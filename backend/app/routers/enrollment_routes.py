@@ -66,13 +66,31 @@ def _require_valid_token(token: str) -> dict:
 def _backend_url(request: Request) -> str:
     """
     Liefert die Basis-Adresse, die in Install-Befehle/Skripte eingebaut wird.
-    Ist in den Einstellungen (Allgemein) eine feste Server-Adresse hinterlegt,
-    wird diese benutzt - sonst wird sie automatisch aus dem Request abgeleitet
-    (das ergab bisher oft "localhost", wenn das Dashboard lokal geöffnet wurde).
+
+    Reihenfolge:
+      1. Vollständige URL (server_url) - falls gesetzt, hat Vorrang.
+      2. Domain oder IP/Host + Backend-Port (aus den Allgemein-Einstellungen).
+      3. Automatisch aus dem Request abgeleitet (ergab bisher oft "localhost").
     """
-    configured = (db.get_setting("server_url") or "").strip()
-    if configured:
-        return configured.rstrip("/")
+    full = (db.get_setting("server_url") or "").strip()
+    if full:
+        return full.rstrip("/")
+
+    domain = (db.get_setting("server_domain") or "").strip()
+    host = (db.get_setting("server_host") or "").strip()
+    target = domain or host
+    if target:
+        # Ein evtl. mit eingegebenes Schema entfernen (bauen wir selbst).
+        target = target.replace("https://", "").replace("http://", "").rstrip("/")
+        try:
+            port = int(db.get_setting("server_backend_port"))
+        except (TypeError, ValueError):
+            port = 4000
+        scheme = "https" if port == 443 else "http"
+        if port in (80, 443):
+            return f"{scheme}://{target}"
+        return f"{scheme}://{target}:{port}"
+
     return str(request.base_url).rstrip("/")
 
 

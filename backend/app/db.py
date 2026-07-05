@@ -850,8 +850,14 @@ def delete_realm(realm_id: str) -> None:
 DEFAULT_SETTINGS = {
     # Leer = automatisch aus der aufgerufenen URL ableiten (request.base_url).
     # Setzt man hier z.B. "https://rmm.firma.de", tauchen die Install-Befehle
-    # mit dieser Adresse statt "localhost" auf.
+    # mit dieser Adresse statt "localhost" auf. Vollständige URL überschreibt
+    # Host/Domain/Port unten.
     "server_url": "",
+    # Server-IP/Host bzw. optionale Domain und Ports (für die Install-Befehle).
+    "server_host": "",              # IP oder Hostname
+    "server_domain": "",            # optionale Domain (wird bevorzugt vor der IP)
+    "server_backend_port": "4000",  # Port des Backends/der API
+    "server_frontend_port": "4000", # Port des Dashboards (Frontend)
     # In welchem Abstand ein Metrik-Punkt gespeichert wird (Sekunden).
     "metrics_interval_seconds": "60",
     # Wie lange die Metrik-Historie aufbewahrt wird (Stunden).

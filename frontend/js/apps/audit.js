@@ -96,10 +96,15 @@ export function renderAudit(body, win) {
         tbody.appendChild(tr);
       }
 
-      // "Aufzeichnung ansehen"-Buttons verkabeln -> Recordings-App öffnen
+      // "Aufzeichnung ansehen"-Buttons verkabeln -> Recordings-App mit genau
+      // dieser Aufzeichnung öffnen (eigenes Fenster pro Aufzeichnung).
       tbody.querySelectorAll("[data-rec]").forEach((btn) =>
         btn.addEventListener("click", () => {
-          openWindow({ key: "recordings", appId: "recordings", title: t("recordings"), w: 820, h: 560 });
+          const recId = btn.dataset.rec;
+          openWindow({
+            key: `recordings-${recId}`, appId: "recordings",
+            title: t("recordings"), props: { recId }, w: 820, h: 560,
+          });
         })
       );
     } catch (e) {

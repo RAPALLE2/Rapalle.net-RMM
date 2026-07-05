@@ -6,6 +6,7 @@
 
 import { api } from "../api.js";
 import { esc } from "../utils.js";
+import { openWindow } from "../windowmanager.js";
 
 export function renderNetwork(body, win) {
   body.innerHTML = `
@@ -61,32 +62,16 @@ export function renderNetwork(body, win) {
         <td style="color:var(--subtext);font-family:monospace;font-size:11px">${esc(d.mac || "–")}</td>
         <td><button class="taskbar-btn" data-portscan="${esc(d.ip)}">Portscan</button></td>
       </tr>
-      <tr data-portrow="${esc(d.ip)}" style="display:none"><td colspan="4" style="background:var(--panel-2)"></td></tr>
     `).join("");
 
+    // Portscan-Button öffnet das Portscan-Programm mit schon eingetragener IP.
     tbody.querySelectorAll("[data-portscan]").forEach((btn) =>
-      btn.addEventListener("click", async () => {
+      btn.addEventListener("click", () => {
         const ip = btn.dataset.portscan;
-        const row = tbody.querySelector(`[data-portrow="${ip}"]`);
-        const cell = row.querySelector("td");
-        row.style.display = "";
-        cell.innerHTML = `<span style="color:var(--subtext)">Scanne Ports auf ${esc(ip)}...</span>`;
-        btn.disabled = true;
-        try {
-          const res = await api.portScan(ip);
-          if (!res.ports.length) {
-            cell.innerHTML = `<span style="color:var(--subtext)">Keine offenen Ports (der gängigen Ports) gefunden.</span>`;
-          } else {
-            cell.innerHTML = `<b>Offene Ports:</b> ` + res.ports.map((p) =>
-              `<span style="display:inline-block;background:var(--panel);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;margin:3px;font-size:12px">
-                ${p.port} <span style="color:var(--subtext)">${esc(p.service)}</span>
-              </span>`).join("");
-          }
-        } catch (e) {
-          cell.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
-        } finally {
-          btn.disabled = false;
-        }
+        openWindow({
+          key: `portscan-${ip}`, appId: "portscan",
+          title: `Portscan — ${ip}`, props: { ip }, w: 560, h: 480,
+        });
       })
     );
   }

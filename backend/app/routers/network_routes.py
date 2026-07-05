@@ -14,7 +14,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user
-from app.network_scan import scan_local_network, scan_ports
+from app.network_scan import scan_local_network, scan_ports, parse_port_spec
 
 router = APIRouter(prefix="/api/network", tags=["network"])
 
@@ -46,7 +46,29 @@ async def get_last_scan(user: dict = Depends(get_current_user)):
 
 
 @router.get("/portscan")
-async def run_portscan(ip: str, user: dict = Depends(get_current_user)):
-    """Prüft die gängigen Ports einer IP-Adresse auf offen/geschlossen."""
-    open_ports = await scan_ports(ip)
-    return {"ip": ip, "ports": open_ports}
+async def run_portscan(
+    ip: str,
+    mode: str = "standard",       # "standard" | "all" | "custom"
+    ports: str | None = None,      # bei mode=custom: z.B. "22,80,8000-8100"
+    user: dict = Depends(get_current_user),
+):
+    """
+    Portscan einer IP.
+      - standard: gängige Ports (schnell)
+      - all:      alle Ports 1-65535 (dauert länger, höhere Nebenläufigkeit)
+      - custom:   frei angegebene Ports/Bereiche (Parameter 'ports')
+    """
+    mode = (mode or "standard").lower()
+    if mode == "all":
+        port_list = list(range(1, 65536))
+        open_ports = await scan_ports(ip, port_list, concurrency=500, timeout=0.5)
+    elif mode == "custom":
+        port_list = parse_port_spec(ports or "")
+        if not port_list:
+            raise HTTPException(400, "Keine gültigen Ports angegeben.")
+        # Konservativer skalieren, je nach Anzahl der Ports.
+        conc = 500 if len(port_list) > 2000 else 200
+        open_ports = await scan_ports(ip, port_list, concurrency=conc, timeout=0.6)
+    else:
+        open_ports = await scan_ports(ip)  # gängige Ports
+    return {"ip": ip, "mode": mode, "scanned": len(port_list) if mode != "standard" else None, "ports": open_ports}

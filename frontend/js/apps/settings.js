@@ -56,7 +56,25 @@ export function renderSettings(body, win) {
         <h3>${t("general_server_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">${t("general_server_hint")}</p>
         <div class="form-row">
-          <label>${t("general_server_url")}</label>
+          <label>${t("general_server_ip")}</label>
+          <input type="text" id="ge-server-host" placeholder="192.168.1.10" value="${esc(s.server_host || "")}" />
+        </div>
+        <div class="form-row">
+          <label>${t("general_server_domain")}</label>
+          <input type="text" id="ge-server-domain" placeholder="rmm.meinefirma.de" value="${esc(s.server_domain || "")}" />
+        </div>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:1">
+            <label>${t("general_backend_port")}</label>
+            <input type="number" min="1" max="65535" id="ge-backend-port" value="${esc(String(s.server_backend_port ?? 4000))}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>${t("general_frontend_port")}</label>
+            <input type="number" min="1" max="65535" id="ge-frontend-port" value="${esc(String(s.server_frontend_port ?? 4000))}" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>${t("general_server_url_advanced")}</label>
           <input type="text" id="ge-server-url" placeholder="https://rmm.meinefirma.de" value="${esc(s.server_url || "")}" />
         </div>
 
@@ -84,6 +102,10 @@ export function renderSettings(body, win) {
       const err = root.querySelector("#ge-error");
       err.classList.add("hidden");
       const payload = {
+        server_host: root.querySelector("#ge-server-host").value.trim(),
+        server_domain: root.querySelector("#ge-server-domain").value.trim(),
+        server_backend_port: parseInt(root.querySelector("#ge-backend-port").value, 10) || 4000,
+        server_frontend_port: parseInt(root.querySelector("#ge-frontend-port").value, 10) || 4000,
         server_url: root.querySelector("#ge-server-url").value.trim(),
         metrics_interval_seconds: parseInt(root.querySelector("#ge-interval").value, 10) || 60,
         metrics_retention_hours: parseInt(root.querySelector("#ge-retention").value, 10) || 1,

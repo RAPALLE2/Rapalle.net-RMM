@@ -17,6 +17,10 @@ function formatDuration(ms) {
 }
 
 export function renderRecordings(body, win) {
+  // Optional: eine bestimmte Aufzeichnung, die beim Öffnen direkt gezeigt wird
+  // (z.B. wenn aus dem Audit-Log auf „Aufzeichnung ansehen" geklickt wurde).
+  let preselectRecId = win.props?.recId || null;
+
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div class="explorer-toolbar">
@@ -157,6 +161,19 @@ export function renderRecordings(body, win) {
           catch (err) { alert(err.message); }
         })
       );
+
+      // Wurde die App mit einer bestimmten Aufzeichnung geöffnet (z.B. aus dem
+      // Audit-Log), diese direkt auswählen und laden.
+      if (preselectRecId) {
+        const row = listEl.querySelector(`[data-rec="${preselectRecId}"]`);
+        if (row) {
+          listEl.querySelectorAll("tr").forEach((x) => x.style.background = "");
+          row.style.background = "rgba(45,212,191,0.1)";
+          row.scrollIntoView({ block: "nearest" });
+        }
+        loadRecording(preselectRecId);
+        preselectRecId = null; // nur beim ersten Laden automatisch öffnen
+      }
     } catch (e) {
       listEl.innerHTML = `<tr><td style="color:var(--danger)">${esc(e.message)}</td></tr>`;
     }

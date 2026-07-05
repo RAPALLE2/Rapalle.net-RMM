@@ -69,7 +69,11 @@ export const api = {
   // --- Netzwerk-Scan ---
   scanNetwork: (subnet) => request(`/api/network/scan${subnet ? `?subnet=${encodeURIComponent(subnet)}` : ""}`),
   lastScan: () => request("/api/network/scan/last"),
-  portScan: (ip) => request(`/api/network/portscan?ip=${encodeURIComponent(ip)}`),
+  portScan: (ip, mode = "standard", ports = "") => {
+    const q = new URLSearchParams({ ip, mode });
+    if (mode === "custom" && ports) q.set("ports", ports);
+    return request(`/api/network/portscan?${q.toString()}`);
+  },
 
   // --- Benutzerverwaltung ---
   getUsers: () => request("/api/users"),

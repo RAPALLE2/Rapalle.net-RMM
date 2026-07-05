@@ -385,6 +385,10 @@ async def delete_webhook(webhook_id: str, user: dict = Depends(get_current_user)
 class SettingsBody(BaseModel):
     # Alle optional: es werden nur die mitgeschickten Felder gespeichert.
     server_url: str | None = None
+    server_host: str | None = None
+    server_domain: str | None = None
+    server_backend_port: int | None = None
+    server_url: str | None = None
     metrics_interval_seconds: int | None = None
     metrics_retention_hours: int | None = None
     replay_retention_days: int | None = None

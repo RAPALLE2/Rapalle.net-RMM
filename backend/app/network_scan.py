@@ -150,23 +150,60 @@ COMMON_PORTS = {
 }
 
 
-async def scan_ports(ip: str, ports: list[int] | None = None) -> list[dict]:
+def parse_port_spec(spec: str) -> list[int]:
+    """
+    Wandelt eine Port-Angabe wie "22,80,8000-8100" in eine sortierte, eindeutige
+    Liste gültiger Ports (1-65535) um. Ungültige Teile werden ignoriert.
+    """
+    ports: set[int] = set()
+    for part in (spec or "").replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                start, end = int(a), int(b)
+            except ValueError:
+                continue
+            if start > end:
+                start, end = end, start
+            for p in range(max(1, start), min(65535, end) + 1):
+                ports.add(p)
+        else:
+            try:
+                p = int(part)
+            except ValueError:
+                continue
+            if 1 <= p <= 65535:
+                ports.add(p)
+    return sorted(ports)
+
+
+async def scan_ports(
+    ip: str,
+    ports: list[int] | None = None,
+    concurrency: int = 100,
+    timeout: float = 1.0,
+) -> list[dict]:
     """
     Prüft für eine IP, welche der angegebenen Ports offen sind.
     Ohne Portliste werden die gängigen Ports (COMMON_PORTS) geprüft.
     Rückgabe: [{"port": 22, "service": "SSH", "open": True}, ...] (nur offene).
+
+    Bei sehr großen Portlisten (z.B. "alle Ports") sorgen höhere Nebenläufigkeit
+    und ein kürzeres Timeout dafür, dass der Scan in vertretbarer Zeit fertig wird.
     """
     if ports is None:
         ports = sorted(COMMON_PORTS.keys())
 
-    semaphore = asyncio.Semaphore(100)
+    semaphore = asyncio.Semaphore(concurrency)
     open_ports = []
 
     async def check_port(port: int):
         async with semaphore:
             try:
                 fut = asyncio.open_connection(ip, port)
-                reader, writer = await asyncio.wait_for(fut, timeout=1.0)
+                reader, writer = await asyncio.wait_for(fut, timeout=timeout)
                 writer.close()
                 try:
                     await writer.wait_closed()

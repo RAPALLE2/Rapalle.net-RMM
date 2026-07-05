@@ -41,6 +41,7 @@ import { renderTowerDefense } from "./apps/towerdefense.js";
 import { renderAutomation } from "./apps/automation.js";
 import { renderNotifications } from "./apps/notifications.js";
 import { renderNetwork } from "./apps/network.js";
+import { renderPortscan } from "./apps/portscan.js";
 import { renderSettings } from "./apps/settings.js";
 import { renderAudit } from "./apps/audit.js";
 import { renderProfile } from "./apps/profile.js";
@@ -64,6 +65,7 @@ const APP_RENDERERS = {
   automation: renderAutomation,
   notifications: renderNotifications,
   network: renderNetwork,
+  portscan: renderPortscan,
   settings: renderSettings,
   audit: renderAudit,
   profile: renderProfile,
@@ -242,6 +244,7 @@ function initMenusAndButtons() {
       const app = btn.dataset.app;
       startMenu.classList.add("hidden");
       if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
+      else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
       else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
       else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
       else if (app === "settings") openWindow({ key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
