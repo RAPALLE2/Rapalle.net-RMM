@@ -21,3 +21,23 @@ By using RAPALLE.net RMM, you acknowledge that:
 - The author assumes no responsibility for any damage, downtime, data loss, security incidents, or other consequences resulting from its use.
 
 This project is best suited for learning, experimentation, homelabs, and personal infrastructure environments where users are comfortable managing and accepting the risks associated with self-hosted software.
+
+
+
+
+
+## Installation
+
+To install RAPALLE.net RMM on your own server, download the latest release as a ZIP archive and extract it to a directory of your choice.
+
+### Requirements
+
+- Python 3.11 or newer
+- Administrative/root privileges
+- Internet connection for initial dependency installation
+
+### Installation Steps
+
+1. Download and extract the latest release.
+2. Open a terminal in the backend sub-directory.
+3. Start the application using: python run.py
