@@ -41,3 +41,22 @@ To install RAPALLE.net RMM on your own server, download the latest release as a 
 1. Download and extract the latest release.
 2. Open a terminal in the backend sub-directory.
 3. Start the application using: python run.py
+4. On first startup, RAPALLE.net RMM automatically creates all required files, initializes the database, and installs any missing Python dependencies.
+5. Open a browsertab with http://YOUR-SERVERS-IP:4000; standart account is user: admin, password: admin.
+
+6. Please consider changing the AGENT_TOKEN and JWT_SECRET in the env file inside the backend and agent folders.
+
+
+
+
+
+
+
+## Support & Feedback
+
+If you need help, have questions, would like to report a bug, or want to share feedback, feel free to join the RAPALLE.net Discord community:
+
+https://dc.rapalle.net
+
+You can open a ticket in the **Tickets** section to get in touch directly with the developer and discuss issues, suggestions, feature requests, or general questions about RAPALLE.net RMM.
+
