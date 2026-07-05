@@ -584,6 +584,74 @@ async def on_proc_kill(data):
 
 _screen_stream = {"active": False, "thread": None, "sid_loop": None}
 
+
+def _detect_from_xorg_process():
+    """
+    Sucht per psutil den laufenden X-Server und liest DISPLAY + Xauthority-Datei
+    aus dessen Kommandozeile. So kann der Agent auch als Dienst (ohne eigenes
+    DISPLAY) den angemeldeten Desktop erfassen. Rückgabe: (display, authfile).
+    """
+    try:
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            name = (proc.info.get("name") or "").lower()
+            if name not in ("xorg", "x", "xwayland") and "xorg" not in name:
+                continue
+            cmd = proc.info.get("cmdline") or []
+            display = None
+            auth = None
+            for i, tok in enumerate(cmd):
+                # Display sieht aus wie ":0" oder ":0.0"
+                if tok.startswith(":") and tok[1:].split(".")[0].isdigit():
+                    display = ":" + tok[1:].split(".")[0]
+                if tok == "-auth" and i + 1 < len(cmd):
+                    auth = cmd[i + 1]
+            if display:
+                return display, auth
+    except Exception:
+        pass
+    return None, None
+
+
+def _detect_graphical_display():
+    """
+    Prüft, ob ein erfassbarer grafischer Bildschirm verfügbar ist, und setzt auf
+    Linux bei Bedarf DISPLAY/XAUTHORITY. Rückgabe: (verfügbar: bool, hinweis: str).
+    """
+    system = platform.system()
+    # Windows/macOS haben praktisch immer einen erfassbaren Desktop.
+    if system in ("Windows", "Darwin"):
+        return True, ""
+
+    # Linux: DISPLAY schon gesetzt? Dann direkt versuchen.
+    if os.environ.get("DISPLAY"):
+        return True, ""
+
+    # 1) X-Server-Prozess finden (liefert DISPLAY + Xauthority)
+    display, auth = _detect_from_xorg_process()
+    if display:
+        os.environ["DISPLAY"] = display
+        if auth and os.path.isfile(auth):
+            os.environ["XAUTHORITY"] = auth
+        return True, f"Display {display} erkannt"
+
+    # 2) Ersatz: aktive X-Sockets in /tmp/.X11-unix suchen
+    try:
+        socket_dir = "/tmp/.X11-unix"
+        nums = []
+        if os.path.isdir(socket_dir):
+            for entry in os.listdir(socket_dir):
+                if entry.startswith("X") and entry[1:].isdigit():
+                    nums.append(int(entry[1:]))
+        if nums:
+            os.environ["DISPLAY"] = f":{sorted(nums)[0]}"
+            return True, f"Display :{sorted(nums)[0]} erkannt"
+    except Exception:
+        pass
+
+    # Kein grafischer Bildschirm -> Shell-only.
+    return False, ("Kein grafischer Bildschirm gefunden (headless VM/Server). "
+                   "Es wird stattdessen eine Shell geöffnet.")
+
 # Maus-/Tastatur-Controller erst hier erstellen. Auch das kann fehlschlagen
 # (z.B. keine grafische Sitzung) - dann deaktivieren wir die Fernsteuerung,
 # statt den ganzen Agenten abstürzen zu lassen.
@@ -600,10 +668,16 @@ if _INPUT_AVAILABLE:
 
 def _screen_capture_loop(loop):
     """Läuft in einem eigenen Thread und schickt fortlaufend Bildschirm-Frames."""
+    is_linux = platform.system() == "Linux"
     try:
         sct = mss.mss()
     except Exception as e:
-        _notify_screen_error(loop, f"Bildschirmaufnahme nicht möglich: {e}")
+        # Kein Display erfassbar. Auf Linux/headless direkt auf Shell umschalten,
+        # sonst normale Fehlermeldung (Windows -> RDP-Angebot im Dashboard).
+        if is_linux:
+            _notify_screen_mode(loop, "shell", f"Bildschirm nicht erfassbar: {e}")
+        else:
+            _notify_screen_error(loop, f"Bildschirmaufnahme nicht möglich: {e}")
         _screen_stream["active"] = False
         return
 
@@ -640,8 +714,12 @@ def _screen_capture_loop(loop):
         except Exception as e:
             consecutive_errors += 1
             msg = str(e)
-            # Typischer Fall: headless VM/Server ohne aktive Grafiksitzung, oder
-            # Agent läuft als SYSTEM-Dienst ohne Zugriff auf den Benutzer-Desktop.
+            # Linux/headless: kein Sinn weiterzuprobieren -> Shell anbieten.
+            if is_linux:
+                _notify_screen_mode(loop, "shell", f"Bildschirmaufnahme abgebrochen: {msg}")
+                _screen_stream["active"] = False
+                break
+            # Windows: typischer Fall headless/kein Desktop -> RDP-Angebot.
             if "denied" in msg.lower() or "bitblt" in msg.lower():
                 _notify_screen_error(
                     loop,
@@ -679,16 +757,41 @@ def _notify_screen_error(loop, message):
         pass
 
 
+def _notify_screen_mode(loop, mode, reason=""):
+    """
+    Teilt dem Dashboard mit, WIE Remote-Zugriff möglich ist. Wichtigster Fall:
+    mode='shell' -> das Dashboard öffnet direkt eine Shell (headless/Shell-only).
+    """
+    _print(f"[agent] Screen-Modus: {mode} ({reason})")
+    try:
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("screen-mode", {"id": DEVICE_ID, "mode": mode, "reason": reason}, namespace="/agent"),
+            loop,
+        )
+    except Exception:
+        pass
+
+
 @sio.on("screen-start", namespace="/agent")
 async def on_screen_start(data):
-    """Startet das Bildschirm-Streaming."""
+    """Startet das Bildschirm-Streaming - oder signalisiert Shell-Modus bei headless."""
+    loop = asyncio.get_event_loop()
+
+    # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen -> Shell anbieten.
     if not _SCREEN_AVAILABLE:
-        await sio.emit("screen-error", {"id": DEVICE_ID, "error": "Auf dem Agent fehlen die Pakete 'mss' und 'Pillow'."}, namespace="/agent")
+        _notify_screen_mode(loop, "shell",
+                            "Bildaufnahme-Pakete (mss/Pillow) fehlen - es wird eine Shell geöffnet.")
         return
+
+    # Ist überhaupt ein grafischer Bildschirm da? (setzt auf Linux ggf. DISPLAY)
+    available, reason = _detect_graphical_display()
+    if not available:
+        _notify_screen_mode(loop, "shell", reason)
+        return
+
     if _screen_stream["active"]:
         return  # läuft schon
     _screen_stream["active"] = True
-    loop = asyncio.get_event_loop()
     _screen_stream["thread"] = threading.Thread(target=_screen_capture_loop, args=(loop,), daemon=True)
     _screen_stream["thread"].start()
     _print("[agent] Bildschirm-Streaming gestartet")

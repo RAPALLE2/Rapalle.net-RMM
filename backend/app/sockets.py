@@ -368,6 +368,16 @@ async def on_screen_error(sid, payload):
     await sio.emit("screen-error", payload, namespace="/dashboard")
 
 
+@sio.on("screen-mode", namespace="/agent")
+async def on_screen_mode(sid, payload):
+    """
+    Ein Agent meldet, WIE Remote-Zugriff möglich ist (z.B. mode='shell', wenn
+    kein grafischer Bildschirm vorhanden ist). Das Dashboard öffnet dann direkt
+    eine Shell statt einen Fehler anzuzeigen.
+    """
+    await sio.emit("screen-mode", payload, namespace="/dashboard")
+
+
 @sio.event(namespace="/agent")
 async def disconnect(sid):
     """Ein Agent hat die Verbindung verloren/beendet -> als offline markieren."""

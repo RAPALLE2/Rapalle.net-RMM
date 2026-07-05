@@ -15,6 +15,7 @@ import { registerCleanup } from "../windowmanager.js";
 import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc } from "../utils.js";
+import { renderTerminal } from "./terminal.js";
 
 export function renderVnc(body, win) {
   const { clientId, clientName } = win.props;
@@ -63,6 +64,36 @@ export function renderVnc(body, win) {
   let remoteHeight = 1080;
   let framesReceived = 0;
   let rdpActive = false;  // true, wenn gerade das experimentelle RDP-Streaming läuft
+  let shellActive = false; // true, sobald auf Shell-Modus umgeschaltet wurde
+
+  // Schaltet das Fenster auf eine eingebettete Shell um (headless/Shell-only).
+  // Wird automatisch ausgelöst, wenn der Agent 'screen-mode: shell' meldet.
+  function switchToShell(reason) {
+    if (shellActive) return;
+    shellActive = true;
+    // Screen-Streaming beenden und alle Screen-Listener abmelden
+    try { dashboardSocket.emit("screen-stop", { clientId }); } catch {}
+    dashboardSocket.off("screen-frame", onFrame);
+    dashboardSocket.off("screen-error", onError);
+    dashboardSocket.off("screen-mode", onMode);
+    window.removeEventListener("mouseup", onMouseUp);
+
+    // Fenster leeren, Hinweis-Banner + Terminal einsetzen
+    body.innerHTML = "";
+    body.style.display = "flex";
+    body.style.flexDirection = "column";
+    body.style.height = "100%";
+    const banner = document.createElement("div");
+    banner.style.cssText = "padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border)";
+    banner.textContent = "🖥️ → ⌨️ " + (reason || "Kein grafischer Bildschirm – Shell geöffnet.");
+    body.appendChild(banner);
+    const termHost = document.createElement("div");
+    termHost.style.cssText = "flex:1;min-height:0";
+    body.appendChild(termHost);
+    // Bestehendes Terminal-Programm im selben Fenster rendern (eigene Session,
+    // persistentes Arbeitsverzeichnis usw. - läuft über denselben Agent-Kanal).
+    renderTerminal(termHost, win);
+  }
 
   // --- Eingehende Frames verarbeiten ---
   function onFrame(data) {
@@ -84,6 +115,12 @@ export function renderVnc(body, win) {
     statusEl.textContent = "Fehler: " + data.error;
     statusEl.style.color = "var(--danger)";
     showRdpOffer(data.error);
+  }
+
+  // Agent meldet den möglichen Zugriffsmodus. mode='shell' -> direkt Shell öffnen.
+  function onMode(data) {
+    if (data.id !== clientId) return;
+    if (data.mode === "shell") switchToShell(data.reason);
   }
 
   // Zeigt bei einem Bildschirm-Fehler (typisch: headless VM) ein Angebot,
@@ -110,6 +147,7 @@ export function renderVnc(body, win) {
         <button class="btn-primary" id="rdp-native-${win.key}" style="width:auto;margin:0">
           ⬇️ Per RDP verbinden (nativ)
         </button>
+        <button class="taskbar-btn" id="rdp-shell-${win.key}">⌨️ Shell öffnen</button>
         <button class="taskbar-btn" id="rdp-embed-${win.key}">
           🧪 Im Browser versuchen (experimentell)
         </button>
@@ -118,6 +156,11 @@ export function renderVnc(body, win) {
       <div id="rdp-embed-msg-${win.key}" style="font-size:12px;color:var(--subtext);max-width:420px"></div>
     `;
     imgArea.appendChild(overlay);
+
+    // Shell im selben Fenster öffnen (funktioniert immer, auch headless)
+    overlay.querySelector(`#rdp-shell-${win.key}`).addEventListener("click", () => {
+      switchToShell("Shell geöffnet.");
+    });
 
     // Nativer RDP-Download (zuverlässig): lädt die .rdp-Datei -> mstsc öffnet sich
     overlay.querySelector(`#rdp-native-${win.key}`).addEventListener("click", async () => {
@@ -150,6 +193,7 @@ export function renderVnc(body, win) {
 
   dashboardSocket.on("screen-frame", onFrame);
   dashboardSocket.on("screen-error", onError);
+  dashboardSocket.on("screen-mode", onMode);
 
   // Agent anweisen, mit dem Streaming zu beginnen (Username für die Aufnahme)
   dashboardSocket.emit("screen-start", { clientId, username: state.user?.username || "unbekannt" });
@@ -297,6 +341,7 @@ export function renderVnc(body, win) {
   registerCleanup(win.key, () => {
     dashboardSocket.off("screen-frame", onFrame);
     dashboardSocket.off("screen-error", onError);
+    dashboardSocket.off("screen-mode", onMode);
     dashboardSocket.emit("screen-stop", { clientId });
     if (rdpActive) dashboardSocket.emit("rdp-stop", { clientId });
     window.removeEventListener("mouseup", onMouseUp);
