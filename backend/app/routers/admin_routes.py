@@ -352,11 +352,11 @@ async def test_webhook(webhook_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(404, "Webhook nicht gefunden")
     try:
         notification = build_notification(
-            "Dies ist eine Test-Benachrichtigung von RAPALLE.net RMM.",
-            head="🔔 Test-Benachrichtigung",
-            tenant="RAPALLE.net",
-            location="Regensburg",
-            client="SRV-DEMO-01",
+            "This is a Test-Notification from RAPALLE.net RMM.",
+            head="🔔 Test-Notification",
+            tenant="Test-Tenant",
+            location="Test-Location",
+            client="Test-Client",
             service="Webhook-Test",
             level="info",
         )
