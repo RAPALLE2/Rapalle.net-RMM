@@ -1,0 +1,24 @@
+# RAPALLE.net RMM - Backend Abhängigkeiten
+# Installieren mit: pip install -r requirements.txt
+#
+# Untere Grenzen (>=) statt fester Versionen, damit pip eine stimmige
+# Kombination wählt (verhindert z.B. aiohttp/socketio-Versionskonflikte).
+
+fastapi>=0.115.0          # Web-Framework für die REST-API
+uvicorn[standard]>=0.32.0 # ASGI-Server, der FastAPI ausführt
+python-socketio>=5.11.0   # Echtzeit-Verbindungen (Agenten + Dashboard)
+python-dotenv>=1.0.0      # Liest .env Dateien für Konfiguration
+bcrypt>=4.2.0             # Sicheres Passwort-Hashing (direkt, ohne passlib)
+PyJWT>=2.9.0              # Login-Tokens (JWT)
+pydantic>=2.9.0          # Datenvalidierung für die API
+psutil>=6.0.0            # Laufwerksauflistung für "dieser Server" im Datei-Explorer
+ldap3>=2.9.0            # LDAP/Active-Directory-Anmeldung (Realms). Optional: ohne
+                        # dieses Paket funktioniert nur die lokale Anmeldung.
+
+# --- Optional, EXPERIMENTELL ---
+# pyrdp aktiviert das eingebettete RDP-Streaming für headless VMs (Button
+# "Im Browser versuchen"). Es ist ein Security-Forschungswerkzeug und KEIN
+# polierter RDP-Client - das Bild kann unvollständig sein oder abbrechen.
+# Der zuverlässige Weg ist immer der native ".rdp"-Download (mstsc).
+# Zum Aktivieren die folgende Zeile einkommentieren:
+# pyrdp-mitm>=2.1.0

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAPALLE.net RMM</title>
+
+  <!-- Socket.IO Client-Bibliothek von einem CDN (kein npm/Build nötig) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="icon" href="images/logo_r.png"/>
+</head>
+<body>
+
+  <!-- ============================================================ -->
+  <!-- LOGIN-BILDSCHIRM (wird per JS ein-/ausgeblendet)               -->
+  <!-- ============================================================ -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-box">
+      <h1 class="login-logo">RAPALLE<span>.net</span> RMM</h1>
+      <p class="login-subtitle">Anmelden</p>
+
+      <form id="login-form">
+        <label>Anmeldung über</label>
+        <select id="login-realm">
+          <option value="local">Lokal</option>
+        </select>
+
+        <label>Benutzername</label>
+        <input type="text" id="login-username" autocomplete="username" required />
+
+        <label>Passwort</label>
+        <input type="password" id="login-password" autocomplete="current-password" required />
+
+        <div id="login-error" class="form-error hidden"></div>
+
+        <button type="submit" class="btn-primary">Anmelden</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- PFLICHT-PASSWORTWECHSEL (nach erstem Login mit Einmalpasswort)  -->
+  <!-- ============================================================ -->
+  <div id="change-pw-screen" class="login-screen hidden">
+    <div class="login-box">
+      <h1 class="login-logo">RAPALLE<span>.net</span> RMM</h1>
+      <p class="login-subtitle">Bitte neues Passwort setzen</p>
+
+      <form id="change-pw-form">
+        <label>Aktuelles (Einmal-)Passwort</label>
+        <input type="password" id="cpw-current" required />
+
+        <label>Neues Passwort (min. 8 Zeichen)</label>
+        <input type="password" id="cpw-new" required minlength="8" />
+
+        <label>Neues Passwort wiederholen</label>
+        <input type="password" id="cpw-repeat" required minlength="8" />
+
+        <div id="cpw-error" class="form-error hidden"></div>
+
+        <button type="submit" class="btn-primary">Passwort setzen</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- HAUPT-APP (Dashboard) - erst sichtbar nach erfolgreichem Login  -->
+  <!-- ============================================================ -->
+  <div id="app" class="app hidden">
+
+    <!-- Kopfleiste -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <img src="/images/logo_r.png" alt="Logo" class="topbar-logo" onerror="this.style.display='none'" />
+        <span class="topbar-title">RAPALLE<span class="accent">.net</span> RMM</span>
+        <span class="topbar-version">v0.1.0</span>
+      </div>
+      <div class="topbar-right">
+        <button id="user-menu-btn" class="user-menu-btn">
+          <span id="user-menu-name">...</span> ▾
+        </button>
+        <div id="user-menu" class="user-menu hidden">
+          <button id="btn-open-profile">Profil / Passwort ändern</button>
+          <button id="btn-open-settings">Einstellungen</button>
+          <hr />
+          <button id="btn-logout">Abmelden</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Hauptbereich: Sidebar links + Content rechts -->
+    <div class="main-area">
+
+      <!-- Einklappbare Seitenleiste mit der Tenant/Location/Client-Hierarchie -->
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <span>Geräte</span>
+          <div>
+            <button id="btn-manage-hierarchy" title="Tenants/Standorte verwalten">⚙</button>
+            <button id="sidebar-collapse-btn" title="Einklappen">«</button>
+          </div>
+        </div>
+        <div id="sidebar-tree" class="sidebar-tree">
+          <!-- wird per JS befüllt (sidebar.js) -->
+        </div>
+        <button id="btn-add-client" class="btn-add-client">+ Client hinzufügen</button>
+      </aside>
+
+      <!-- Hauptinhalt: Status/Metrics/Actions für den ausgewählten Client,
+           oder eine aggregierte Übersicht für Tenant/Location -->
+      <main id="main-content" class="main-content">
+        <div class="empty-state">
+          Wähle links einen Tenant, Standort oder Client aus.
+        </div>
+      </main>
+    </div>
+
+    <!-- Bereich, in dem alle offenen Fenster (Terminal, Explorer, ...) liegen -->
+    <div id="window-layer" class="window-layer"></div>
+
+    <!-- Taskleiste -->
+    <footer class="taskbar">
+      <button id="taskbar-menu-btn" class="taskbar-btn taskbar-menu-btn" title="Menü">☰</button>
+      <button id="taskbar-minimize-all-btn" class="taskbar-btn" title="Alle minimieren">▁</button>
+      <div id="taskbar-windows" class="taskbar-windows"></div>
+      <div id="taskbar-clock" class="taskbar-clock"></div>
+    </footer>
+
+    <!-- Großes DSM-artiges App-Menü (zentriertes Overlay mit Kacheln) -->
+    <div id="start-menu" class="start-menu-overlay hidden">
+      <div class="start-menu-panel">
+        <div class="start-menu-header">Anwendungen</div>
+        <div class="start-menu-grid">
+          <button data-app="clients"><span class="app-icon">📊</span><span>Geräte-Übersicht</span></button>
+          <button data-app="manage"><span class="app-icon">🏢</span><span>Tenants &amp; Standorte</span></button>
+          <button data-app="scripts"><span class="app-icon">📜</span><span>Scripts</span></button>
+          <button data-app="bulk"><span class="app-icon">⚡</span><span>Bulk Remote Shell</span></button>
+          <button data-app="automation"><span class="app-icon">🔁</span><span>Automation</span></button>
+          <button data-app="notifications"><span class="app-icon">🔔</span><span>Benachrichtigungen</span></button>
+          <button data-app="network"><span class="app-icon">📡</span><span>Netzwerk-Scanner</span></button>
+          <button data-app="recordings"><span class="app-icon">🎥</span><span>Aufzeichnungen</span></button>
+          <button data-app="towerdefense"><span class="app-icon">🎮</span><span>Tower Defense</span></button>
+          <button data-app="audit"><span class="app-icon">📝</span><span>Audit-Log</span></button>
+          <button data-app="settings"><span class="app-icon">⚙️</span><span>Einstellungen</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Eigener Code, als ES-Modul geladen (erlaubt "import" zwischen Dateien) -->
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

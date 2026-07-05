@@ -1,0 +1,14 @@
+# RAPALLE.net RMM - Agent Abhängigkeiten
+# Installieren mit: pip install -r requirements.txt
+#
+# Hinweis: python-socketio und aiohttp müssen zueinander passen. Wir geben
+# untere Grenzen an (>=) statt fester Versionen, damit pip automatisch eine
+# stimmige, aktuelle Kombination wählt und es keinen Versionskonflikt gibt.
+
+python-socketio[asyncio_client]>=5.11.0  # Verbindung zum Backend
+aiohttp>=3.10.0                          # Transport für python-socketio (muss zu socketio passen)
+psutil>=6.0.0                            # CPU/RAM/Disk/Uptime/Netzwerk/Prozesse
+python-dotenv>=1.0.0                     # liest die .env Konfigurationsdatei
+mss>=9.0.0                               # schnelle Bildschirm-Screenshots (Remote Screen)
+Pillow>=10.0.0                           # Bildbearbeitung/JPEG-Kodierung der Screenshots
+pynput>=1.7.0                            # Maus-/Tastatur-Simulation (Fernsteuerung)

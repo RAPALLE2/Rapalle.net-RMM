@@ -1,0 +1,39 @@
+"""
+routers/audit_routes.py
+--------------------------
+Zeigt das Audit-Log an (wer hat wann was gemacht - Logins, Terminal-Befehle,
+Client-Änderungen, Benutzer-Änderungen). Aufbewahrung: 30 Tage, siehe
+db.cleanup_old_audit_entries(), die beim Start und danach periodisch läuft.
+"""
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from app import db
+from app.auth import get_current_user, require_admin
+
+router = APIRouter(prefix="/api/audit", tags=["audit"])
+
+
+@router.get("")
+async def get_audit_log(limit: int = 200, user: dict = Depends(get_current_user)):
+    require_admin(user)
+    return db.list_audit_log(limit)
+
+
+class ClientErrorBody(BaseModel):
+    message: str
+    level: str = "error"     # "error" | "warn" | "info"
+    context: str | None = None   # z.B. "vnc", "terminal", "explorer"
+
+
+@router.post("/log-error")
+async def log_client_error(body: ClientErrorBody, user: dict = Depends(get_current_user)):
+    """
+    Ermöglicht dem Frontend, wichtige Fehler (die dem Benutzer als
+    Benachrichtigung angezeigt werden) auch dauerhaft im Audit-Log zu erfassen.
+    """
+    action = "error.warn" if body.level == "warn" else "error.reported"
+    details = f"[{body.context}] {body.message}" if body.context else body.message
+    db.add_audit_entry(user["username"], action, details=details[:500])
+    return {"ok": True}

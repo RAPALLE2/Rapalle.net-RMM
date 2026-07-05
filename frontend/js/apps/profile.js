@@ -1,0 +1,109 @@
+// apps/profile.js
+// ---------------
+// Persönliche Einstellungen des eingeloggten Benutzers: Anzeigename, Sprache
+// (DE/EN), Theme (Dark/Light) und Passwortänderung.
+
+import { state } from "../state.js";
+import { api } from "../api.js";
+import { esc } from "../utils.js";
+import { applyTheme, applyAccent, ACCENT_PALETTES } from "../theme.js";
+import { setLanguage, applyStaticTranslations } from "../i18n_apply.js";
+import { renderSidebar } from "../sidebar.js";
+import { renderMainContent } from "../panel.js";
+
+export function renderProfile(body, win) {
+  const u = state.user;
+  body.innerHTML = `
+    <div class="settings-section">
+      <h3>Profil</h3>
+      <div class="form-row">
+        <label>Anzeigename</label>
+        <input type="text" id="pr-name" value="${esc(u.display_name)}" />
+      </div>
+      <div class="form-row">
+        <label>Sprache</label>
+        <select id="pr-lang">
+          <option value="de" ${u.language === "de" ? "selected" : ""}>Deutsch</option>
+          <option value="en" ${u.language === "en" ? "selected" : ""}>English</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Design</label>
+        <select id="pr-theme">
+          <option value="dark" ${u.theme === "dark" ? "selected" : ""}>Dunkel</option>
+          <option value="light" ${u.theme === "light" ? "selected" : ""}>Hell</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Farbpalette</label>
+        <div id="pr-accents" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:2px">
+          ${Object.entries(ACCENT_PALETTES).map(([key, p]) => `
+            <button type="button" class="accent-swatch ${(u.accent || "teal") === key ? "selected" : ""}"
+              data-accent="${key}" title="${esc(p.name)}"
+              style="background:linear-gradient(135deg, ${p.accent}, ${p.accent2})"></button>
+          `).join("")}
+        </div>
+      </div>
+      <button class="btn-primary" id="pr-save" style="margin-top:6px">Profil speichern</button>
+
+      <h3 style="margin-top:26px">Passwort ändern</h3>
+      <div class="form-row">
+        <label>Aktuelles Passwort</label>
+        <input type="password" id="pr-cur" />
+      </div>
+      <div class="form-row">
+        <label>Neues Passwort (min. 8 Zeichen)</label>
+        <input type="password" id="pr-new" />
+      </div>
+      <div id="pr-msg" style="margin:8px 0;font-size:13px"></div>
+      <button class="btn-primary" id="pr-changepw" style="margin-top:6px">Passwort ändern</button>
+    </div>
+  `;
+
+  // Live-Vorschau: Theme sofort umschalten, wenn im Dropdown geändert
+  body.querySelector("#pr-theme").addEventListener("change", (e) => applyTheme(e.target.value));
+
+  // Farbpalette wählen: markiert die Auswahl und zeigt sie sofort als Vorschau
+  let selectedAccent = u.accent || "teal";
+  body.querySelectorAll(".accent-swatch").forEach((sw) =>
+    sw.addEventListener("click", () => {
+      selectedAccent = sw.dataset.accent;
+      body.querySelectorAll(".accent-swatch").forEach((s) => s.classList.remove("selected"));
+      sw.classList.add("selected");
+      applyAccent(selectedAccent);  // Live-Vorschau
+    })
+  );
+
+  body.querySelector("#pr-save").addEventListener("click", async () => {
+    const updated = await api.updateProfile({
+      display_name: body.querySelector("#pr-name").value,
+      language: body.querySelector("#pr-lang").value,
+      theme: body.querySelector("#pr-theme").value,
+      accent: selectedAccent,
+    });
+    state.user = updated;
+    applyTheme(updated.theme);
+    applyAccent(updated.accent || "teal");
+    setLanguage(updated.language);
+    applyStaticTranslations();       // statische HTML-Texte übersetzen
+    renderSidebar();                 // Sidebar in neuer Sprache
+    renderMainContent();             // Hauptbereich in neuer Sprache
+    document.getElementById("user-menu-name").textContent = updated.display_name;
+    body.querySelector("#pr-msg").innerHTML = `<span style="color:var(--accent)">✓</span>`;
+  });
+
+  body.querySelector("#pr-changepw").addEventListener("click", async () => {
+    const msg = body.querySelector("#pr-msg");
+    try {
+      await api.changePassword(
+        body.querySelector("#pr-cur").value,
+        body.querySelector("#pr-new").value
+      );
+      msg.innerHTML = `<span style="color:var(--accent)">Passwort geändert.</span>`;
+      body.querySelector("#pr-cur").value = "";
+      body.querySelector("#pr-new").value = "";
+    } catch (e) {
+      msg.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+    }
+  });
+}
