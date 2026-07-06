@@ -137,6 +137,42 @@ def parse_instruction(text: str) -> list[str]:
     return elements
 
 
+def _split_complete_instructions(buf: str) -> tuple[str, str]:
+    """
+    Zerlegt einen Guacamole-Textstrom in (komplette Instruktionen, Rest).
+
+    Das Protokoll ist "LEN.WERT,LEN.WERT,...;" - LEN zählt ZEICHEN (nicht Bytes),
+    daher wird auf dem bereits dekodierten str gearbeitet. Der Trenner ';' darf
+    innerhalb von Werten vorkommen (z.B. Clipboard, Fenstertitel), deshalb darf
+    NICHT naiv an ';' gesplittet werden, sondern nur längenpräfix-geführt.
+
+    Rückgabe: (buf[:x], buf[x:]) - x = Ende der letzten vollständigen Instruktion.
+    Bei Protokollfehlern wird alles durchgereicht (Client meldet den Fehler dann
+    selbst), damit hier nichts stumm hängen bleibt.
+    """
+    pos = 0
+    last_complete = 0
+    n = len(buf)
+    while pos < n:
+        dot = buf.find(".", pos)
+        if dot == -1:
+            break  # Längenpräfix noch unvollständig
+        try:
+            length = int(buf[pos:dot])
+        except ValueError:
+            return buf, ""  # Protokollfehler -> durchreichen
+        end = dot + 1 + length  # Index des Terminators (',' oder ';')
+        if end >= n:
+            break  # Wert oder Terminator noch nicht vollständig empfangen
+        term = buf[end]
+        pos = end + 1
+        if term == ";":
+            last_complete = pos
+        elif term != ",":
+            return buf, ""  # Protokollfehler -> durchreichen
+    return buf[:last_complete], buf[last_complete:]
+
+
 async def _read_instruction(reader: asyncio.StreamReader, timeout: float = 15.0) -> list[str]:
     """Liest genau eine Instruktion (bis zum ';') von guacd."""
     data = await asyncio.wait_for(reader.readuntil(b";"), timeout=timeout)
@@ -236,6 +272,20 @@ async def run_tunnel(ws, protocol: str, params: dict,
             pass
         return
 
+    # TCP_NODELAY: Nagle-Algorithmus abschalten. Der Guacamole-Strom besteht aus
+    # vielen kleinen, latenzkritischen Instruktionen (Frame-Updates UND die
+    # 'sync'-Pings/-ACKs für die Flow-Control). Puffert Nagle diese kleinen Pakete,
+    # entstehen (a) verzögerte/falsch erkannte Frame-Grenzen -> Screen aktualisiert
+    # ruckelig/unvollständig, und (b) verspätete sync-ACKs -> guacd hält den Client
+    # für unresponsive und TRENNT nach kurzer Zeit. Sofortiges Senden behebt beides.
+    try:
+        import socket as _socket
+        sock = writer.get_extra_info("socket")
+        if sock is not None:
+            sock.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
+
     try:
         ready_id = await _handshake(reader, writer, protocol, params, width, height, dpi)
         print(f"[guac] Handshake OK, connection-id={ready_id}")
@@ -258,17 +308,30 @@ async def run_tunnel(ws, protocol: str, params: dict,
         # Chunk-Grenzen geteilte Mehrbyte-Zeichen korrekt. KEIN 'ignore'/'replace',
         # da das Zeichen verschlucken/ersetzen und damit die längenpräfixierten
         # Guacamole-Instruktionen verschieben würde -> Grafik-Artefakte.
+        #
+        # WICHTIG (Framing): Guacamole.WebSocketTunnel im Browser parst JEDE
+        # WebSocket-Message für sich - es gibt KEINEN Puffer über Message-
+        # Grenzen hinweg. Eine WS-Message darf daher nur VOLLSTÄNDIGE
+        # Instruktionen enthalten. Rohes Chunk-Forwarding (read(8192) -> send)
+        # zerschneidet große Bild-Blobs mitten im Base64:
+        #   -> "InvalidStateError: The source image could not be decoded"
+        #      (Grafik-Artefakte), und
+        #   -> Tunnel-Abbruch mit "Incomplete instruction" nach kurzer Zeit.
+        # Deshalb: Puffern und nur bis zur letzten kompletten Instruktion
+        # (längenpräfix-korrekt, ';' darf in Werten vorkommen!) weiterreichen.
         decoder = codecs.getincrementaldecoder("utf-8")()
+        buf = ""
         try:
             while not stop.is_set():
-                data = await reader.read(8192)
+                data = await reader.read(65536)
                 if not data:
                     break
                 if stop.is_set():
                     break
-                text = decoder.decode(data)
-                if text:
-                    await ws.send_text(text)
+                buf += decoder.decode(data)
+                complete, buf = _split_complete_instructions(buf)
+                if complete:
+                    await ws.send_text(complete)
         except Exception:
             # Browser hat geschlossen o.ä. - normaler Fall, nicht laut loggen.
             pass

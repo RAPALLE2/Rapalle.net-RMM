@@ -33,7 +33,14 @@ try:
 except ImportError:
     GUACD_PORT = int(os.getenv("GUACD_PORT", "4822"))
 
-IMAGE = "guacamole/guacd"
+# guacd-Image FEST auf 1.6.0 gepinnt. 1.6.0 bringt "improved rendering
+# performance" und - entscheidend für RDP - Unterstützung der RDP Graphics
+# Pipeline Extension (RDPGFX). Damit kennt guacd echte Frame-Grenzen, statt sie
+# über Timing-Heuristiken zu RATEN. Genau dieses Raten verursacht bei älteren
+# guacd-Versionen das "nur geänderte Bereiche werden neu gezeichnet / alte Reste
+# bleiben stehen" (Layering/Tearing). Ohne Tag würde Docker 'latest' nehmen und
+# ein bereits lokal liegendes altes Image nie aktualisieren.
+IMAGE = "guacamole/guacd:1.6.0"
 CONTAINER_NAME = "rapalle-guacd"
 # Der veröffentlichte Port wird bewusst nur an localhost gebunden - guacd hat
 # keine eigene Authentifizierung und darf nicht offen im Netz hängen.
@@ -83,6 +90,14 @@ def _container_state() -> str:
     if rc != 0:
         return "absent"
     return "running" if out.strip() == "true" else "stopped"
+
+
+def _container_image() -> str:
+    """Image, aus dem der laufende/vorhandene guacd-Container erstellt wurde."""
+    rc, out, _ = _run(
+        ["docker", "inspect", "-f", "{{.Config.Image}}", CONTAINER_NAME], timeout=15
+    )
+    return out.strip() if rc == 0 else ""
 
 
 def status() -> dict:
@@ -181,8 +196,18 @@ def ensure_running() -> dict:
             return {"ok": False, "log": "\n".join(log)}
 
     state = _container_state()
+    # Läuft/existiert ein Container noch aus einem ANDEREN (älteren) Image, muss er
+    # neu aufgesetzt werden - sonst bleibt guacd auf der alten Version, obwohl das
+    # neue 1.6.0-Image lokal schon vorliegt (der Container "erbt" das Update nicht).
+    if state != "absent":
+        current = _container_image()
+        if current and current != IMAGE:
+            log.append(f"guacd-Container läuft aus altem Image '{current}' -> Neuaufbau auf {IMAGE}.")
+            _run(["docker", "rm", "-f", CONTAINER_NAME], timeout=60)
+            state = "absent"
+
     if state == "running":
-        return {"ok": True, "log": "guacd-Container läuft bereits."}
+        return {"ok": True, "log": "guacd-Container läuft bereits (aktuelles Image)."}
     if state == "stopped":
         rc, out, err = _run(["docker", "start", CONTAINER_NAME], timeout=60)
         log.append("Starte vorhandenen Container ...")

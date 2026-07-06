@@ -139,9 +139,11 @@ export function renderGuacamole(body, win) {
     } catch {}
   }
 
-  // Watchdog gegen Einfrieren: misst, wie pünktlich ein 1s-Timer feuert. Wird der
-  // Hauptthread zu lange blockiert (> 6s), schließt sich das Guacamole-Fenster
-  // selbst, damit das restliche RMM-GUI wieder bedienbar wird.
+  // Watchdog gegen Einfrieren: misst, wie pünktlich ein 1s-Timer feuert. Ein
+  // kurzzeitig durch hohe Render-Last blockierter Hauptthread darf die laufende
+  // RDP-Session NICHT mehr automatisch schließen (das war ein Hauptgrund für
+  // "schließt nach kurzer Zeit"). Er warnt nur noch dezent; echte Abbrüche
+  // behandeln onerror / onstatechange(state 5).
   let _visHandler = null;
   let _stallStrikes = 0;
   function startWatchdog() {
@@ -156,12 +158,11 @@ export function renderGuacamole(body, win) {
       lastBeat = now;
       if (document.hidden) { _stallStrikes = 0; return; }  // Hintergrund-Tab ignorieren
       if (gap > 10000) {
-        // Erst nach ZWEI aufeinanderfolgenden langen Blockaden schließen,
-        // damit ein einzelner Ruckler nicht sofort das Fenster killt.
         _stallStrikes++;
         if (_stallStrikes >= 2) {
-          console.warn(`[guac] Hauptthread wiederholt >10s blockiert -> schließe Guacamole-Fenster.`);
-          forceClose("GUI war mehrfach blockiert – Guacamole wurde automatisch geschlossen.");
+          console.warn("[guac] Hauptthread mehrfach kurz blockiert (hohe Render-Last) – Session bleibt bestehen.");
+          try { setStatus("Hohe Last – Bild kann kurz ruckeln", "var(--warn)"); } catch {}
+          _stallStrikes = 0;   // nur warnen, NICHT schließen
         }
       } else {
         _stallStrikes = 0;
@@ -173,7 +174,8 @@ export function renderGuacamole(body, win) {
     if (_visHandler) { document.removeEventListener("visibilitychange", _visHandler); _visHandler = null; }
   }
 
-  // Sauberes Trennen + Fenster schließen (Notausgang).
+  // Sauberes Trennen + Fenster schließen. Nur noch manuell/als Notausgang
+  // verfügbar - der Watchdog ruft das bewusst NICHT mehr automatisch auf.
   function forceClose(reason) {
     try { setStatus(reason, "var(--danger)"); } catch {}
     cleanupClient();
@@ -237,6 +239,21 @@ export function renderGuacamole(body, win) {
       params["disable-bitmap-caching"] = "true";
       params["disable-offscreen-caching"] = "true";
       params["disable-glyph-caching"] = "true";
+
+      // GEGEN DIE BLOCK-/LAYERING-ARTEFAKTE (blaue Blöcke, stehengebliebene
+      // Regionen, Cursor-Reste) auf modernen Windows-Servern:
+      // guacd 1.6.0 aktiviert die RDP Graphics Pipeline Extension (GFX/RDPGFX)
+      // STANDARDMÄSSIG. Auf Windows Server (2019/2022) erzeugt GFX aber genau
+      // diese Grafikfehler - offiziell dokumentiert ("if you find it causing
+      // problems, disable it") und im Apache-Bugtracker (GUACAMOLE-1863) sowie
+      // in aktuellen Setups (guacd 1.6.0 + Windows Server) bestätigt: GFX aus ->
+      // guacd fällt auf den stabilen Basis-Grafikpfad zurück, Artefakte weg.
+      // Der Parameter wurde in guacd von "enable-gfx" auf "disable-gfx" umbenannt;
+      // wir setzen beide Schreibweisen - der Handshake sendet nur die, die die
+      // installierte guacd-Version tatsächlich anfordert, die andere wird ignoriert.
+      params["disable-gfx"] = "true";        // ab GFX-Default (1.6.0)
+      params["enable-gfx"] = "false";        // ältere/alternative Schreibweise
+      params["enable-gfx-h264"] = "false";   // H.264/AVC-Variante ebenfalls aus
     } else if (proto === "vnc") {
       params.width = String(width);
       params.height = String(height);
@@ -244,8 +261,13 @@ export function renderGuacamole(body, win) {
     return { proto, params, width, height };
   }
 
-  // Lädt guacamole-common-js bei Bedarf nach. Reihenfolge: lokal (offline)
-  // zuerst, dann verschiedene CDN-Pfade als Fallback. Sobald window.Guacamole
+  // Lädt guacamole-common-js bei Bedarf nach. WICHTIG: Das npm-Paket 1.5.0
+  // enthält KEIN klassisches Browser-Bundle mehr - nur noch:
+  //   dist/esm/guacamole-common(.min).js  -> ES-Modul (braucht import())
+  //   dist/cjs/guacamole-common(.min).js  -> CommonJS (braucht module-Shim,
+  //                                          als <script> geladen: "module is
+  //                                          not defined")
+  // Reihenfolge: lokal (offline) zuerst, dann CDN. Sobald window.Guacamole
   // existiert, sind wir fertig.
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -257,19 +279,50 @@ export function renderGuacamole(body, win) {
     });
   }
 
+  // Prüft, ob ein Kandidat wie das Guacamole-API aussieht, und macht ihn global.
+  function adoptGuacamole(candidate) {
+    const G = candidate?.default ?? candidate?.Guacamole ?? candidate;
+    if (G && G.Client && G.WebSocketTunnel) { window.Guacamole = G; return true; }
+    return !!(window.Guacamole && window.Guacamole.Client);
+  }
+
+  // ESM-Build per dynamischem import() laden.
+  async function loadEsm(src) {
+    const mod = await import(/* @vite-ignore */ src);
+    return adoptGuacamole(mod);
+  }
+
+  // CJS-Build laden: Quelltext holen und mit module/exports-Shim ausführen
+  // (direkt als <script> eingebunden wirft er "module is not defined").
+  async function loadCjs(src) {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const code = await res.text();
+    const module = { exports: {} };
+    new Function("module", "exports", code)(module, module.exports);
+    return adoptGuacamole(module.exports);
+  }
+
   async function ensureGuacamoleLoaded() {
     if (window.Guacamole) return true;
-    const sources = [
-      "/js/vendor/guacamole-common.min.js",                                  // selbst gehostet (offline)
-      "https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0",              // CDN (main)
-      "https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/guacamole-common.min.js",
-      "https://unpkg.com/guacamole-common-js@1.5.0",
+    const attempts = [
+      // 1) Selbst gehostet (offline-fähig, empfohlen):
+      //    UMD/klassisches Script ODER ESM - beide Varianten werden probiert.
+      () => loadScript("/js/vendor/guacamole-common.min.js").then(() => adoptGuacamole(window.Guacamole)),
+      () => loadEsm("/js/vendor/guacamole-common.min.js"),
+      () => loadCjs("/js/vendor/guacamole-common.min.js"),
+      // 2) CDN, ESM-Build (existiert in 1.5.0 wirklich - dist/guacamole-common.min.js gibt es NICHT mehr!)
+      () => loadEsm("https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/esm/guacamole-common.min.js"),
+      () => loadEsm("https://unpkg.com/guacamole-common-js@1.5.0/dist/esm/guacamole-common.min.js"),
+      // 3) CDN, CJS-Build mit Shim (letzter Fallback)
+      () => loadCjs("https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/cjs/guacamole-common.min.js"),
+      () => loadCjs("https://unpkg.com/guacamole-common-js@1.5.0/dist/cjs/guacamole-common.min.js"),
     ];
-    for (const src of sources) {
+    for (const attempt of attempts) {
       try {
-        await loadScript(src);
-        if (window.Guacamole) return true;
+        if (await attempt()) return true;
       } catch { /* nächste Quelle versuchen */ }
+      if (window.Guacamole && window.Guacamole.Client) return true;
     }
     return !!window.Guacamole;
   }
@@ -294,9 +347,10 @@ export function renderGuacamole(body, win) {
         `Bei Servern ohne Internet: Datei einmalig herunterladen und unter ` +
         `<code>frontend/js/vendor/guacamole-common.min.js</code> ablegen ` +
         `(siehe Hinweis in der Konsole).</span>`;
-      console.error("[guac] guacamole-common-js nicht ladbar. Offline-Lösung: " +
-        "Datei von https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0 herunterladen " +
-        "und als frontend/js/vendor/guacamole-common.min.js speichern.");
+      console.error("[guac] guacamole-common-js nicht ladbar. Offline-Lösung: Datei von " +
+        "https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/esm/guacamole-common.min.js " +
+        "herunterladen und als frontend/js/vendor/guacamole-common.min.js speichern " +
+        "(ESM wird unterstützt; alternativ funktioniert auch jedes klassische UMD-Bundle).");
       return;
     }
     formMsg.textContent = "Token wird geholt...";
@@ -322,6 +376,15 @@ export function renderGuacamole(body, win) {
     const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
     const tunnelUrl = `${wsProto}//${location.host}/guac/tunnel`;
     const tunnel = new Guacamole.WebSocketTunnel(tunnelUrl);
+    // guacamole-common-js schließt den Tunnel per Default schon nach 15 s ohne
+    // empfangene Daten (receiveTimeout) und meldet nach 1,5 s "instabil". Bei
+    // kurzen Puffer-/Netzwerk-Hängern (Reverse-Proxy, WLAN) trennt das sonst
+    // vorschnell -> großzügiger einstellen. guacd sendet regelmäßig sync-Pings,
+    // solange der Weg frei ist, also ist ein längeres Fenster unkritisch.
+    try {
+      tunnel.receiveTimeout = 30000;
+      tunnel.unstableThreshold = 6000;
+    } catch {}
     client = new Guacamole.Client(tunnel);
 
     const displayElement = client.getDisplay().getElement();
