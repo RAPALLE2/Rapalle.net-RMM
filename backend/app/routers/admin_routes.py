@@ -392,6 +392,8 @@ class SettingsBody(BaseModel):
     metrics_interval_seconds: int | None = None
     metrics_retention_hours: int | None = None
     replay_retention_days: int | None = None
+    guacd_host: str | None = None
+    guacd_port: int | None = None
 
 
 @router.get("/settings")

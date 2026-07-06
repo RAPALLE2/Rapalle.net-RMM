@@ -76,6 +76,13 @@ const translations = {
     general_server_ip: "Server-IP / Host", general_server_domain: "Domain (optional)",
     general_backend_port: "Backend-Port", general_frontend_port: "Frontend-Port",
     general_server_url_advanced: "Vollständige URL (überschreibt IP/Domain/Port)",
+    // Guacamole (extern gehostet)
+    guac_title: "Remote-Gateway (Guacamole)",
+    guac_hint: "Für Remote-Desktop im Browser (RDP/VNC/SSH) wird ein extern gehosteter guacd-Dienst genutzt. Host und Port hier eintragen (z.B. eine separate VM mit 'docker run -d -p 4822:4822 guacamole/guacd').",
+    guac_host: "guacd Host / IP", guac_port: "guacd Port",
+    guac_test: "Verbindung testen",
+    guac_loading: "Status wird geladen…",
+    guac_reachable: "erreichbar", guac_unreachable: "nicht erreichbar",
     // Automation
     auto_new: "Neue Automation", auto_schedule: "Zeitplan", auto_target: "Ziel-Clients",
     auto_every: "Ausführen alle", minutes: "Minuten", hours: "Stunden", days: "Tage",
@@ -170,6 +177,13 @@ const translations = {
     general_server_ip: "Server IP / host", general_server_domain: "Domain (optional)",
     general_backend_port: "Backend port", general_frontend_port: "Frontend port",
     general_server_url_advanced: "Full URL (overrides IP/domain/port)",
+    // Guacamole (externally hosted)
+    guac_title: "Remote gateway (Guacamole)",
+    guac_hint: "Remote desktop in the browser (RDP/VNC/SSH) uses an externally hosted guacd service. Enter its host and port here (e.g. a separate VM running 'docker run -d -p 4822:4822 guacamole/guacd').",
+    guac_host: "guacd host / IP", guac_port: "guacd port",
+    guac_test: "Test connection",
+    guac_loading: "Loading status…",
+    guac_reachable: "reachable", guac_unreachable: "unreachable",
     auto_new: "New automation", auto_schedule: "Schedule", auto_target: "Target clients",
     auto_every: "Run every", minutes: "minutes", hours: "hours", days: "days",
     auto_none: "No automations yet.",

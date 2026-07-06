@@ -95,6 +95,24 @@ export function renderSettings(body, win) {
 
         <div id="ge-error" class="form-error hidden"></div>
         <button class="btn-primary" id="ge-save" style="margin-top:8px">${t("save")}</button>
+
+        <h3 style="margin-top:26px">${t("guac_title")}</h3>
+        <p style="color:var(--subtext);font-size:13px">${t("guac_hint")}</p>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:2">
+            <label>${t("guac_host")}</label>
+            <input type="text" id="ge-guacd-host" placeholder="192.168.1.20" value="${esc(s.guacd_host || "")}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>${t("guac_port")}</label>
+            <input type="number" min="1" max="65535" id="ge-guacd-port" value="${esc(String(s.guacd_port ?? 4822))}" />
+          </div>
+        </div>
+        <div id="guacd-status" style="font-size:13px;margin:2px 0 8px;color:var(--subtext)">${t("guac_loading")}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-primary" id="guacd-save" style="width:auto;margin:0">${t("save")}</button>
+          <button class="taskbar-btn" id="guacd-test">${t("guac_test")}</button>
+        </div>
       </div>
     `;
 
@@ -118,6 +136,43 @@ export function renderSettings(body, win) {
         err.textContent = e.message; err.classList.remove("hidden");
       }
     });
+
+    // ---- Guacamole (extern gehostet): Host/Port speichern + Erreichbarkeit ----
+    const guacStatusEl = root.querySelector("#guacd-status");
+
+    async function refreshGuacStatus() {
+      guacStatusEl.textContent = t("guac_loading");
+      try {
+        const st = await api.guacStatus();
+        guacStatusEl.innerHTML = st.available
+          ? `<span style="color:#3ecf8e">● guacd ${t("guac_reachable")}</span>`
+          : `<span style="color:var(--warn)">○ guacd ${t("guac_unreachable")}</span>`;
+      } catch (e) {
+        guacStatusEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+      }
+    }
+
+    async function saveGuacd() {
+      try {
+        await api.updateSettings({
+          guacd_host: root.querySelector("#ge-guacd-host").value.trim(),
+          guacd_port: parseInt(root.querySelector("#ge-guacd-port").value, 10) || 4822,
+        });
+        window.notify?.(t("general_saved"), "success");
+        refreshGuacStatus();
+      } catch (e) {
+        window.notify?.(e.message, "error");
+      }
+    }
+
+    root.querySelector("#guacd-save").addEventListener("click", saveGuacd);
+    root.querySelector("#guacd-test").addEventListener("click", async (e) => {
+      const btn = e.currentTarget; const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = "…";
+      await refreshGuacStatus();
+      btn.disabled = false; btn.textContent = orig;
+    });
+    refreshGuacStatus();
   }
 
   // ---------------- USERS ----------------
