@@ -227,8 +227,8 @@ body {
 .donut-value b { font-size: 16px; display: block; }
 
 /* Alle Verlaufs-Charts (CPU, RAM, Netzwerk) gleich groß */
-.mini-chart { flex: 1 1 0; min-width: 220px; }
-.mini-chart svg { width: 100%; height: auto; }
+.mini-chart { flex: 1 1 0; min-width: 220px; overflow: visible; }
+.mini-chart svg { width: 100%; height: auto; overflow: visible; }
 
 .notes-textarea {
   width: 100%; min-height: 240px; height: 100%; background: var(--panel-2); border: 1px solid var(--border);
@@ -474,4 +474,73 @@ body.theme-light {
   --border: #dbe2ec;
   --text: #16202e;
   --subtext: #64748b;
+}
+
+
+
+
+
+/* ==========================================================
+   Schöne moderne Checkboxen
+========================================================== */
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+
+  width: 18px;
+  height: 18px;
+
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+
+  cursor: pointer;
+  position: relative;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(45,212,191,0.12);
+}
+
+input[type="checkbox"]:active {
+  transform: scale(0.95);
+}
+
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "✓";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -58%);
+
+  color: #081018;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(45,212,191,0.18),
+    0 0 0 6px rgba(45,212,191,0.08);
+}
+
+label:has(input[type="checkbox"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }

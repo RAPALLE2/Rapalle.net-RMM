@@ -213,8 +213,11 @@ export function renderGuacamole(body, win) {
         params["enable-wallpaper"] = "false";
         params["enable-desktop-composition"] = "false";
       } else {
-        // low / flüssig: möglichst wenig Grafiklast
-        params["color-depth"] = "16";
+        // low / flüssig: möglichst wenig Grafiklast.
+        // color-depth 24 statt 16: 16bpp erzeugt auf modernen Windows-RDP-Servern
+        // sichtbares Banding/Geisterbilder; 24bpp ist mit abgeschalteten Effekten
+        // kaum teurer, aber deutlich sauberer.
+        params["color-depth"] = "24";
         params["enable-wallpaper"] = "false";
         params["enable-theming"] = "false";
         params["enable-full-window-drag"] = "false";
@@ -222,6 +225,18 @@ export function renderGuacamole(body, win) {
         params["enable-menu-animations"] = "false";
       }
       params["enable-font-smoothing"] = "true";
+
+      // GEGEN FRAME-LAYERING / GEISTERBILDER ("alte Frames bleiben stehen"):
+      // guacd wiederverwendet sonst gecachte Bitmaps, Glyphen und Offscreen-
+      // Surfaces. Wenn dieser Cache und der tatsächliche Bildschirminhalt
+      // auseinanderlaufen, werden geänderte Bereiche NICHT sauber neu gezeichnet
+      // -> alte Inhalte "kleben" unter/neben dem neuen Bild. Das Abschalten der
+      // drei RDP-Caches zwingt guacd, geänderte Regionen immer frisch zu senden.
+      // Kostet etwas mehr Bandbreite, liefert aber ein vollständig aktualisiertes,
+      // artefaktfreies Bild.
+      params["disable-bitmap-caching"] = "true";
+      params["disable-offscreen-caching"] = "true";
+      params["disable-glyph-caching"] = "true";
     } else if (proto === "vnc") {
       params.width = String(width);
       params.height = String(height);

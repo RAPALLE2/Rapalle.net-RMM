@@ -19,8 +19,10 @@ schwer zu erratenden Token in der URL selbst.
 """
 
 import io
+import ipaddress
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
@@ -63,6 +65,34 @@ def _require_valid_token(token: str) -> dict:
     return row
 
 
+def _ensure_scheme(url: str) -> str:
+    """
+    Sorgt dafür, dass eine URL ein Schema hat. Ohne 'http(s)://' kann weder
+    Invoke-WebRequest (Windows) noch curl (Linux) eine Verbindung aufbauen -
+    genau daran scheitert der Client-Install, wenn im Feld 'Server-URL' nur
+    eine nackte IP/Domain steht.
+    """
+    url = url.strip().rstrip("/")
+    if url and "://" not in url:
+        url = "http://" + url
+    return url
+
+
+def _configured_backend_port(default: int = 4000) -> int:
+    try:
+        return int(db.get_setting("server_backend_port"))
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
 def _backend_url(request: Request) -> str:
     """
     Liefert die Basis-Adresse, die in Install-Befehle/Skripte eingebaut wird.
@@ -74,6 +104,22 @@ def _backend_url(request: Request) -> str:
     """
     full = (db.get_setting("server_url") or "").strip()
     if full:
+        # Fehlendes Schema ergänzen (sonst kann Invoke-WebRequest/curl nicht verbinden).
+        full = _ensure_scheme(full)
+        parts = urlsplit(full)
+        has_port = parts.port is not None
+        has_path = parts.path not in ("", "/")
+        # Häufigster Konfig-Fehler: im Feld "Server-URL" steht nur eine nackte IP
+        # (z.B. 10.10.32.249) ohne Port -> landet sonst auf Port 80, das Backend
+        # hört aber auf 4000. Bei einer BLANKEN IP ohne Port/Pfad ergänzen wir
+        # daher automatisch den konfigurierten Backend-Port. Domains bleiben
+        # unangetastet (dort steckt praktisch immer ein Reverse-Proxy dahinter),
+        # ebenso bereits mit Port/Pfad angegebene URLs und https://.
+        if (parts.scheme == "http" and not has_port and not has_path
+                and parts.hostname and _is_ip_literal(parts.hostname)):
+            bport = _configured_backend_port()
+            if bport not in (0, 80):
+                full = urlunsplit((parts.scheme, f"{parts.hostname}:{bport}", "", "", ""))
         return full.rstrip("/")
 
     domain = (db.get_setting("server_domain") or "").strip()
