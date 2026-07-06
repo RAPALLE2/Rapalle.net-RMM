@@ -159,6 +159,7 @@ async def _handshake(reader, writer, protocol: str, params: dict,
         raise RuntimeError(f"Unerwartete guacd-Antwort: {instr[:1]}")
     server_args = instr[1:]
 
+<<<<<<< HEAD
     # 3) Bildgröße + unterstützte Medien.
     #    WICHTIG: Die Liste der vom Client unterstützten BILD-Mimetypes MUSS hier
     #    angegeben werden. guacd kodiert den (RDP-/VNC-)Desktop als Bildstrom
@@ -172,6 +173,13 @@ async def _handshake(reader, writer, protocol: str, params: dict,
     writer.write(encode_instruction("audio"))
     writer.write(encode_instruction("video"))
     writer.write(encode_instruction("image", "image/png", "image/jpeg", "image/webp"))
+=======
+    # 3) Bildgröße + unterstützte Medien (wir nutzen nur das Bild)
+    writer.write(encode_instruction("size", width, height, dpi))
+    writer.write(encode_instruction("audio"))
+    writer.write(encode_instruction("video"))
+    writer.write(encode_instruction("image"))
+>>>>>>> 121be5b1eb8311af2753307a41e15cfe58c4b368
     await writer.drain()
 
     # 4) 'connect' mit einem Wert je erwartetem Argument (in exakt dieser
@@ -286,6 +294,7 @@ async def run_tunnel(ws, protocol: str, params: dict,
         finally:
             stop.set()
 
+<<<<<<< HEAD
     task_a = asyncio.create_task(guacd_to_browser())
     task_b = asyncio.create_task(browser_to_guacd())
     try:
@@ -302,6 +311,11 @@ async def run_tunnel(ws, protocol: str, params: dict,
         task_a.cancel()
         task_b.cancel()
         await asyncio.gather(task_a, task_b, return_exceptions=True)
+=======
+    try:
+        await asyncio.gather(guacd_to_browser(), browser_to_guacd())
+    finally:
+>>>>>>> 121be5b1eb8311af2753307a41e15cfe58c4b368
         print("[guac] Tunnel geschlossen.")
         try:
             writer.close()

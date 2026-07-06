@@ -262,12 +262,15 @@ export function renderGuacamole(body, win) {
   async function connect() {
     const { proto, params, width, height } = buildParams();
     if (!params.hostname) { formMsg.textContent = "Bitte Host/IP angeben."; return; }
+<<<<<<< HEAD
     // Alten Client/Keyboard/Mouse IMMER zuerst aufräumen (auch bei Reconnect
     // nach normalem Trennen): sonst bleibt der alte Guacamole.Keyboard auf
     // displayEl registriert und feuert (Closure über "client") zusätzlich an
     // den neuen Client -> jede Taste wird doppelt gesendet, und die alte
     // Session/der alte Tunnel bleiben unbemerkt offen.
     cleanupClient();
+=======
+>>>>>>> 121be5b1eb8311af2753307a41e15cfe58c4b368
     // Zustand für (Neu-)Verbindung zurücksetzen
     disconnected = false;
     lastScale = 0;
@@ -355,7 +358,11 @@ export function renderGuacamole(body, win) {
         setStatus(`Verbunden (${proto.toUpperCase()})`, "var(--accent)");
         startWatchdog();   // erst ab hier auf Einfrieren achten (nicht während des Aufbaus)
       } else if (st === 5 && !disconnected) {
+<<<<<<< HEAD
         cleanupClient();
+=======
+        stopWatchdog();
+>>>>>>> 121be5b1eb8311af2753307a41e15cfe58c4b368
         setStatus("Verbindung getrennt", "var(--danger)");
         showReconnect("Verbindung wurde getrennt.");
       }
