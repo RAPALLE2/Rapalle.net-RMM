@@ -864,6 +864,9 @@ DEFAULT_SETTINGS = {
     "metrics_retention_hours": "1",
     # Wie lange Screen-Replays aufbewahrt werden (Tage).
     "replay_retention_days": "10",
+    # Extern gehostetes Apache guacd (für Remote-Desktop im Browser).
+    "guacd_host": "127.0.0.1",
+    "guacd_port": "4822",
 }
 
 

@@ -75,6 +75,11 @@ export const api = {
     return request(`/api/network/portscan?${q.toString()}`);
   },
 
+  // Apache Guacamole (extern gehostet)
+  guacStatus: () => request("/api/guac/status"),
+  createGuacToken: (protocol, params, clientId) =>
+    request("/api/guac/token", { method: "POST", body: JSON.stringify({ protocol, params, client_id: clientId }) }),
+
   // --- Benutzerverwaltung ---
   getUsers: () => request("/api/users"),
   createUser: (data) => request("/api/users", { method: "POST", body: JSON.stringify(data) }),
@@ -127,8 +132,7 @@ export const api = {
   deleteScript: (id) => request(`/api/scripts/${id}`, { method: "DELETE" }),
 
   // --- Rechte / Gruppen ---
-  getSettings: () => request("/api/admin/settings"),
-  updateSettings: (data) => request("/api/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
+  getSettings: () => request("/api/admin/settings"),  updateSettings: (data) => request("/api/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
   getPermissions: () => request("/api/admin/permissions"),
   getGroups: () => request("/api/admin/groups"),

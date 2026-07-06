@@ -37,6 +37,7 @@ from app.routers import (
     scripts_routes,
     admin_routes,
     agent_update_routes,
+    guac_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -75,6 +76,11 @@ api.include_router(recordings_routes.router)
 api.include_router(scripts_routes.router)
 api.include_router(admin_routes.router)
 api.include_router(agent_update_routes.router)
+api.include_router(guac_routes.router)
+
+# Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
+# Frontend-Mount registriert werden, damit die Route greift.
+api.add_api_websocket_route("/guac/tunnel", guac_routes.tunnel_endpoint)
 
 
 @api.get("/api/health")

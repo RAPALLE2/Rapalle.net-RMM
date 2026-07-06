@@ -94,6 +94,7 @@ function renderClientView(el, clientId) {
           <button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>
           <button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>
           <button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>
+          <button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>
           <button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>
         </div>
       </div>
@@ -322,6 +323,12 @@ function handleAction(action, client) {
   }
   else if (action === "explorer") openWindow({ key: `explorer-${client.id}`, appId: "explorer", title: `${t("file_explorer")} — ${client.hostname}`, props, ...colorProps });
   else if (action === "vnc") openWindow({ key: `vnc-${client.id}`, appId: "vnc", title: `${t("remote_screen")} — ${client.hostname}`, props, ...colorProps, w: 800, h: 600 });
+  else if (action === "guacamole") openWindow({
+    key: `guac-${client.id}`, appId: "guacamole",
+    title: `Guacamole — ${client.hostname}`,
+    props: { clientId: client.id, clientName: client.hostname, host: client.ip, platform: client.platform },
+    ...colorProps, w: 900, h: 640,
+  });
   else if (action === "taskmanager") openWindow({ key: `task-${client.id}`, appId: "taskmanager", title: `${t("task_manager")} — ${client.hostname}`, props, ...colorProps });
 }
 

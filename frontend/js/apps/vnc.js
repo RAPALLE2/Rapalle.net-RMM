@@ -66,6 +66,20 @@ export function renderVnc(body, win) {
   let rdpActive = false;  // true, wenn gerade das experimentelle RDP-Streaming läuft
   let shellActive = false; // true, sobald auf Shell-Modus umgeschaltet wurde
 
+  // Öffnet den Guacamole-Client (RDP/VNC/SSH über extern gehostetes guacd)
+  // für diesen Client in einem eigenen Fenster.
+  function openGuacWindow() {
+    import("../windowmanager.js").then(({ openWindow }) => {
+      const c = state.clients?.find((x) => x.id === clientId);
+      openWindow({
+        key: `guac-${clientId}`, appId: "guacamole",
+        title: `Guacamole — ${clientName}`,
+        props: { clientId, clientName, host: c?.ip || "", platform: c?.platform },
+        w: 900, h: 640,
+      });
+    });
+  }
+
   // Schaltet das Fenster auf eine eingebettete Shell um (headless/Shell-only).
   // Wird automatisch ausgelöst, wenn der Agent 'screen-mode: shell' meldet.
   function switchToShell(reason) {
@@ -78,14 +92,22 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-mode", onMode);
     window.removeEventListener("mouseup", onMouseUp);
 
-    // Fenster leeren, Hinweis-Banner + Terminal einsetzen
+    // Fenster leeren, Hinweis-Banner (inkl. Guacamole-Option) + Terminal einsetzen
     body.innerHTML = "";
     body.style.display = "flex";
     body.style.flexDirection = "column";
     body.style.height = "100%";
     const banner = document.createElement("div");
-    banner.style.cssText = "padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border)";
-    banner.textContent = "🖥️ → ⌨️ " + (reason || "Kein grafischer Bildschirm – Shell geöffnet.");
+    banner.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border)";
+    const label = document.createElement("span");
+    label.style.flex = "1";
+    label.textContent = "🖥️ → ⌨️ " + (reason || "Kein grafischer Bildschirm – Shell geöffnet.");
+    const guacBtn = document.createElement("button");
+    guacBtn.className = "taskbar-btn";
+    guacBtn.textContent = "🕹️ Über Guacamole (RDP/VNC/SSH)";
+    guacBtn.addEventListener("click", openGuacWindow);
+    banner.appendChild(label);
+    banner.appendChild(guacBtn);
     body.appendChild(banner);
     const termHost = document.createElement("div");
     termHost.style.cssText = "flex:1;min-height:0";
@@ -148,6 +170,7 @@ export function renderVnc(body, win) {
           ⬇️ Per RDP verbinden (nativ)
         </button>
         <button class="taskbar-btn" id="rdp-shell-${win.key}">⌨️ Shell öffnen</button>
+        <button class="taskbar-btn" id="rdp-guac-${win.key}">🕹️ Über Guacamole (RDP/VNC/SSH)</button>
         <button class="taskbar-btn" id="rdp-embed-${win.key}">
           🧪 Im Browser versuchen (experimentell)
         </button>
@@ -161,6 +184,9 @@ export function renderVnc(body, win) {
     overlay.querySelector(`#rdp-shell-${win.key}`).addEventListener("click", () => {
       switchToShell("Shell geöffnet.");
     });
+
+    // Über Guacamole verbinden (RDP/VNC/SSH über guacd) - eigenes Fenster
+    overlay.querySelector(`#rdp-guac-${win.key}`).addEventListener("click", openGuacWindow);
 
     // Nativer RDP-Download (zuverlässig): lädt die .rdp-Datei -> mstsc öffnet sich
     overlay.querySelector(`#rdp-native-${win.key}`).addEventListener("click", async () => {

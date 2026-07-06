@@ -28,3 +28,8 @@ JWT_EXPIRE_HOURS: int = 12
 
 # Erlaubte Herkunft für Browser-Anfragen (CORS)
 CORS_ORIGIN: str = os.getenv("CORS_ORIGIN", "*")
+
+# Apache Guacamole: Adresse des guacd-Daemons (Proxy, der RDP/VNC/SSH spricht).
+# Standard passt zu einem lokal laufenden guacd (z.B. via Docker auf Port 4822).
+GUACD_HOST: str = os.getenv("GUACD_HOST", "127.0.0.1")
+GUACD_PORT: int = int(os.getenv("GUACD_PORT", "4822"))

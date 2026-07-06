@@ -42,6 +42,7 @@ import { renderAutomation } from "./apps/automation.js";
 import { renderNotifications } from "./apps/notifications.js";
 import { renderNetwork } from "./apps/network.js";
 import { renderPortscan } from "./apps/portscan.js";
+import { renderGuacamole } from "./apps/guacamole.js";
 import { renderSettings } from "./apps/settings.js";
 import { renderAudit } from "./apps/audit.js";
 import { renderProfile } from "./apps/profile.js";
@@ -66,6 +67,7 @@ const APP_RENDERERS = {
   notifications: renderNotifications,
   network: renderNetwork,
   portscan: renderPortscan,
+  guacamole: renderGuacamole,
   settings: renderSettings,
   audit: renderAudit,
   profile: renderProfile,
