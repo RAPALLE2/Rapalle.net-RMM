@@ -537,7 +537,7 @@ input[type="checkbox"]:checked::after {
   content: "✓";
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: calc(50% + 2px);
   transform: translate(-50%, -58%);
 
   color: #081018;
