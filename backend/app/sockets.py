@@ -389,6 +389,35 @@ async def on_screen_mode(sid, payload):
     await sio.emit("screen-mode", payload, namespace="/dashboard")
 
 
+# --- Interaktives Terminal: Agent -> Dashboard weiterleiten ---
+# Laufende Terminal-Sitzungen: session_id -> Verlaufspuffer (für EIN Audit-Log
+# pro Sitzung mit der gesamten History, statt pro Befehl).
+_term_sessions: dict = {}
+
+
+@sio.on("term-output", namespace="/agent")
+async def on_term_output(sid, payload):
+    """Shell-Ausgabe an alle Dashboards weiterreichen + in den Sitzungspuffer
+    schreiben (für das Verlaufs-Log)."""
+    session = payload.get("session")
+    meta = _term_sessions.get(session)
+    if meta is not None:
+        data = payload.get("data", "")
+        meta["chunks"].append(data)
+        meta["bytes"] += len(data)
+        # Puffer begrenzen (nur die jüngste History behalten).
+        if meta["bytes"] > 400000:
+            meta["chunks"] = meta["chunks"][-2000:]
+            meta["bytes"] = sum(len(c) for c in meta["chunks"])
+    await sio.emit("term-output", payload, namespace="/dashboard")
+
+
+@sio.on("term-exit", namespace="/agent")
+async def on_term_exit(sid, payload):
+    await sio.emit("term-exit", payload, namespace="/dashboard")
+    _finalize_term_session(payload.get("session"))
+
+
 @sio.event(namespace="/agent")
 async def disconnect(sid):
     """Ein Agent hat die Verbindung verloren/beendet -> als offline markieren."""
@@ -540,3 +569,93 @@ async def dashboard_rdp_stop(sid, data):
     client_id = data.get("clientId")
     if client_id:
         rdp_gateway.stop_session(client_id)
+
+
+_term_sessions_UNUSED = None  # (Puffer oben in der Agent-Sektion definiert)
+
+
+# --- Interaktives Terminal: Dashboard -> Agent weiterleiten ---
+@sio.on("term-open", namespace="/dashboard")
+async def dashboard_term_open(sid, data):
+    """Startet eine interaktive Shell-Session auf dem Ziel-Client."""
+    client_id = data.get("clientId")
+    shell = data.get("shell", "auto")
+    session = data.get("session")
+    ok = await send_to_agent(client_id, "term-open", {
+        "session": session,
+        "shell": shell,
+        "cols": data.get("cols", 80),
+        "rows": data.get("rows", 24),
+    })
+    # Bestätigung ans Dashboard: beweist, dass DIESES (aktuelle) Backend das
+    # Event verarbeitet hat, und meldet, ob der Ziel-Agent online ist. Damit
+    # kann das Frontend genau unterscheiden: kein ack = Backend veraltet/nicht
+    # neu gestartet; ack mit agent_online=false = Client offline; ack aber keine
+    # Ausgabe = Agent veraltet (kein PTY).
+    await sio.emit("term-ack", {"session": session, "agent_online": bool(ok)},
+                   namespace="/dashboard")
+    if ok:
+        # Sitzung anlegen: Metadaten + leerer Verlaufspuffer. Geloggt wird EINE
+        # Sitzung mit gesamter History erst beim Schließen (term-close/exit).
+        import time as _t
+        _term_sessions[session] = {
+            "client_id": client_id,
+            "username": data.get("username", "unbekannt"),
+            "shell": shell,
+            "started": _t.time(),
+            "chunks": [],   # Ausgabe-Schnipsel (gesamte sichtbare History)
+            "bytes": 0,
+        }
+    else:
+        await sio.emit("term-output", {
+            "id": client_id, "session": session,
+            "data": "\r\n\x1b[31mClient ist offline.\x1b[0m\r\n",
+        }, namespace="/dashboard")
+        await sio.emit("term-exit", {"id": client_id, "session": session},
+                       namespace="/dashboard")
+
+
+@sio.on("term-input", namespace="/dashboard")
+async def dashboard_term_input(sid, data):
+    await send_to_agent(data.get("clientId"), "term-input", {
+        "session": data.get("session"), "data": data.get("data", ""),
+    })
+
+
+@sio.on("term-resize", namespace="/dashboard")
+async def dashboard_term_resize(sid, data):
+    await send_to_agent(data.get("clientId"), "term-resize", {
+        "session": data.get("session"),
+        "cols": data.get("cols", 80), "rows": data.get("rows", 24),
+    })
+
+
+@sio.on("term-close", namespace="/dashboard")
+async def dashboard_term_close(sid, data):
+    await send_to_agent(data.get("clientId"), "term-close", {
+        "session": data.get("session"),
+    })
+    _finalize_term_session(data.get("session"))
+
+
+def _finalize_term_session(session: str) -> None:
+    """Schreibt EINEN Audit-Eintrag mit dem gesamten Sitzungsverlauf und räumt auf."""
+    from app import db as _db
+    meta = _term_sessions.pop(session, None)
+    if not meta:
+        return
+    # Gesamte sichtbare Historie zusammensetzen und ANSI-Steuerzeichen grob
+    # entfernen, damit das Log lesbar bleibt.
+    import re as _re, time as _t
+    transcript = "".join(meta["chunks"])
+    transcript = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", transcript)  # CSI-Sequenzen
+    transcript = _re.sub(r"\x1b\][^\x07]*\x07", "", transcript)      # OSC-Sequenzen
+    transcript = transcript.replace("\r\n", "\n").replace("\r", "\n")
+    transcript = transcript.strip()
+    if len(transcript) > 60000:
+        transcript = "…(gekürzt)…\n" + transcript[-60000:]
+    dur = int(_t.time() - meta["started"])
+    details = (f"shell:{meta['shell']} dauer:{dur}s\n"
+               f"----- Sitzungsverlauf -----\n{transcript}")
+    _db.add_audit_entry(meta["username"], "terminal.session",
+                        target=meta["client_id"], details=details)

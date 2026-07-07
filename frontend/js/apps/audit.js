@@ -16,6 +16,7 @@ const ACTION_LABELS = {
   "password.changed": "🔑 Passwort geändert",
   "file.download": "⬇️ Datei heruntergeladen",
   "terminal.exec": "⌨️ Terminal-Befehl",
+  "terminal.session": "⌨️ Terminal-Sitzung",
   "terminal.bulk_exec": "⚡ Bulk-Befehl",
   "process.kill": "❌ Prozess beendet",
   "screen.session_started": "🖥️ Remote-Session gestartet",
@@ -82,7 +83,7 @@ export function renderAudit(body, win) {
   // Aktionen, die eine Remote-Session darstellen (für den Sammelfilter).
   const SESSION_ACTIONS = new Set([
     "screen.session_started", "guac.connect", "guac.recording",
-    "terminal.exec", "terminal.bulk_exec", "rdp.file_generated",
+    "terminal.exec", "terminal.session", "terminal.bulk_exec", "rdp.file_generated",
   ]);
 
   let allEntries = [];        // ungefilterte Rohdaten
@@ -151,6 +152,12 @@ export function renderAudit(body, win) {
       if (e.action === "guac.recording" && guacMatch) {
         recId = guacMatch[1];
         detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
+      }
+      // Terminal-Sitzung: mehrzeiliger Verlauf -> aufklappbarer <pre>-Block.
+      if (e.action === "terminal.session" && (e.details || "").includes("Sitzungsverlauf")) {
+        const full = e.details;
+        detailsHtml = `<details><summary style="cursor:pointer">Sitzungsverlauf anzeigen</summary>` +
+          `<pre style="white-space:pre-wrap;max-height:320px;overflow:auto;background:var(--panel-2);padding:8px;border-radius:6px;margin-top:6px;font-size:11px">${esc(full)}</pre></details>`;
       }
 
       tr.innerHTML = `

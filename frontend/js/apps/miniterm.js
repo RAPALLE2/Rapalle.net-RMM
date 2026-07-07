@@ -1,0 +1,333 @@
+// apps/miniterm.js
+// ----------------
+// Schlanker, abhängigkeitsfreier Terminal-Emulator (VT100/ANSI-Subset).
+// Bewusst OHNE xterm.js/CDN, damit das Terminal auch in abgeschotteten LANs
+// ohne Internetzugang funktioniert. Deckt ab, was ein Remote-Shell-Terminal
+// braucht: Zeichenausgabe, Zeilen/Spalten-Puffer, Cursor-Bewegung, Farben
+// (SGR), Löschsequenzen, Backspace/CR/LF, Scrolling, sowie Tastatureingabe
+// inkl. Steuertasten (Pfeile, Enter, Backspace, Tab, Strg-C usw.).
+//
+// API:
+//   const term = new MiniTerm(hostEl, { onData, onResize });
+//   term.write(str);   // Ausgabe vom Server einspeisen
+//   term.focus();      // Eingabefokus setzen
+//   term.dispose();
+
+const COLORS = [
+  "#0b0f14", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#c0caf5",
+  "#414868", "#ff9e9e", "#b9f27c", "#ffc777", "#9fb4ff", "#d7b9ff", "#a4e8ff", "#ffffff",
+];
+
+export class MiniTerm {
+  constructor(host, opts = {}) {
+    this.host = host;
+    this.onData = opts.onData || (() => {});
+    this.onResize = opts.onResize || (() => {});
+    this.cols = 80;
+    this.rows = 24;
+    this.cx = 0;             // Cursor-Spalte
+    this.cy = 0;             // Cursor-Zeile
+    this.fg = 7; this.bg = 0; this.bold = false;
+    this.buffer = [];        // Array von Zeilen; jede Zeile = Array von Zellen {ch, fg, bg, bold}
+    this._parseState = "text";
+    this._csi = "";
+    this._scrollTop = 0;
+    this._build();
+    this._measure();
+    this._render();
+  }
+
+  _build() {
+    this.host.style.cssText += ";overflow:hidden;position:relative;background:#0b0f14;";
+    // Ausgabe-Fläche - AUSWÄHLBAR, damit man Text mit der Maus markieren und
+    // mit Strg+C / Rechtsklick kopieren kann.
+    this.screen = document.createElement("pre");
+    this.screen.style.cssText =
+      "margin:0;padding:6px 8px;font-family:Menlo,Consolas,'DejaVu Sans Mono',monospace;" +
+      "font-size:13px;line-height:1.2;color:#c0caf5;white-space:pre;outline:none;" +
+      "height:100%;box-sizing:border-box;overflow-y:auto;cursor:text;user-select:text;";
+    this.host.appendChild(this.screen);
+
+    // Verstecktes Eingabefeld für Tastatur/IME/Paste. Off-screen, damit es die
+    // Textauswahl im Screen nicht stört; wird bei Klick OHNE Selektion fokussiert.
+    this.input = document.createElement("textarea");
+    this.input.style.cssText =
+      "position:absolute;width:1px;height:1px;padding:0;border:0;left:0;top:0;" +
+      "opacity:0;resize:none;overflow:hidden;";
+    this.input.autocapitalize = "off";
+    this.input.autocomplete = "off";
+    this.input.spellcheck = false;
+    this.host.appendChild(this.input);
+
+    // Klick: hat der Nutzer Text markiert -> Fokus NICHT stehlen (Kopieren
+    // möglich). Sonst Eingabe fokussieren, damit Tippen ankommt.
+    this.screen.addEventListener("mouseup", () => {
+      const sel = window.getSelection?.().toString() || "";
+      if (!sel) setTimeout(() => this.input.focus(), 0);
+    });
+    // Rechtsklick soll das native Kontextmenü (Kopieren/Einfügen) zeigen.
+    this.screen.addEventListener("contextmenu", (e) => { /* native menu */ });
+
+    this.input.addEventListener("keydown", (e) => this._onKey(e));
+    this.input.addEventListener("input", () => {
+      if (this.input.value) { this.onData(this.input.value); this.input.value = ""; }
+    });
+    this.input.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData("text");
+      if (text) this.onData(text);
+    });
+  }
+
+  _measure() {
+    // Zeichenbreite/-höhe messen, um cols/rows zu bestimmen.
+    const probe = document.createElement("span");
+    probe.style.cssText = "font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.2;visibility:hidden;position:absolute;";
+    probe.textContent = "MMMMMMMMMMMMMMMMMMMM"; // 20 Zeichen
+    this.host.appendChild(probe);
+    const cw = probe.getBoundingClientRect().width / 20 || 8;
+    const chH = 13 * 1.2;
+    probe.remove();
+    const rect = this.host.getBoundingClientRect();
+    this.cols = Math.max(20, Math.floor((rect.width - 16) / cw));
+    this.rows = Math.max(6, Math.floor((rect.height - 12) / chH));
+    // Puffer auf Größe bringen
+    while (this.buffer.length < this.rows) this.buffer.push(this._blankLine());
+  }
+
+  fit() {
+    const oldCols = this.cols, oldRows = this.rows;
+    this._measure();
+    if (this.cols !== oldCols || this.rows !== oldRows) {
+      this.onResize(this.cols, this.rows);
+      this._render();
+    }
+  }
+
+  _blankLine() {
+    const line = [];
+    for (let i = 0; i < this.cols; i++) line.push({ ch: " ", fg: 7, bg: 0, bold: false });
+    return line;
+  }
+
+  _ensureLine(y) {
+    while (this.buffer.length <= y) this.buffer.push(this._blankLine());
+  }
+
+  // ---- Ausgabe verarbeiten (VT100/ANSI-Subset) ----
+  write(str) {
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (this._parseState === "text") {
+        if (ch === "\x1b") { this._parseState = "esc"; }
+        else this._putChar(ch);
+      } else if (this._parseState === "esc") {
+        if (ch === "[") { this._parseState = "csi"; this._csi = ""; }
+        else if (ch === "]") { this._parseState = "osc"; }
+        else { this._parseState = "text"; } // andere ESC-Sequenzen ignorieren
+      } else if (this._parseState === "csi") {
+        if (/[0-9;?]/.test(ch)) { this._csi += ch; }
+        else { this._handleCsi(ch, this._csi); this._parseState = "text"; }
+      } else if (this._parseState === "osc") {
+        if (ch === "\x07") { this._parseState = "text"; }        // BEL beendet OSC
+        else if (ch === "\x1b") { this._parseState = "osc_esc"; }
+      } else if (this._parseState === "osc_esc") {
+        this._parseState = "text";                               // ESC\ beendet OSC
+      }
+    }
+    this._render();
+  }
+
+  _putChar(ch) {
+    if (ch === "\r") { this.cx = 0; return; }
+    if (ch === "\n") { this._newline(); return; }
+    if (ch === "\b") { this.cx = Math.max(0, this.cx - 1); return; }
+    if (ch === "\t") { this.cx = Math.min(this.cols - 1, (this.cx + 8) & ~7); return; }
+    if (ch === "\x07") return; // Bell ignorieren
+    if (ch < " ") return;      // andere Steuerzeichen ignorieren
+
+    this._ensureLine(this.cy);
+    if (this.cx >= this.cols) { this.cx = 0; this._newline(); }
+    this.buffer[this.cy][this.cx] = { ch, fg: this.fg, bg: this.bg, bold: this.bold };
+    this.cx++;
+  }
+
+  _newline() {
+    this.cy++;
+    if (this.cy >= this.buffer.length) this.buffer.push(this._blankLine());
+    // Sichtfenster nach unten scrollen: nur die letzten "rows" Zeilen behalten.
+    const maxLines = 5000;
+    if (this.buffer.length > maxLines) this.buffer = this.buffer.slice(-maxLines);
+  }
+
+  _handleCsi(cmd, params) {
+    const args = params.split(";").filter((x) => x !== "").map((n) => parseInt(n, 10));
+    const a0 = isNaN(args[0]) ? 0 : args[0];
+    switch (cmd) {
+      case "H": case "f": { // Cursor positionieren
+        const row = (args[0] || 1) - 1, col = (args[1] || 1) - 1;
+        this.cy = this._viewTop() + Math.max(0, row);
+        this.cx = Math.max(0, col);
+        this._ensureLine(this.cy);
+        break;
+      }
+      case "A": this.cy = Math.max(this._viewTop(), this.cy - (a0 || 1)); break;
+      case "B": this.cy = this.cy + (a0 || 1); this._ensureLine(this.cy); break;
+      case "C": this.cx = Math.min(this.cols - 1, this.cx + (a0 || 1)); break;
+      case "D": this.cx = Math.max(0, this.cx - (a0 || 1)); break;
+      case "G": this.cx = Math.max(0, (a0 || 1) - 1); break;
+      case "J": this._eraseDisplay(a0); break;
+      case "K": this._eraseLine(a0); break;
+      case "m": this._setGraphics(args); break;
+      default: break; // unbekannte Sequenzen ignorieren
+    }
+  }
+
+  _viewTop() { return Math.max(0, this.buffer.length - this.rows); }
+
+  _eraseDisplay(mode) {
+    if (mode === 2 || mode === 3) {
+      // gesamten sichtbaren Bereich löschen
+      const top = this._viewTop();
+      for (let y = top; y < this.buffer.length; y++) this.buffer[y] = this._blankLine();
+      this.cx = 0; this.cy = top;
+    } else if (mode === 0) {
+      // vom Cursor bis Ende
+      this._ensureLine(this.cy);
+      for (let x = this.cx; x < this.cols; x++) this.buffer[this.cy][x] = { ch: " ", fg: 7, bg: 0, bold: false };
+      for (let y = this.cy + 1; y < this.buffer.length; y++) this.buffer[y] = this._blankLine();
+    }
+  }
+
+  _eraseLine(mode) {
+    this._ensureLine(this.cy);
+    const line = this.buffer[this.cy];
+    if (mode === 0) { for (let x = this.cx; x < this.cols; x++) line[x] = { ch: " ", fg: 7, bg: 0, bold: false }; }
+    else if (mode === 1) { for (let x = 0; x <= this.cx; x++) line[x] = { ch: " ", fg: 7, bg: 0, bold: false }; }
+    else { for (let x = 0; x < this.cols; x++) line[x] = { ch: " ", fg: 7, bg: 0, bold: false }; }
+  }
+
+  _setGraphics(args) {
+    if (!args.length) args = [0];
+    for (const n of args) {
+      if (n === 0) { this.fg = 7; this.bg = 0; this.bold = false; }
+      else if (n === 1) this.bold = true;
+      else if (n === 22) this.bold = false;
+      else if (n >= 30 && n <= 37) this.fg = n - 30;
+      else if (n >= 90 && n <= 97) this.fg = n - 90 + 8;
+      else if (n === 39) this.fg = 7;
+      else if (n >= 40 && n <= 47) this.bg = n - 40;
+      else if (n >= 100 && n <= 107) this.bg = n - 100 + 8;
+      else if (n === 49) this.bg = 0;
+    }
+  }
+
+  // ---- Darstellung ----
+  _render() {
+    const top = this._viewTop();
+    const frag = [];
+    for (let y = top; y < this.buffer.length; y++) {
+      const line = this.buffer[y];
+      let html = "", runFg = -1, runBg = -1, runBold = false, open = false;
+      for (let x = 0; x < line.length; x++) {
+        const c = line[x];
+        const isCursor = (y === this.cy && x === this.cx);
+        if (c.fg !== runFg || c.bg !== runBg || c.bold !== runBold || isCursor) {
+          if (open) html += "</span>";
+          runFg = c.fg; runBg = c.bg; runBold = c.bold;
+          const fgc = COLORS[c.bold && runFg < 8 ? runFg + 8 : runFg] || COLORS[7];
+          const bgc = isCursor ? "#c0caf5" : (c.bg ? COLORS[c.bg] : "transparent");
+          const fg2 = isCursor ? "#0b0f14" : fgc;
+          html += `<span style="color:${fg2};background:${bgc};${c.bold ? "font-weight:bold;" : ""}">`;
+          open = true;
+        }
+        html += this._escHtml(c.ch);
+      }
+      if (open) html += "</span>";
+      frag.push(html);
+    }
+    this.screen.innerHTML = frag.join("\n");
+    this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
+  _escHtml(ch) {
+    if (ch === "&") return "&amp;";
+    if (ch === "<") return "&lt;";
+    if (ch === ">") return "&gt;";
+    return ch;
+  }
+
+  // ---- Tastatur -> Terminalsequenzen ----
+  _onKey(e) {
+    const k = e.key;
+
+    // --- Copy/Paste zuerst behandeln ---
+    const sel = window.getSelection?.().toString() || "";
+    // Strg+Shift+C = kopieren (Terminal-Konvention). Strg+C nur kopieren, wenn
+    // etwas markiert ist - sonst als Abbruch (SIGINT) an die Shell senden.
+    if ((e.ctrlKey && e.shiftKey && (k === "C" || k === "c")) ||
+        (e.ctrlKey && !e.shiftKey && (k === "c" || k === "C") && sel)) {
+      if (sel) {
+        e.preventDefault();
+        this._copy(sel);
+        return;
+      }
+      // keine Selektion -> unten als \x03 behandeln
+    }
+    // Strg+V / Strg+Shift+V = einfügen. Async aus der Zwischenablage lesen und
+    // senden; das native paste-Event greift zusätzlich als Fallback.
+    if (e.ctrlKey && (k === "v" || k === "V")) {
+      e.preventDefault();
+      this._paste();
+      return;
+    }
+
+    let seq = null;
+    if (k === "Enter") seq = "\r";
+    else if (k === "Backspace") seq = "\x7f";
+    else if (k === "Tab") seq = "\t";
+    else if (k === "Escape") seq = "\x1b";
+    else if (k === "ArrowUp") seq = "\x1b[A";
+    else if (k === "ArrowDown") seq = "\x1b[B";
+    else if (k === "ArrowRight") seq = "\x1b[C";
+    else if (k === "ArrowLeft") seq = "\x1b[D";
+    else if (k === "Home") seq = "\x1b[H";
+    else if (k === "End") seq = "\x1b[F";
+    else if (k === "Delete") seq = "\x1b[3~";
+    else if (k === "PageUp") seq = "\x1b[5~";
+    else if (k === "PageDown") seq = "\x1b[6~";
+    else if (e.ctrlKey && k.length === 1) {
+      const code = k.toLowerCase().charCodeAt(0);
+      if (code >= 97 && code <= 122) seq = String.fromCharCode(code - 96);
+    }
+    if (seq !== null) {
+      e.preventDefault();
+      this.onData(seq);
+    }
+    // Normale Zeichen laufen über das 'input'-Event (IME/Umlaute/AltGr).
+  }
+
+  _copy(text) {
+    try {
+      navigator.clipboard.writeText(text);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove();
+      } catch {}
+    }
+  }
+
+  async _paste() {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch { text = ""; }
+    if (text) this.onData(text);
+    // Falls die Clipboard-API blockiert (HTTP): das native paste-Event
+    // (Strg+V löst es aus) übernimmt. Nichts weiter zu tun.
+  }
+
+  focus() { try { this.input.focus(); } catch {} }
+  dispose() { try { this.host.innerHTML = ""; } catch {} }
+}

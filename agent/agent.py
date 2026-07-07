@@ -52,6 +52,9 @@ def _bootstrap_deps() -> None:
         "Pillow": "PIL",
         "pynput": "pynput",
     }
+    # Windows: pywinpty für das interaktive Terminal (ConPTY).
+    if os.name == "nt":
+        needed["pywinpty"] = "winpty"
     import importlib
     missing_specs = []
     for spec, mod in needed.items():
@@ -537,6 +540,251 @@ async def on_exec(data):
         {"requestId": request_id, "stdout": stdout, "stderr": stderr, "code": exit_code},
         namespace="/agent",
     )
+
+
+# ==============================================================
+# INTERAKTIVES TERMINAL (echte PTY-Session)
+# ==============================================================
+# Statt einzelne Befehle auszuführen, hält der Agent pro Terminal-Fenster eine
+# ECHTE Shell offen (bash/sh auf Linux, cmd/powershell auf Windows). Damit
+# funktioniert alles wie in einem lokalen Terminal: 'cd' wirkt dauerhaft,
+# Editoren wie nano/vim laufen, Verlauf, Farben, interaktive Programme.
+#
+# Linux/macOS: Python-Standardbibliothek 'pty' (kein Zusatzpaket nötig).
+# Windows:     'pywinpty' (ConPTY). Wird per Bootstrap automatisch installiert;
+#              fehlt es, wird eine klare Meldung ausgegeben.
+#
+# Datenfluss:
+#   Dashboard --term-open {session, shell, cols, rows}--> Agent startet Shell
+#   Dashboard --term-input {session, data}-------------> in die Shell schreiben
+#   Dashboard --term-resize {session, cols, rows}------> PTY-Größe anpassen
+#   Dashboard --term-close {session}-------------------> Shell beenden
+#   Agent     --term-output {session, data}------------> Ausgabe zum Dashboard
+#   Agent     --term-exit {session}--------------------> Shell wurde beendet
+# --------------------------------------------------------------
+
+_terminals: dict = {}   # session_id -> Handle (plattformabhängig)
+
+
+def _resolve_shell_cmd(shell: str, elevated: bool) -> list:
+    """Bestimmt das Startkommando der Shell je nach Wunsch und Plattform."""
+    if IS_WINDOWS:
+        if shell == "powershell":
+            return ["powershell.exe", "-NoLogo", "-NoProfile"]
+        return ["cmd.exe"]
+    # POSIX: bevorzugt bash, sonst sh. 'shell' spielt hier keine Rolle.
+    for candidate in ("/bin/bash", "/bin/sh"):
+        if os.path.exists(candidate):
+            return [candidate, "-i"] if candidate.endswith("bash") else [candidate]
+    return ["/bin/sh"]
+
+
+class _PosixTerminal:
+    """Interaktive Shell über ein echtes PTY (Linux/macOS)."""
+
+    def __init__(self, session_id, shell, cols, rows, loop):
+        import pty, fcntl, termios, struct
+        self.session_id = session_id
+        self.loop = loop
+        self.alive = True
+        argv = _resolve_shell_cmd(shell, False)
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            # Kindprozess: Umgebung setzen und Shell starten.
+            os.environ["TERM"] = "xterm-256color"
+            try:
+                os.execvp(argv[0], argv)
+            except Exception:
+                os._exit(1)
+        # Elternprozess: PTY-Größe setzen.
+        self._set_size(cols, rows)
+        # Leser-Thread: liest PTY-Ausgabe und schickt sie ans Dashboard.
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+    def _set_size(self, cols, rows):
+        try:
+            import fcntl, termios, struct
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(self.fd, termios.TIOCSWINSZ, winsize)
+        except Exception:
+            pass
+
+    def _read_loop(self):
+        while self.alive:
+            try:
+                data = os.read(self.fd, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            text = data.decode("utf-8", errors="replace")
+            asyncio.run_coroutine_threadsafe(
+                sio.emit("term-output", {"id": DEVICE_ID, "session": self.session_id,
+                                         "data": text}, namespace="/agent"),
+                self.loop,
+            )
+        self.alive = False
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("term-exit", {"id": DEVICE_ID, "session": self.session_id},
+                     namespace="/agent"),
+            self.loop,
+        )
+
+    def write(self, data: str):
+        try:
+            os.write(self.fd, data.encode("utf-8"))
+        except OSError:
+            pass
+
+    def resize(self, cols, rows):
+        self._set_size(cols, rows)
+
+    def close(self):
+        self.alive = False
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        try:
+            os.kill(self.pid, 9)
+        except OSError:
+            pass
+
+
+class _WinTerminal:
+    """Interaktive Shell über ConPTY (Windows, benötigt pywinpty)."""
+
+    def __init__(self, session_id, shell, cols, rows, loop):
+        from winpty import PtyProcess
+        self.session_id = session_id
+        self.loop = loop
+        self.alive = True
+        # winpty.PtyProcess.spawn erwartet einen KOMMANDOSTRING (keine Liste!).
+        # Eine Liste führt zu stillem Fehlschlag/Exception.
+        if shell == "powershell":
+            cmd = "powershell.exe -NoLogo -NoProfile"
+        else:
+            cmd = "cmd.exe"
+        self.proc = PtyProcess.spawn(cmd, dimensions=(rows, cols))
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+    def _read_loop(self):
+        while self.alive:
+            try:
+                data = self.proc.read(65536)
+            except EOFError:
+                break
+            except Exception:
+                break
+            if not data:
+                if not self.proc.isalive():
+                    break
+                continue
+            asyncio.run_coroutine_threadsafe(
+                sio.emit("term-output", {"id": DEVICE_ID, "session": self.session_id,
+                                         "data": data}, namespace="/agent"),
+                self.loop,
+            )
+        self.alive = False
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("term-exit", {"id": DEVICE_ID, "session": self.session_id},
+                     namespace="/agent"),
+            self.loop,
+        )
+
+    def write(self, data: str):
+        try:
+            self.proc.write(data)
+        except Exception:
+            pass
+
+    def resize(self, cols, rows):
+        try:
+            self.proc.setwinsize(rows, cols)
+        except Exception:
+            pass
+
+    def close(self):
+        self.alive = False
+        try:
+            self.proc.terminate(force=True)
+        except Exception:
+            pass
+
+
+@sio.on("term-open", namespace="/agent")
+async def on_term_open(data):
+    """Startet eine echte interaktive Shell-Session."""
+    session_id = data.get("session")
+    shell = data.get("shell", "auto")
+    cols = int(data.get("cols", 80))
+    rows = int(data.get("rows", 24))
+    if not session_id:
+        return
+
+    # SOFORT-Marker: beweist, dass DIESER (neue) Agent-Code läuft. Sieht der
+    # Nutzer diese Zeile nicht, läuft auf dem Client noch die ALTE agent.py
+    # (Prozess nach dem Update nicht neu gestartet).
+    await sio.emit("term-output", {
+        "id": DEVICE_ID, "session": session_id,
+        "data": f"\x1b[90m[Agent startet {shell}-Shell…]\x1b[0m\r\n",
+    }, namespace="/agent")
+
+    # Schon offen? Erst schließen (Neustart).
+    old = _terminals.pop(session_id, None)
+    if old:
+        try:
+            old.close()
+        except Exception:
+            pass
+
+    loop = asyncio.get_event_loop()
+    try:
+        if IS_WINDOWS:
+            term = _WinTerminal(session_id, shell, cols, rows, loop)
+        else:
+            term = _PosixTerminal(session_id, shell, cols, rows, loop)
+        _terminals[session_id] = term
+    except ImportError as e:
+        await sio.emit("term-output", {
+            "id": DEVICE_ID, "session": session_id,
+            "data": "\r\n\x1b[31mInteraktives Terminal benoetigt 'pywinpty' "
+                    f"(Import fehlgeschlagen: {e}).\x1b[0m\r\n"
+                    "Installiere es manuell mit:  pip install pywinpty\r\n"
+                    "oder starte den Agenten neu (er versucht es automatisch).\r\n",
+        }, namespace="/agent")
+        await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id}, namespace="/agent")
+    except Exception as e:
+        import traceback
+        _print(f"[term] Fehler beim Shell-Start: {e}\n{traceback.format_exc()}")
+        await sio.emit("term-output", {
+            "id": DEVICE_ID, "session": session_id,
+            "data": f"\r\n\x1b[31mTerminal-Fehler: {e}\x1b[0m\r\n",
+        }, namespace="/agent")
+        await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id}, namespace="/agent")
+
+
+@sio.on("term-input", namespace="/agent")
+async def on_term_input(data):
+    term = _terminals.get(data.get("session"))
+    if term:
+        term.write(data.get("data", ""))
+
+
+@sio.on("term-resize", namespace="/agent")
+async def on_term_resize(data):
+    term = _terminals.get(data.get("session"))
+    if term:
+        term.resize(int(data.get("cols", 80)), int(data.get("rows", 24)))
+
+
+@sio.on("term-close", namespace="/agent")
+async def on_term_close(data):
+    term = _terminals.pop(data.get("session"), None)
+    if term:
+        term.close()
 
 
 # --------------------------------------------------------------

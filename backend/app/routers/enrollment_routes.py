@@ -255,10 +255,46 @@ async def install_script_linux(token: str, request: Request):
 set -e
 INSTALL_DIR="/opt/rapalle-rmm-agent"
 
+# --- Systemvoraussetzungen automatisch installieren -----------------------
+# Benötigt: python3, python3-venv (ensurepip!), python3-pip, unzip, curl.
+# Wir erkennen den Paketmanager und installieren fehlende Pakete selbst, damit
+# der bekannte Fehler "ensurepip is not available / install python3-venv"
+# nicht mehr auftritt.
+ensure_pkgs() {{
+  # Python-Minor bestimmen (z.B. 3.13) für das passende venv-Paket auf Debian/Ubuntu.
+  PYV="$(python3 -c 'import sys;print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")' 2>/dev/null || echo 3)"
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export TERM="${{TERM:-dumb}}"
+    sudo -E apt-get update -y -qq >/dev/null 2>&1 || true
+    # Erst das versionsspezifische venv-Paket, sonst das generische.
+    sudo -E apt-get install -y -qq "python${{PYV}}-venv" >/dev/null 2>&1 \
+      || sudo -E apt-get install -y -qq python3-venv >/dev/null 2>&1 || true
+    sudo -E apt-get install -y -qq python3-pip unzip curl >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y python3 python3-pip unzip curl || true
+  elif command -v yum >/dev/null 2>&1; then
+    sudo yum install -y python3 python3-pip unzip curl || true
+  elif command -v zypper >/dev/null 2>&1; then
+    sudo zypper install -y python3 python3-pip unzip curl || true
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -Sy --noconfirm python python-pip unzip curl || true
+  elif command -v apk >/dev/null 2>&1; then
+    sudo apk add --no-cache python3 py3-pip unzip curl || true
+  else
+    echo "WARNUNG: Kein bekannter Paketmanager gefunden - stelle sicher, dass python3-venv, pip, unzip und curl installiert sind."
+  fi
+}}
+ensure_pkgs
+
 echo "Lade Agent herunter..."
 sudo mkdir -p "$INSTALL_DIR"
 curl -sSL "{backend_url}/enroll/{token}/agent.zip" -o /tmp/rapalle-agent.zip
 sudo unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract
+# Laufenden Agenten stoppen, bevor Dateien ersetzt werden (sonst bleibt die
+# alte Version aktiv, bis der Dienst manuell neu startet).
+sudo systemctl stop rapalle-agent 2>/dev/null || true
 sudo cp -r /tmp/rapalle-agent-extract/agent/. "$INSTALL_DIR/"
 
 # .env auf die echte Backend-Adresse setzen (der Rechner, der dieses Skript ausführt,
@@ -267,8 +303,18 @@ sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
 
 echo "Installiere Python-Abhängigkeiten..."
 cd "$INSTALL_DIR"
-sudo python3 -m venv venv
-sudo ./venv/bin/pip install --quiet -r requirements.txt
+# venv anlegen; falls das trotz Paketinstallation scheitert, ohne venv direkt
+# ins System installieren (--break-system-packages für PEP-668-Distributionen).
+if sudo python3 -m venv venv; then
+  sudo ./venv/bin/python -m pip install --quiet --upgrade pip || true
+  sudo ./venv/bin/pip install --quiet -r requirements.txt
+  PYEXEC="$INSTALL_DIR/venv/bin/python"
+else
+  echo "venv nicht verfügbar - installiere Abhängigkeiten systemweit..."
+  sudo python3 -m pip install --quiet --break-system-packages -r requirements.txt \
+    || sudo python3 -m pip install --quiet -r requirements.txt
+  PYEXEC="$(command -v python3)"
+fi
 
 echo "Richte Autostart-Dienst ein..."
 sudo tee /etc/systemd/system/rapalle-agent.service > /dev/null <<EOF
@@ -278,7 +324,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/agent.py
+ExecStart=$PYEXEC $INSTALL_DIR/agent.py
 Restart=always
 User=root
 
@@ -336,6 +382,20 @@ Write-Host "Lade Agent herunter..."
 Invoke-WebRequest -Uri "{backend_url}/enroll/{token}/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
 if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
 Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
+
+# --- Laufenden Agenten STOPPEN, bevor Dateien ersetzt werden ---------------
+# WICHTIG: Sonst laeuft nach dem Update weiter die ALTE agent.py im Speicher
+# (neue Funktionen wie das interaktive Terminal fehlen dann). Erst Task
+# anhalten, dann alle pythonw/python-Prozesse killen, die agent.py ausfuehren.
+Write-Host "Stoppe evtl. laufenden Agenten..."
+try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
+try {{
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+        Where-Object {{ $_.CommandLine -like "*agent.py*" }} |
+        ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+}} catch {{}}
+Start-Sleep -Seconds 2
+
 Copy-Item -Path "$env:TEMP\\rapalle-agent-extract\\agent\\*" -Destination $InstallDir -Recurse -Force
 
 # .env auf die echte Backend-Adresse setzen

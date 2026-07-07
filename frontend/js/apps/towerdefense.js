@@ -64,8 +64,35 @@ export function renderTowerDefense(body, win) {
   }
 
   // --- Türme platzieren ---
-  body.querySelector("#td-tower-fw").addEventListener("click", () => { placing = "fw"; });
-  body.querySelector("#td-tower-av").addEventListener("click", () => { placing = "av"; });
+  body.querySelector("#td-tower-fw").addEventListener("click", () => { 
+    if (!placing) {
+      placing = "fw"; 
+      return;
+    } else {
+      if (placing === "av") {
+        placing = "fw";
+        return;
+      } else {
+        placing = null;
+        return;
+      }
+    }
+  });
+
+  body.querySelector("#td-tower-av").addEventListener("click", () => { 
+    if (!placing) {
+      placing = "av"; 
+      return;
+    } else {
+      if (placing === "fw") {
+        placing = "av";
+        return;
+      } else {
+        placing = null;
+        return;
+      }
+    }
+  });
 
   canvas.addEventListener("click", (e) => {
     if (!placing) return;
@@ -86,7 +113,6 @@ export function renderTowerDefense(body, win) {
     }
     money -= cost;
     updateHud();
-    placing = null;
   });
 
   function nearPath(x, y, dist) {
