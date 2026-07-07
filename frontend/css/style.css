@@ -362,7 +362,7 @@ body {
 }
 .start-menu-grid button:hover {
   border-color: var(--accent); transform: translateY(-2px);
-  background: rgba(45,212,191,0.08);
+  background: rgba(var(--accent-2-rgb),0.08);
 }
 .start-menu-grid .app-icon { font-size: 34px; line-height: 1; }
 
