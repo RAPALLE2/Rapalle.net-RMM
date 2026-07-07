@@ -264,6 +264,12 @@ def init_db() -> None:
     _migrate_add_column("realms", "use_ssl", "INTEGER NOT NULL DEFAULT 0")  # 1 = LDAPS
     _migrate_add_column("realms", "user_filter", "TEXT")            # optionaler zusätzlicher LDAP-Filter
 
+    # Migration Metrik-Einstellungen: Wer die ALTEN Defaults (60 s Intervall /
+    # 1 h Aufbewahrung) unverändert gespeichert hat, wird auf die neuen Werte
+    # (10 s / unbegrenzt) gehoben. Bewusst abweichend gesetzte Werte bleiben.
+    _conn.execute("DELETE FROM settings WHERE key = 'metrics_interval_seconds' AND value = '60'")
+    _conn.execute("DELETE FROM settings WHERE key = 'metrics_retention_hours' AND value = '1'")
+
     # Falls noch kein Benutzer existiert: Standard-Login admin/admin anlegen,
     # mit must_change_pw=1, damit beim ersten Login ein neues Passwort gesetzt werden MUSS.
     if _conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 0:
@@ -407,6 +413,69 @@ def create_location(tenant_id: str, name: str) -> dict:
     _conn.execute("INSERT INTO locations (id, tenant_id, name) VALUES (?, ?, ?)", (lid, tenant_id, name))
     _conn.commit()
     return dict(_conn.execute("SELECT * FROM locations WHERE id = ?", (lid,)).fetchone())
+
+
+def _move_clients_to_uncategorized(where_sql: str, params: tuple) -> int:
+    """
+    Verschiebt alle Clients, auf die where_sql zutrifft, nach
+    Uncategorized/Default (folder_id wird geleert, da Ordner an der alten
+    Location hängen). Gibt die Anzahl verschobener Clients zurück.
+    """
+    unc_tenant, unc_location = ensure_uncategorized()
+    cur = _conn.execute(
+        f"UPDATE clients SET tenant_id = ?, location_id = ?, folder_id = NULL WHERE {where_sql}",
+        (unc_tenant, unc_location, *params),
+    )
+    return cur.rowcount
+
+
+def delete_location(location_id: str) -> dict:
+    """
+    Löscht eine Location. Alle Clients darin wandern nach Uncategorized/Default.
+    Die "Default"-Location des Uncategorized-Tenants ist geschützt (Auffangbecken).
+    Ordner der Location werden mitgelöscht (Clients wurden vorher verschoben).
+    """
+    unc_tenant, unc_location = ensure_uncategorized()
+    if location_id == unc_location:
+        raise ValueError("Die Standard-Location 'Uncategorized/Default' kann nicht gelöscht werden")
+    if not _conn.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,)).fetchone():
+        raise KeyError("Location nicht gefunden")
+
+    moved = _move_clients_to_uncategorized("location_id = ?", (location_id,))
+    # Ordner explizit löschen (nicht auf FK-CASCADE verlassen - PRAGMA
+    # foreign_keys ist in SQLite standardmäßig aus).
+    _conn.execute("DELETE FROM folders WHERE location_id = ?", (location_id,))
+    _conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+    _conn.commit()
+    return {"moved_clients": moved}
+
+
+def delete_tenant(tenant_id: str) -> dict:
+    """
+    Löscht einen Tenant samt aller seiner Locations und Ordner. Alle Clients
+    des Tenants (auch solche ohne Location) wandern nach Uncategorized/Default.
+    Der Uncategorized-Tenant selbst ist geschützt (Auffangbecken).
+    """
+    unc_tenant, _ = ensure_uncategorized()
+    if tenant_id == unc_tenant:
+        raise ValueError("Der Tenant 'Uncategorized' kann nicht gelöscht werden")
+    if not _conn.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant_id,)).fetchone():
+        raise KeyError("Tenant nicht gefunden")
+
+    # Clients über tenant_id ODER über eine Location des Tenants erwischen
+    # (deckt auch inkonsistente Datensätze ab, bei denen nur eins gesetzt ist).
+    moved = _move_clients_to_uncategorized(
+        "tenant_id = ? OR location_id IN (SELECT id FROM locations WHERE tenant_id = ?)",
+        (tenant_id, tenant_id),
+    )
+    _conn.execute(
+        "DELETE FROM folders WHERE location_id IN (SELECT id FROM locations WHERE tenant_id = ?)",
+        (tenant_id,),
+    )
+    _conn.execute("DELETE FROM locations WHERE tenant_id = ?", (tenant_id,))
+    _conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
+    _conn.commit()
+    return {"moved_clients": moved}
 
 
 def list_folders(location_id: str | None = None) -> list[dict]:
@@ -859,9 +928,11 @@ DEFAULT_SETTINGS = {
     "server_backend_port": "4000",  # Port des Backends/der API
     "server_frontend_port": "4000", # Port des Dashboards (Frontend)
     # In welchem Abstand ein Metrik-Punkt gespeichert wird (Sekunden).
-    "metrics_interval_seconds": "60",
+    "metrics_interval_seconds": "10",
     # Wie lange die Metrik-Historie aufbewahrt wird (Stunden).
-    "metrics_retention_hours": "1",
+    # 0 = UNBEGRENZT: es wird nie automatisch gelöscht - die Graphen zeigen
+    # nach einem Browser-Reload immer die komplette bisherige Historie.
+    "metrics_retention_hours": "0",
     # Wie lange Screen-Replays aufbewahrt werden (Tage).
     "replay_retention_days": "10",
     # Extern gehostetes Apache guacd (für Remote-Desktop im Browser).

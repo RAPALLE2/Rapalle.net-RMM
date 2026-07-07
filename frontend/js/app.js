@@ -98,6 +98,22 @@ async function refreshAll() {
 }
 
 // -----------------------------------------------------------------
+// Version: Single Source of Truth ist backend/version.txt (via
+// /api/version). Alle Anzeigen im Frontend werden von hier befüllt -
+// nirgends mehr hardcoden!
+// -----------------------------------------------------------------
+async function loadVersion() {
+  try {
+    const v = await api.getVersions(); // { backend, agent }
+    document.querySelectorAll(".topbar-version").forEach((el) => {
+      el.textContent = v.backend || "";
+      el.title = `Backend ${v.backend || "?"} · Agent ${v.agent || "?"}`;
+    });
+  } catch { /* Version ist Kosmetik - Fehler nie den Start blockieren lassen */ }
+}
+loadVersion();
+
+// -----------------------------------------------------------------
 // Login-Ablauf
 // -----------------------------------------------------------------
 

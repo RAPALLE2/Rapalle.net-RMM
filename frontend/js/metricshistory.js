@@ -6,11 +6,12 @@
 // (z.B. "letzte 5 Minuten" / "letzte Stunde") funktioniert und der Hover-
 // Tooltip die genaue Uhrzeit zeigen kann.
 //
-// Hinweis: Das ist bewusst nur im Browser-Speicher (RAM) und geht beim
-// Neuladen der Seite verloren. Für dauerhafte Langzeit-Historie würde man das
-// später im Backend in der SQLite-Datenbank speichern.
+// Die dauerhafte Historie liegt im Backend (SQLite, Tabelle metrics_history,
+// Standard: unbegrenzte Aufbewahrung). Beim Öffnen eines Clients wird sie per
+// seedHistory() hierher geladen - nach einem Browser-Reload sind die Graphen
+// also sofort wieder mit der KOMPLETTEN bisherigen Historie gefüllt.
 
-const MAX_POINTS = 2400; // bei ~5s-Takt etwa 3 Stunden Historie
+const MAX_POINTS = 50000; // Obergrenze im Browser-RAM (~5,8 Tage bei 10s-Takt)
 
 // clientId -> { cpu: [...], ram: [...], netIn: [...], netOut: [...], ts: [...] }
 const history = {};

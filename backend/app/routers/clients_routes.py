@@ -32,13 +32,17 @@ router = APIRouter(prefix="/api/clients", tags=["clients"])
 @router.get("/{client_id}/metrics/history")
 async def get_client_metrics_history(client_id: str, user: dict = Depends(get_current_user)):
     """
-    Liefert die gespeicherte Metrik-Historie eines Clients (letzte
-    metrics_retention_hours). Das Frontend nutzt das, um die Graphen nach
-    einem Seiten-Neuladen sofort mit Verlaufsdaten zu füllen, statt bei 0
-    anzufangen.
+    Liefert die gespeicherte Metrik-Historie eines Clients. Das Frontend nutzt
+    das, um die Graphen nach einem Seiten-Neuladen sofort mit Verlaufsdaten zu
+    füllen, statt bei 0 anzufangen.
+
+    metrics_retention_hours = 0 (Standard) -> KOMPLETTE Historie zurückgeben.
+    Sonst nur die letzten N Stunden.
     """
     retention_hours = db.get_int_setting("metrics_retention_hours")
-    since_ts = int(time.time() * 1000) - retention_hours * 3600 * 1000
+    since_ts = None
+    if retention_hours > 0:
+        since_ts = int(time.time() * 1000) - retention_hours * 3600 * 1000
     return {"points": db.get_metrics_history(client_id, since_ts)}
 
 

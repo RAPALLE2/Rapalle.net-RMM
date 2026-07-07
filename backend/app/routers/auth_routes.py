@@ -45,6 +45,15 @@ class ProfileBody(BaseModel):
     accent: str | None = None     # Farbpalette, z.B. "teal", "violet", ...
 
 
+def _auth_realm_of(user) -> str | None:
+    """Realm-ID des Users (AD/LDAP/SSO) oder None bei lokalem Konto.
+    Funktioniert für dict UND sqlite3.Row."""
+    try:
+        return user["auth_realm"] if "auth_realm" in user.keys() else None
+    except Exception:
+        return None
+
+
 def _public_user(user: dict) -> dict:
     """Gibt nur die Felder zurück, die das Frontend sehen darf (kein Passwort-Hash!)."""
     return {
@@ -56,6 +65,9 @@ def _public_user(user: dict) -> dict:
         "language": user["language"],
         "theme": user["theme"],
         "accent": user["accent"] if "accent" in user.keys() else "teal",
+        # Realm-ID (AD/LDAP/SSO) oder null bei lokalem Konto - das Frontend
+        # blendet damit u.a. die Passwort-ändern-Funktion aus.
+        "auth_realm": _auth_realm_of(user),
     }
 
 
@@ -87,6 +99,12 @@ async def login(body: LoginBody):
 
 @router.post("/change-password")
 async def change_password(body: ChangePasswordBody, user: dict = Depends(get_current_user)):
+    # Verzeichnis-Benutzer (AD/LDAP/SSO, erkennbar an auth_realm) haben KEIN
+    # lokales Passwort - der Hash ist nur ein Platzhalter. Eine "Änderung"
+    # würde ein lokales Schatten-Passwort erzeugen, das am Verzeichnis vorbei
+    # zum Login taugt. Deshalb hart blocken; geändert wird im AD/LDAP selbst.
+    if _auth_realm_of(user):
+        raise HTTPException(403, "Passwort wird zentral im Verzeichnis (AD/LDAP/SSO) verwaltet und kann hier nicht geändert werden")
     # Beim allerersten Pflicht-Passwortwechsel ist current_password="admin" (o.ä.) zu prüfen
     if not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(400, "Aktuelles Passwort ist falsch")

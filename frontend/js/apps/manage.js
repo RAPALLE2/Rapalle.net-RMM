@@ -61,15 +61,22 @@ export function renderManage(body, win) {
     } else {
       listEl.innerHTML = tenants.map((t) => {
         const locations = state.hierarchy.locations.filter((l) => l.tenant_id === t.id);
-        const locationRows = locations.map((l) =>
-          `<div style="padding:4px 0 4px 20px;color:var(--subtext);font-size:13px">📍 ${esc(l.name)}</div>`
-        ).join("") || `<div style="padding:4px 0 4px 20px;color:var(--subtext);font-size:12px">— noch keine Standorte —</div>`;
+        const isUncat = t.name === "Uncategorized";
+        const locationRows = locations.map((l) => {
+          const isDefaultLoc = isUncat && l.name === "Default";
+          return `<div style="display:flex;align-items:center;padding:4px 0 4px 20px;color:var(--subtext);font-size:13px">
+            <span style="flex:1">📍 ${esc(l.name)}</span>
+            ${isDefaultLoc ? "" : `<button class="action-btn" data-del-loc="${l.id}" data-loc-name="${esc(l.name)}" title="Standort löschen (Clients wandern nach Uncategorized/Default)">🗑</button>`}
+          </div>`;
+        }).join("") || `<div style="padding:4px 0 4px 20px;color:var(--subtext);font-size:12px">— noch keine Standorte —</div>`;
 
         return `
           <div class="panel" style="margin-bottom:10px">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <span class="dot" style="width:10px;height:10px;border-radius:50%;background:${esc(t.color)}"></span>
-              <strong>${esc(t.name)}</strong>
+              <strong style="flex:1">${esc(t.name)}</strong>
+              ${isUncat ? `<span style="color:var(--subtext);font-size:11px" title="Auffangbecken für Clients aus gelöschten Tenants/Standorten">geschützt</span>`
+                        : `<button class="action-btn" data-del-tenant="${t.id}" data-tenant-name="${esc(t.name)}" title="Tenant löschen (Clients wandern nach Uncategorized/Default)">🗑</button>`}
             </div>
             ${locationRows}
             <div style="display:flex;gap:6px;margin-top:10px">
@@ -90,6 +97,38 @@ export function renderManage(body, win) {
           if (!name) return;
           try {
             await api.createLocation(tenantId, name);
+            if (onChanged) await onChanged();
+            draw();
+          } catch (e) {
+            alert("Fehler: " + e.message);
+          }
+        })
+      );
+
+      // ---- Tenant löschen (Clients wandern nach Uncategorized/Default) ----
+      listEl.querySelectorAll("[data-del-tenant]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.tenantName;
+          if (!confirm(`Tenant "${name}" wirklich löschen?\n\nAlle Standorte und Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`)) return;
+          try {
+            const res = await api.deleteTenant(btn.dataset.delTenant);
+            window.notify?.(`Tenant gelöscht — ${res.moved_clients} Client(s) nach Uncategorized/Default verschoben`, "success");
+            if (onChanged) await onChanged();
+            draw();
+          } catch (e) {
+            alert("Fehler: " + e.message);
+          }
+        })
+      );
+
+      // ---- Standort löschen (Clients wandern nach Uncategorized/Default) ----
+      listEl.querySelectorAll("[data-del-loc]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.locName;
+          if (!confirm(`Standort "${name}" wirklich löschen?\n\nAlle Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`)) return;
+          try {
+            const res = await api.deleteLocation(btn.dataset.delLoc);
+            window.notify?.(`Standort gelöscht — ${res.moved_clients} Client(s) nach Uncategorized/Default verschoben`, "success");
             if (onChanged) await onChanged();
             draw();
           } catch (e) {

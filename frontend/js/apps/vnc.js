@@ -134,7 +134,9 @@ export function renderVnc(body, win) {
 
   function onError(data) {
     if (data.id !== clientId) return;
-    statusEl.textContent = "Fehler: " + data.error;
+    // Rohen Fehlertext nur in die Konsole - die Oberfläche bleibt freundlich.
+    console.warn("[screen] Fehler vom Agent:", data.error);
+    statusEl.textContent = "Kein Bildschirm verfügbar";
     statusEl.style.color = "var(--danger)";
     showRdpOffer(data.error);
   }
@@ -145,8 +147,10 @@ export function renderVnc(body, win) {
     if (data.mode === "shell") switchToShell(data.reason);
   }
 
-  // Zeigt bei einem Bildschirm-Fehler (typisch: headless VM) ein Angebot,
-  // stattdessen per RDP zu verbinden - nativ (zuverlässig) oder experimentell.
+  // Zeigt bei einem Bildschirm-Fehler (typisch: headless VM) eine freundliche
+  // Auswahl an Alternativen. Bewusst OHNE die rohe Fehlermeldung (die steht
+  // klein in der Statusleiste und im agent.log) und OHNE RDP-Datei-Download /
+  // experimentelles Browser-RDP - beides wurde entfernt.
   function showRdpOffer(errorText) {
     // Nur einmal anzeigen
     if (body.querySelector(`#rdp-offer-${win.key}`)) return;
@@ -155,28 +159,29 @@ export function renderVnc(body, win) {
     overlay.id = `rdp-offer-${win.key}`;
     overlay.style.cssText = `
       position:absolute; inset:0; display:flex; flex-direction:column;
-      align-items:center; justify-content:center; gap:14px; padding:24px;
-      background:rgba(10,20,32,0.92); text-align:center; z-index:5;`;
+      align-items:center; justify-content:center; gap:10px; padding:24px;
+      background:radial-gradient(ellipse at center, rgba(16,28,44,0.97), rgba(8,14,24,0.99));
+      text-align:center; z-index:5;`;
     overlay.innerHTML = `
-      <div style="font-size:34px">🖥️</div>
-      <div style="color:var(--text);font-size:15px;font-weight:600">Bildschirm nicht erfassbar</div>
-      <div style="color:var(--subtext);font-size:13px;max-width:420px;line-height:1.5">
-        ${esc(errorText || "")}<br><br>
-        Bei headless VMs kann man sich stattdessen per <b>RDP</b> verbinden —
-        RDP erzeugt selbst eine Sitzung, die sich fernsteuern lässt.
+      <div style="width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+                  background:var(--panel-2);border:1px solid var(--border);font-size:32px;margin-bottom:4px">🖥️</div>
+      <div style="color:var(--text);font-size:16px;font-weight:600">Kein Bildschirm verfügbar</div>
+      <div style="color:var(--subtext);font-size:13px;max-width:400px;line-height:1.55">
+        Auf diesem Gerät läuft gerade keine erfassbare Bildschirmsitzung
+        (typisch bei Servern und headless VMs). Kein Problem — so kommst du
+        trotzdem drauf:
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:4px">
-        <button class="btn-primary" id="rdp-native-${win.key}" style="width:auto;margin:0">
-          ⬇️ Per RDP verbinden (nativ)
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;width:100%;max-width:340px">
+        <button class="btn-primary" id="rdp-guac-${win.key}" style="width:100%;margin:0;display:flex;align-items:center;gap:10px;justify-content:center">
+          🕹️ Remote-Sitzung öffnen (RDP/VNC/SSH)
         </button>
-        <button class="taskbar-btn" id="rdp-shell-${win.key}">⌨️ Shell öffnen</button>
-        <button class="taskbar-btn" id="rdp-guac-${win.key}">🕹️ Über Guacamole (RDP/VNC/SSH)</button>
-        <button class="taskbar-btn" id="rdp-embed-${win.key}">
-          🧪 Im Browser versuchen (experimentell)
+        <button class="taskbar-btn" id="rdp-shell-${win.key}" style="width:100%;display:flex;align-items:center;gap:10px;justify-content:center">
+          ⌨️ Shell öffnen
         </button>
-        <button class="taskbar-btn" id="rdp-retry-${win.key}">↻ Erneut streamen</button>
+        <button class="taskbar-btn" id="rdp-retry-${win.key}" style="width:100%;display:flex;align-items:center;gap:10px;justify-content:center">
+          ↻ Bildschirm erneut versuchen
+        </button>
       </div>
-      <div id="rdp-embed-msg-${win.key}" style="font-size:12px;color:var(--subtext);max-width:420px"></div>
     `;
     imgArea.appendChild(overlay);
 
@@ -187,26 +192,6 @@ export function renderVnc(body, win) {
 
     // Über Guacamole verbinden (RDP/VNC/SSH über guacd) - eigenes Fenster
     overlay.querySelector(`#rdp-guac-${win.key}`).addEventListener("click", openGuacWindow);
-
-    // Nativer RDP-Download (zuverlässig): lädt die .rdp-Datei -> mstsc öffnet sich
-    overlay.querySelector(`#rdp-native-${win.key}`).addEventListener("click", async () => {
-      try {
-        await api.downloadRdpFile(clientId, clientName);
-        window.notify?.("RDP-Datei heruntergeladen — öffne sie, um dich zu verbinden.", "success");
-      } catch (e) {
-        window.notify?.(e.message, "error");
-      }
-    });
-
-    // Experimentelles RDP-Streaming im Browser (pyrdp-Gateway)
-    overlay.querySelector(`#rdp-embed-${win.key}`).addEventListener("click", () => {
-      const msg = overlay.querySelector(`#rdp-embed-msg-${win.key}`);
-      msg.textContent = "Versuche RDP-Verbindung über das Backend...";
-      // Frames kommen über denselben screen-frame-Kanal -> Overlay ausblenden,
-      // sobald ein Frame ankommt (onFrame entfernt es).
-      rdpActive = true;
-      dashboardSocket.emit("rdp-start", { clientId });
-    });
 
     // Erneut unser eigenes Streaming versuchen
     overlay.querySelector(`#rdp-retry-${win.key}`).addEventListener("click", () => {

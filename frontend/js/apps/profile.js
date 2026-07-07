@@ -47,6 +47,12 @@ export function renderProfile(body, win) {
       <button class="btn-primary" id="pr-save" style="margin-top:6px">Profil speichern</button>
 
       <h3 style="margin-top:26px">Passwort ändern</h3>
+      ${u.auth_realm ? `
+      <p style="color:var(--subtext);font-size:13px;max-width:520px">
+        🔒 Dein Konto wird zentral über das Verzeichnis (AD/LDAP/SSO) verwaltet.
+        Das Passwort kann nur dort geändert werden — nicht im RMM.
+      </p>
+      ` : `
       <div class="form-row">
         <label>Aktuelles Passwort</label>
         <input type="password" id="pr-cur" />
@@ -57,6 +63,7 @@ export function renderProfile(body, win) {
       </div>
       <div id="pr-msg" style="margin:8px 0;font-size:13px"></div>
       <button class="btn-primary" id="pr-changepw" style="margin-top:6px">Passwort ändern</button>
+      `}
     </div>
   `;
 
@@ -89,10 +96,11 @@ export function renderProfile(body, win) {
     renderSidebar();                 // Sidebar in neuer Sprache
     renderMainContent();             // Hauptbereich in neuer Sprache
     document.getElementById("user-menu-name").textContent = updated.display_name;
-    body.querySelector("#pr-msg").innerHTML = `<span style="color:var(--accent)">✓</span>`;
+    const okMsg = body.querySelector("#pr-msg");
+    if (okMsg) okMsg.innerHTML = `<span style="color:var(--accent)">✓</span>`;
   });
 
-  body.querySelector("#pr-changepw").addEventListener("click", async () => {
+  body.querySelector("#pr-changepw")?.addEventListener("click", async () => {
     const msg = body.querySelector("#pr-msg");
     try {
       await api.changePassword(

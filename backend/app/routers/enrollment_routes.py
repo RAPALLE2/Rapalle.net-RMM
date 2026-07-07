@@ -45,16 +45,25 @@ class CreateEnrollmentBody(BaseModel):
 
 
 @router.post("/api/enrollment/tokens")
-async def create_enrollment_token(body: CreateEnrollmentBody, user: dict = Depends(get_current_user)):
-    """Erzeugt einen neuen Onboarding-Token und gibt fertige URLs dafür zurück."""
+async def create_enrollment_token(body: CreateEnrollmentBody, request: Request, user: dict = Depends(get_current_user)):
+    """
+    Erzeugt einen neuen Onboarding-Token und gibt fertige URLs dafür zurück.
+
+    WICHTIG: Die URLs werden hier ABSOLUT gebaut (via _backend_url: Settings
+    server_url/server_domain/server_host haben Vorrang). Vorher hat das
+    Frontend window.location.origin vorangestellt - wer das Dashboard über
+    localhost/127.0.0.1 öffnet, bekam damit unbrauchbare "localhost"-Links.
+    """
     require_admin(user)
     token = db.create_enrollment_token(body.tenant_id, body.location_id, body.client_name)
+    base = _backend_url(request)
     return {
         "token": token,
-        "landing_url": f"/enroll/{token}",
-        "install_sh_url": f"/enroll/{token}/install.sh",
-        "install_ps1_url": f"/enroll/{token}/install.ps1",
-        "download_url": f"/enroll/{token}/agent.zip",
+        "base_url": base,
+        "landing_url": f"{base}/enroll/{token}",
+        "install_sh_url": f"{base}/enroll/{token}/install.sh",
+        "install_ps1_url": f"{base}/enroll/{token}/install.ps1",
+        "download_url": f"{base}/enroll/{token}/agent.zip",
     }
 
 
@@ -202,12 +211,14 @@ async def enrollment_landing_page(token: str, request: Request):
 
 
 @router.get("/enroll/{token}/agent.zip")
-async def download_agent_zip(token: str):
+async def download_agent_zip(token: str, request: Request):
     """Packt den Agent-Ordner inkl. einer vorausgefüllten .env-Datei in ein ZIP."""
     _require_valid_token(token)
 
+    # Echte Server-Adresse eintragen (Settings-basiert) - kein Platzhalter mehr.
+    backend_url = _backend_url(request)
     env_content = (
-        f"BACKEND_URL=http://ANPASSEN:4000\n"
+        f"BACKEND_URL={backend_url}\n"
         f"AGENT_TOKEN={AGENT_TOKEN}\n"
         f"ENROLLMENT_TOKEN={token}\n"
         f"DEVICE_NAME=\n"

@@ -15,7 +15,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+import os
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
@@ -457,3 +458,76 @@ async def delete_automation(auto_id: str, user: dict = Depends(get_current_user)
     db.delete_automation(auto_id)
     db.add_audit_entry(user["username"], "automation.deleted", target=auto_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Branding: Logos/Bilder per Upload ersetzen
+# ---------------------------------------------------------------------------
+# Die Dateien liegen im Frontend-Ordner (werden von StaticFiles ausgeliefert).
+# Upload als ROHER Request-Body (kein multipart) - so brauchen wir keine
+# zusätzliche Abhängigkeit (python-multipart) und der Fetch im Frontend
+# bleibt ein Einzeiler (body: file).
+
+from pathlib import Path as _Path
+
+_IMAGES_DIR = _Path(__file__).resolve().parents[3] / "frontend" / "images"
+
+# Whitelist: Slot-Name -> (Dateiname, erlaubte Magic-Bytes, Beschreibung)
+_PNG = (b"\x89PNG\r\n\x1a\n",)
+_JPG = (b"\xff\xd8\xff",)
+_ICO = (b"\x00\x00\x01\x00", b"\x89PNG\r\n\x1a\n")  # .ico oder PNG-als-Favicon
+BRANDING_SLOTS: dict[str, dict] = {
+    "logo_r.png":   {"magic": _PNG, "label": "Logo klein (Topbar + Browser-Icon)"},
+    "logo.png":     {"magic": _PNG, "label": "Logo Standard"},
+    "logo_big.png": {"magic": _PNG, "label": "Logo groß"},
+    "login-bg.jpg": {"magic": _JPG, "label": "Login-Hintergrundbild"},
+    "favicon.ico":  {"magic": _ICO, "label": "Favicon (.ico)"},
+}
+_MAX_BRANDING_BYTES = 8 * 1024 * 1024  # 8 MB reichen für jedes Logo/Hintergrundbild
+
+
+@router.get("/branding")
+async def list_branding(user: dict = Depends(get_current_user)):
+    """Listet alle austauschbaren Branding-Dateien inkl. Änderungszeit (Cache-Busting)."""
+    require_admin(user)
+    slots = []
+    for name, meta in BRANDING_SLOTS.items():
+        f = _IMAGES_DIR / name
+        slots.append({
+            "name": name,
+            "label": meta["label"],
+            "url": f"/images/{name}",
+            "exists": f.is_file(),
+            "mtime": int(f.stat().st_mtime) if f.is_file() else 0,
+        })
+    return {"slots": slots}
+
+
+@router.post("/branding/{name}")
+async def upload_branding(name: str, request: Request, user: dict = Depends(get_current_user)):
+    """
+    Ersetzt eine Branding-Datei. Body = rohe Bilddaten (kein multipart).
+    Nur Whitelist-Dateinamen, Magic-Byte-Prüfung, Größenlimit, atomares
+    Ersetzen (tmp + os.replace) - die alte Datei bleibt bei Fehlern intakt.
+    """
+    require_admin(user)
+    slot = BRANDING_SLOTS.get(name)
+    if not slot:
+        raise HTTPException(404, f"Unbekannter Branding-Slot. Erlaubt: {', '.join(BRANDING_SLOTS)}")
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "Leerer Upload")
+    if len(data) > _MAX_BRANDING_BYTES:
+        raise HTTPException(413, "Datei zu groß (max. 8 MB)")
+    if not any(data.startswith(m) for m in slot["magic"]):
+        expected = "PNG" if slot["magic"] == _PNG else ("JPEG" if slot["magic"] == _JPG else "ICO/PNG")
+        raise HTTPException(400, f"Falsches Dateiformat - erwartet: {expected}")
+
+    _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _IMAGES_DIR / (name + ".tmp-upload")
+    tmp.write_bytes(data)
+    os.replace(tmp, _IMAGES_DIR / name)  # atomar - nie halb geschriebene Logos
+
+    db.add_audit_entry(user["username"], "branding.updated", target=name, details=f"{len(data)} bytes")
+    return {"ok": True, "name": name, "mtime": int((_IMAGES_DIR / name).stat().st_mtime)}

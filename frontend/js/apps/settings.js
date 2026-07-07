@@ -24,6 +24,7 @@ export function renderSettings(body, win) {
           <button class="tab-btn ${activeTab === "users" ? "active" : ""}" data-t="users">${t("tab_users")}</button>
           <button class="tab-btn ${activeTab === "groups" ? "active" : ""}" data-t="groups">${t("tab_groups")}</button>
           <button class="tab-btn ${activeTab === "sso" ? "active" : ""}" data-t="sso">${t("tab_sso")}</button>
+          <button class="tab-btn ${activeTab === "branding" ? "active" : ""}" data-t="branding">Branding</button>
           <button class="tab-btn ${activeTab === "notifications" ? "active" : ""}" data-t="notifications">${t("tab_notifications")}</button>
         </div>
         <div id="set-content" style="flex:1;overflow:auto"></div>
@@ -37,7 +38,82 @@ export function renderSettings(body, win) {
     else if (activeTab === "users") renderUsersTab(content);
     else if (activeTab === "groups") renderGroupsTab(content);
     else if (activeTab === "sso") renderSsoTab(content);
+    else if (activeTab === "branding") renderBrandingTab(content);
     else if (activeTab === "notifications") renderNotifTab(content);
+  }
+
+  // ---------------- BRANDING (Logos per Upload ersetzen) ----------------
+  async function renderBrandingTab(root) {
+    root.innerHTML = `<div class="settings-section"><p style="color:var(--subtext);font-size:13px">Lade…</p></div>`;
+    let data;
+    try {
+      data = await api.getBranding();
+    } catch (e) {
+      root.innerHTML = `<div class="settings-section"><div style="color:var(--danger)">${esc(e.message)}</div></div>`;
+      return;
+    }
+
+    root.innerHTML = `
+      <div class="settings-section">
+        <h3>Logos &amp; Bilder</h3>
+        <p style="color:var(--subtext);font-size:13px;max-width:640px">
+          Hier lassen sich alle Logos und der Login-Hintergrund gegen eigene
+          Dateien austauschen. Format muss zum Slot passen (PNG/JPG/ICO),
+          max. 8&nbsp;MB. Änderungen sind sofort aktiv — ggf. Seite neu laden
+          (Strg+F5), da der Browser Bilder cached.
+        </p>
+        <div id="br-slots"></div>
+        <div id="br-msg" style="margin-top:10px;font-size:13px"></div>
+      </div>
+    `;
+
+    const slotsEl = root.querySelector("#br-slots");
+    const msgEl = root.querySelector("#br-msg");
+
+    slotsEl.innerHTML = data.slots.map((s) => `
+      <div class="panel" style="display:flex;align-items:center;gap:14px;margin-bottom:10px;padding:10px">
+        <div style="width:96px;height:56px;display:flex;align-items:center;justify-content:center;background:var(--panel-2);border-radius:8px;overflow:hidden">
+          ${s.exists
+            ? `<img src="${esc(s.url)}?v=${s.mtime}" alt="" style="max-width:100%;max-height:100%;object-fit:contain" data-preview="${esc(s.name)}" />`
+            : `<span style="color:var(--subtext);font-size:11px">— fehlt —</span>`}
+        </div>
+        <div style="flex:1">
+          <strong style="font-size:13px">${esc(s.label)}</strong>
+          <div style="color:var(--subtext);font-size:12px">${esc(s.name)}</div>
+        </div>
+        <input type="file" data-file="${esc(s.name)}" style="display:none"
+          accept="${s.name.endsWith(".jpg") ? "image/jpeg" : s.name.endsWith(".ico") ? ".ico,image/x-icon,image/png" : "image/png"}" />
+        <button class="action-btn" data-pick="${esc(s.name)}">Datei wählen &amp; ersetzen…</button>
+      </div>
+    `).join("");
+
+    slotsEl.querySelectorAll("[data-pick]").forEach((btn) => {
+      const name = btn.dataset.pick;
+      const fileInput = slotsEl.querySelector(`[data-file="${name}"]`);
+      btn.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        msgEl.innerHTML = `<span style="color:var(--subtext)">Lade "${esc(name)}" hoch…</span>`;
+        try {
+          const res = await api.uploadBranding(name, file);
+          msgEl.innerHTML = `<span style="color:var(--accent)">✓ ${esc(name)} ersetzt.</span>`;
+          // Vorschau + Topbar-Logo sofort aktualisieren (Cache-Busting via mtime)
+          const bust = `?v=${res.mtime || Date.now()}`;
+          const prev = slotsEl.querySelector(`[data-preview="${name}"]`);
+          if (prev) prev.src = `/images/${name}${bust}`;
+          if (name === "logo_r.png") {
+            document.querySelectorAll(".topbar-logo").forEach((img) => { img.src = `/images/logo_r.png${bust}`; img.style.display = ""; });
+            document.querySelectorAll('link[rel="icon"]').forEach((l) => { l.href = `images/logo_r.png${bust}`; });
+          }
+          if (!prev) renderBrandingTab(root); // Slot existierte vorher nicht -> neu zeichnen
+        } catch (e) {
+          msgEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+        } finally {
+          fileInput.value = "";
+        }
+      });
+    });
   }
 
   // ---------------- GENERAL ----------------

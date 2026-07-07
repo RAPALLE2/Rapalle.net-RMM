@@ -82,6 +82,40 @@ def stop_recording(client_id: str) -> None:
     db.finish_recording(rec.rec_id, rec.frame_count)
 
 
+def abort_recording(client_id: str, only_if_empty: bool = True) -> bool:
+    """
+    Bricht eine laufende Aufzeichnung ab und löscht sie SOFORT wieder
+    (Datei + DB-Eintrag). Wird genutzt, wenn das Screen-Streaming mit einem
+    Fehler startet (z.B. headless VM) - sonst bleibt ein leeres 0-Frame-Replay
+    in der Liste liegen.
+
+    only_if_empty=True (Standard): Nur löschen, wenn noch KEIN Frame
+    aufgezeichnet wurde - eine Session mit echtem Bildmaterial wird bei einem
+    späten Fehler nicht weggeworfen, sondern normal abgeschlossen.
+
+    WICHTIG: Der Audit-Log-Eintrag (screen.session_started) wird bewusst
+    NICHT angetastet - der Zugriffsversuch bleibt nachvollziehbar.
+    """
+    rec = _active.get(client_id)
+    if not rec:
+        return False
+    if only_if_empty and rec.frame_count > 0:
+        # Es gibt schon Bildmaterial -> regulär beenden statt löschen.
+        stop_recording(client_id)
+        return False
+    _active.pop(client_id, None)
+    try:
+        rec.file.close()
+    except Exception:
+        pass
+    try:
+        pathlib.Path(rec.file_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    db.delete_recording(rec.rec_id)
+    return True
+
+
 def cleanup_old_recordings() -> int:
     """
     Löscht Aufzeichnungen, die älter als RETENTION_DAYS sind (Datei + DB-Eintrag).

@@ -83,10 +83,44 @@ api.include_router(guac_routes.router)
 api.add_api_websocket_route("/guac/tunnel", guac_routes.tunnel_endpoint)
 
 
+# ------------------------------------------------------------------
+# Versionen: Single Source of Truth sind die version.txt-Dateien
+# (backend/version.txt und agent/version.txt). Grundlage für das
+# spätere Auto-Update: Agents/Frontends vergleichen ihre Version
+# gegen /api/version und aktualisieren sich bei Abweichung.
+# ------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _read_version(path: Path, fallback: str = "0.0.0") -> str:
+    try:
+        v = path.read_text(encoding="utf-8").strip()
+        return v or fallback
+    except OSError:
+        return fallback
+
+
+def get_backend_version() -> str:
+    return _read_version(_PROJECT_ROOT / "backend" / "version.txt")
+
+
+def get_agent_version() -> str:
+    return _read_version(_PROJECT_ROOT / "agent" / "version.txt")
+
+
 @api.get("/api/health")
 async def health_check():
     """Einfacher Endpunkt zum Prüfen, ob das Backend läuft."""
-    return {"ok": True, "name": "RAPALLE.net RMM", "version": "0.1.0"}
+    return {"ok": True, "name": "RAPALLE.net RMM", "version": get_backend_version()}
+
+
+@api.get("/api/version")
+async def versions():
+    """
+    Zentrale Versionsauskunft (kein Auth - enthält keine Geheimnisse):
+    Backend- und Agent-Version aus den jeweiligen version.txt-Dateien.
+    """
+    return {"backend": get_backend_version(), "agent": get_agent_version()}
 
 
 # ------------------------------------------------------------------

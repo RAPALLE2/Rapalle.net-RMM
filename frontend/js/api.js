@@ -47,6 +47,8 @@ export const api = {
   getHierarchy: () => request("/api/hierarchy"),
   createTenant: (name, color) => request("/api/tenants", { method: "POST", body: JSON.stringify({ name, color }) }),
   createLocation: (tenant_id, name) => request("/api/locations", { method: "POST", body: JSON.stringify({ tenant_id, name }) }),
+  deleteTenant: (tenant_id) => request(`/api/tenants/${tenant_id}`, { method: "DELETE" }),
+  deleteLocation: (location_id) => request(`/api/locations/${location_id}`, { method: "DELETE" }),
   createFolder: (location_id, name, parent_folder_id = null) =>
     request("/api/folders", { method: "POST", body: JSON.stringify({ location_id, name, parent_folder_id }) }),
 
@@ -101,6 +103,28 @@ export const api = {
 
   // --- Agent-Verwaltung ---
   updateAgent: (clientId) => request(`/api/clients/${clientId}/update-agent`, { method: "POST" }),
+
+  // --- Branding (Logos per Upload ersetzen) ---
+  getBranding: () => request("/api/admin/branding"),
+  // Roh-Upload (KEIN multipart, KEIN JSON-Header) - Backend liest den Body direkt.
+  uploadBranding: async (name, file) => {
+    const token = getToken();
+    const res = await fetch(`${BACKEND_URL}/api/admin/branding/${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: file,
+    });
+    if (!res.ok) {
+      let msg = "Upload fehlgeschlagen";
+      try { const j = await res.json(); msg = j.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
+
+  // --- Versionen (Backend + Agent, Basis fürs Auto-Update) ---
+  getVersions: () => request("/api/version"),
+
   // Liefert die URL zur .rdp-Datei (Download öffnet den nativen RDP-Client)
   rdpFileUrl: (clientId) => `/api/clients/${clientId}/rdp-file`,
   // Lädt die .rdp-Datei (mit Auth) und stößt den Download im Browser an

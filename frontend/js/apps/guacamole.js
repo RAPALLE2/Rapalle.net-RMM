@@ -460,12 +460,24 @@ export function renderGuacamole(body, win) {
     mouse = new Guacamole.Mouse(displayElement);
     const sendMouse = (mouseState) => {
       try {
+        // WICHTIG: mouseState NIEMALS mutieren! Guacamole.Mouse verwendet
+        // intern EIN wiederverwendetes State-Objekt für alle Events. Wird
+        // hier direkt durch die Skalierung geteilt, teilt jedes weitere
+        // Event (z.B. mouseup direkt nach mousedown, ohne Move dazwischen)
+        // DENSELBEN Wert erneut -> Koordinaten schrumpfen pro Klick Richtung
+        // (0,0): "Cursor wandert bei jedem Klick in die Ecke, springt beim
+        // Bewegen zurück". Deshalb: skalierte KOPIE senden.
         const scale = display.getScale() || 1;
-        if (scale && scale !== 1) {
-          mouseState.x = mouseState.x / scale;
-          mouseState.y = mouseState.y / scale;
-        }
-        client.sendMouseState(mouseState);
+        const scaled = new Guacamole.Mouse.State(
+          mouseState.x / scale,
+          mouseState.y / scale,
+          mouseState.left,
+          mouseState.middle,
+          mouseState.right,
+          mouseState.up,
+          mouseState.down
+        );
+        client.sendMouseState(scaled);
       } catch { /* Maus-Event ignorieren, niemals das GUI blockieren */ }
     };
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = sendMouse;

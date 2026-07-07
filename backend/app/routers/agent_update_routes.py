@@ -16,16 +16,29 @@ from fastapi.responses import PlainTextResponse
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
-# Version des ausgelieferten Agents. Bei Änderungen am Agent hochzählen.
-AGENT_VERSION = "1.1.0"
-
 # Pfad zur agent.py im Projekt (…/backend/app/routers/ -> …/agent/agent.py)
-_AGENT_PY = Path(__file__).resolve().parents[3] / "agent" / "agent.py"
+_AGENT_DIR = Path(__file__).resolve().parents[3] / "agent"
+_AGENT_PY = _AGENT_DIR / "agent.py"
+_AGENT_VERSION_FILE = _AGENT_DIR / "version.txt"
+
+
+def _agent_version() -> str:
+    """
+    Version des ausgelieferten Agents - Single Source of Truth ist
+    agent/version.txt (bei Änderungen am Agent dort hochzählen).
+    Wird bei jedem Aufruf frisch gelesen, damit ein Update der Datei
+    ohne Backend-Neustart wirkt (wichtig fürs spätere Auto-Update).
+    """
+    try:
+        v = _AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
+        return v or "0.0.0"
+    except OSError:
+        return "0.0.0"
 
 
 @router.get("/version")
 async def agent_version():
-    return {"version": AGENT_VERSION}
+    return {"version": _agent_version()}
 
 
 @router.get("/latest", response_class=PlainTextResponse)

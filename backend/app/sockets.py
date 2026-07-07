@@ -297,8 +297,11 @@ async def on_heartbeat(sid, payload):
                 now_ms,
             )
             # Alles außerhalb der Aufbewahrungsdauer wegräumen.
-            retention_ms = db.get_int_setting("metrics_retention_hours") * 3600 * 1000
-            db.prune_metrics_history(now_ms - retention_ms)
+            # 0 (oder negativ) = unbegrenzt aufbewahren -> NIE prunen.
+            retention_hours = db.get_int_setting("metrics_retention_hours")
+            if retention_hours > 0:
+                retention_ms = retention_hours * 3600 * 1000
+                db.prune_metrics_history(now_ms - retention_ms)
     except Exception as e:
         print(f"[metrics] Konnte Messpunkt nicht speichern: {e}")
 
@@ -365,6 +368,11 @@ async def on_screen_frame(sid, payload):
 @sio.on("screen-error", namespace="/agent")
 async def on_screen_error(sid, payload):
     """Ein Agent meldet, dass Screen-Streaming nicht möglich ist."""
+    # Beim Start wurde bereits eine Aufzeichnung angelegt - die wäre jetzt ein
+    # leeres 0-Frame-Replay. Sofort wieder löschen (Datei + DB). Der Audit-
+    # Eintrag bleibt bewusst bestehen (Zugriffsversuch bleibt nachvollziehbar).
+    from app import recording
+    recording.abort_recording(payload.get("id"))
     await sio.emit("screen-error", payload, namespace="/dashboard")
 
 

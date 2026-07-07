@@ -70,17 +70,36 @@ export function renderAddClient(body, win) {
     resultEl.innerHTML = `<span style="color:var(--subtext)">Erzeuge Token...</span>`;
     try {
       const res = await api.createEnrollmentToken(tenantSel.value || null, locationSel.value || null, clientName);
-      const base = window.location.origin;
+      // Backend liefert jetzt ABSOLUTE URLs (aus den Server-Einstellungen) -
+      // damit steht nie mehr "localhost" im Link, egal wie das Dashboard
+      // geöffnet wurde. Fallback für alte Backends: origin voranstellen.
+      const abs = (u) => (u && u.startsWith("http") ? u : window.location.origin + u);
+      const landingUrl = abs(res.landing_url);
+      const installShUrl = abs(res.install_sh_url);
+      const installPs1Url = abs(res.install_ps1_url);
+      const downloadUrl = abs(res.download_url);
+
+      // Kleiner Helfer: <pre> mit Copy-Button daneben
+      const copyRow = (text, idx) => `
+        <div style="display:flex;gap:6px;align-items:stretch">
+          <pre style="flex:1;background:var(--panel-2);padding:10px;border-radius:6px;overflow-x:auto;margin:0">${esc(text)}</pre>
+          <button class="action-btn" data-copy="${idx}" title="In die Zwischenablage kopieren" style="align-self:center">📋</button>
+        </div>`;
+      const copyTexts = [
+        landingUrl,
+        `curl -sSL ${installShUrl} | sudo bash`,
+        `iwr ${installPs1Url} -UseBasicParsing | iex`,
+      ];
 
       resultEl.innerHTML = `
         <h3 style="font-size:13px">Weg 1 — Download-Seite (Link weitergeben)</h3>
-        <pre style="background:var(--panel-2);padding:10px;border-radius:6px;overflow-x:auto">${base}${esc(res.landing_url)}</pre>
+        ${copyRow(copyTexts[0], 0)}
 
         <h3 style="font-size:13px;margin-top:16px">Weg 2 — Ein-Zeiler Linux (als root)</h3>
-        <pre style="background:var(--panel-2);padding:10px;border-radius:6px;overflow-x:auto">curl -sSL ${base}${esc(res.install_sh_url)} | sudo bash</pre>
+        ${copyRow(copyTexts[1], 1)}
 
         <h3 style="font-size:13px;margin-top:16px">Weg 2 — Ein-Zeiler Windows (PowerShell als Admin)</h3>
-        <pre style="background:var(--panel-2);padding:10px;border-radius:6px;overflow-x:auto">iwr ${base}${esc(res.install_ps1_url)} -UseBasicParsing | iex</pre>
+        ${copyRow(copyTexts[2], 2)}
         <p style="color:var(--subtext);font-size:12px;margin-top:4px">
           Der Windows-Installer installiert Python bei Bedarf selbst und richtet den
           unsichtbaren Autostart ein. Danach kannst du die PowerShell einfach schließen.
@@ -88,8 +107,33 @@ export function renderAddClient(body, win) {
 
         <h3 style="font-size:13px;margin-top:16px">Weg 3 — Direkter Download</h3>
         <a class="btn-primary" style="display:inline-block;width:auto;text-decoration:none"
-           href="${base}${esc(res.download_url)}">Agent .zip herunterladen</a>
+           href="${esc(downloadUrl)}">Agent .zip herunterladen</a>
       `;
+
+      // Copy-Handler (navigator.clipboard braucht HTTPS/localhost -> Fallback
+      // über verstecktes Textarea + execCommand für HTTP-Setups)
+      resultEl.querySelectorAll("[data-copy]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const text = copyTexts[Number(btn.dataset.copy)];
+          let ok = false;
+          try {
+            await navigator.clipboard.writeText(text);
+            ok = true;
+          } catch {
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.cssText = "position:fixed;opacity:0";
+              document.body.appendChild(ta);
+              ta.select();
+              ok = document.execCommand("copy");
+              ta.remove();
+            } catch { ok = false; }
+          }
+          btn.textContent = ok ? "✓" : "✗";
+          setTimeout(() => { btn.textContent = "📋"; }, 1500);
+        })
+      );
     } catch (e) {
       resultEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
     }
