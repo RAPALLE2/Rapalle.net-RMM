@@ -58,7 +58,8 @@ export const api = {
   getMetricsHistory: (id) => request(`/api/clients/${id}/metrics/history`),
   updateClient: (id, fields) => request(`/api/clients/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteClient: (id) => request(`/api/clients/${id}`, { method: "DELETE" }),
-  execOnClient: (id, command, session) => request(`/api/clients/${id}/exec`, { method: "POST", body: JSON.stringify({ command, session }) }),
+  execOnClient: (id, command, session, shell = "auto", elevated = false) =>
+    request(`/api/clients/${id}/exec`, { method: "POST", body: JSON.stringify({ command, session, shell, elevated }) }),
   bulkExec: (client_ids, command) => request("/api/clients/bulk-exec", { method: "POST", body: JSON.stringify({ client_ids, command }) }),
   listClientFs: (id, path) => request(`/api/clients/${id}/fs?path=${encodeURIComponent(path)}`),
   listProcesses: (id) => request(`/api/clients/${id}/processes`),
@@ -79,8 +80,8 @@ export const api = {
 
   // Apache Guacamole (extern gehostet)
   guacStatus: () => request("/api/guac/status"),
-  createGuacToken: (protocol, params, clientId) =>
-    request("/api/guac/token", { method: "POST", body: JSON.stringify({ protocol, params, client_id: clientId }) }),
+  createGuacToken: (protocol, params, clientId, hostname, record = true) =>
+    request("/api/guac/token", { method: "POST", body: JSON.stringify({ protocol, params, client_id: clientId, hostname, record }) }),
 
   // --- Benutzerverwaltung ---
   getUsers: () => request("/api/users"),
@@ -184,6 +185,7 @@ export const api = {
   createAutomation: (data) => request("/api/admin/automations", { method: "POST", body: JSON.stringify(data) }),
   toggleAutomation: (id) => request(`/api/admin/automations/${id}/toggle`, { method: "POST" }),
   deleteAutomation: (id) => request(`/api/admin/automations/${id}`, { method: "DELETE" }),
+  getAutomationRuns: (id) => request(`/api/admin/automations/${id}/runs`),
 };
 
 export function saveToken(token) {

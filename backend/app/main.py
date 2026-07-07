@@ -91,6 +91,12 @@ api.add_api_websocket_route("/guac/tunnel", guac_routes.tunnel_endpoint)
 # ------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# Eindeutige ID DIESES Backend-Prozesses. Ändert sich bei jedem (Neu-)Start.
+# Das Frontend pollt sie und lädt sich neu, sobald sie sich ändert -> nach
+# einem Backend-Restart aktualisiert sich die Webconsole von selbst.
+import uuid as _uuid
+BOOT_ID = _uuid.uuid4().hex
+
 
 def _read_version(path: Path, fallback: str = "0.0.0") -> str:
     try:
@@ -119,8 +125,15 @@ async def versions():
     """
     Zentrale Versionsauskunft (kein Auth - enthält keine Geheimnisse):
     Backend- und Agent-Version aus den jeweiligen version.txt-Dateien.
+    'boot_id' identifiziert den laufenden Prozess (Auto-Reload nach Restart).
     """
-    return {"backend": get_backend_version(), "agent": get_agent_version()}
+    return {"backend": get_backend_version(), "agent": get_agent_version(), "boot_id": BOOT_ID}
+
+
+@api.get("/api/boot-id")
+async def boot_id():
+    """Leichter Endpunkt, den das Frontend pollt, um Backend-Neustarts zu erkennen."""
+    return {"boot_id": BOOT_ID}
 
 
 # ------------------------------------------------------------------
@@ -137,11 +150,27 @@ async def _automation_engine():
         try:
             for auto in db.get_due_automations():
                 client_ids = [c for c in (auto["client_ids"] or "").split(",") if c]
+                run_id = _uuid.uuid4().hex   # gruppiert diesen Durchlauf
                 for cid in client_ids:
+                    hostname = None
                     try:
-                        await _request_exec(cid, auto["command"], timeout_seconds=60)
+                        c = db.get_client(cid)
+                        hostname = c["hostname"] if c else None
+                    except Exception:
+                        pass
+                    try:
+                        res = await _request_exec(cid, auto["command"], timeout_seconds=60)
+                        db.record_automation_result(
+                            run_id, auto["id"], cid, hostname,
+                            res.get("stdout", ""), res.get("stderr", ""),
+                            res.get("code"), ok=True,
+                        )
                     except Exception as e:
                         print(f"[automation] '{auto['name']}' auf {cid} fehlgeschlagen: {e}")
+                        db.record_automation_result(
+                            run_id, auto["id"], cid, hostname,
+                            "", str(e), None, ok=False,
+                        )
                 db.mark_automation_run(auto["id"])
                 db.add_audit_entry("system", "automation.executed", target=auto["id"], details=auto["name"])
         except Exception as e:

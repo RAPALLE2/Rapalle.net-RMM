@@ -460,6 +460,13 @@ async def delete_automation(auto_id: str, user: dict = Depends(get_current_user)
     return {"ok": True}
 
 
+@router.get("/automations/{auto_id}/runs")
+async def get_automation_runs(auto_id: str, user: dict = Depends(get_current_user)):
+    """Liefert die letzten Durchläufe einer Automation mit Ergebnis je Client."""
+    require_admin(user)
+    return {"runs": db.list_automation_runs(auto_id)}
+
+
 # ---------------------------------------------------------------------------
 # Branding: Logos/Bilder per Upload ersetzen
 # ---------------------------------------------------------------------------

@@ -33,4 +33,14 @@ export function applyAccent(accentKey) {
   const root = document.documentElement;
   root.style.setProperty("--accent", palette.accent);
   root.style.setProperty("--accent-2", palette.accent2);
+  // Zusätzlich als "R, G, B"-Tripel, damit im CSS rgba(var(--accent-2-rgb), .15)
+  // für halbtransparente Hintergründe genutzt werden kann (Sidebar-Auswahl,
+  // priorisiertes Taskbar-Fenster).
+  const toRgb = (hex) => {
+    const h = hex.replace("#", "");
+    const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+    return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  };
+  root.style.setProperty("--accent-rgb", toRgb(palette.accent));
+  root.style.setProperty("--accent-2-rgb", toRgb(palette.accent2));
 }

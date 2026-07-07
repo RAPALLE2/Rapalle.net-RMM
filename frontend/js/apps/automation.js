@@ -110,9 +110,11 @@ export function renderAutomation(body, win) {
             <pre style="background:var(--panel-2);padding:8px;border-radius:6px;margin:8px 0;font-size:12px;white-space:pre-wrap">${esc(a.command)}</pre>
             <div style="font-size:12px;color:var(--subtext)">Alle ${every} · Ziele: ${targets || "—"}${a.last_run ? " · zuletzt: " + new Date(a.last_run).toLocaleString("de-DE") : ""}</div>
             <div style="display:flex;gap:6px;margin-top:8px">
+              <button class="taskbar-btn" data-runs="${a.id}">📋 Ergebnisse</button>
               <button class="taskbar-btn" data-toggle="${a.id}">${a.enabled ? "Pausieren" : "Aktivieren"}</button>
               <button class="taskbar-btn" data-del="${a.id}">Löschen</button>
             </div>
+            <div class="au-runs" id="au-runs-${a.id}" style="display:none;margin-top:8px"></div>
           </div>`;
       }).join("");
 
@@ -123,6 +125,50 @@ export function renderAutomation(body, win) {
         btn.addEventListener("click", async () => {
           if (!confirm("Automation löschen?")) return;
           await api.deleteAutomation(btn.dataset.del); loadList();
+        })
+      );
+      // Ergebnisliste je Durchlauf ein-/ausklappen
+      listEl.querySelectorAll("[data-runs]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const box = listEl.querySelector(`#au-runs-${btn.dataset.runs}`);
+          if (box.style.display === "block") { box.style.display = "none"; return; }
+          box.style.display = "block";
+          box.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lade Ergebnisse…</div>`;
+          try {
+            const { runs } = await api.getAutomationRuns(btn.dataset.runs);
+            if (!runs.length) {
+              box.innerHTML = `<div style="color:var(--subtext);font-size:12px">Noch keine Durchläufe.</div>`;
+              return;
+            }
+            box.innerHTML = runs.map((run) => {
+              const when = new Date(run.started_at).toLocaleString("de-DE");
+              const okCount = run.results.filter((r) => r.ok && (r.exit_code === 0 || r.exit_code == null)).length;
+              const rows = run.results.map((r) => {
+                const good = r.ok && (r.exit_code === 0 || r.exit_code == null);
+                const output = (r.stdout || "").trim() || (r.stderr || "").trim() || "(keine Ausgabe)";
+                return `
+                  <div style="border-top:1px solid var(--border);padding:6px 0">
+                    <div style="display:flex;justify-content:space-between;font-size:12px">
+                      <span>${good ? "✅" : "❌"} <strong>${esc(r.client_hostname || r.client_id.slice(0,6))}</strong></span>
+                      <span style="color:var(--subtext)">Exit ${r.exit_code ?? "—"}</span>
+                    </div>
+                    <pre style="background:var(--panel-2);padding:6px;border-radius:5px;margin:4px 0 0;font-size:11px;white-space:pre-wrap;max-height:140px;overflow:auto">${esc(output)}</pre>
+                  </div>`;
+              }).join("");
+              return `
+                <div class="panel" style="background:var(--panel-2);margin-bottom:8px">
+                  <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600">
+                    <span>${when}</span>
+                    <span style="color:${okCount === run.results.length ? "var(--accent)" : "var(--danger)"}">
+                      ${okCount}/${run.results.length} OK
+                    </span>
+                  </div>
+                  ${rows}
+                </div>`;
+            }).join("");
+          } catch (e) {
+            box.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
+          }
         })
       );
     } catch (e) {

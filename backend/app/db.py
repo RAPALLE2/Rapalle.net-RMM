@@ -226,6 +226,22 @@ def init_db() -> None:
             created_at INTEGER NOT NULL
         );
 
+        -- Automation-Läufe: EIN Eintrag pro Client pro Durchlauf. Damit lässt
+        -- sich im Dashboard eine Ergebnisliste je Durchlauf einsehen (Ausgabe,
+        -- Fehler, Exit-Code, Zeit). run_id gruppiert alle Clients EINES Laufs.
+        CREATE TABLE IF NOT EXISTS automation_runs (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,               -- gruppiert einen Durchlauf
+            automation_id TEXT NOT NULL,
+            client_id TEXT NOT NULL,
+            client_hostname TEXT,
+            started_at INTEGER NOT NULL,
+            stdout TEXT,
+            stderr TEXT,
+            exit_code INTEGER,
+            ok INTEGER NOT NULL DEFAULT 0       -- 1 = erfolgreich ausgeführt
+        );
+
         -- Globale Einstellungen als einfacher Schlüssel/Wert-Speicher.
         -- Wird u.a. für die Install-Server-Adresse und die Metrik-/Replay-
         -- Aufbewahrung genutzt (siehe DEFAULT_SETTINGS weiter unten).
@@ -1078,6 +1094,54 @@ def set_automation_enabled(auto_id: str, enabled: bool) -> None:
 
 def mark_automation_run(auto_id: str) -> None:
     _conn.execute("UPDATE automations SET last_run = ? WHERE id = ?", (_now_ms(), auto_id))
+    _conn.commit()
+
+
+def record_automation_result(run_id: str, automation_id: str, client_id: str,
+                             client_hostname: str | None, stdout: str, stderr: str,
+                             exit_code: int | None, ok: bool) -> None:
+    """Speichert das Ergebnis EINES Clients innerhalb eines Automation-Durchlaufs."""
+    _conn.execute(
+        """INSERT INTO automation_runs
+           (id, run_id, automation_id, client_id, client_hostname, started_at,
+            stdout, stderr, exit_code, ok)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (_new_id(), run_id, automation_id, client_id, client_hostname, _now_ms(),
+         (stdout or "")[:20000], (stderr or "")[:20000], exit_code, 1 if ok else 0),
+    )
+    _conn.commit()
+
+
+def list_automation_runs(automation_id: str, limit_runs: int = 20) -> list[dict]:
+    """
+    Liefert die letzten Durchläufe einer Automation, gruppiert nach run_id.
+    Jeder Durchlauf enthält die Ergebnisliste aller Clients.
+    """
+    rows = [dict(r) for r in _conn.execute(
+        """SELECT * FROM automation_runs WHERE automation_id = ?
+           ORDER BY started_at DESC""", (automation_id,)).fetchall()]
+    runs: dict[str, dict] = {}
+    order: list[str] = []
+    for r in rows:
+        rid = r["run_id"]
+        if rid not in runs:
+            runs[rid] = {"run_id": rid, "started_at": r["started_at"], "results": []}
+            order.append(rid)
+        runs[rid]["results"].append({
+            "client_id": r["client_id"],
+            "client_hostname": r["client_hostname"],
+            "stdout": r["stdout"],
+            "stderr": r["stderr"],
+            "exit_code": r["exit_code"],
+            "ok": bool(r["ok"]),
+            "started_at": r["started_at"],
+        })
+        runs[rid]["started_at"] = max(runs[rid]["started_at"], r["started_at"])
+    return [runs[rid] for rid in order[:limit_runs]]
+
+
+def prune_automation_runs(older_than_ts: int) -> None:
+    _conn.execute("DELETE FROM automation_runs WHERE started_at < ?", (older_than_ts,))
     _conn.commit()
 
 

@@ -27,11 +27,54 @@ import os
 import platform
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import uuid
 from pathlib import Path
+
+
+# --------------------------------------------------------------
+# Selbst-Bootstrap: fehlende Bibliotheken automatisch nachinstallieren.
+# Der Agent besteht (nach Installation) aus agent.py + requirements.txt.
+# Fehlt eine Lib (z.B. weil requirements.txt erweitert wurde), installieren
+# wir sie hier NACH, bevor wir sie importieren - sonst stürzt der Import ab.
+# --------------------------------------------------------------
+def _bootstrap_deps() -> None:
+    # PyPI-Name -> Importname (nur wo abweichend)
+    needed = {
+        "python-socketio[asyncio_client]": "socketio",
+        "aiohttp": "aiohttp",
+        "psutil": "psutil",
+        "python-dotenv": "dotenv",
+        "mss": "mss",
+        "Pillow": "PIL",
+        "pynput": "pynput",
+    }
+    import importlib
+    missing_specs = []
+    for spec, mod in needed.items():
+        try:
+            importlib.import_module(mod)
+        except Exception:
+            missing_specs.append(spec)
+    if not missing_specs:
+        return
+    print(f"[agent-bootstrap] Installiere fehlende Pakete: {', '.join(missing_specs)}")
+    req = Path(__file__).resolve().parent / "requirements.txt"
+    try:
+        if req.is_file():
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)],
+                           check=False, timeout=600)
+        else:
+            subprocess.run([sys.executable, "-m", "pip", "install", *missing_specs],
+                           check=False, timeout=600)
+    except Exception as e:
+        print(f"[agent-bootstrap] pip fehlgeschlagen: {e}")
+
+
+_bootstrap_deps()
 
 import psutil
 import socketio
@@ -300,35 +343,52 @@ def _update_session_cwd(session_id: str | None, new_cwd: str) -> None:
         _terminal_sessions.setdefault(session_id, {})["cwd"] = new_cwd
 
 
-def _run_shell_command(command: str, session_id: str | None = None) -> tuple[str, str, int]:
+def _run_shell_command(command: str, session_id: str | None = None,
+                       shell: str = "auto", elevated: bool = False) -> tuple[str, str, int]:
     """
     Führt einen Shell-Befehl aus und gibt (stdout, stderr, exit_code) zurück.
 
+    shell:    'cmd' | 'powershell' | 'auto' (auto = cmd auf Windows, sh auf POSIX)
+    elevated: True -> auf Windows als Administrator ausführen (UAC-Elevation).
+
     Ist eine session_id gesetzt, läuft der Befehl im gemerkten Arbeitsverzeichnis
     dieser Terminal-Session, und ein evtl. per "cd" geändertes Verzeichnis wird
-    für den nächsten Befehl übernommen. Das neue Verzeichnis wird über eine
-    kleine Temp-Datei zurückgemeldet - so bleibt die eigentliche Ausgabe (stdout)
-    sauber und Exit-Codes sowie mehrzeilige Befehle funktionieren auf Linux
-    UND Windows korrekt.
+    für den nächsten Befehl übernommen.
     """
     start_cwd = _session_cwd(session_id)
     cwd_file = None
-    bat_file = None
+    script_file = None
+    is_win = os.name == "nt"
+    use_ps = (shell == "powershell")
     try:
         fd, cwd_file = tempfile.mkstemp(prefix="rmm_cwd_")
         os.close(fd)
 
-        if os.name == "nt":
-            # Windows: temporäre .bat für saubere Mehrzeilen-/Fehlercode-Behandlung.
-            fd, bat_file = tempfile.mkstemp(prefix="rmm_cmd_", suffix=".bat")
+        # Windows + Administrator: eigener Elevations-Pfad (UAC).
+        if is_win and elevated:
+            return _run_elevated_windows(command, start_cwd, use_ps)
+
+        if is_win and use_ps:
+            # PowerShell-Skript für saubere Mehrzeilen-/Fehlercode-Behandlung.
+            fd, script_file = tempfile.mkstemp(prefix="rmm_ps_", suffix=".ps1")
             os.close(fd)
-            with open(bat_file, "w", encoding="utf-8") as f:
+            with open(script_file, "w", encoding="utf-8") as f:
+                f.write(command + "\r\n")
+                f.write('$__rmm_rc = $LASTEXITCODE; if ($null -eq $__rmm_rc) { $__rmm_rc = 0 }\r\n')
+                f.write(f'(Get-Location).Path | Out-File -Encoding utf8 "{cwd_file}"\r\n')
+                f.write('exit $__rmm_rc\r\n')
+            argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_file]
+        elif is_win:
+            # cmd: temporäre .bat.
+            fd, script_file = tempfile.mkstemp(prefix="rmm_cmd_", suffix=".bat")
+            os.close(fd)
+            with open(script_file, "w", encoding="utf-8") as f:
                 f.write("@echo off\r\n")
                 f.write(command + "\r\n")
                 f.write('set "__rmm_rc=%ERRORLEVEL%"\r\n')
                 f.write(f'cd > "{cwd_file}"\r\n')
                 f.write("exit /b %__rmm_rc%\r\n")
-            argv = ["cmd", "/c", bat_file]
+            argv = ["cmd", "/c", script_file]
         else:
             # POSIX: sh -c mit Wrapper, der nach dem Befehl das PWD wegschreibt.
             wrapper = (
@@ -362,12 +422,80 @@ def _run_shell_command(command: str, session_id: str | None = None) -> tuple[str
     except Exception as e:
         return "", str(e), 1
     finally:
-        for path in (cwd_file, bat_file):
+        for path in (cwd_file, script_file):
             if path:
                 try:
                     os.unlink(path)
                 except OSError:
                     pass
+
+
+def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> tuple[str, str, int]:
+    """
+    Führt einen Befehl auf Windows ALS ADMINISTRATOR aus (UAC-Elevation via
+    PowerShell Start-Process -Verb RunAs). Da der elevierte Prozess ein eigener
+    ist, werden stdout/stderr/Exit-Code über Temp-Dateien eingesammelt.
+
+    Läuft der Agent bereits als SYSTEM/Administrator (Autostart als Dienst),
+    erscheint KEIN UAC-Dialog - die Elevation ist dann transparent.
+    """
+    out_file = tempfile.mkstemp(prefix="rmm_out_", suffix=".txt")[1]
+    err_file = tempfile.mkstemp(prefix="rmm_err_", suffix=".txt")[1]
+    rc_file = tempfile.mkstemp(prefix="rmm_rc_", suffix=".txt")[1]
+    inner = tempfile.mkstemp(prefix="rmm_inner_", suffix=(".ps1" if use_ps else ".bat"))[1]
+    try:
+        if use_ps:
+            with open(inner, "w", encoding="utf-8") as f:
+                if start_cwd:
+                    f.write(f'Set-Location "{start_cwd}"\r\n')
+                f.write(f'& {{ {command} }} *> "{out_file}" 2> "{err_file}"\r\n')
+                f.write(f'$LASTEXITCODE | Out-File -Encoding ascii "{rc_file}"\r\n')
+            inner_launch = f'powershell -NoProfile -ExecutionPolicy Bypass -File \"\"{inner}\"\"'
+        else:
+            with open(inner, "w", encoding="utf-8") as f:
+                f.write("@echo off\r\n")
+                if start_cwd:
+                    f.write(f'cd /d "{start_cwd}"\r\n')
+                f.write(f'call {command} > "{out_file}" 2> "{err_file}"\r\n')
+                f.write(f'echo %ERRORLEVEL% > "{rc_file}"\r\n')
+            inner_launch = f'cmd /c \"\"{inner}\"\"'
+
+        # Start-Process -Verb RunAs hebt den inneren Befehl auf Admin-Rechte an.
+        ps_launch = (
+            f"$p = Start-Process -FilePath cmd -ArgumentList '/c {inner_launch}' "
+            f"-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_launch],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        def _read(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    return f.read()
+            except OSError:
+                return ""
+        stdout = _read(out_file)
+        stderr = _read(err_file)
+        rc_raw = _read(rc_file).strip()
+        try:
+            code = int(rc_raw)
+        except ValueError:
+            code = 0
+        if not stdout and not stderr and code != 0:
+            stderr = "(Elevierter Befehl fehlgeschlagen oder UAC abgelehnt.)"
+        return stdout, stderr, code
+    except subprocess.TimeoutExpired:
+        return "", "Zeitüberschreitung beim elevierten Befehl (>120s)", 1
+    except Exception as e:
+        return "", f"Elevation fehlgeschlagen: {e}", 1
+    finally:
+        for path in (out_file, err_file, rc_file, inner):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 @sio.on("exec", namespace="/agent")
@@ -376,10 +504,12 @@ async def on_exec(data):
     request_id = data.get("requestId")
     command = data.get("command", "")
     session_id = data.get("session")
+    shell = data.get("shell", "auto")        # 'cmd' | 'powershell' | 'auto'
+    elevated = bool(data.get("elevated", False))
 
     loop = asyncio.get_event_loop()
     stdout, stderr, exit_code = await loop.run_in_executor(
-        None, _run_shell_command, command, session_id
+        None, _run_shell_command, command, session_id, shell, elevated
     )
 
     await sio.emit(

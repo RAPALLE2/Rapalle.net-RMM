@@ -10,16 +10,39 @@
 
 import { api } from "../api.js";
 import { esc } from "../utils.js";
+import { state } from "../state.js";
 
 export function renderTerminal(body, win) {
   const { clientId, clientName } = win.props;
+
+  // Ist der Ziel-Client ein Windows-Gerät? Nur dann Shell-Auswahl anzeigen.
+  const client = state.clients?.find((c) => c.id === clientId);
+  const isWindows = (client?.platform || "").toLowerCase().includes("win");
 
   // Eindeutige Session-ID pro Terminal-Fenster. Der Agent hält dazu ein
   // eigenes Arbeitsverzeichnis, damit "cd" über mehrere Befehle hinweg wirkt.
   const sessionId = (window.crypto?.randomUUID?.() || `term-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+  // Aktuell gewählter Shell-Modus (nur Windows relevant).
+  let shellMode = "auto";      // 'cmd' | 'powershell' | 'auto'
+  let elevated = false;        // als Administrator
+
+  const shellBar = isWindows ? `
+      <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--subtext)">Shell:</span>
+        <select id="term-shell-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+          <option value="cmd">CMD</option>
+          <option value="powershell">PowerShell</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--subtext);cursor:pointer">
+          <input type="checkbox" id="term-admin-${win.key}" /> als Administrator 🛡️
+        </label>
+        <span id="term-shell-hint-${win.key}" style="font-size:11px;color:var(--subtext)"></span>
+      </div>` : "";
+
   body.innerHTML = `
     <div class="terminal-body">
+      ${shellBar}
       <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center">
         <span style="font-size:11px;color:var(--subtext)">Skript:</span>
         <select id="term-script-${win.key}" style="flex:1;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
@@ -29,7 +52,7 @@ export function renderTerminal(body, win) {
       </div>
       <div class="terminal-output" id="term-out-${win.key}"></div>
       <div class="terminal-input-row">
-        <span style="color:var(--accent)">$</span>
+        <span id="term-prompt-${win.key}" style="color:var(--accent)">$</span>
         <input type="text" id="term-in-${win.key}" placeholder="Befehl eingeben und Enter..." autocomplete="off" />
         <button class="taskbar-btn" id="term-copy-${win.key}" title="Ausgabe kopieren">⧉</button>
       </div>
@@ -58,18 +81,39 @@ export function renderTerminal(body, win) {
   addLine(`Verbunden mit ${clientName}`, "terminal-line-info");
 
   async function runCommand(cmd) {
-    addLine(`$ ${cmd}`, "terminal-line-cmd");
+    const tag = isWindows && (shellMode !== "auto" || elevated)
+      ? `[${shellMode === "auto" ? "cmd" : shellMode}${elevated ? "/admin" : ""}] ` : "";
+    addLine(`${tag}$ ${cmd}`, "terminal-line-cmd");
     cmdHistory.push(cmd);
     historyIndex = cmdHistory.length;
 
     try {
-      const res = await api.execOnClient(clientId, cmd, sessionId);
+      const res = await api.execOnClient(clientId, cmd, sessionId, shellMode, elevated);
       if (res.stdout) addLine(res.stdout.replace(/\s+$/, ""));
       if (res.stderr) addLine(res.stderr.replace(/\s+$/, ""), "terminal-line-err");
       if (!res.stdout && !res.stderr) addLine(`(Exit-Code ${res.code}, keine Ausgabe)`, "terminal-line-info");
     } catch (e) {
       addLine(e.message, "terminal-line-err");
     }
+  }
+
+  // Shell-Auswahl (nur Windows) verdrahten
+  if (isWindows) {
+    const shellSel = body.querySelector(`#term-shell-${win.key}`);
+    const adminChk = body.querySelector(`#term-admin-${win.key}`);
+    const promptEl = body.querySelector(`#term-prompt-${win.key}`);
+    const hintEl = body.querySelector(`#term-shell-hint-${win.key}`);
+    const updatePrompt = () => {
+      shellMode = shellSel.value;         // 'cmd' | 'powershell'
+      elevated = adminChk.checked;
+      promptEl.textContent = shellMode === "powershell" ? "PS>" : ">";
+      promptEl.style.color = elevated ? "var(--danger)" : "var(--accent)";
+      hintEl.textContent = elevated ? "läuft mit Admin-Rechten (UAC)" : "";
+    };
+    shellSel.value = "cmd";
+    shellSel.addEventListener("change", updatePrompt);
+    adminChk.addEventListener("change", updatePrompt);
+    updatePrompt();
   }
 
   // Gespeicherte Skripte ins Dropdown laden (Command wird als value hinterlegt)

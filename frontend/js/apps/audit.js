@@ -34,6 +34,8 @@ const ACTION_LABELS = {
   "automation.created": "🔁 Automation angelegt",
   "automation.executed": "🔁 Automation ausgeführt",
   "automation.deleted": "🔁 Automation gelöscht",
+  "guac.connect": "🕹️ Remote-Sitzung (Guacamole)",
+  "guac.recording": "⏺️ Guacamole-Replay",
   "error.reported": "🔴 Fehler gemeldet",
   "error.warn": "🟠 Warnung",
   "agent.update_triggered": "⬆️ Agent-Update ausgelöst",
@@ -86,6 +88,12 @@ export function renderAudit(body, win) {
         if (e.action === "screen.session_started" && (e.details || "").startsWith("rec:")) {
           recId = e.details.slice(4);
           detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">${t("view_recording")}</button>`;
+        }
+        // Guacamole-Replay (details = "Replay: /api/recordings/<id>")
+        const guacMatch = (e.details || "").match(/\/api\/recordings\/([A-Za-z0-9_-]+)/);
+        if (e.action === "guac.recording" && guacMatch) {
+          recId = guacMatch[1];
+          detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
         }
 
         tr.innerHTML = `

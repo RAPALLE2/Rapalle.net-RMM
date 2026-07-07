@@ -68,7 +68,8 @@ def _new_request_id() -> str:
 
 
 async def request_exec(client_id: str, command: str, timeout_seconds: float = 20.0,
-                       session: str | None = None) -> dict:
+                       session: str | None = None, shell: str = "auto",
+                       elevated: bool = False) -> dict:
     """
     Schickt einen Shell-Befehl an einen Agenten und wartet auf das Ergebnis.
     Gibt zurück: {"stdout": ..., "stderr": ..., "code": ...}
@@ -76,6 +77,7 @@ async def request_exec(client_id: str, command: str, timeout_seconds: float = 20
 
     'session' identifiziert ein Terminal-Fenster: der Agent hält pro Session ein
     eigenes Arbeitsverzeichnis, damit 'cd' über mehrere Befehle hinweg wirkt.
+    'shell' = 'cmd'|'powershell'|'auto', 'elevated' = als Administrator (Windows).
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
@@ -87,7 +89,8 @@ async def request_exec(client_id: str, command: str, timeout_seconds: float = 20
 
     await sio.emit(
         "exec",
-        {"requestId": request_id, "command": command, "session": session},
+        {"requestId": request_id, "command": command, "session": session,
+         "shell": shell, "elevated": elevated},
         to=sid, namespace="/agent",
     )
 

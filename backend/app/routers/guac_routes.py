@@ -25,7 +25,9 @@ _ALLOWED_PROTOCOLS = {"rdp", "vnc", "ssh", "telnet", "kubernetes"}
 class GuacTokenBody(BaseModel):
     protocol: str
     params: dict = {}
-    client_id: str | None = None   # nur fürs Audit-Log
+    client_id: str | None = None   # fürs Audit-Log UND fürs Replay
+    hostname: str | None = None    # Anzeigename im Replay
+    record: bool = True            # Session als Replay aufzeichnen (Standard: ja)
 
 
 @router.get("/status")
@@ -46,7 +48,11 @@ async def guac_token(body: GuacTokenBody, user: dict = Depends(get_current_user)
         from fastapi import HTTPException
         raise HTTPException(400, f"Protokoll nicht unterstützt: {protocol}")
 
-    token = guacamole.create_token(protocol, dict(body.params or {}), user.get("username", ""))
+    token = guacamole.create_token(
+        protocol, dict(body.params or {}), user.get("username", ""),
+        client_id=body.client_id or "", hostname=body.hostname or "",
+        record=bool(body.record),
+    )
     db.add_audit_entry(
         user["username"], "guac.connect",
         target=body.client_id or "", details=protocol,
@@ -87,16 +93,46 @@ async def tunnel_endpoint(ws: WebSocket):
     height = _int("GUAC_HEIGHT", _int("height", 768))
     dpi = _int("GUAC_DPI", _int("dpi", 96))
 
+    # Optionales Replay: die guacd-Session serverseitig als .jsonl mitschneiden
+    # (5 fps, niedrigste Qualität). Der fertige Eintrag erscheint in den
+    # Aufzeichnungen; ein Audit-Log-Eintrag verlinkt darauf.
+    recorder = None
+    if entry.get("record"):
+        try:
+            from app.guac_recording import GuacSessionRecorder
+            recorder = GuacSessionRecorder(
+                entry.get("client_id") or "guac",
+                entry.get("hostname") or entry.get("params", {}).get("hostname") or "Guacamole",
+                entry.get("by") or "",
+            )
+            if recorder.start() is None:
+                recorder = None  # Pillow fehlt -> ohne Aufnahme fortfahren
+        except Exception as e:
+            print(f"[guac] Replay-Aufnahme nicht möglich: {e}")
+            recorder = None
+
     try:
         await guacamole.run_tunnel(
             ws, entry["protocol"], entry["params"],
-            width=width, height=height, dpi=dpi,
+            width=width, height=height, dpi=dpi, recorder=recorder,
         )
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
     finally:
+        if recorder is not None:
+            try:
+                recorder.stop()
+                if recorder.rec_id:
+                    # Audit-Eintrag mit direktem Link zum Replay.
+                    db.add_audit_entry(
+                        entry.get("by") or "", "guac.recording",
+                        target=entry.get("client_id") or "",
+                        details=f"Replay: /api/recordings/{recorder.rec_id}",
+                    )
+            except Exception:
+                pass
         try:
             await ws.close()
         except Exception:

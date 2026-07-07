@@ -72,7 +72,8 @@ _tokens: dict[str, dict] = {}
 _TOKEN_TTL = 60  # Sekunden bis ein ungenutztes Token verfällt
 
 
-def create_token(protocol: str, params: dict, username: str = "") -> str:
+def create_token(protocol: str, params: dict, username: str = "",
+                 client_id: str = "", hostname: str = "", record: bool = False) -> str:
     """Legt ein Einmal-Token für eine Guacamole-Verbindung an und gibt es zurück."""
     _prune_tokens()
     token = secrets.token_urlsafe(24)
@@ -80,6 +81,9 @@ def create_token(protocol: str, params: dict, username: str = "") -> str:
         "protocol": protocol,
         "params": params,
         "by": username,
+        "client_id": client_id,
+        "hostname": hostname,
+        "record": record,
         "expires": time.time() + _TOKEN_TTL,
     }
     return token
@@ -135,6 +139,41 @@ def parse_instruction(text: str) -> list[str]:
         if i < n and text[i] == ",":
             i += 1
     return elements
+
+
+def _parse_instructions(data: str) -> list[list[str]]:
+    """
+    Zerlegt einen String aus VOLLSTÄNDIGEN Guacamole-Instruktionen in eine
+    Liste von [opcode, arg1, ...]. Erwartet, dass 'data' nur komplette
+    Instruktionen enthält (Ausgabe von _split_complete_instructions).
+    Bei Protokollfehlern wird abgebrochen und das bisher Geparste geliefert.
+    """
+    out: list[list[str]] = []
+    pos = 0
+    n = len(data)
+    while pos < n:
+        elements: list[str] = []
+        while True:
+            dot = data.find(".", pos)
+            if dot == -1:
+                return out
+            try:
+                length = int(data[pos:dot])
+            except ValueError:
+                return out
+            start = dot + 1
+            end = start + length
+            if end >= n:
+                return out
+            elements.append(data[start:end])
+            term = data[end]
+            pos = end + 1
+            if term == ";":
+                out.append(elements)
+                break
+            elif term != ",":
+                return out
+    return out
 
 
 def _split_complete_instructions(buf: str) -> tuple[str, str]:
@@ -246,13 +285,16 @@ async def guacd_available(timeout: float = 3.0) -> bool:
 
 
 async def run_tunnel(ws, protocol: str, params: dict,
-                     width: int = 1024, height: int = 768, dpi: int = 96) -> None:
+                     width: int = 1024, height: int = 768, dpi: int = 96,
+                     recorder=None) -> None:
     """
     Verbindet einen bereits akzeptierten Browser-WebSocket mit guacd und leitet
     den Guacamole-Instruktions-Strom in beide Richtungen weiter, bis eine Seite
     die Verbindung schließt.
 
     'ws' ist ein Starlette/FastAPI-WebSocket (mit .send_text / .receive_text).
+    'recorder' (optional) ist ein GuacSessionRecorder: bekommt jede geparste
+    guacd->Browser-Instruktion und schreibt daraus ein gedrosseltes Replay.
     """
     host, port = _guacd_target()
     safe = {k: ("***" if k == "password" else v) for k, v in params.items()}
@@ -332,6 +374,12 @@ async def run_tunnel(ws, protocol: str, params: dict,
                 complete, buf = _split_complete_instructions(buf)
                 if complete:
                     await ws.send_text(complete)
+                    # Fürs Replay: die soeben weitergereichten (vollständigen)
+                    # Instruktionen parsen und dem Recorder geben. Läuft nach
+                    # dem Senden -> bremst den Bildstrom zum Browser nicht.
+                    if recorder is not None:
+                        for instr in _parse_instructions(complete):
+                            recorder.feed(instr)
         except Exception:
             # Browser hat geschlossen o.ä. - normaler Fall, nicht laut loggen.
             pass

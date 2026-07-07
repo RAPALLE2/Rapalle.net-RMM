@@ -358,7 +358,7 @@ export function renderGuacamole(body, win) {
 
     let token;
     try {
-      const res = await api.createGuacToken(proto, params, clientId);
+      const res = await api.createGuacToken(proto, params, clientId, params.hostname || p.clientName || host);
       token = res.token;
     } catch (e) {
       formMsg.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;

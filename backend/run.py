@@ -12,6 +12,12 @@ Für Entwicklung mit automatischem Neustart bei Code-Änderungen:
 
 import uvicorn
 
+# ZUERST fehlende Abhängigkeiten automatisch nachinstallieren (z.B. ldap3),
+# BEVOR die App importiert wird - sonst scheitert der Import an einer fehlenden
+# Bibliothek. Läuft bei jedem Start, ist aber schnell, wenn alles da ist.
+from app.bootstrap_deps import ensure_dependencies
+ensure_dependencies()
+
 from app.config import PORT
 
 if __name__ == "__main__":

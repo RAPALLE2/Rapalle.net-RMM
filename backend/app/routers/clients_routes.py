@@ -49,6 +49,8 @@ async def get_client_metrics_history(client_id: str, user: dict = Depends(get_cu
 class ExecBody(BaseModel):
     command: str
     session: str | None = None   # Terminal-Session (für persistentes Arbeitsverzeichnis)
+    shell: str = "auto"          # 'cmd' | 'powershell' | 'auto'
+    elevated: bool = False       # als Administrator (nur Windows)
 
 
 class BulkExecBody(BaseModel):
@@ -115,12 +117,14 @@ async def remove_client(client_id: str, user: dict = Depends(get_current_user)):
 @router.post("/{client_id}/exec")
 async def exec_on_client(client_id: str, body: ExecBody, user: dict = Depends(get_current_user)):
     try:
-        result = await request_exec(client_id, body.command, session=body.session)
+        result = await request_exec(client_id, body.command, session=body.session,
+                                    shell=body.shell, elevated=body.elevated)
     except Exception as e:
         raise HTTPException(504, str(e))
 
     # Jeder ausgeführte Befehl landet im Audit-Log (wie gewünscht: "wer hat wann was gemacht")
-    db.add_audit_entry(user["username"], "terminal.exec", target=client_id, details=body.command)
+    _mode = f"[{body.shell}{'/admin' if body.elevated else ''}] " if body.shell != "auto" or body.elevated else ""
+    db.add_audit_entry(user["username"], "terminal.exec", target=client_id, details=_mode + body.command)
     return result
 
 
