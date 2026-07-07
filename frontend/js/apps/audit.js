@@ -50,16 +50,23 @@ const ACTION_LABELS = {
 export function renderAudit(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
-      <div class="explorer-toolbar">
-        <span style="flex:1;color:var(--subtext)">Aktivitätsprotokoll (letzte 200 Einträge, 30 Tage Aufbewahrung)</span>
+      <div class="explorer-toolbar" style="flex-wrap:wrap;gap:8px">
+        <span style="color:var(--subtext)">Aktivitätsprotokoll (letzte 200, 30 Tage)</span>
+        <select id="au-filter-user-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+          <option value="">Alle Benutzer</option>
+        </select>
+        <select id="au-filter-kind-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+          <option value="">Alle Aktionen</option>
+        </select>
+        <span style="flex:1"></span>
         <button id="au-refresh-${win.key}">⟳</button>
       </div>
       <div style="flex:1;overflow:auto">
         <table class="data-table">
           <thead><tr>
-            <th style="width:150px">${t("audit_when")}</th>
-            <th>${t("audit_user")}</th>
-            <th>${t("audit_action")}</th>
+            <th style="width:150px;cursor:pointer" data-sort="ts">${t("audit_when")} ⇅</th>
+            <th style="cursor:pointer" data-sort="username">${t("audit_user")} ⇅</th>
+            <th style="cursor:pointer" data-sort="action">${t("audit_action")} ⇅</th>
             <th>${t("audit_details")}</th>
           </tr></thead>
           <tbody id="au-body-${win.key}"><tr><td colspan="4" style="color:var(--subtext)">Lädt...</td></tr></tbody>
@@ -69,56 +76,113 @@ export function renderAudit(body, win) {
   `;
 
   const tbody = body.querySelector(`#au-body-${win.key}`);
+  const userSel = body.querySelector(`#au-filter-user-${win.key}`);
+  const kindSel = body.querySelector(`#au-filter-kind-${win.key}`);
+
+  // Aktionen, die eine Remote-Session darstellen (für den Sammelfilter).
+  const SESSION_ACTIONS = new Set([
+    "screen.session_started", "guac.connect", "guac.recording",
+    "terminal.exec", "terminal.bulk_exec", "rdp.file_generated",
+  ]);
+
+  let allEntries = [];        // ungefilterte Rohdaten
+  let sortKey = "ts";
+  let sortDir = -1;           // -1 = neueste zuerst
 
   async function load() {
     try {
-      const entries = await api.getAuditLog();
-      tbody.innerHTML = "";
-      if (!entries.length) {
-        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">Keine Einträge.</td></tr>`;
-        return;
-      }
-      for (const e of entries) {
-        const tr = document.createElement("tr");
-        const label = ACTION_LABELS[e.action] || e.action;
+      allEntries = await api.getAuditLog();
+      // User-Filter-Dropdown mit den vorkommenden Benutzern füllen.
+      const users = [...new Set(allEntries.map((e) => e.username).filter(Boolean))].sort();
+      const cur = userSel.value;
+      userSel.innerHTML = `<option value="">Alle Benutzer</option>` +
+        users.map((u) => `<option value="${esc(u)}">${esc(u)}</option>`).join("");
+      userSel.value = cur;
 
-        // Screen-Session mit Aufzeichnungs-Verknüpfung (details = "rec:<id>")
-        let detailsHtml = esc(e.details || "");
-        let recId = null;
-        if (e.action === "screen.session_started" && (e.details || "").startsWith("rec:")) {
-          recId = e.details.slice(4);
-          detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">${t("view_recording")}</button>`;
-        }
-        // Guacamole-Replay (details = "Replay: /api/recordings/<id>")
-        const guacMatch = (e.details || "").match(/\/api\/recordings\/([A-Za-z0-9_-]+)/);
-        if (e.action === "guac.recording" && guacMatch) {
-          recId = guacMatch[1];
-          detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
-        }
-
-        tr.innerHTML = `
-          <td style="color:var(--subtext)">${new Date(e.ts).toLocaleString("de-DE")}</td>
-          <td>${esc(e.username || "—")}</td>
-          <td>${esc(label)}${e.target ? ` <span style="color:var(--subtext);font-size:11px">→ ${esc(String(e.target).slice(0, 12))}</span>` : ""}</td>
-          <td style="color:var(--subtext)">${detailsHtml}</td>`;
-        tbody.appendChild(tr);
-      }
-
-      // "Aufzeichnung ansehen"-Buttons verkabeln -> Recordings-App mit genau
-      // dieser Aufzeichnung öffnen (eigenes Fenster pro Aufzeichnung).
-      tbody.querySelectorAll("[data-rec]").forEach((btn) =>
-        btn.addEventListener("click", () => {
-          const recId = btn.dataset.rec;
-          openWindow({
-            key: `recordings-${recId}`, appId: "recordings",
-            title: t("recordings"), props: { recId }, w: 820, h: 560,
-          });
-        })
-      );
+      // Aktions-Filter mit den tatsächlich vorkommenden Aktionen füllen
+      // (menschenlesbares Label, technischer Wert). "__sessions" bleibt oben.
+      const actions = [...new Set(allEntries.map((e) => e.action).filter(Boolean))].sort();
+      const curK = kindSel.value;
+      kindSel.innerHTML = `<option value="">Alle Aktionen</option>` +
+        `<option value="__sessions">Nur Remote-Sessions</option>` +
+        actions.map((a) => `<option value="${esc(a)}">${esc(ACTION_LABELS[a] || a)}</option>`).join("");
+      kindSel.value = curK;
+      render();
     } catch (e) {
       tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(e.message)}</td></tr>`;
     }
   }
+
+  function render() {
+    const uFilter = userSel.value;
+    const kFilter = kindSel.value;
+    let rows = allEntries.filter((e) => {
+      if (uFilter && e.username !== uFilter) return false;
+      if (kFilter === "__sessions" && !SESSION_ACTIONS.has(e.action)) return false;
+      else if (kFilter && kFilter !== "__sessions" && e.action !== kFilter) return false;
+      return true;
+    });
+
+    rows.sort((a, b) => {
+      let va = a[sortKey], vb = b[sortKey];
+      if (sortKey === "ts") { va = a.ts; vb = b.ts; }
+      else { va = String(va || "").toLowerCase(); vb = String(vb || "").toLowerCase(); }
+      if (va < vb) return -1 * sortDir;
+      if (va > vb) return 1 * sortDir;
+      return 0;
+    });
+
+    tbody.innerHTML = "";
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">Keine Einträge.</td></tr>`;
+      return;
+    }
+    for (const e of rows) {
+      const tr = document.createElement("tr");
+      const label = ACTION_LABELS[e.action] || e.action;
+
+      let detailsHtml = esc(e.details || "");
+      let recId = null;
+      if (e.action === "screen.session_started" && (e.details || "").startsWith("rec:")) {
+        recId = e.details.slice(4);
+        detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">${t("view_recording")}</button>`;
+      }
+      const guacMatch = (e.details || "").match(/\/api\/recordings\/([A-Za-z0-9_-]+)/);
+      if (e.action === "guac.recording" && guacMatch) {
+        recId = guacMatch[1];
+        detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
+      }
+
+      tr.innerHTML = `
+        <td style="color:var(--subtext)">${new Date(e.ts).toLocaleString("de-DE")}</td>
+        <td>${esc(e.username || "—")}</td>
+        <td>${esc(label)}${e.target ? ` <span style="color:var(--subtext);font-size:11px">→ ${esc(String(e.target).slice(0, 12))}</span>` : ""}</td>
+        <td style="color:var(--subtext)">${detailsHtml}</td>`;
+      tbody.appendChild(tr);
+    }
+
+    tbody.querySelectorAll("[data-rec]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const recId = btn.dataset.rec;
+        openWindow({
+          key: `recordings-${recId}`, appId: "recordings",
+          title: t("recordings"), props: { recId }, w: 820, h: 560,
+        });
+      })
+    );
+  }
+
+  // Filter-Dropdowns + Spalten-Sortierung verkabeln
+  userSel.addEventListener("change", render);
+  kindSel.addEventListener("change", render);
+  body.querySelectorAll("[data-sort]").forEach((th) =>
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (sortKey === key) sortDir *= -1;      // gleiche Spalte -> Richtung umdrehen
+      else { sortKey = key; sortDir = key === "ts" ? -1 : 1; }
+      render();
+    })
+  );
 
   body.querySelector(`#au-refresh-${win.key}`).addEventListener("click", load);
   load();

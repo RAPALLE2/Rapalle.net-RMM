@@ -93,11 +93,14 @@ async def tunnel_endpoint(ws: WebSocket):
     height = _int("GUAC_HEIGHT", _int("height", 768))
     dpi = _int("GUAC_DPI", _int("dpi", 96))
 
-    # Optionales Replay: die guacd-Session serverseitig als .jsonl mitschneiden
-    # (5 fps, niedrigste Qualität). Der fertige Eintrag erscheint in den
-    # Aufzeichnungen; ein Audit-Log-Eintrag verlinkt darauf.
+    # Optionales Replay: die guacd-Session serverseitig als .jsonl mitschneiden.
+    # Qualität/FPS/Skalierung kommen aus den Einstellungen; der globale
+    # Master-Schalter "recording_enabled" kann alles abschalten. Funktioniert
+    # für ALLE Protokolle mit Bildstrom (RDP, VNC und auch SSH/Telnet, die
+    # guacd als Terminal-Bild rendert).
     recorder = None
-    if entry.get("record"):
+    _rec_on = db.get_setting("recording_enabled", "1") == "1"
+    if entry.get("record") and _rec_on:
         try:
             from app.guac_recording import GuacSessionRecorder
             recorder = GuacSessionRecorder(
@@ -106,7 +109,7 @@ async def tunnel_endpoint(ws: WebSocket):
                 entry.get("by") or "",
             )
             if recorder.start() is None:
-                recorder = None  # Pillow fehlt -> ohne Aufnahme fortfahren
+                recorder = None  # Pillow fehlt / Aufnahme aus -> ohne fortfahren
         except Exception as e:
             print(f"[guac] Replay-Aufnahme nicht möglich: {e}")
             recorder = None

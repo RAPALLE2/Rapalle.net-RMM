@@ -389,10 +389,17 @@ class SettingsBody(BaseModel):
     server_host: str | None = None
     server_domain: str | None = None
     server_backend_port: int | None = None
-    server_url: str | None = None
+    server_frontend_port: int | None = None
     metrics_interval_seconds: int | None = None
     metrics_retention_hours: int | None = None
     replay_retention_days: int | None = None
+    # Aufnahme-Einstellungen (Screen-Agent + Guacamole)
+    recording_enabled: str | None = None
+    screen_record_quality: int | None = None
+    screen_record_fps: int | None = None
+    guac_record_quality: int | None = None
+    guac_record_fps: int | None = None
+    guac_record_scale: float | None = None
     guacd_host: str | None = None
     guacd_port: int | None = None
 

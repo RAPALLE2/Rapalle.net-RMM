@@ -30,6 +30,7 @@ import io
 import time
 
 from app import recording as _rec
+from app import db as _db
 
 try:
     from PIL import Image
@@ -38,11 +39,15 @@ except Exception:
     _PIL_OK = False
 
 
-# Drosselung: max. Frames pro Sekunde und Qualitätsstufe (niedrigst).
-_MAX_FPS = 5.0
-_MIN_FRAME_INTERVAL = 1.0 / _MAX_FPS
-_JPEG_QUALITY = 25
-_DOWNSCALE = 0.5   # halbe Auflösung -> kleinere Dateien
+def _guac_record_params() -> tuple[float, int, float]:
+    """Liest (min_frame_interval, jpeg_quality, downscale) aus den Settings."""
+    fps = _db.get_float_setting("guac_record_fps") or 8.0
+    fps = max(1.0, min(fps, 30.0))
+    quality = _db.get_int_setting("guac_record_quality") or 50
+    quality = max(1, min(quality, 95))
+    scale = _db.get_float_setting("guac_record_scale") or 0.75
+    scale = max(0.1, min(scale, 1.0))
+    return (1.0 / fps, quality, scale)
 
 
 class GuacSessionRecorder:
@@ -54,6 +59,9 @@ class GuacSessionRecorder:
         self.username = username
         self.rec_id: str | None = None
         self.enabled = _PIL_OK
+
+        # Aufnahme-Parameter aus den Einstellungen (einmal beim Start gelesen).
+        self._min_interval, self._quality, self._scale = _guac_record_params()
 
         self._canvas = None            # PIL.Image der Standard-Ebene (Layer 0)
         self._w = 0
@@ -161,17 +169,17 @@ class GuacSessionRecorder:
         if self._canvas is None or not self._dirty:
             return
         now = time.time()
-        if not force and (now - self._last_frame_ts) < _MIN_FRAME_INTERVAL:
-            return  # Drosselung: max. ~5 fps
+        if not force and (now - self._last_frame_ts) < self._min_interval:
+            return  # Drosselung gemäß eingestellter FPS
         self._last_frame_ts = now
         self._dirty = False
 
         img = self._canvas
-        if _DOWNSCALE and _DOWNSCALE != 1.0:
+        if self._scale and self._scale != 1.0:
             img = img.resize(
-                (max(1, int(self._w * _DOWNSCALE)), max(1, int(self._h * _DOWNSCALE)))
+                (max(1, int(self._w * self._scale)), max(1, int(self._h * self._scale)))
             )
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
+        img.save(buf, format="JPEG", quality=self._quality)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         _rec.record_frame(self.client_id, b64, img.width, img.height)

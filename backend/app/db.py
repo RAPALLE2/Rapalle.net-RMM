@@ -951,6 +951,17 @@ DEFAULT_SETTINGS = {
     "metrics_retention_hours": "0",
     # Wie lange Screen-Replays aufbewahrt werden (Tage).
     "replay_retention_days": "10",
+    # --- Aufnahme-Einstellungen (Screen-Agent UND Guacamole-Sessions) ---
+    # Master-Schalter: "1" = Sessions werden als Replay aufgezeichnet, "0" = aus.
+    "recording_enabled": "1",
+    # Screen-Agent-Replay: JPEG-Qualität (1-100) und max. Bilder/Sekunde.
+    "screen_record_quality": "40",
+    "screen_record_fps": "5",
+    # Guacamole-Replay (RDP/VNC/SSH/Telnet): Qualität, FPS, Auflösungs-Skalierung.
+    # scale 1.0 = volle Auflösung; 0.5 = halbe (kleinere Dateien).
+    "guac_record_quality": "50",
+    "guac_record_fps": "8",
+    "guac_record_scale": "0.75",
     # Extern gehostetes Apache guacd (für Remote-Desktop im Browser).
     "guacd_host": "127.0.0.1",
     "guacd_port": "4822",
@@ -975,6 +986,17 @@ def get_int_setting(key: str) -> int:
             return int(float(DEFAULT_SETTINGS.get(key, 0)))
         except (TypeError, ValueError):
             return 0
+
+
+def get_float_setting(key: str) -> float:
+    """Einstellung als Kommazahl lesen; fällt bei Unsinn auf den Default zurück."""
+    try:
+        return float(get_setting(key))
+    except (TypeError, ValueError):
+        try:
+            return float(DEFAULT_SETTINGS.get(key, 0))
+        except (TypeError, ValueError):
+            return 0.0
 
 
 def get_all_settings() -> dict:

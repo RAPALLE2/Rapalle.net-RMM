@@ -169,6 +169,43 @@ export function renderSettings(body, win) {
           <input type="number" min="1" step="1" id="ge-replay" value="${esc(String(s.replay_retention_days ?? 10))}" />
         </div>
 
+        <h3 style="margin-top:24px">Aufnahme (Replays)</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Steuert, wie Remote-Sessions als Replay aufgezeichnet werden — für den
+          Screen-Agenten und für Guacamole (RDP/VNC/SSH/Telnet). Höhere Werte =
+          schärfer/flüssiger, aber größere Dateien.
+        </p>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="ge-rec-enabled" ${(s.recording_enabled ?? "1") === "1" ? "checked" : ""} />
+            Aufzeichnung aktiviert
+          </label>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:1">
+            <label>Screen-Qualität (1–100)</label>
+            <input type="number" min="1" max="100" id="ge-screen-q" value="${esc(String(s.screen_record_quality ?? 40))}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>Screen-Bilder/Sek.</label>
+            <input type="number" min="1" max="30" id="ge-screen-fps" value="${esc(String(s.screen_record_fps ?? 5))}" />
+          </div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:1">
+            <label>Guacamole-Qualität (1–95)</label>
+            <input type="number" min="1" max="95" id="ge-guac-q" value="${esc(String(s.guac_record_quality ?? 50))}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>Guacamole-Bilder/Sek.</label>
+            <input type="number" min="1" max="30" id="ge-guac-fps" value="${esc(String(s.guac_record_fps ?? 8))}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>Guacamole-Skalierung (0.1–1.0)</label>
+            <input type="number" min="0.1" max="1" step="0.05" id="ge-guac-scale" value="${esc(String(s.guac_record_scale ?? 0.75))}" />
+          </div>
+        </div>
+
         <div id="ge-error" class="form-error hidden"></div>
         <button class="btn-primary" id="ge-save" style="margin-top:8px">${t("save")}</button>
 
@@ -204,6 +241,12 @@ export function renderSettings(body, win) {
         metrics_interval_seconds: parseInt(root.querySelector("#ge-interval").value, 10) || 60,
         metrics_retention_hours: parseInt(root.querySelector("#ge-retention").value, 10) || 1,
         replay_retention_days: parseInt(root.querySelector("#ge-replay").value, 10) || 10,
+        recording_enabled: root.querySelector("#ge-rec-enabled").checked ? "1" : "0",
+        screen_record_quality: parseInt(root.querySelector("#ge-screen-q").value, 10) || 40,
+        screen_record_fps: parseInt(root.querySelector("#ge-screen-fps").value, 10) || 5,
+        guac_record_quality: parseInt(root.querySelector("#ge-guac-q").value, 10) || 50,
+        guac_record_fps: parseInt(root.querySelector("#ge-guac-fps").value, 10) || 8,
+        guac_record_scale: parseFloat(root.querySelector("#ge-guac-scale").value) || 0.75,
       };
       try {
         await api.updateSettings(payload);

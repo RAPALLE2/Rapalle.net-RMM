@@ -369,15 +369,23 @@ def _run_shell_command(command: str, session_id: str | None = None,
             return _run_elevated_windows(command, start_cwd, use_ps)
 
         if is_win and use_ps:
-            # PowerShell-Skript für saubere Mehrzeilen-/Fehlercode-Behandlung.
-            fd, script_file = tempfile.mkstemp(prefix="rmm_ps_", suffix=".ps1")
-            os.close(fd)
-            with open(script_file, "w", encoding="utf-8") as f:
-                f.write(command + "\r\n")
-                f.write('$__rmm_rc = $LASTEXITCODE; if ($null -eq $__rmm_rc) { $__rmm_rc = 0 }\r\n')
-                f.write(f'(Get-Location).Path | Out-File -Encoding utf8 "{cwd_file}"\r\n')
-                f.write('exit $__rmm_rc\r\n')
-            argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_file]
+            # PowerShell robust ausführen: -EncodedCommand (Base64/UTF-16LE)
+            # umgeht ExecutionPolicy, Quoting- UND Encoding-Probleme, die bei
+            # "-File script.ps1" auf gesperrten/lokalisierten Maschinen dazu
+            # führen, dass Befehle wie 'irm' scheinbar "nicht gefunden" werden.
+            # Wir kapseln den Nutzerbefehl, hängen Exit-Code- und CWD-Ausgabe an
+            # und setzen die Konsolen-Ausgabe explizit auf UTF-8.
+            ps_script = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n"
+                + (f'Set-Location -LiteralPath "{start_cwd}"\r\n' if start_cwd else "")
+                + command + "\r\n"
+                + "$__rmm_rc = $LASTEXITCODE; if ($null -eq $__rmm_rc) { $__rmm_rc = 0 }\r\n"
+                + f'(Get-Location).Path | Out-File -Encoding utf8 -FilePath "{cwd_file}"\r\n'
+                + "exit $__rmm_rc\r\n"
+            )
+            encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+            argv = ["powershell", "-NoProfile", "-NonInteractive",
+                    "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]
         elif is_win:
             # cmd: temporäre .bat.
             fd, script_file = tempfile.mkstemp(prefix="rmm_cmd_", suffix=".bat")
@@ -403,6 +411,8 @@ def _run_shell_command(command: str, session_id: str | None = None,
             argv,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             cwd=start_cwd if start_cwd else None,
         )
@@ -430,6 +440,11 @@ def _run_shell_command(command: str, session_id: str | None = None,
                     pass
 
 
+def _ps_single_quote(s: str) -> str:
+    """Escaped einen String für PowerShell-Single-Quotes ('' verdoppeln)."""
+    return "'" + s.replace("'", "''") + "'"
+
+
 def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> tuple[str, str, int]:
     """
     Führt einen Befehl auf Windows ALS ADMINISTRATOR aus (UAC-Elevation via
@@ -446,11 +461,12 @@ def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> 
     try:
         if use_ps:
             with open(inner, "w", encoding="utf-8") as f:
+                f.write("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n")
                 if start_cwd:
-                    f.write(f'Set-Location "{start_cwd}"\r\n')
-                f.write(f'& {{ {command} }} *> "{out_file}" 2> "{err_file}"\r\n')
-                f.write(f'$LASTEXITCODE | Out-File -Encoding ascii "{rc_file}"\r\n')
-            inner_launch = f'powershell -NoProfile -ExecutionPolicy Bypass -File \"\"{inner}\"\"'
+                    f.write(f'Set-Location -LiteralPath "{start_cwd}"\r\n')
+                f.write(f'& {{ {command} }} > "{out_file}" 2> "{err_file}"\r\n')
+                f.write(f'$c = $LASTEXITCODE; if ($null -eq $c) {{ $c = 0 }}; $c | Out-File -Encoding ascii "{rc_file}"\r\n')
+            inner_exec = f'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{inner}"'
         else:
             with open(inner, "w", encoding="utf-8") as f:
                 f.write("@echo off\r\n")
@@ -458,16 +474,20 @@ def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> 
                     f.write(f'cd /d "{start_cwd}"\r\n')
                 f.write(f'call {command} > "{out_file}" 2> "{err_file}"\r\n')
                 f.write(f'echo %ERRORLEVEL% > "{rc_file}"\r\n')
-            inner_launch = f'cmd /c \"\"{inner}\"\"'
+            inner_exec = f'cmd /c "{inner}"'
 
         # Start-Process -Verb RunAs hebt den inneren Befehl auf Admin-Rechte an.
-        ps_launch = (
-            f"$p = Start-Process -FilePath cmd -ArgumentList '/c {inner_launch}' "
+        # Der Launcher selbst wird als EncodedCommand übergeben, damit die
+        # verschachtelten Anführungszeichen sauber bleiben.
+        launch_script = (
+            f"$p = Start-Process -FilePath cmd.exe -ArgumentList '/c',{_ps_single_quote(inner_exec)} "
             f"-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
         )
+        encoded = base64.b64encode(launch_script.encode("utf-16-le")).decode("ascii")
         subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_launch],
-            capture_output=True, text=True, timeout=120,
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-EncodedCommand", encoded],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
 
         def _read(p):
@@ -712,7 +732,8 @@ async def on_proc_kill(data):
 # könnte man später auf WebRTC umstellen - die Dashboard-Seite müsste dann nur
 # die Frames anders empfangen, der Rest bliebe gleich.
 
-_screen_stream = {"active": False, "thread": None, "sid_loop": None}
+_screen_stream = {"active": False, "thread": None, "sid_loop": None,
+                  "quality": 55, "fps": 10}
 
 
 def _detect_from_xorg_process():
@@ -821,14 +842,18 @@ def _screen_capture_loop(loop):
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
             consecutive_errors = 0  # erfolgreich -> Fehlerzähler zurücksetzen
 
-            # Auf max. 1280px Breite herunterskalieren (spart Bandbreite)
-            max_width = 1280
+            # Ziel-Breite skaliert mit der gewählten Qualität: hohe Qualität ->
+            # bis 1920px (schärfer), niedrige -> 1280px (spart Bandbreite).
+            _q_now = int(_screen_stream.get("quality", 55))
+            max_width = 1920 if _q_now >= 70 else 1280
             if img.width > max_width:
                 ratio = max_width / img.width
                 img = img.resize((max_width, int(img.height * ratio)))
 
             buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=55)
+            _q = int(_screen_stream.get("quality", 55))
+            _q = max(10, min(_q, 95))
+            img.save(buffer, format="JPEG", quality=_q)
             b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
 
             asyncio.run_coroutine_threadsafe(
@@ -840,7 +865,10 @@ def _screen_capture_loop(loop):
                 }, namespace="/agent"),
                 loop,
             )
-            time.sleep(0.1)  # ~10 Bilder pro Sekunde
+            # Sende-Rate aus der Einstellung (Bilder/Sekunde).
+            _fps = int(_screen_stream.get("fps", 10))
+            _fps = max(1, min(_fps, 30))
+            time.sleep(1.0 / _fps)
         except Exception as e:
             consecutive_errors += 1
             msg = str(e)
@@ -906,6 +934,13 @@ def _notify_screen_mode(loop, mode, reason=""):
 async def on_screen_start(data):
     """Startet das Bildschirm-Streaming - oder signalisiert Shell-Modus bei headless."""
     loop = asyncio.get_event_loop()
+
+    # Aufnahme-Qualität/FPS vom Backend übernehmen (aus den Einstellungen).
+    if isinstance(data, dict):
+        if data.get("quality"):
+            _screen_stream["quality"] = int(data["quality"])
+        if data.get("fps"):
+            _screen_stream["fps"] = int(data["fps"])
 
     # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen -> Shell anbieten.
     if not _SCREEN_AVAILABLE:

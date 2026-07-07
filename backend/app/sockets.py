@@ -436,18 +436,25 @@ async def dashboard_screen_start(sid, data):
     """Dashboard möchte den Bildschirm eines Clients sehen -> Agent anweisen + Aufnahme starten."""
     from app import recording, db as _db
     client_id = data.get("clientId")
-    await send_to_agent(client_id, "screen-start", {})
 
-    # Aufzeichnung starten (falls Client bekannt) + im Audit-Log vermerken
+    # Aufnahme-Qualität/FPS aus den Einstellungen an den Agent mitgeben, damit
+    # er die Frames passend erzeugt (bessere/schlechtere Qualität, mehr/weniger
+    # Bilder). Der Agent nutzt diese Werte fürs JPEG-Encoding & die Sende-Rate.
+    quality = _db.get_int_setting("screen_record_quality") or 40
+    fps = _db.get_int_setting("screen_record_fps") or 5
+    await send_to_agent(client_id, "screen-start", {"quality": quality, "fps": fps})
+
+    # Aufzeichnung nur starten, wenn global aktiviert.
+    recording_on = _db.get_setting("recording_enabled", "1") == "1"
+
+    # Aufzeichnung starten (falls Client bekannt und aktiviert) + Audit-Log.
     client = _db.get_client(client_id)
     if client:
         rec_id = recording.start_recording(
-            client_id,
-            client["hostname"],
-            data.get("username", "unbekannt"),
-        )
-        # Audit-Eintrag mit Verknüpfung zur Aufzeichnung (rec:<id> im Detail-Feld,
-        # damit das Frontend einen "Aufzeichnung ansehen"-Button anzeigen kann)
+            client_id, client["hostname"], data.get("username", "unbekannt"),
+        ) if recording_on else None
+        # Audit-Eintrag IMMER (Zugriff protokollieren) - mit Replay-Verknüpfung,
+        # falls aufgezeichnet wurde.
         _db.add_audit_entry(
             data.get("username", "unbekannt"),
             "screen.session_started",
