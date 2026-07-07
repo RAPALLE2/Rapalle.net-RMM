@@ -37,6 +37,19 @@ let cascade = 0; // sorgt für leicht versetzte Positionierung neuer Fenster
 
 const layer = () => document.getElementById("window-layer");
 
+// Bei Größenänderung des Browserfensters alle offenen Fenster wieder
+// vollständig in den sichtbaren Bereich klemmen (sonst können sie beim
+// Verkleinern hinter Topbar/Taskleiste rutschen und unerreichbar werden).
+let _resizeClampTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(_resizeClampTimer);
+  _resizeClampTimer = setTimeout(() => {
+    for (const win of state.windows) {
+      if (!win.minimized && !win.maximized) clampWindowIntoView(win);
+    }
+  }, 100);
+});
+
 // -----------------------------------------------------------------
 // Öffnen / Schließen / Fokus / Minimieren
 // -----------------------------------------------------------------
@@ -65,8 +78,21 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   state.focusOrder.push(key);
 
   createWindowElement(win); // EINMALIG das DOM-Element bauen
+  clampWindowIntoView(win); // sicherstellen, dass es komplett sichtbar ist
   applyFocusZIndex();
   notifyChanged();
+}
+
+// Klemmt ein Fenster vollständig in den sichtbaren Fensterbereich (layer).
+export function clampWindowIntoView(win) {
+  const lay = layer();
+  if (!lay || !win._el) return;
+  const maxX = Math.max(0, lay.clientWidth - win._el.offsetWidth);
+  const maxY = Math.max(0, lay.clientHeight - win._el.offsetHeight);
+  win.x = Math.min(Math.max(0, win.x), maxX);
+  win.y = Math.min(Math.max(0, win.y), maxY);
+  win._el.style.left = `${win.x}px`;
+  win._el.style.top = `${win.y}px`;
 }
 
 export function closeWindow(key) {
@@ -253,8 +279,20 @@ function makeDraggable(handle, windowEl, win) {
     const startTop = win.y;
 
     function onMove(ev) {
-      win.x = startLeft + (ev.clientX - startX);
-      win.y = startTop + (ev.clientY - startY);
+      let nx = startLeft + (ev.clientX - startX);
+      let ny = startTop + (ev.clientY - startY);
+      // In die Grenzen des Fensterbereichs (layer) klemmen, damit kein Rand
+      // je außerhalb landet. layer sitzt zwischen Topbar (oben) und Taskleiste
+      // (unten); Fenster-Koordinaten sind relativ dazu.
+      const lay = layer();
+      if (lay) {
+        const maxX = Math.max(0, lay.clientWidth - windowEl.offsetWidth);
+        const maxY = Math.max(0, lay.clientHeight - windowEl.offsetHeight);
+        nx = Math.min(Math.max(0, nx), maxX);
+        ny = Math.min(Math.max(0, ny), maxY);
+      }
+      win.x = nx;
+      win.y = ny;
       windowEl.style.left = `${win.x}px`;
       windowEl.style.top = `${win.y}px`;
     }
@@ -286,12 +324,17 @@ function makeResizable(handle, windowEl, win, axis = "both") {
     document.body.style.userSelect = "none";
 
     function onMove(ev) {
+      const lay = layer();
       if (axis === "x" || axis === "both") {
-        win.w = Math.max(380, startW + (ev.clientX - startX));
+        let nw = Math.max(380, startW + (ev.clientX - startX));
+        if (lay) nw = Math.min(nw, lay.clientWidth - win.x);  // nicht über rechten Rand
+        win.w = nw;
         windowEl.style.width = `${win.w}px`;
       }
       if (axis === "y" || axis === "both") {
-        win.h = Math.max(260, startH + (ev.clientY - startY));
+        let nh = Math.max(260, startH + (ev.clientY - startY));
+        if (lay) nh = Math.min(nh, lay.clientHeight - win.y);  // nicht über unteren Rand
+        win.h = nh;
         windowEl.style.height = `${win.h}px`;
       }
     }
