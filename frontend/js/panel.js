@@ -10,6 +10,7 @@
 // Diagramme mit Hover-Tooltip und Zeitspannen-Dropdown.
 
 import { state, findClient } from "./state.js";
+import { hasClientPerm, hasGlobalPerm } from "./state.js";
 import {
   formatBytes, formatUptime, esc,
   gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT,
@@ -84,18 +85,20 @@ function renderClientView(el, clientId) {
           <div class="quick-actions">
             <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
             <button data-quick="shutdown" ${client.online ? "" : "disabled"}>⏻ ${t("shutdown")}</button>
+            ${hasClientPerm(client.id, "manage_agent") ? `
             <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
-            <button data-quick="edit">✎ ${t("edit")}</button>
+            <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
+            ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✎ ${t("edit")}</button>` : ""}
           </div>
         </div>
 
         <div class="panel actions-panel">
           <h3>${t("actions")}</h3>
-          <button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>
-          <button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>
-          <button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>
-          <button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>
-          <button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>
+          ${hasClientPerm(client.id, "use_explorer") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
+          ${hasClientPerm(client.id, "use_terminal") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
+          ${hasClientPerm(client.id, "use_screen") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>` : ""}
+          ${hasClientPerm(client.id, "use_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
+          ${hasClientPerm(client.id, "use_taskmanager") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}
         </div>
       </div>
 
@@ -305,6 +308,16 @@ async function handleQuickAction(action, client) {
       window.notify?.(`Agent-Update auf ${client.hostname} gestartet. Der Client verbindet sich in Kürze neu.`, "success", 8000);
     } catch (e) {
       window.notify?.("Update fehlgeschlagen: " + e.message, "error");
+    }
+    return;
+  }
+  if (action === "uninstall") {
+    if (!confirm(`${client.hostname}: Agent WIRKLICH deinstallieren?\n\nDer Autostart-Dienst wird entfernt und die Programmdateien gelöscht.\nDer Client geht offline und erscheint nicht mehr automatisch.\n(Der Eintrag im Dashboard bleibt, bis du ihn löschst.)`)) return;
+    try {
+      await api.uninstallAgent(client.id);
+      window.notify?.(`Deinstallation auf ${client.hostname} gestartet. Der Client geht in Kürze offline.`, "success", 8000);
+    } catch (e) {
+      window.notify?.("Deinstallation fehlgeschlagen: " + e.message, "error");
     }
   }
 }

@@ -460,11 +460,32 @@ async def dashboard_disconnect(sid):
     pass  # nichts Besonderes zu tun
 
 
+# --- Rechteprüfung im (unauthentifizierten) Dashboard-Namespace ------------
+# Der Dashboard-Namespace hat keinen JWT-Handshake; wir vertrauen dem vom
+# Frontend mitgeschickten Benutzernamen (best effort, analog zum Audit-Log).
+# Die REST-Routen bleiben die harte Sicherheitsgrenze; hier verhindern wir
+# zusätzlich versehentliche/naive Zugriffe ohne Recht.
+def _ws_user_may(username: str | None, perm: str, client_id: str | None) -> bool:
+    from app import db as _db
+    from app.auth import user_has_permission
+    if not username:
+        return False
+    u = _db.get_user_by_username(username)
+    if not u:
+        return False
+    return user_has_permission(u, perm, client_id)
+
+
 @sio.on("screen-start", namespace="/dashboard")
 async def dashboard_screen_start(sid, data):
     """Dashboard möchte den Bildschirm eines Clients sehen -> Agent anweisen + Aufnahme starten."""
     from app import recording, db as _db
     client_id = data.get("clientId")
+    if not _ws_user_may(data.get("username"), "use_screen", client_id):
+        await sio.emit("screen-error",
+                       {"id": client_id, "error": "Keine Berechtigung für den Remote-Bildschirm dieses Clients."},
+                       namespace="/dashboard")
+        return
 
     # Aufnahme-Qualität/FPS aus den Einstellungen an den Agent mitgeben, damit
     # er die Frames passend erzeugt (bessere/schlechtere Qualität, mehr/weniger
@@ -581,6 +602,13 @@ async def dashboard_term_open(sid, data):
     client_id = data.get("clientId")
     shell = data.get("shell", "auto")
     session = data.get("session")
+    if not _ws_user_may(data.get("username"), "use_terminal", client_id):
+        await sio.emit("term-output", {
+            "id": client_id, "session": session,
+            "data": "\r\n\x1b[31mKeine Berechtigung für das Terminal dieses Clients.\x1b[0m\r\n",
+        }, namespace="/dashboard")
+        await sio.emit("term-exit", {"id": client_id, "session": session}, namespace="/dashboard")
+        return
     ok = await send_to_agent(client_id, "term-open", {
         "session": session,
         "shell": shell,

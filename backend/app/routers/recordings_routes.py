@@ -15,7 +15,7 @@ import pathlib
 from fastapi import APIRouter, Depends, HTTPException
 
 from app import db
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_perm
 
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
 
@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/recordings", tags=["recordings"])
 @router.get("")
 async def list_recordings(user: dict = Depends(get_current_user)):
     """Alle Aufzeichnungen als Liste (neueste zuerst)."""
+    require_perm(user, "see_replay")
     recordings = db.list_recordings()
     # Dauer berechnen für die Anzeige
     for r in recordings:
@@ -39,6 +40,7 @@ async def get_recording_frames(rec_id: str, user: dict = Depends(get_current_use
     Liefert alle Frames einer Aufzeichnung zum Abspielen.
     Jeder Frame: {t: Zeit-Offset in ms, w, h, img: Base64-JPEG}.
     """
+    require_perm(user, "see_replay")
     rec = db.get_recording(rec_id)
     if not rec:
         raise HTTPException(404, "Aufzeichnung nicht gefunden")
@@ -63,7 +65,7 @@ async def get_recording_frames(rec_id: str, user: dict = Depends(get_current_use
 @router.delete("/{rec_id}")
 async def delete_recording(rec_id: str, user: dict = Depends(get_current_user)):
     """Löscht eine Aufzeichnung (Datei + Datenbank-Eintrag)."""
-    require_admin(user)
+    require_perm(user, "delete_replay")
     rec = db.delete_recording(rec_id)
     if rec:
         try:

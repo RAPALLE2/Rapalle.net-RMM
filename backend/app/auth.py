@@ -307,3 +307,114 @@ def get_user_with_permissions(user: dict) -> dict:
     """Ergänzt ein User-Dict um die Liste seiner effektiven Rechte (für das Frontend)."""
     perms = db.get_user_permissions(user["id"], user["role"])
     return {**user, "permissions": sorted(perms)}
+
+
+# ==================================================================
+# NEUES, feingranulares Rechte-System (tri-state Grants)
+# ==================================================================
+# Auflösung für ein (perm, client_id):
+#   1. spezifisches Recht 'deny' (global ODER client)  -> verboten
+#   2. 'admin'-Wildcard 'deny' (global/client)          -> verboten
+#   3. spezifisches Recht 'allow'                       -> erlaubt
+#   4. 'admin'-Wildcard 'allow'                         -> erlaubt
+#   5. sonst                                            -> verboten (default-deny)
+# Der lokale Super-Admin (role == 'admin') hat IMMER alle Rechte.
+
+
+def is_super_admin(user: dict) -> bool:
+    """Der klassische Voll-Admin (Rolle 'admin') darf alles - Bypass des Resolvers."""
+    try:
+        return user.get("role") == "admin"
+    except AttributeError:
+        return user["role"] == "admin"
+
+
+def _aggregate_effect(grants: list[dict], perm: str, scopes: list[str]) -> str | None:
+    """
+    Fasst alle Grants für 'perm' in den angegebenen Scopes zusammen.
+    'deny' schlägt 'allow'; ohne Treffer -> None.
+    """
+    found_allow = False
+    for g in grants:
+        if g["perm"] == perm and g["scope"] in scopes:
+            if g["effect"] == "deny":
+                return "deny"
+            if g["effect"] == "allow":
+                found_allow = True
+    return "allow" if found_allow else None
+
+
+def _resolve(grants: list[dict], perm: str, client_id: str | None) -> bool:
+    scopes = ["global"] + ([client_id] if client_id else [])
+    # 1./3. spezifisches Recht
+    specific = _aggregate_effect(grants, perm, scopes)
+    if specific == "deny":
+        return False
+    # 2./4. admin-Wildcard
+    admin = _aggregate_effect(grants, "admin", scopes)
+    if admin == "deny":
+        return False
+    if specific == "allow":
+        return True
+    if admin == "allow":
+        return True
+    return False
+
+
+def user_has_permission(user: dict, perm: str, client_id: str | None = None) -> bool:
+    """
+    Effektive Rechteprüfung. Bei client_id werden client- UND globale Grants
+    berücksichtigt. Client-Aktionen sind zusätzlich durch 'access_clients'
+    gegated (ohne Zugriff auf den Client -> alles verboten).
+    """
+    if is_super_admin(user):
+        return True
+    grants = db.get_effective_grants(user["id"])
+    # Gate: für client-bezogene Aktionen muss der Client überhaupt zugänglich
+    # sein (access_clients auf global ODER auf diesem Client).
+    if client_id and perm != "access_clients":
+        if not _resolve(grants, "access_clients", client_id):
+            return False
+    return _resolve(grants, perm, client_id)
+
+
+def can_access_client(user: dict, client_id: str) -> bool:
+    """Ist dieser Client für den Benutzer sichtbar/zugänglich?"""
+    if is_super_admin(user):
+        return True
+    grants = db.get_effective_grants(user["id"])
+    return _resolve(grants, "access_clients", client_id)
+
+
+def visible_client_ids(user: dict, all_client_ids: list[str]) -> set[str]:
+    """Filtert eine Client-ID-Liste auf die für den Benutzer sichtbaren."""
+    if is_super_admin(user):
+        return set(all_client_ids)
+    grants = db.get_effective_grants(user["id"])
+    return {cid for cid in all_client_ids if _resolve(grants, "access_clients", cid)}
+
+
+def require_perm(user: dict, perm: str, client_id: str | None = None) -> None:
+    """Wirft 403, wenn das Recht fehlt."""
+    if not user_has_permission(user, perm, client_id):
+        raise HTTPException(403, f"Fehlendes Recht: {perm}")
+
+
+def effective_permissions(user: dict, client_ids: list[str]) -> dict:
+    """
+    Baut die Rechte-Übersicht fürs Frontend:
+      { admin, global: {perm: bool}, clients: { client_id: {perm: bool} } }
+    Enthält nur SICHTBARE Clients (access_clients).
+    """
+    if is_super_admin(user):
+        g = {p: True for p in db.PERM_KEYS}
+        clients = {cid: {p: True for p in db.CLIENT_PERM_KEYS} for cid in client_ids}
+        return {"admin": True, "global": g, "clients": clients}
+
+    global_map = {p: user_has_permission(user, p) for p in db.PERM_KEYS}
+    clients_map: dict[str, dict] = {}
+    for cid in client_ids:
+        if not can_access_client(user, cid):
+            continue  # unsichtbare Clients gar nicht erst aufnehmen
+        clients_map[cid] = {p: user_has_permission(user, p, cid) for p in db.CLIENT_PERM_KEYS}
+    return {"admin": False, "global": global_map, "clients": clients_map}

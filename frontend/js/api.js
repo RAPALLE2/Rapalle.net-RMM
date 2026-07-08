@@ -104,6 +104,16 @@ export const api = {
 
   // --- Agent-Verwaltung ---
   updateAgent: (clientId) => request(`/api/clients/${clientId}/update-agent`, { method: "POST" }),
+  uninstallAgent: (clientId) => request(`/api/clients/${clientId}/uninstall-agent`, { method: "POST" }),
+
+  // --- Effektive Rechte des eingeloggten Benutzers (Frontend-Gating) ---
+  getEffectivePermissions: () => request("/api/auth/effective"),
+
+  // --- Feingranulare Rechte-Grants (Permissions-App) ---
+  getPermissionCatalog: () => request("/api/admin/permission-catalog"),
+  getGrants: (subjectType, subjectId) => request(`/api/admin/grants/${subjectType}/${subjectId}`),
+  setGrants: (subjectType, subjectId, grants) =>
+    request(`/api/admin/grants/${subjectType}/${subjectId}`, { method: "PUT", body: JSON.stringify({ grants }) }),
 
   // --- Branding (Logos per Upload ersetzen) ---
   getBranding: () => request("/api/admin/branding"),

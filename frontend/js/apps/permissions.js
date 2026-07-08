@@ -1,0 +1,323 @@
+// apps/permissions.js
+// -------------------
+// Zentrale Rechte-Verwaltung. Man wählt links ein Subjekt (Benutzer ODER
+// Gruppe, jeweils lokal oder aus dem AD) und vergibt rechts feingranulare
+// Rechte als TRI-STATE:
+//
+//   Verbieten (deny)  /  — (keine Einstellung)  /  Erlauben (allow)
+//
+// Auflösung im Backend (auth.py): 'deny' gewinnt immer, 'admin' ist ein
+// Wildcard, client-Rechte sind zusätzlich durch 'access_clients' gegated.
+// Beispiele:
+//   - nur 'login' allow  -> darf sich anmelden, sieht aber keine Clients/Apps
+//   - admin auf Client X + global deny 'use_terminal' -> alles auf X außer Terminal
+//   - global admin + 'access_clients' deny auf Client Y -> Y ist versteckt
+//
+// Es gibt zwei Tabs: "Allgemein" (globale Rechte) und "Clients" (pro Client,
+// mit Suchleiste).
+
+import { api } from "../api.js";
+import { state } from "../state.js";
+import { esc } from "../utils.js";
+
+export function renderPermissions(body, win) {
+  // ---- lokaler Zustand des Fensters ----
+  let subjectKind = "user";      // "user" | "group"
+  let subjects = { user: [], group: [] };
+  let catalog = { labels: {}, general: [], client: [] };
+  let selected = null;           // {type, id, name}
+  let activeTab = "general";     // "general" | "clients"
+  let clientSearch = "";
+  let subjSearch = "";
+
+  // Grant-Modell: Map "scope|perm" -> "allow" | "deny". Fehlt der Eintrag =
+  // keine Einstellung. dirty = ungespeicherte Änderungen vorhanden.
+  let grants = new Map();
+  let dirty = false;
+
+  const gk = (scope, perm) => `${scope}|${perm}`;
+  const getEffect = (scope, perm) => grants.get(gk(scope, perm)) || "";
+  function setEffect(scope, perm, effect) {
+    const key = gk(scope, perm);
+    if (effect === "allow" || effect === "deny") grants.set(key, effect);
+    else grants.delete(key);
+    dirty = true;
+    updateSaveBar();
+  }
+
+  // ---------------------------------------------------------------
+  // Grundgerüst
+  // ---------------------------------------------------------------
+  body.innerHTML = `
+    <div style="display:flex;height:100%;min-height:0">
+      <!-- LINKS: Subjektliste -->
+      <div style="width:250px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0">
+        <div style="display:flex;gap:4px;padding:8px">
+          <button class="tab-btn" id="pm-kind-user">Benutzer</button>
+          <button class="tab-btn" id="pm-kind-group">Gruppen</button>
+        </div>
+        <div style="padding:0 8px 8px">
+          <input type="text" id="pm-subj-search" placeholder="Suchen…"
+            style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px" />
+        </div>
+        <div id="pm-subj-list" style="flex:1;overflow:auto;padding:0 6px 8px"></div>
+      </div>
+
+      <!-- RECHTS: Rechte-Editor -->
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div id="pm-head" style="padding:10px 14px;border-bottom:1px solid var(--border)">
+          <div style="color:var(--subtext);font-size:13px">Wähle links einen Benutzer oder eine Gruppe.</div>
+        </div>
+        <div class="tab-bar" id="pm-tabs" style="padding:8px 14px 0;gap:6px;display:none">
+          <button class="tab-btn active" data-pt="general">Allgemein</button>
+          <button class="tab-btn" data-pt="clients">Clients</button>
+        </div>
+        <div id="pm-content" style="flex:1;overflow:auto;padding:14px"></div>
+        <div id="pm-savebar" style="display:none;border-top:1px solid var(--border);padding:10px 14px;align-items:center;gap:12px">
+          <span id="pm-dirty" style="font-size:12px;color:var(--subtext)"></span>
+          <span style="flex:1"></span>
+          <button class="taskbar-btn" id="pm-reset">Verwerfen</button>
+          <button class="btn-primary" id="pm-save">Speichern</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const subjListEl = body.querySelector("#pm-subj-list");
+  const headEl = body.querySelector("#pm-head");
+  const tabsEl = body.querySelector("#pm-tabs");
+  const contentEl = body.querySelector("#pm-content");
+  const saveBar = body.querySelector("#pm-savebar");
+  const dirtyEl = body.querySelector("#pm-dirty");
+
+  function updateSaveBar() {
+    saveBar.style.display = selected ? "flex" : "none";
+    dirtyEl.textContent = dirty ? "● Ungespeicherte Änderungen" : "Gespeichert";
+    dirtyEl.style.color = dirty ? "var(--warn)" : "var(--subtext)";
+  }
+
+  // Segmented Tri-State-Control. Gibt HTML zurück; Klicks werden delegiert.
+  function triState(scope, perm) {
+    const cur = getEffect(scope, perm);
+    const opt = (val, label, color) => {
+      const on = cur === val || (val === "" && cur === "");
+      return `<button type="button" class="pm-tri" data-scope="${esc(scope)}" data-perm="${esc(perm)}" data-val="${val}"
+        style="border:1px solid var(--border);background:${on ? color : "transparent"};
+        color:${on ? "#0b0f14" : "var(--subtext)"};font-weight:${on ? 600 : 400};
+        padding:2px 8px;font-size:11px;cursor:pointer;min-width:34px">${label}</button>`;
+    };
+    return `<span style="display:inline-flex;border-radius:6px;overflow:hidden">
+      ${opt("deny", "Verbieten", "var(--danger)")}
+      ${opt("", "—", "var(--subtext)")}
+      ${opt("allow", "Erlauben", "var(--online)")}
+    </span>`;
+  }
+
+  // Klick-Delegation für alle Tri-State-Buttons.
+  contentEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".pm-tri");
+    if (!btn) return;
+    setEffect(btn.dataset.scope, btn.dataset.perm, btn.dataset.val);
+    // nur die betroffene Zeile neu zeichnen (leichtgewichtig: ganze Ansicht)
+    drawContent();
+  });
+
+  // ---------------------------------------------------------------
+  // Subjektliste
+  // ---------------------------------------------------------------
+  function subjLabel(s) {
+    if (subjectKind === "user") {
+      const ad = s.auth_realm ? ' <span style="color:var(--accent);font-size:10px">AD</span>' : "";
+      const role = s.role === "admin" ? ' <span style="color:var(--warn);font-size:10px">ADMIN</span>' : "";
+      return `${esc(s.display_name || s.username)} <span style="color:var(--subtext);font-size:11px">@${esc(s.username)}</span>${ad}${role}`;
+    }
+    const ad = s.is_ad_group ? ' <span style="color:var(--accent);font-size:10px">AD</span>' : "";
+    return `${esc(s.name)}${ad}`;
+  }
+
+  function drawSubjects() {
+    body.querySelector("#pm-kind-user").classList.toggle("active", subjectKind === "user");
+    body.querySelector("#pm-kind-group").classList.toggle("active", subjectKind === "group");
+    const list = subjects[subjectKind] || [];
+    const q = subjSearch.toLowerCase();
+    const filtered = list.filter((s) => {
+      const hay = subjectKind === "user"
+        ? `${s.username} ${s.display_name}`.toLowerCase()
+        : `${s.name}`.toLowerCase();
+      return !q || hay.includes(q);
+    });
+    if (!filtered.length) {
+      subjListEl.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:8px">Keine Einträge.</div>`;
+      return;
+    }
+    subjListEl.innerHTML = filtered.map((s) => {
+      const id = subjectKind === "user" ? s.id : s.id;
+      const name = subjectKind === "user" ? (s.display_name || s.username) : s.name;
+      const active = selected && selected.type === subjectKind && selected.id === id;
+      return `<div class="pm-subj" data-id="${esc(id)}" data-name="${esc(name)}"
+        style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;margin-bottom:2px;
+        ${active ? "background:var(--accent);color:#0b0f14" : ""}">${subjLabel(s)}</div>`;
+    }).join("");
+    subjListEl.querySelectorAll(".pm-subj").forEach((el) =>
+      el.addEventListener("click", () => selectSubject(subjectKind, el.dataset.id, el.dataset.name))
+    );
+  }
+
+  async function selectSubject(type, id, name) {
+    if (dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+    selected = { type, id, name };
+    grants = new Map();
+    dirty = false;
+    activeTab = "general";
+    tabsEl.style.display = "flex";
+    tabsEl.querySelectorAll("[data-pt]").forEach((b) => b.classList.toggle("active", b.dataset.pt === "general"));
+    headEl.innerHTML = `<div style="font-weight:600">${esc(name)}</div>
+      <div style="color:var(--subtext);font-size:12px">${type === "user" ? "Benutzer" : "Gruppe"} · Rechte hier gelten zusätzlich zu Gruppen-Rechten (Verbieten gewinnt)</div>`;
+    contentEl.innerHTML = `<div style="color:var(--subtext)">Lade Rechte…</div>`;
+    try {
+      const res = await api.getGrants(type, id);
+      for (const g of res.grants || []) grants.set(gk(g.scope, g.perm), g.effect);
+    } catch (e) {
+      contentEl.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`;
+      return;
+    }
+    drawSubjects();
+    drawContent();
+    updateSaveBar();
+  }
+
+  // ---------------------------------------------------------------
+  // Rechte-Editor (Tabs)
+  // ---------------------------------------------------------------
+  function drawContent() {
+    if (!selected) return;
+    if (activeTab === "general") drawGeneral();
+    else drawClients();
+  }
+
+  function permRow(scope, perm) {
+    return `<div style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;font-size:13px">${esc(catalog.labels[perm] || perm)}
+        <span style="color:var(--subtext);font-size:11px">(${esc(perm)})</span></div>
+      ${triState(scope, perm)}
+    </div>`;
+  }
+
+  function drawGeneral() {
+    contentEl.innerHTML = `
+      <div style="max-width:640px">
+        <p style="color:var(--subtext);font-size:13px;margin-top:0">
+          Globale Rechte. <b>Erlauben</b> = gewähren, <b>Verbieten</b> = hart entziehen
+          (schlägt jede Erlaubnis, auch aus Gruppen), <b>—</b> = keine Einstellung.
+          <br>Das Recht <b>Admin</b> ist ein Voll-Zugriff (Wildcard).
+        </p>
+        ${catalog.general.map((p) => permRow("global", p)).join("")}
+      </div>`;
+  }
+
+  function drawClients() {
+    const clients = state.clients || [];
+    const q = clientSearch.toLowerCase();
+    const filtered = clients.filter((c) =>
+      !q || `${c.hostname} ${c.ip || ""}`.toLowerCase().includes(q));
+
+    contentEl.innerHTML = `
+      <div>
+        <p style="color:var(--subtext);font-size:13px;margin-top:0">
+          Client-spezifische Rechte. <b>Clients sehen/zugreifen</b> steuert die
+          Sichtbarkeit — ohne dieses Recht (bzw. bei <b>Verbieten</b>) ist der
+          Client für das Subjekt versteckt und dort ist nichts möglich.
+        </p>
+        <input type="text" id="pm-client-search" placeholder="Client suchen…" value="${esc(clientSearch)}"
+          style="width:100%;max-width:360px;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px;margin-bottom:10px" />
+        <div id="pm-client-list"></div>
+      </div>`;
+
+    const search = contentEl.querySelector("#pm-client-search");
+    search.addEventListener("input", () => {
+      clientSearch = search.value;
+      // nur Liste neu rendern, Fokus behalten
+      renderClientList();
+    });
+
+    function renderClientList() {
+      const q2 = clientSearch.toLowerCase();
+      const list = (state.clients || []).filter((c) =>
+        !q2 || `${c.hostname} ${c.ip || ""}`.toLowerCase().includes(q2));
+      const listEl = contentEl.querySelector("#pm-client-list");
+      if (!list.length) {
+        listEl.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Clients gefunden.</div>`;
+        return;
+      }
+      listEl.innerHTML = list.map((c) => {
+        const rows = catalog.client.map((p) => `
+          <div style="display:flex;align-items:center;gap:10px;padding:3px 0">
+            <div style="flex:1;font-size:12px;color:var(--text)">${esc(catalog.labels[p] || p)}</div>
+            ${triState(c.id, p)}
+          </div>`).join("");
+        return `<details class="panel" style="margin-bottom:8px;padding:8px 12px">
+          <summary style="cursor:pointer;font-size:13px;font-weight:600;list-style:none">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.online ? "var(--online)" : "var(--subtext)"};margin-right:6px"></span>
+            ${esc(c.hostname)} <span style="color:var(--subtext);font-weight:400;font-size:11px">${esc(c.ip || "")}</span>
+          </summary>
+          <div style="margin-top:8px">${rows}</div>
+        </details>`;
+      }).join("");
+    }
+    renderClientList();
+  }
+
+  // Tab-Umschalter
+  tabsEl.querySelectorAll("[data-pt]").forEach((b) =>
+    b.addEventListener("click", () => {
+      activeTab = b.dataset.pt;
+      tabsEl.querySelectorAll("[data-pt]").forEach((x) => x.classList.toggle("active", x === b));
+      drawContent();
+    })
+  );
+
+  // Speichern / Verwerfen
+  body.querySelector("#pm-save").addEventListener("click", async () => {
+    if (!selected) return;
+    const payload = [];
+    for (const [key, effect] of grants.entries()) {
+      const [scope, perm] = key.split("|");
+      payload.push({ scope, perm, effect });
+    }
+    try {
+      await api.setGrants(selected.type, selected.id, payload);
+      dirty = false;
+      updateSaveBar();
+      window.notify?.("Rechte gespeichert", "success");
+    } catch (e) {
+      window.notify?.("Speichern fehlgeschlagen: " + e.message, "error");
+    }
+  });
+  body.querySelector("#pm-reset").addEventListener("click", () => {
+    if (selected) selectSubject(selected.type, selected.id, selected.name);
+  });
+
+  // Subjekt-Art umschalten + Suche
+  body.querySelector("#pm-kind-user").addEventListener("click", () => { subjectKind = "user"; drawSubjects(); });
+  body.querySelector("#pm-kind-group").addEventListener("click", () => { subjectKind = "group"; drawSubjects(); });
+  body.querySelector("#pm-subj-search").addEventListener("input", (e) => { subjSearch = e.target.value; drawSubjects(); });
+
+  // ---------------------------------------------------------------
+  // Initial laden
+  // ---------------------------------------------------------------
+  (async () => {
+    try {
+      const [cat, users, groups] = await Promise.all([
+        api.getPermissionCatalog(),
+        api.getUsers().catch(() => []),
+        api.getGroups().catch(() => []),
+      ]);
+      catalog = cat;
+      subjects.user = users;
+      subjects.group = groups;
+      drawSubjects();
+    } catch (e) {
+      subjListEl.innerHTML = `<div style="color:var(--danger);font-size:12px;padding:8px">${esc(e.message)}</div>`;
+    }
+  })();
+}

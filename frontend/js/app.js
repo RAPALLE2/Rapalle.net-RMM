@@ -9,6 +9,7 @@
 //      Fensters rendert (renderWindowContent)
 
 import { state } from "./state.js";
+import { hasGlobalPerm, isAdmin } from "./state.js";
 import { api, saveToken, clearToken } from "./api.js";
 import { dashboardSocket } from "./socket.js";
 import { applyTheme, applyAccent } from "./theme.js";
@@ -45,6 +46,7 @@ import { renderNetwork } from "./apps/network.js";
 import { renderPortscan } from "./apps/portscan.js";
 import { renderGuacamole } from "./apps/guacamole.js";
 import { renderSettings } from "./apps/settings.js";
+import { renderPermissions } from "./apps/permissions.js";
 import { renderAudit } from "./apps/audit.js";
 import { renderProfile } from "./apps/profile.js";
 
@@ -70,6 +72,7 @@ const APP_RENDERERS = {
   portscan: renderPortscan,
   guacamole: renderGuacamole,
   settings: renderSettings,
+  permissions: renderPermissions,
   audit: renderAudit,
   profile: renderProfile,
 };
@@ -90,6 +93,49 @@ async function reloadHierarchy() {
 
 async function reloadClients() {
   state.clients = await api.getClients();
+}
+
+// Effektive Rechte des Benutzers laden (für Frontend-Gating).
+async function reloadPerms() {
+  try {
+    state.perms = await api.getEffectivePermissions();
+  } catch {
+    // Fallback: keine Rechte-Info -> als "nur Admin sieht alles" behandeln wäre
+    // unsicher; stattdessen leere Rechte (Backend bleibt die harte Grenze).
+    state.perms = { admin: false, global: {}, clients: {} };
+  }
+}
+
+// Apps, die ausschließlich dem Super-Admin offenstehen (Backend: require_admin).
+const ADMIN_ONLY_APPS = new Set(["settings", "permissions", "automation", "manage"]);
+// App-Key -> benötigtes globales Recht (nur relevant, wenn nicht admin-only).
+const APP_REQUIRED_PERM = {
+  audit: "see_audit",
+  recordings: "see_replay",
+  bulk: "use_terminal",
+};
+
+function _appAllowed(appKey) {
+  if (ADMIN_ONLY_APPS.has(appKey)) return isAdmin();
+  const perm = APP_REQUIRED_PERM[appKey];
+  if (!perm) return true;               // frei zugängliche App
+  return hasGlobalPerm(perm);
+}
+
+function applyAppVisibility() {
+  // Startmenü-Kacheln
+  document.querySelectorAll("#start-menu [data-app]").forEach((btn) => {
+    btn.style.display = _appAllowed(btn.dataset.app) ? "" : "none";
+  });
+  // Benutzermenü: Einstellungen nur für Verwalter/Admin
+  const settingsBtn = document.getElementById("btn-open-settings");
+  if (settingsBtn) settingsBtn.style.display = _appAllowed("settings") ? "" : "none";
+  // Sidebar: Client hinzufügen / Hierarchie verwalten nur für Super-Admins
+  // (die zugehörigen Backend-Routen sind admin-only).
+  const addBtn = document.getElementById("btn-add-client");
+  if (addBtn) addBtn.style.display = isAdmin() ? "" : "none";
+  const mgmtBtn = document.getElementById("btn-manage-hierarchy");
+  if (mgmtBtn) mgmtBtn.style.display = isAdmin() ? "" : "none";
 }
 
 async function refreshAll() {
@@ -159,6 +205,10 @@ async function startSession(user) {
   }
 
   await refreshAll();
+
+  // Effektive Rechte laden (bestimmt sichtbare Apps/Aktionen im Frontend).
+  await reloadPerms();
+  applyAppVisibility();
 
   // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
   // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern).
@@ -314,6 +364,7 @@ function initMenusAndButtons() {
       else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
       else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
       else if (app === "settings") openWindow({ key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
+      else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
       else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
       else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
       else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
@@ -351,6 +402,8 @@ function initLiveUpdates() {
   // in der Sidebar auftauchen würde.
   dashboardSocket.on("clients:changed", async () => {
     await refreshAll();
+    await reloadPerms();
+    applyAppVisibility();
   });
 
   // Fehler bei der Bildschirmübertragung (z.B. headless VM) als Notification

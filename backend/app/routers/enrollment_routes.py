@@ -210,20 +210,14 @@ async def enrollment_landing_page(token: str, request: Request):
     return HTMLResponse(html)
 
 
-@router.get("/enroll/{token}/agent.zip")
-async def download_agent_zip(token: str, request: Request):
-    """Packt den Agent-Ordner inkl. einer vorausgefüllten .env-Datei in ein ZIP."""
-    _require_valid_token(token)
-
-    # Echte Server-Adresse eintragen (Settings-basiert) - kein Platzhalter mehr.
-    backend_url = _backend_url(request)
+def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.BytesIO:
+    """Baut das Agent-ZIP inkl. vorausgefüllter .env (Backend-URL/Token)."""
     env_content = (
         f"BACKEND_URL={backend_url}\n"
         f"AGENT_TOKEN={AGENT_TOKEN}\n"
-        f"ENROLLMENT_TOKEN={token}\n"
+        f"ENROLLMENT_TOKEN={enrollment_token}\n"
         f"DEVICE_NAME=\n"
     )
-
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in AGENT_SOURCE_DIR.rglob("*"):
@@ -237,6 +231,14 @@ async def download_agent_zip(token: str, request: Request):
             "3. python agent.py\n",
         )
     buffer.seek(0)
+    return buffer
+
+
+@router.get("/enroll/{token}/agent.zip")
+async def download_agent_zip(token: str, request: Request):
+    """Packt den Agent-Ordner inkl. einer vorausgefüllten .env-Datei in ein ZIP."""
+    _require_valid_token(token)
+    buffer = _build_agent_zip_bytes(_backend_url(request), token)
     return StreamingResponse(
         buffer,
         media_type="application/zip",
@@ -434,5 +436,136 @@ Write-Host "Du kannst dieses Fenster schliessen - der Agent laeuft weiter."
 Write-Host "Der Client sollte in wenigen Sekunden im Dashboard erscheinen."
 Write-Host ""
 Write-Host "(Log-Datei bei Problemen: $InstallDir\\agent.log)"
+"""
+    return PlainTextResponse(script, media_type="text/plain")
+
+
+# ==========================================================================
+# TOKENLOSE AGENT-DISTRIBUTION: Update & Uninstall
+# --------------------------------------------------------------------------
+# Diese Routen liegen bewusst unter /agent-dist/... (NICHT unter /enroll/{token},
+# sonst würde "agent-dist" als Token interpretiert). Sie brauchen keinen
+# Onboarding-Token, weil ein bereits installierter Agent seine Identität über
+# die Datei ".device-id" behält - ein Update/Deinstall ändert daran nichts.
+# Der Agent ruft diese Skripte selbst auf, wenn er die Events "update-agent"
+# bzw. "uninstall-agent" empfängt (siehe agent.py).
+# ==========================================================================
+
+@router.get("/agent-dist/agent.zip")
+async def agent_dist_zip(request: Request):
+    """Aktuelles Agent-ZIP OHNE Onboarding-Token (für Selbst-Update)."""
+    buffer = _build_agent_zip_bytes(_backend_url(request), "")
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=rapalle-rmm-agent.zip"},
+    )
+
+
+@router.get("/agent-dist/update.sh", response_class=PlainTextResponse)
+async def agent_update_sh(request: Request):
+    """Reinstalliert/aktualisiert den Agenten (Linux) - identisch zur Erstinstallation,
+    aber ohne Token. Bestehende .device-id bleibt erhalten -> gleiche Client-Identität."""
+    backend_url = _backend_url(request)
+    script = f"""#!/bin/bash
+# RAPALLE.net RMM - Agent-Update (Linux)
+set -e
+INSTALL_DIR="/opt/rapalle-rmm-agent"
+echo "Lade neueste Agent-Version..."
+curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/rapalle-agent.zip
+sudo mkdir -p "$INSTALL_DIR"
+rm -rf /tmp/rapalle-agent-extract
+mkdir -p /tmp/rapalle-agent-extract
+unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract >/dev/null
+# Laufenden Dienst stoppen, damit die alte agent.py nicht weiterläuft.
+sudo systemctl stop rapalle-agent 2>/dev/null || true
+# .env NICHT überschreiben (behält evtl. angepasste Werte) - agent.py ersetzen.
+sudo find /tmp/rapalle-agent-extract/agent -maxdepth 1 -type f ! -name '.env' -exec cp {{}} "$INSTALL_DIR/" \\;
+# BACKEND_URL sicherheitshalber aktualisieren.
+if [ -f "$INSTALL_DIR/.env" ]; then
+  sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
+fi
+cd "$INSTALL_DIR"
+if [ -x "$INSTALL_DIR/venv/bin/pip" ]; then
+  sudo ./venv/bin/pip install --quiet -r requirements.txt || true
+fi
+sudo systemctl daemon-reload 2>/dev/null || true
+sudo systemctl start rapalle-agent 2>/dev/null || true
+echo "Update fertig - Agent neu gestartet."
+"""
+    return PlainTextResponse(script, media_type="text/x-sh")
+
+
+@router.get("/agent-dist/update.ps1", response_class=PlainTextResponse)
+async def agent_update_ps1(request: Request):
+    """Reinstalliert/aktualisiert den Agenten (Windows) ohne Token."""
+    backend_url = _backend_url(request)
+    script = f"""# RAPALLE.net RMM - Agent-Update (Windows) - als Administrator ausfuehren
+$ErrorActionPreference = "Stop"
+$InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+Write-Host "Lade neueste Agent-Version..."
+Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
+if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
+Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
+# Laufenden Agenten stoppen (Task + Prozesse), damit die alte agent.py endet.
+try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
+try {{
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+        Where-Object {{ $_.CommandLine -like "*agent.py*" }} |
+        ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+}} catch {{}}
+Start-Sleep -Seconds 2
+# Alle Dateien AUSSER .env ersetzen (behaelt Konfiguration/Device-ID).
+Get-ChildItem "$env:TEMP\\rapalle-agent-extract\\agent" -File | Where-Object {{ $_.Name -ne ".env" }} |
+    ForEach-Object {{ Copy-Item $_.FullName -Destination $InstallDir -Force }}
+if (Test-Path "$InstallDir\\.env") {{
+    (Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
+}}
+if (Test-Path "$InstallDir\\venv\\Scripts\\pip.exe") {{
+    & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt" --quiet
+}}
+Start-ScheduledTask -TaskName "RapalleRmmAgent"
+Write-Host "Update fertig - Agent neu gestartet."
+"""
+    return PlainTextResponse(script, media_type="text/plain")
+
+
+@router.get("/agent-dist/uninstall.sh", response_class=PlainTextResponse)
+async def agent_uninstall_sh(request: Request):
+    """Deinstalliert den Agenten (Linux): Dienst weg, Dateien weg."""
+    script = """#!/bin/bash
+# RAPALLE.net RMM - Agent-Deinstallation (Linux)
+INSTALL_DIR="/opt/rapalle-rmm-agent"
+echo "Stoppe und entferne Agent-Dienst..."
+sudo systemctl stop rapalle-agent 2>/dev/null || true
+sudo systemctl disable rapalle-agent 2>/dev/null || true
+sudo rm -f /etc/systemd/system/rapalle-agent.service
+sudo systemctl daemon-reload 2>/dev/null || true
+# Prozesse sicherheitshalber beenden.
+sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
+# Programmordner (inkl. .device-id) entfernen. Nach einem kurzen Delay, damit
+# dieses Skript (das evtl. aus dem Ordner heraus laeuft) noch fertig wird.
+( sleep 3; sudo rm -rf "$INSTALL_DIR" ) &
+echo "Agent deinstalliert."
+"""
+    return PlainTextResponse(script, media_type="text/x-sh")
+
+
+@router.get("/agent-dist/uninstall.ps1", response_class=PlainTextResponse)
+async def agent_uninstall_ps1(request: Request):
+    """Deinstalliert den Agenten (Windows): Task weg, Prozesse weg, Dateien weg."""
+    script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows) - als Administrator ausfuehren
+$ErrorActionPreference = "SilentlyContinue"
+$InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+Write-Host "Stoppe und entferne Agent-Autostart..."
+Stop-ScheduledTask -TaskName "RapalleRmmAgent"
+Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false
+Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+    Where-Object { $_.CommandLine -like "*agent.py*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Start-Sleep -Seconds 2
+# Programmordner nach kurzem Delay entfernen (dieses Skript laeuft evtl. daraus).
+Start-Job -ScriptBlock { Start-Sleep -Seconds 3; Remove-Item -Recurse -Force "C:\\Program Files\\RapalleRmmAgent" } | Out-Null
+Write-Host "Agent deinstalliert."
 """
     return PlainTextResponse(script, media_type="text/plain")

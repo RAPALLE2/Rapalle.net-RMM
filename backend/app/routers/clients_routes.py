@@ -23,8 +23,19 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user
+from app.auth import (
+    get_current_user, require_perm, can_access_client,
+    visible_client_ids, user_has_permission,
+)
 from app.sockets import state, request_exec, request_fs_list, request_proc_list, request_proc_kill, request_fs_read, send_to_agent
+
+
+def _require_client_perm(user: dict, client_id: str, perm: str) -> None:
+    """Prüft ein client-bezogenes Recht; wirft 404 statt 403, wenn der Client
+    für den Benutzer gar nicht sichtbar ist (versteckte Clients bleiben verborgen)."""
+    if not can_access_client(user, client_id):
+        raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, perm, client_id)
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
 
@@ -81,13 +92,15 @@ def _with_live_state(c: dict) -> dict:
 
 @router.get("")
 async def get_clients(user: dict = Depends(get_current_user)):
-    return [_with_live_state(c) for c in db.list_clients()]
+    clients = db.list_clients()
+    visible = visible_client_ids(user, [c["id"] for c in clients])
+    return [_with_live_state(c) for c in clients if c["id"] in visible]
 
 
 @router.get("/{client_id}")
 async def get_client(client_id: str, user: dict = Depends(get_current_user)):
     c = db.get_client(client_id)
-    if not c:
+    if not c or not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
     return _with_live_state(c)
 
@@ -96,6 +109,7 @@ async def get_client(client_id: str, user: dict = Depends(get_current_user)):
 async def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
         raise HTTPException(404, "Client nicht gefunden")
+    _require_client_perm(user, client_id, "manage_clients")
 
     # Nur die tatsächlich mitgeschickten Felder übernehmen
     fields = body.model_dump(exclude_unset=True)
@@ -109,6 +123,7 @@ async def update_client(client_id: str, body: UpdateClientBody, user: dict = Dep
 
 @router.delete("/{client_id}")
 async def remove_client(client_id: str, user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "manage_clients")
     db.delete_client(client_id)
     db.add_audit_entry(user["username"], "client.deleted", target=client_id)
     return {"ok": True}
@@ -116,6 +131,7 @@ async def remove_client(client_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{client_id}/exec")
 async def exec_on_client(client_id: str, body: ExecBody, user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "use_terminal")
     try:
         result = await request_exec(client_id, body.command, session=body.session,
                                     shell=body.shell, elevated=body.elevated)
@@ -135,6 +151,10 @@ async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
     Alle Anfragen laufen parallel (asyncio.gather), das Ergebnis ist eine
     Zuordnung Client-ID -> Ergebnis (oder Fehlermeldung, falls einer offline ist).
     """
+    # Nur Clients, auf die der Benutzer Terminal-Rechte hat (Rest wird verworfen).
+    allowed_ids = [cid for cid in body.client_ids
+                   if user_has_permission(user, "use_terminal", cid)]
+
     async def run_one(client_id: str) -> tuple[str, dict]:
         try:
             result = await request_exec(client_id, body.command)
@@ -142,7 +162,7 @@ async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
         except Exception as e:
             return client_id, {"ok": False, "error": str(e)}
 
-    results = await asyncio.gather(*(run_one(cid) for cid in body.client_ids))
+    results = await asyncio.gather(*(run_one(cid) for cid in allowed_ids))
     db.add_audit_entry(
         user["username"], "terminal.bulk_exec",
         target=",".join(body.client_ids), details=body.command,
@@ -152,6 +172,7 @@ async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
 
 @router.get("/{client_id}/fs")
 async def list_client_fs(client_id: str, path: str = "", user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "use_explorer")
     try:
         entries = await request_fs_list(client_id, path)
     except Exception as e:
@@ -162,6 +183,7 @@ async def list_client_fs(client_id: str, path: str = "", user: dict = Depends(ge
 @router.get("/{client_id}/processes")
 async def list_client_processes(client_id: str, user: dict = Depends(get_current_user)):
     """Liefert die laufende Prozessliste eines Clients (Task-Manager)."""
+    _require_client_perm(user, client_id, "use_taskmanager")
     try:
         processes = await request_proc_list(client_id)
     except Exception as e:
@@ -176,6 +198,7 @@ class KillBody(BaseModel):
 @router.post("/{client_id}/processes/kill")
 async def kill_client_process(client_id: str, body: KillBody, user: dict = Depends(get_current_user)):
     """Beendet einen Prozess auf einem Client."""
+    _require_client_perm(user, client_id, "use_taskmanager")
     try:
         result = await request_proc_kill(client_id, body.pid)
     except Exception as e:
@@ -191,6 +214,7 @@ async def read_client_file(client_id: str, path: str, user: dict = Depends(get_c
     Das Frontend baut daraus einen Download. (Für kleinere Dateien gedacht;
     der Agent begrenzt die Größe auf 25 MB.)
     """
+    _require_client_perm(user, client_id, "use_explorer")
     try:
         result = await request_fs_read(client_id, path)
     except Exception as e:
@@ -202,14 +226,32 @@ async def read_client_file(client_id: str, path: str, user: dict = Depends(get_c
 @router.post("/{client_id}/update-agent")
 async def update_client_agent(client_id: str, user: dict = Depends(get_current_user)):
     """
-    Weist den Agenten an, sich selbst zu aktualisieren: Er lädt die neueste
-    agent.py vom Backend (Endpunkt /api/agent/latest), ersetzt seine eigene
-    Datei und startet neu. Der Client verbindet sich danach frisch.
+    Weist den Agenten an, sich selbst zu aktualisieren: Er startet den
+    Client-Update-Befehl in einer eigenen Shell-Session (lädt das aktuelle
+    Agent-Paket, ersetzt agent.py und startet den Dienst neu).
     """
+    _require_client_perm(user, client_id, "manage_agent")
     ok = await send_to_agent(client_id, "update-agent", {})
     if not ok:
         raise HTTPException(503, "Client ist offline")
     db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id)
+    return {"ok": True}
+
+
+@router.post("/{client_id}/uninstall-agent")
+async def uninstall_client_agent(client_id: str, user: dict = Depends(get_current_user)):
+    """
+    Weist den Agenten an, sich selbst zu DEINSTALLIEREN: Er lädt das
+    Uninstall-Skript vom Backend und führt es in einer Shell aus (stoppt den
+    Autostart-Dienst/Task und entfernt die Programmdateien). Danach ist der
+    Client offline und erscheint nicht mehr neu - der DB-Eintrag bleibt, bis
+    er im Dashboard gelöscht wird.
+    """
+    _require_client_perm(user, client_id, "manage_agent")
+    ok = await send_to_agent(client_id, "uninstall-agent", {})
+    if not ok:
+        raise HTTPException(503, "Client ist offline")
+    db.add_audit_entry(user["username"], "agent.uninstall_triggered", target=client_id)
     return {"ok": True}
 
 
@@ -224,8 +266,9 @@ async def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
     Bildschirm-Streaming, das eine bereits vorhandene Sitzung voraussetzt.
     """
     client = db.get_client(client_id)
-    if not client:
+    if not client or not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_screen", client_id)
 
     host = client.get("ip")
     if not host:

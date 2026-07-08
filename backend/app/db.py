@@ -188,6 +188,21 @@ def init_db() -> None:
             PRIMARY KEY (user_id, group_id)
         );
 
+        -- Feingranulare Rechte-Vergabe (tri-state: allow/deny, sonst = keine Angabe).
+        -- subject_type: 'user' oder 'group'; scope: 'global' oder eine client_id.
+        -- Deny gewinnt immer, 'admin' ist ein Wildcard-Recht (siehe auth.py Resolver).
+        CREATE TABLE IF NOT EXISTS permission_grants (
+            id TEXT PRIMARY KEY,
+            subject_type TEXT NOT NULL,   -- 'user' | 'group'
+            subject_id TEXT NOT NULL,
+            scope TEXT NOT NULL,          -- 'global' | <client_id>
+            perm TEXT NOT NULL,
+            effect TEXT NOT NULL,         -- 'allow' | 'deny'
+            UNIQUE(subject_type, subject_id, scope, perm)
+        );
+        CREATE INDEX IF NOT EXISTS idx_perm_grants_subject
+            ON permission_grants (subject_type, subject_id);
+
         -- Verzeichnis-Anbindungen (Realms), z.B. Active Directory via LDAP/LDAPS.
         -- Voll funktionsfähig: Benutzer können sich gegen diese Realms anmelden.
         CREATE TABLE IF NOT EXISTS realms (
@@ -591,6 +606,8 @@ def update_client(client_id: str, fields: dict) -> dict | None:
 
 def delete_client(client_id: str) -> None:
     _conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    # Client-scoped Rechte-Grants mit aufräumen (verwaiste Einträge vermeiden).
+    _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
     _conn.commit()
 
 
@@ -741,11 +758,112 @@ def delete_script(script_id: str) -> None:
 # ------------------------------------------------------------------
 # GRUPPEN / ROLLEN & RECHTE
 # ------------------------------------------------------------------
-# Verfügbare Rechte-Schlüssel (werden im Frontend als Checkboxen angeboten):
+# Verfügbare Rechte-Schlüssel (Legacy-Gruppen-Checkboxen, global allow):
 ALL_PERMISSIONS = [
     "login", "screen", "terminal", "explorer", "quick_actions",
     "audit", "manage_users", "manage_clients", "automation",
 ]
+
+# --- Neues, feingranulares Rechte-Vokabular (tri-state Grants) -------------
+# 'admin' ist ein Wildcard (deckt alle anderen Rechte im selben Scope ab).
+# 'access_clients' steuert Sichtbarkeit + Basiszugriff auf Clients.
+# Manche Rechte sind nur global sinnvoll, andere auch pro Client (siehe Tabs im
+# Frontend). Der Resolver in auth.py erlaubt aber jeden Key in jedem Scope.
+PERM_KEYS = [
+    "admin", "login", "use_guacamole", "use_terminal", "use_screen",
+    "use_explorer", "use_taskmanager", "see_audit", "see_replay",
+    "delete_replay", "access_clients", "manage_users", "manage_clients",
+    "manage_agent", "automation",
+]
+
+# Welche Rechte im General-Tab (global) bzw. im Client-Tab angeboten werden.
+GENERAL_PERM_KEYS = [
+    "admin", "login", "access_clients", "use_guacamole", "use_terminal",
+    "use_screen", "use_explorer", "use_taskmanager", "see_audit",
+    "see_replay", "delete_replay", "manage_users", "manage_clients",
+    "manage_agent", "automation",
+]
+CLIENT_PERM_KEYS = [
+    "access_clients", "admin", "use_terminal", "use_screen", "use_explorer",
+    "use_taskmanager", "use_guacamole", "manage_clients", "manage_agent",
+]
+
+# Legacy-Gruppen-Recht -> neuer Perm-Key (für Rückwärtskompatibilität).
+_LEGACY_PERM_MAP = {
+    "login": "login", "screen": "use_screen", "terminal": "use_terminal",
+    "explorer": "use_explorer", "audit": "see_audit",
+    "manage_users": "manage_users", "manage_clients": "manage_clients",
+    "automation": "automation",
+}
+
+
+# ------------------------------------------------------------------
+# PERMISSION GRANTS (tri-state, user/group, global/client)
+# ------------------------------------------------------------------
+
+def get_grants(subject_type: str, subject_id: str) -> list[dict]:
+    """Alle Grants EINES Subjekts (Benutzer oder Gruppe)."""
+    rows = _conn.execute(
+        "SELECT scope, perm, effect FROM permission_grants "
+        "WHERE subject_type = ? AND subject_id = ?",
+        (subject_type, subject_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_grants(subject_type: str, subject_id: str, grants: list[dict]) -> None:
+    """
+    Ersetzt ALLE Grants eines Subjekts. 'grants' ist eine Liste von
+    {scope, perm, effect}. effect muss 'allow' oder 'deny' sein; alles andere
+    (bzw. weggelassene Kombinationen) bedeutet 'keine Angabe' und wird nicht
+    gespeichert.
+    """
+    _conn.execute(
+        "DELETE FROM permission_grants WHERE subject_type = ? AND subject_id = ?",
+        (subject_type, subject_id),
+    )
+    for g in grants:
+        scope = g.get("scope") or "global"
+        perm = g.get("perm")
+        effect = g.get("effect")
+        if perm not in PERM_KEYS or effect not in ("allow", "deny"):
+            continue
+        _conn.execute(
+            "INSERT OR REPLACE INTO permission_grants "
+            "(id, subject_type, subject_id, scope, perm, effect) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (_new_id(), subject_type, subject_id, scope, perm, effect),
+        )
+    _conn.commit()
+
+
+def delete_grants_for_client(client_id: str) -> None:
+    """Räumt Client-scoped Grants auf, wenn ein Client gelöscht wird."""
+    _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
+    _conn.commit()
+
+
+def get_effective_grants(user_id: str) -> list[dict]:
+    """
+    Sammelt ALLE relevanten Grants eines Benutzers: seine eigenen (subject
+    'user') plus die aller Gruppen, in denen er Mitglied ist ('group'), plus
+    die Legacy-Gruppenrechte (groups.permissions) als globale allow-Grants.
+    Rückgabe: Liste {scope, perm, effect}.
+    """
+    grants: list[dict] = []
+    grants.extend(get_grants("user", user_id))
+
+    group_ids = get_user_group_ids(user_id)
+    for gid in group_ids:
+        grants.extend(get_grants("group", gid))
+        # Legacy: alte Checkbox-Rechte der Gruppe als globale allow-Grants.
+        g = get_group(gid)
+        if g:
+            for p in (g["permissions"] or "").split(","):
+                key = _LEGACY_PERM_MAP.get(p.strip())
+                if key:
+                    grants.append({"scope": "global", "perm": key, "effect": "allow"})
+    return grants
 
 
 def list_groups() -> list[dict]:

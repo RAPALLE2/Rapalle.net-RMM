@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPExce
 from pydantic import BaseModel
 
 from app import db, guacamole
-from app.auth import get_current_user
+from app.auth import get_current_user, require_perm, can_access_client
 
 router = APIRouter(prefix="/api/guac", tags=["guacamole"])
 
@@ -47,6 +47,11 @@ async def guac_token(body: GuacTokenBody, user: dict = Depends(get_current_user)
     if protocol not in _ALLOWED_PROTOCOLS:
         from fastapi import HTTPException
         raise HTTPException(400, f"Protokoll nicht unterstützt: {protocol}")
+    # Rechteprüfung: Guacamole-Nutzung (ggf. client-bezogen).
+    from fastapi import HTTPException as _HTTPException
+    if body.client_id and not can_access_client(user, body.client_id):
+        raise _HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_guacamole", body.client_id or None)
 
     token = guacamole.create_token(
         protocol, dict(body.params or {}), user.get("username", ""),

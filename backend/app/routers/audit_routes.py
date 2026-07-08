@@ -10,14 +10,14 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_perm
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 
 @router.get("")
 async def get_audit_log(limit: int = 200, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "see_audit")
     return db.list_audit_log(limit)
 
 

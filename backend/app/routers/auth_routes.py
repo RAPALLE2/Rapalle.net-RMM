@@ -22,6 +22,9 @@ from app.auth import (
     get_current_user,
     hash_password,
     verify_password,
+    is_super_admin,
+    user_has_permission,
+    effective_permissions,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -62,6 +65,7 @@ def _public_user(user: dict) -> dict:
         "display_name": user["display_name"],
         "role": user["role"],
         "must_change_pw": bool(user["must_change_pw"]),
+        "is_admin": is_super_admin(user),
         "language": user["language"],
         "theme": user["theme"],
         "accent": user["accent"] if "accent" in user.keys() else "teal",
@@ -92,6 +96,12 @@ async def login(body: LoginBody):
         db.add_audit_entry(body.username, "login.failed", details=f"realm:{body.realm}")
         raise HTTPException(401, "Benutzername oder Passwort falsch")
 
+    # Rechteprüfung: wer nicht das Recht 'login' hat (und kein Super-Admin ist),
+    # darf sich trotz korrektem Passwort NICHT anmelden.
+    if not user_has_permission(user, "login"):
+        db.add_audit_entry(user["username"], "login.denied", details="fehlendes Recht 'login'")
+        raise HTTPException(403, "Keine Berechtigung zur Anmeldung an diesem System")
+
     db.add_audit_entry(user["username"], "login.success", details=f"realm:{body.realm}")
     token = create_access_token(user)
     return {"token": token, "user": _public_user(user)}
@@ -119,6 +129,17 @@ async def change_password(body: ChangePasswordBody, user: dict = Depends(get_cur
 @router.get("/me")
 async def me(user: dict = Depends(get_current_user)):
     return _public_user(user)
+
+
+@router.get("/effective")
+async def my_effective_permissions(user: dict = Depends(get_current_user)):
+    """
+    Effektive Rechte des eingeloggten Benutzers für das Frontend-Gating:
+    { admin, global: {perm: bool}, clients: { client_id: {perm: bool} } }.
+    Enthält nur sichtbare Clients.
+    """
+    all_ids = [c["id"] for c in db.list_clients()]
+    return effective_permissions(user, all_ids)
 
 
 @router.put("/profile")

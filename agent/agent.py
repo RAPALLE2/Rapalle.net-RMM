@@ -1235,48 +1235,72 @@ if _INPUT_AVAILABLE:
 @sio.on("update-agent", namespace="/agent")
 async def on_update_agent(data):
     """
-    Aktualisiert den Agenten selbst: lädt die neueste agent.py vom Backend,
-    überschreibt die eigene Datei und startet den Prozess neu.
+    Aktualisiert den Agenten, indem der Client-Install-/Update-Befehl in einer
+    eigenen Shell-Session ausgeführt wird (genau wie bei der Erstinstallation).
+    Das Update-Skript stoppt den laufenden Agenten, ersetzt agent.py und startet
+    den Dienst neu - deshalb läuft der Befehl LOSGELÖST vom Agent-Prozess.
     """
-    _print("[agent] Update angefordert - lade neueste Version...")
+    _print("[agent] Update angefordert - starte Update-Befehl in eigener Shell...")
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _self_update)
+    await loop.run_in_executor(None, _run_dist_command, "update")
 
 
-def _self_update():
+@sio.on("uninstall-agent", namespace="/agent")
+async def on_uninstall_agent(data):
     """
-    Lädt die neue agent.py herunter, ersetzt die eigene Datei und startet neu.
-    Läuft im Thread-Pool, da urllib und Prozess-Neustart blockierend sind.
+    Deinstalliert den Agenten: führt das Uninstall-Skript in einer eigenen Shell
+    aus (Dienst/Task entfernen, Programmordner löschen). Läuft losgelöst, da es
+    den eigenen Prozess beendet.
     """
-    import sys
-    import urllib.request
+    _print("[agent] Deinstallation angefordert - starte Uninstall-Befehl in eigener Shell...")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _run_dist_command, "uninstall")
+
+
+def _run_dist_command(kind: str):
+    """
+    Startet den Update- bzw. Uninstall-Befehl als EIGENSTÄNDIGEN Prozess, der
+    den Tod des Agent-Prozesses überlebt (das Skript beendet den Agenten selbst).
+
+    kind: 'update' | 'uninstall'
+    """
+    import shutil
 
     try:
-        url = f"{BACKEND_URL}/api/agent/latest"
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            new_code = resp.read().decode("utf-8")
-
-        if not new_code.strip() or "agent.py nicht gefunden" in new_code:
-            _print("[agent] Update abgebrochen: leerer/ungültiger Download")
-            return
-
-        own_path = Path(__file__).resolve()
-        # Sicherheitshalber die alte Version als .bak behalten
-        backup = own_path.with_suffix(".py.bak")
-        try:
-            backup.write_text(own_path.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception:
-            pass
-
-        own_path.write_text(new_code, encoding="utf-8")
-        _print("[agent] Neue Version gespeichert - starte neu...")
-
-        # Prozess durch sich selbst ersetzen (gleicher Interpreter, gleiches Skript).
-        # Der geplante Autostart-Task bleibt davon unberührt; hier startet der
-        # laufende Prozess einfach mit dem neuen Code neu.
-        os.execv(sys.executable, [sys.executable, str(own_path)])
+        if IS_WINDOWS:
+            fname = "update.ps1" if kind == "update" else "uninstall.ps1"
+            url = f"{BACKEND_URL}/agent-dist/{fname}"
+            ps = f"iwr '{url}' -UseBasicParsing | iex"
+            # DETACHED_PROCESS(0x8) + CREATE_NEW_PROCESS_GROUP(0x200): überlebt,
+            # wenn das Skript gleich die eigenen python-Prozesse beendet.
+            flags = 0x00000008 | 0x00000200
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                creationflags=flags, close_fds=True,
+            )
+            _print(f"[agent] {kind}-Befehl (Windows) gestartet: {url}")
+        else:
+            fname = "update.sh" if kind == "update" else "uninstall.sh"
+            url = f"{BACKEND_URL}/agent-dist/{fname}"
+            inner = f"curl -sSL '{url}' | bash"
+            logf = f"/tmp/rapalle-agent-{kind}.log"
+            # Bevorzugt systemd-run --scope: eigener cgroup -> überlebt
+            # 'systemctl stop rapalle-agent' (KillMode=control-group).
+            if shutil.which("systemd-run"):
+                subprocess.Popen(
+                    ["systemd-run", "--scope", "--quiet",
+                     "bash", "-c", f"{inner} >{logf} 2>&1"],
+                    start_new_session=True, close_fds=True,
+                )
+            else:
+                # Fallback: eigene Session, vom Agent-Prozess losgelöst.
+                subprocess.Popen(
+                    ["setsid", "bash", "-c", f"nohup {inner} >{logf} 2>&1"],
+                    start_new_session=True, close_fds=True,
+                )
+            _print(f"[agent] {kind}-Befehl (Linux) gestartet: {url} (Log: {logf})")
     except Exception as e:
-        _print(f"[agent] Selbst-Update fehlgeschlagen: {e}")
+        _print(f"[agent] {kind}-Befehl fehlgeschlagen: {e}")
 
 
 @sio.on("screen-input", namespace="/agent")

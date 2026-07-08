@@ -91,6 +91,85 @@ async def get_user_groups(user_id: str, user: dict = Depends(get_current_user)):
 
 
 # ==================================================================
+# Feingranulare Rechte (tri-state Grants) für die Permissions-App
+# ==================================================================
+# Labels für die Frontend-Anzeige. Der Resolver kennt die Semantik.
+PERM_LABELS = {
+    "admin": "Admin (Vollzugriff)",
+    "login": "Anmelden",
+    "use_guacamole": "Guacamole nutzen",
+    "use_terminal": "Terminal nutzen",
+    "use_screen": "Remote-Bildschirm",
+    "use_explorer": "Datei-Explorer",
+    "use_taskmanager": "Task-Manager",
+    "see_audit": "Audit-Log sehen",
+    "see_replay": "Aufzeichnungen sehen",
+    "delete_replay": "Aufzeichnungen löschen",
+    "access_clients": "Clients sehen/zugreifen",
+    "manage_users": "Benutzer verwalten",
+    "manage_clients": "Clients verwalten",
+    "manage_agent": "Agent update/uninstall",
+    "automation": "Automationen",
+}
+
+
+@router.get("/permission-catalog")
+async def permission_catalog(user: dict = Depends(get_current_user)):
+    """Liefert die Rechte-Schlüssel (global + client) inkl. Labels fürs Frontend."""
+    require_admin(user)
+    return {
+        "labels": PERM_LABELS,
+        "general": db.GENERAL_PERM_KEYS,
+        "client": db.CLIENT_PERM_KEYS,
+    }
+
+
+class GrantItem(BaseModel):
+    scope: str = "global"        # 'global' | <client_id>
+    perm: str
+    effect: str                  # 'allow' | 'deny'
+
+
+class GrantsBody(BaseModel):
+    grants: list[GrantItem] = []
+
+
+def _valid_subject(subject_type: str, subject_id: str) -> bool:
+    if subject_type == "user":
+        return db.get_user_by_id(subject_id) is not None
+    if subject_type == "group":
+        return db.get_group(subject_id) is not None
+    return False
+
+
+@router.get("/grants/{subject_type}/{subject_id}")
+async def get_grants(subject_type: str, subject_id: str, user: dict = Depends(get_current_user)):
+    """Alle Grants eines Subjekts (Benutzer oder Gruppe)."""
+    require_admin(user)
+    if subject_type not in ("user", "group"):
+        raise HTTPException(400, "subject_type muss 'user' oder 'group' sein")
+    if not _valid_subject(subject_type, subject_id):
+        raise HTTPException(404, "Subjekt nicht gefunden")
+    return {"grants": db.get_grants(subject_type, subject_id)}
+
+
+@router.put("/grants/{subject_type}/{subject_id}")
+async def put_grants(subject_type: str, subject_id: str, body: GrantsBody,
+                     user: dict = Depends(get_current_user)):
+    """Ersetzt ALLE Grants eines Subjekts (tri-state; nur allow/deny werden gespeichert)."""
+    require_admin(user)
+    if subject_type not in ("user", "group"):
+        raise HTTPException(400, "subject_type muss 'user' oder 'group' sein")
+    if not _valid_subject(subject_type, subject_id):
+        raise HTTPException(404, "Subjekt nicht gefunden")
+    db.set_grants(subject_type, subject_id, [g.model_dump() for g in body.grants])
+    db.add_audit_entry(user["username"], "grants.updated",
+                       target=f"{subject_type}:{subject_id}",
+                       details=f"{len(body.grants)} Grants")
+    return {"ok": True, "grants": db.get_grants(subject_type, subject_id)}
+
+
+# ==================================================================
 # Realms (Verzeichnis-Anbindung / Active Directory)
 # ==================================================================
 
