@@ -14,12 +14,13 @@ import { dashboardSocket } from "./socket.js";
 import { applyTheme, applyAccent } from "./theme.js";
 import { setLanguage, applyStaticTranslations } from "./i18n_apply.js";
 
-import { renderSidebar, setOnSelect } from "./sidebar.js";
+import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
 import { renderTaskbar, initTaskbar } from "./taskbar.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
+import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded } from "./persist.js";
 
 // notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
 // die schönen Slide-Down-Meldungen nutzen können.
@@ -142,8 +143,55 @@ async function startSession(user) {
   showOnly(appScreen());
   document.getElementById("user-menu-name").textContent = user.display_name;
 
+  // Persistenz einrichten (pro Benutzer). Aufgeklappte Sidebar-Knoten müssen
+  // VOR dem ersten Render gesetzt werden, damit der Baum sofort korrekt aussieht.
+  configurePersistence({
+    username: user.username,
+    getExpanded: getExpandedIds,
+    setExpanded: setExpandedIds,
+  });
+  initFavorites(user.username);   // Favoriten des Benutzers laden
+  initSidebarNav();               // Dashboard-Tab + Favoriten-Header verkabeln
+  const saved = loadState();
+  if (saved) {
+    applyExpanded(saved);           // Aufklapp-Zustand
+    if (saved.selection) state.selection = saved.selection;
+  }
+
   await refreshAll();
+
+  // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
+  // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern).
+  if (saved) restoreWindows(saved);
+
+  // Ab jetzt jede Fenster-/Baum-Änderung speichern.
+  setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
+  setOnTreeStateChanged(() => scheduleSave(state));
+
   renderTaskbar();
+}
+
+// Öffnet die zuletzt offenen Fenster in ihrer gespeicherten Reihenfolge,
+// Geometrie und mit ihrem Status (minimiert/maximiert) erneut.
+function restoreWindows(saved) {
+  const wins = saved.windows || [];
+  if (!wins.length) return;
+  // In Fokus-Reihenfolge öffnen (letztes = oberstes). Fenster, die nicht in
+  // focusOrder stehen, hinten anstellen.
+  const order = saved.focusOrder || [];
+  wins.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+  for (const w of wins) {
+    try {
+      openWindow({
+        key: w.key, appId: w.appId, title: w.title, props: w.props || {},
+        clientColor: w.clientColor, w: w.w, h: w.h, x: w.x, y: w.y,
+        minimized: w.minimized, maximized: w.maximized,
+        focus: false,   // Fokus am Ende gesetzt (Reihenfolge)
+      });
+    } catch (e) {
+      console.warn("[persist] Fenster konnte nicht wiederhergestellt werden:", w.key, e);
+    }
+  }
 }
 
 function initLoginForm() {
@@ -346,8 +394,7 @@ function initLiveUpdates() {
 async function main() {
   // Renderer für Fenster-Inhalte registrieren
   setContentRenderer(renderWindowContent);
-  // Taskbar aktualisieren, sobald Fenster geöffnet/geschlossen/fokussiert werden
-  setOnWindowsChanged(renderTaskbar);
+  // (setOnWindowsChanged wird in startSession gesetzt - inkl. Zustand-Speichern)
   // Sidebar-Auswahl -> Haupt-Panel aktualisieren
   setOnSelect(renderMainContent);
   // Edit-Client-Änderungen -> alles neu laden

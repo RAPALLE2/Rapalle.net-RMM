@@ -20,10 +20,75 @@ export function setOnSelect(fn) {
 // Merkt sich, welche Knoten aufgeklappt sind (damit ein Re-Render sie nicht zuklappt)
 const expanded = new Set();
 
+// -----------------------------------------------------------------
+// Favoriten-System: Clients UND Tenants können mit ★ markiert werden.
+// Gespeichert pro Benutzer im Browser (localStorage), damit die Auswahl
+// Reloads überlebt. Format: { clients: [id,...], tenants: [id,...] }
+// -----------------------------------------------------------------
+let _favUser = "anon";
+const favorites = { clients: new Set(), tenants: new Set() };
+let favExpanded = true;   // Favoriten-Sektion aufgeklappt?
+
+function _favKey() { return `rapalle-favs:${_favUser}`; }
+
+export function initFavorites(username) {
+  _favUser = username || "anon";
+  favorites.clients.clear();
+  favorites.tenants.clear();
+  try {
+    const raw = localStorage.getItem(_favKey());
+    if (raw) {
+      const d = JSON.parse(raw);
+      (d.clients || []).forEach((id) => favorites.clients.add(id));
+      (d.tenants || []).forEach((id) => favorites.tenants.add(id));
+      if (typeof d.expanded === "boolean") favExpanded = d.expanded;
+    }
+  } catch {}
+}
+
+function _saveFavorites() {
+  try {
+    localStorage.setItem(_favKey(), JSON.stringify({
+      clients: [...favorites.clients],
+      tenants: [...favorites.tenants],
+      expanded: favExpanded,
+    }));
+  } catch {}
+}
+
+function isFav(kind, id) { return favorites[kind]?.has(id); }
+
+function toggleFav(kind, id) {
+  const set = favorites[kind];
+  if (!set) return;
+  if (set.has(id)) set.delete(id);
+  else set.add(id);
+  _saveFavorites();
+  renderSidebar();
+}
+
+// Kleiner Stern-Button (gefüllt = Favorit). Bekommt eine Klick-Animation.
+function favStar(kind, id) {
+  const on = isFav(kind, id);
+  return `<span class="fav-star ${on ? "on" : ""}" data-fav="${kind}:${id}" title="Favorit">${on ? "★" : "☆"}</span>`;
+}
+
+// Für die Persistenz (persist.js): aktuellen Aufklapp-Zustand lesen/setzen.
+export function getExpandedIds() { return [...expanded]; }
+export function setExpandedIds(ids) {
+  expanded.clear();
+  for (const id of ids || []) expanded.add(id);
+}
+
+// Wird von app.js gesetzt, damit Änderungen am Aufklapp-Zustand gespeichert werden.
+let onTreeStateChanged = null;
+export function setOnTreeStateChanged(fn) { onTreeStateChanged = fn; }
+
 function toggleExpand(nodeId) {
   if (expanded.has(nodeId)) expanded.delete(nodeId);
   else expanded.add(nodeId);
   renderSidebar();
+  if (onTreeStateChanged) onTreeStateChanged();
 }
 
 // Klappt den Pfad zu einem Client auf (Tenant + Location + evtl. Host-Client),
@@ -44,6 +109,7 @@ function select(type, id) {
   state.selection = { type, id };
   renderSidebar();
   if (onSelectCallback) onSelectCallback();
+  if (onTreeStateChanged) onTreeStateChanged();
 }
 
 // Baut das kleine "online"-Pünktchen für einen Client
@@ -94,9 +160,10 @@ function renderClientNode(client) {
 
   return `
     <div class="tree-node">
-      <div class="tree-row ${selected ? "selected" : ""}" data-select-client="${client.id}">
+      <div class="tree-row row-anim ${selected ? "selected" : ""}" data-select-client="${client.id}">
         ${children.length ? `<span data-toggle="${client.id}">${isOpen ? "▾" : "▸"}</span>` : `<span style="width:10px;display:inline-block"></span>`}
-        ${clientDot(client)} ${esc(client.hostname)}
+        ${clientDot(client)} <span style="flex:1">${esc(client.hostname)}</span>
+        ${favStar("clients", client.id)}
       </div>
       ${isOpen && children.length ? `<div class="tree-children">${children.map(renderClientNode).join("")}</div>` : ""}
     </div>
@@ -116,11 +183,12 @@ export function renderSidebar() {
 
     html += `
       <div class="tree-node">
-        <div class="tree-row ${selected ? "selected" : ""}">
+        <div class="tree-row row-anim ${selected ? "selected" : ""}">
           <span data-toggle="${tenant.id}">${isOpen ? "▾" : "▸"}</span>
           <span data-select-tenant="${tenant.id}" style="flex:1">
             <span class="dot" style="background:${esc(tenant.color)}"></span> ${esc(tenant.name)}
           </span>
+          ${favStar("tenants", tenant.id)}
         </div>
     `;
 
@@ -171,4 +239,91 @@ export function renderSidebar() {
   tree.querySelectorAll("[data-select-client]").forEach((el) =>
     el.addEventListener("click", (e) => { e.stopPropagation(); select("client", el.dataset.selectClient); })
   );
+
+  // Stern-Klicks (Favorit an/aus) - mit kleiner Pop-Animation.
+  tree.querySelectorAll("[data-fav]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      el.classList.add("fav-pop");
+      const [kind, id] = el.dataset.fav.split(":");
+      setTimeout(() => toggleFav(kind, id), 120);  // Animation kurz sichtbar lassen
+    })
+  );
+
+  renderFavorites();
+}
+
+// -----------------------------------------------------------------
+// Favoriten-Sektion oben in der Sidebar rendern
+// -----------------------------------------------------------------
+function renderFavorites() {
+  const box = document.getElementById("sidebar-fav-list");
+  const header = document.getElementById("fav-header");
+  if (!box || !header) return;
+
+  // Aufklapp-Zustand der Favoriten-Sektion
+  const caret = header.querySelector(".fav-caret");
+  if (caret) caret.textContent = favExpanded ? "▾" : "▸";
+  box.style.display = favExpanded ? "block" : "none";
+
+  const favTenants = state.hierarchy.tenants.filter((tn) => favorites.tenants.has(tn.id));
+  const favClients = state.clients.filter((c) => favorites.clients.has(c.id));
+
+  if (!favTenants.length && !favClients.length) {
+    box.innerHTML = `<div class="fav-empty">Noch keine Favoriten – tippe auf ☆ neben einem Client oder Tenant.</div>`;
+  } else {
+    let h = "";
+    for (const tn of favTenants) {
+      h += `
+        <div class="tree-row row-anim fav-row" data-fav-select="tenant:${tn.id}">
+          <span class="dot" style="background:${esc(tn.color)}"></span>
+          <span style="flex:1">${esc(tn.name)}</span>
+          <span class="fav-star on" data-fav="tenants:${tn.id}">★</span>
+        </div>`;
+    }
+    for (const c of favClients) {
+      h += `
+        <div class="tree-row row-anim fav-row" data-fav-select="client:${c.id}">
+          ${clientDot(c)} <span style="flex:1">${esc(c.hostname)}</span>
+          <span class="fav-star on" data-fav="clients:${c.id}">★</span>
+        </div>`;
+    }
+    box.innerHTML = h;
+  }
+
+  // Klick auf Favorit -> auswählen (+ Pfad aufklappen bei Clients)
+  box.querySelectorAll("[data-fav-select]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-fav]")) return;  // Stern-Klick separat
+      const [type, id] = el.dataset.favSelect.split(":");
+      if (type === "client") revealClient(id);
+      select(type, id);
+    })
+  );
+  // Stern in der Favoritenliste entfernt den Favoriten (mit Animation).
+  box.querySelectorAll("[data-fav]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      el.classList.add("fav-pop");
+      const [kind, id] = el.dataset.fav.split(":");
+      setTimeout(() => toggleFav(kind, id), 120);
+    })
+  );
+}
+
+// Favoriten-Header (Ein-/Ausklappen) + Dashboard-Tab verkabeln. Wird einmal
+// von app.js aufgerufen.
+export function initSidebarNav() {
+  const header = document.getElementById("fav-header");
+  if (header) header.addEventListener("click", () => {
+    favExpanded = !favExpanded;
+    _saveFavorites();
+    renderFavorites();
+  });
+  const dash = document.getElementById("sidebar-dashboard");
+  if (dash) dash.addEventListener("click", () => {
+    // Platzhalter für die Zukunft - aktuell nur visuelles Feedback.
+    dash.classList.add("nav-pulse");
+    setTimeout(() => dash.classList.remove("nav-pulse"), 400);
+  });
 }

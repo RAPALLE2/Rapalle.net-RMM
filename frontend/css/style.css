@@ -558,3 +558,153 @@ label:has(input[type="checkbox"]) {
   align-items: center;
   gap: 8px;
 }
+
+/* ============================================================
+   ANIMATIONEN - überall etwas Leben (dezent, nicht aufdringlich)
+   ============================================================ */
+
+/* Respektiert Nutzer, die Bewegung reduzieren möchten. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---- Fenster: öffnen / schließen / minimieren / maximieren ---- */
+@keyframes win-open {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes win-close {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.90) translateY(10px); }
+}
+@keyframes win-minimize {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.6) translateY(120px); }
+}
+.rmm-window {
+  animation: win-open 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: box-shadow 0.2s ease;
+}
+.rmm-window.win-closing { animation: win-close 0.16s ease forwards; }
+.rmm-window.win-minimizing { animation: win-minimize 0.2s ease forwards; }
+/* Sanftes Wachsen/Schrumpfen beim Maximieren/Wiederherstellen. */
+.rmm-window.win-animate-geo {
+  transition: left 0.2s cubic-bezier(0.22,1,0.36,1),
+              top 0.2s cubic-bezier(0.22,1,0.36,1),
+              width 0.2s cubic-bezier(0.22,1,0.36,1),
+              height 0.2s cubic-bezier(0.22,1,0.36,1);
+}
+
+/* ---- Sidebar-Zeilen: Hover & Auswahlwechsel (Client im Tenant wechseln) ---- */
+.tree-row {
+  transition: background 0.16s ease, color 0.16s ease,
+              box-shadow 0.16s ease, transform 0.12s ease;
+}
+.tree-row:hover { transform: translateX(2px); }
+/* TODO: .row-anim { animation: row-in 0.18s ease; } */
+@keyframes row-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+/* TODO:Aufklappende Kinder gleiten herein. */
+.tree-children { animation: children-in 0.18s ease; overflow: hidden; }
+/* TODO: @keyframes children-in {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 2000px; }
+}*/
+
+/* ---- Favoriten-Stern: Pop beim Umschalten ---- */
+.fav-star {
+  cursor: pointer;
+  margin-left: 6px;
+  color: var(--subtext);
+  opacity: 0.55;
+  transition: color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+}
+.tree-row:hover .fav-star { opacity: 1; }
+.fav-star.on { color: #f6c453; opacity: 1; }
+.fav-star:hover { transform: scale(1.25); }
+.fav-star.fav-pop { animation: fav-pop 0.32s cubic-bezier(0.34,1.56,0.64,1); }
+@keyframes fav-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.6) rotate(18deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+/* ---- Sidebar-Navigation: Dashboard-Tab + Favoriten-Sektion ---- */
+.sidebar-nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin: 4px 8px; border-radius: 8px;
+  cursor: pointer; color: var(--text); font-size: 13px;
+  transition: background 0.16s ease, transform 0.12s ease;
+}
+.sidebar-nav-item:hover { background: rgba(var(--accent-rgb), 0.12); transform: translateX(2px); }
+.sidebar-nav-item .nav-ico { color: var(--accent); }
+.sidebar-nav-item .nav-soon {
+  margin-left: auto; font-size: 10px; color: var(--subtext);
+  border: 1px solid var(--border); border-radius: 10px; padding: 1px 7px;
+}
+.nav-pulse { animation: nav-pulse 0.4s ease; }
+@keyframes nav-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.96); background: rgba(var(--accent-rgb), 0.25); }
+  100% { transform: scale(1); }
+}
+.sidebar-fav { margin: 2px 0 6px; }
+.sidebar-fav-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; margin: 0 8px; border-radius: 8px;
+  cursor: pointer; font-size: 12px; color: var(--subtext);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  transition: background 0.16s ease;
+}
+.sidebar-fav-header:hover { background: rgba(255,255,255,0.05); }
+.sidebar-fav-header .fav-caret { transition: transform 0.18s ease; display: inline-block; }
+.sidebar-fav-list { animation: children-in 0.2s ease; padding: 0 4px; }
+.fav-row { margin: 2px 6px; padding: 5px 8px; border-radius: 7px; cursor: pointer; }
+.fav-empty { font-size: 11px; color: var(--subtext); padding: 6px 12px; line-height: 1.4; }
+.sidebar-section-label {
+  font-size: 11px; color: var(--subtext); text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 8px 12px 4px; margin-top: 4px;
+}
+
+/* ---- Checkboxen: animiertes Häkchen ---- */
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 16px; height: 16px; border: 1.5px solid var(--border);
+  border-radius: 4px; background: var(--panel-2); cursor: pointer;
+  position: relative; vertical-align: middle;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.1s ease;
+}
+input[type="checkbox"]:hover { border-color: var(--accent); }
+input[type="checkbox"]:active { transform: scale(0.88); }
+input[type="checkbox"]:checked {
+  background: var(--accent); border-color: var(--accent);
+}
+input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 4px; top: 1px;
+  width: 4px; height: 8px; border: solid #0b0f14;
+  border-width: 0 2px 2px 0; transform: rotate(45deg) scale(0);
+  animation: check-pop 0.2s ease forwards;
+}
+@keyframes check-pop {
+  from { transform: rotate(45deg) scale(0); }
+  to   { transform: rotate(45deg) scale(1); }
+}
+
+/* ---- Buttons: sanftes Drücken ---- */
+button, .btn-primary, .action-btn, .taskbar-btn {
+  transition: background 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+button:active, .btn-primary:active, .action-btn:active, .taskbar-btn:active {
+  transform: scale(0.96);
+}
+
+/* ---- Taskbar-Fensterknöpfe: Hereingleiten ---- */
+.taskbar-window-btn { animation: row-in 0.16s ease; }
+
+/* ---- Modale/Panels: sanftes Erscheinen ---- */
+.panel { transition: box-shadow 0.2s ease, transform 0.15s ease; }

@@ -54,7 +54,8 @@ window.addEventListener("resize", () => {
 // Öffnen / Schließen / Fokus / Minimieren
 // -----------------------------------------------------------------
 
-export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460 }) {
+export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
+                            x = null, y = null, minimized = false, maximized = false, focus = true }) {
   const existing = state.windows.find((win) => win.key === key);
   if (existing) {
     // Fenster existiert schon -> wiederherstellen und nach vorne holen
@@ -67,10 +68,11 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   cascade = (cascade + 1) % 6;
   const win = {
     key, appId, title, props, clientColor,
-    x: 60 + cascade * 26,
-    y: 30 + cascade * 22,
+    x: x != null ? x : 60 + cascade * 26,
+    y: y != null ? y : 30 + cascade * 22,
     w, h,
-    minimized: false,
+    minimized: !!minimized,
+    maximized: !!maximized,
     _el: null,
     _rendered: false,
   };
@@ -78,8 +80,17 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   state.focusOrder.push(key);
 
   createWindowElement(win); // EINMALIG das DOM-Element bauen
-  clampWindowIntoView(win); // sicherstellen, dass es komplett sichtbar ist
+  if (win.maximized) {
+    // Maximiert wiederherstellen: gespeicherte Normalgeometrie merken, dann maximieren.
+    win._restore = { x: win.x, y: win.y, w: win.w, h: win.h };
+    win.maximized = false;      // toggleMaximize erwartet den Ausgangszustand
+    toggleMaximize(key);
+  } else {
+    clampWindowIntoView(win);
+  }
+  if (win.minimized && win._el) win._el.style.display = "none";
   applyFocusZIndex();
+  if (focus && !win.minimized) focusWindow(key);
   notifyChanged();
 }
 
@@ -97,6 +108,18 @@ export function clampWindowIntoView(win) {
 
 export function closeWindow(key) {
   // Falls die App eine Aufräum-Funktion registriert hat (z.B. VNC-Stream stoppen)
+  const win = state.windows.find((w) => w.key === key);
+  // Schließ-Animation abspielen, dann tatsächlich entfernen.
+  if (win && win._el && !win._closing) {
+    win._closing = true;
+    win._el.classList.add("win-closing");
+    setTimeout(() => _removeWindow(key), 150);
+    return;
+  }
+  _removeWindow(key);
+}
+
+function _removeWindow(key) {
   if (cleanupFns[key]) {
     try { cleanupFns[key](); } catch (e) { console.error(e); }
     delete cleanupFns[key];
@@ -122,7 +145,21 @@ export function toggleMinimize(key) {
   const win = state.windows.find((w) => w.key === key);
   if (!win) return;
   win.minimized = !win.minimized;
-  if (win._el) win._el.style.display = win.minimized ? "none" : "flex";
+  if (win._el) {
+    if (win.minimized) {
+      // Einklapp-Animation, dann ausblenden.
+      win._el.classList.add("win-minimizing");
+      setTimeout(() => {
+        win._el.style.display = "none";
+        win._el.classList.remove("win-minimizing");
+      }, 190);
+    } else {
+      win._el.style.display = "flex";
+      win._el.classList.remove("win-minimizing");
+      win._el.style.animation = "win-open 0.18s cubic-bezier(0.22,1,0.36,1)";
+      setTimeout(() => { if (win._el) win._el.style.animation = ""; }, 200);
+    }
+  }
   if (!win.minimized) focusWindow(key);
   notifyChanged();
 }
@@ -130,6 +167,10 @@ export function toggleMinimize(key) {
 export function toggleMaximize(key) {
   const win = state.windows.find((w) => w.key === key);
   if (!win || !win._el) return;
+
+  // Für die Dauer des Wechsels sanfte Geometrie-Transition aktivieren.
+  win._el.classList.add("win-animate-geo");
+  setTimeout(() => { if (win._el) win._el.classList.remove("win-animate-geo"); }, 230);
 
   if (win.maximized) {
     // Wiederherstellen: gemerkte Position/Größe zurücksetzen
@@ -299,6 +340,7 @@ function makeDraggable(handle, windowEl, win) {
     function onUp() {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      notifyChanged();   // neue Position speichern
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -342,6 +384,7 @@ function makeResizable(handle, windowEl, win, axis = "both") {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       document.body.style.userSelect = "";
+      notifyChanged();   // neue Größe speichern
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
