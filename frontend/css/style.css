@@ -152,8 +152,19 @@ body {
   border-right: 1px solid var(--border); display: flex; flex-direction: column;
   transition: width 0.15s ease;
 }
-.sidebar.collapsed { width: 46px; }
-.sidebar.collapsed .sidebar-tree, .sidebar.collapsed .btn-add-client, .sidebar.collapsed .sidebar-header span { display: none; }
+.sidebar.collapsed { width: 46px !important; cursor: pointer; }
+.sidebar.collapsed .sidebar-tree, .sidebar.collapsed .btn-add-client,
+.sidebar.collapsed .sidebar-header span, .sidebar.collapsed .sidebar-fav,
+.sidebar.collapsed .sidebar-section-label, .sidebar.collapsed .sidebar-nav-item { display: none; }
+/* Während des Ziehens keine Breiten-Animation (snappy), sonst "hinterherlaufen". */
+.sidebar.resizing { transition: none; }
+
+/* Zieh-Griff am rechten Rand der Sidebar (wie bei den App-Panels). */
+.sidebar-resizer {
+  width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent;
+  margin-left: -3px; z-index: 5; position: relative;
+}
+.sidebar-resizer:hover, .sidebar-resizer.active { background: var(--accent); opacity: 0.5; }
 
 .sidebar-header {
   display: flex; align-items: center; justify-content: space-between;

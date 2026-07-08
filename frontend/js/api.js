@@ -51,6 +51,7 @@ export const api = {
   deleteLocation: (location_id) => request(`/api/locations/${location_id}`, { method: "DELETE" }),
   createFolder: (location_id, name, parent_folder_id = null) =>
     request("/api/folders", { method: "POST", body: JSON.stringify({ location_id, name, parent_folder_id }) }),
+  deleteFolder: (folder_id) => request(`/api/folders/${folder_id}`, { method: "DELETE" }),
 
   // --- Clients ---
   getClients: () => request("/api/clients"),
@@ -82,6 +83,9 @@ export const api = {
   guacStatus: () => request("/api/guac/status"),
   createGuacToken: (protocol, params, clientId, hostname, record = true) =>
     request("/api/guac/token", { method: "POST", body: JSON.stringify({ protocol, params, client_id: clientId, hostname, record }) }),
+  getGuacProfile: (clientId) => request(`/api/guac/profile/${clientId}`),
+  saveGuacProfile: (clientId, profile) =>
+    request(`/api/guac/profile/${clientId}`, { method: "PUT", body: JSON.stringify(profile) }),
 
   // --- Benutzerverwaltung ---
   getUsers: () => request("/api/users"),

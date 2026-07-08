@@ -527,6 +527,34 @@ def create_folder(location_id: str, name: str, parent_folder_id: str | None = No
     return dict(_conn.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone())
 
 
+def delete_folder(folder_id: str) -> int:
+    """
+    Löscht einen Ordner samt aller Unterordner (rekursiv). Clients, die in einem
+    dieser Ordner lagen, verlieren nur ihre Ordner-Zuordnung (folder_id = NULL) -
+    sie bleiben in ihrer Location/ihrem Tenant. Gibt die Anzahl gelöschter Ordner
+    zurück.
+    """
+    # Alle betroffenen Ordner-IDs sammeln (der Ordner + alle Nachkommen).
+    to_delete = [folder_id]
+    frontier = [folder_id]
+    while frontier:
+        children = _conn.execute(
+            "SELECT id FROM folders WHERE parent_folder_id = ?", (frontier.pop(),)
+        ).fetchall()
+        for c in children:
+            to_delete.append(c["id"])
+            frontier.append(c["id"])
+    placeholders = ",".join("?" for _ in to_delete)
+    # Clients aus diesen Ordnern lösen (bleiben in Location/Tenant).
+    _conn.execute(
+        f"UPDATE clients SET folder_id = NULL WHERE folder_id IN ({placeholders})",
+        to_delete,
+    )
+    _conn.execute(f"DELETE FROM folders WHERE id IN ({placeholders})", to_delete)
+    _conn.commit()
+    return len(to_delete)
+
+
 # ------------------------------------------------------------------
 # CLIENTS
 # ------------------------------------------------------------------

@@ -74,6 +74,19 @@ async def create_folder(body: CreateFolderBody, user: dict = Depends(get_current
     return folder
 
 
+@router.delete("/api/folders/{folder_id}")
+async def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
+    """
+    Löscht einen Ordner samt Unterordnern. Clients darin verlieren nur ihre
+    Ordner-Zuordnung, bleiben aber in ihrer Location.
+    """
+    require_admin(user)
+    removed = db.delete_folder(folder_id)
+    db.add_audit_entry(user["username"], "folder.deleted", target=folder_id,
+                       details=f"removed_folders:{removed}")
+    return {"ok": True, "removed_folders": removed}
+
+
 @router.delete("/api/tenants/{tenant_id}")
 async def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
     """

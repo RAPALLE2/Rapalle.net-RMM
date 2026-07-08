@@ -202,6 +202,7 @@ async function startSession(user) {
   if (saved) {
     applyExpanded(saved);           // Aufklapp-Zustand
     if (saved.selection) state.selection = saved.selection;
+    if (saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
   }
 
   await refreshAll();
@@ -247,12 +248,30 @@ function restoreWindows(saved) {
 function initLoginForm() {
   // Verfügbare AD-Realms ins Dropdown laden (zusätzlich zu "Lokal")
   const realmSelect = document.getElementById("login-realm");
+  const userField = document.getElementById("login-username");
+
+  // Zuletzt genutzten Benutzernamen + Realm wiederherstellen (wie bei Proxmox).
+  // Gespeichert wird NUR Benutzername + Realm, NIEMALS das Passwort.
+  let savedRealm = null;
+  try {
+    const raw = localStorage.getItem("rmm_login_hint");
+    if (raw) {
+      const hint = JSON.parse(raw);
+      if (hint.username && userField) userField.value = hint.username;
+      savedRealm = hint.realm || null;
+    }
+  } catch {}
+
   api.getLoginRealms().then((realms) => {
     for (const r of realms) {
       const opt = document.createElement("option");
       opt.value = r.id;
       opt.textContent = r.name + " (AD)";
       realmSelect.appendChild(opt);
+    }
+    // Gespeicherten Realm wählen, sofern noch vorhanden.
+    if (savedRealm && [...realmSelect.options].some((o) => o.value === savedRealm)) {
+      realmSelect.value = savedRealm;
     }
   }).catch(() => { /* Backend evtl. noch nicht bereit - egal, "Lokal" reicht */ });
 
@@ -261,11 +280,16 @@ function initLoginForm() {
     const errBox = document.getElementById("login-error");
     errBox.classList.add("hidden");
     try {
+      const username = userField.value;
       const res = await api.login(
-        document.getElementById("login-username").value,
+        username,
         document.getElementById("login-password").value,
         realmSelect.value
       );
+      // Benutzername + Realm merken (Passwort NICHT).
+      try {
+        localStorage.setItem("rmm_login_hint", JSON.stringify({ username, realm: realmSelect.value }));
+      } catch {}
       saveToken(res.token);
       await startSession(res.user);
     } catch (err) {
@@ -375,10 +399,9 @@ function initMenusAndButtons() {
     })
   );
 
-  // Sidebar einklappen
-  document.getElementById("sidebar-collapse-btn").addEventListener("click", () => {
-    document.getElementById("sidebar").classList.toggle("collapsed");
-  });
+  // Sidebar: Ein-/Ausklappen, Breite ziehen, Klick-zum-Ausklappen. Details in
+  // initSidebarResize() unten (inkl. Persistenz der Breite/Zustand).
+  initSidebarResize();
 
   // Tenants/Standorte verwalten (Zahnrad in der Sidebar-Kopfzeile)
   document.getElementById("btn-manage-hierarchy").addEventListener("click", () => {
@@ -388,6 +411,92 @@ function initMenusAndButtons() {
   // "Client hinzufügen"
   document.getElementById("btn-add-client").addEventListener("click", () => {
     openWindow({ key: "add-client", appId: "add-client", title: "Client hinzufügen", w: 560, h: 600 });
+  });
+}
+
+// -----------------------------------------------------------------
+// Sidebar: Breite ziehen, Ein-/Ausklappen, Klick-zum-Ausklappen
+// -----------------------------------------------------------------
+const SB_COLLAPSED_W = 46;   // Breite im eingeklappten Zustand (siehe CSS)
+const SB_MIN_W = 170;        // kleinste "ausgeklappte" Breite
+const SB_MAX_W = 560;        // größte Breite
+const SB_SNAP = 90;          // zieht man schmaler als das -> gilt als eingeklappt
+
+// Wendet state.sidebar (Breite + collapsed) auf die DOM an.
+function applySidebarState() {
+  const sb = document.getElementById("sidebar");
+  if (!sb) return;
+  const s = state.sidebar || (state.sidebar = { width: 260, collapsed: false });
+  if (s.collapsed) {
+    sb.classList.add("collapsed");
+    // Breite bleibt per CSS auf 46px; inline-Breite merkt sich den Ausklapp-Wert.
+    sb.style.width = (s.width || 260) + "px";
+  } else {
+    sb.classList.remove("collapsed");
+    sb.style.width = (s.width || 260) + "px";
+  }
+}
+
+function initSidebarResize() {
+  const sb = document.getElementById("sidebar");
+  const resizer = document.getElementById("sidebar-resizer");
+  const collapseBtn = document.getElementById("sidebar-collapse-btn");
+  if (!sb || !resizer) return;
+
+  applySidebarState();
+
+  const persist = () => { try { scheduleSave(state); } catch {} };
+
+  function setCollapsed(collapsed) {
+    state.sidebar.collapsed = collapsed;
+    applySidebarState();
+    persist();
+  }
+
+  // « -Button: einklappen (nur relevant, wenn ausgeklappt).
+  collapseBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!state.sidebar.collapsed) setCollapsed(true);
+    else setCollapsed(false);
+  });
+
+  // Klick IRGENDWO auf die eingeklappte Sidebar -> wieder ausklappen.
+  sb.addEventListener("click", () => {
+    if (state.sidebar.collapsed) setCollapsed(false);
+  });
+
+  // --- Breite ziehen ---
+  let dragging = false;
+  function onMove(clientX) {
+    const left = sb.getBoundingClientRect().left;
+    let w = clientX - left;
+    if (w <= SB_SNAP) {
+      // So schmal wie eingeklappt gezogen -> als eingeklappt markieren,
+      // aber die zuletzt gewählte Ausklapp-Breite behalten (für's Wieder-Auf).
+      if (!state.sidebar.collapsed) { state.sidebar.collapsed = true; sb.classList.add("collapsed"); }
+      return;
+    }
+    // wieder ausgeklappt
+    if (state.sidebar.collapsed) { state.sidebar.collapsed = false; sb.classList.remove("collapsed"); }
+    w = Math.max(SB_MIN_W, Math.min(SB_MAX_W, w));
+    state.sidebar.width = w;
+    sb.style.width = w + "px";
+  }
+  resizer.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    dragging = true;
+    sb.classList.add("resizing");
+    resizer.classList.add("active");
+    document.body.style.userSelect = "none";
+  });
+  window.addEventListener("mousemove", (e) => { if (dragging) onMove(e.clientX); });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    sb.classList.remove("resizing");
+    resizer.classList.remove("active");
+    document.body.style.userSelect = "";
+    persist();
   });
 }
 

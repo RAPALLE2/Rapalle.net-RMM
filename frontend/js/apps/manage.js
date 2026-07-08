@@ -64,10 +64,21 @@ export function renderManage(body, win) {
         const isUncat = t.name === "Uncategorized";
         const locationRows = locations.map((l) => {
           const isDefaultLoc = isUncat && l.name === "Default";
+          // Ordner dieser Location (verschachtelt darstellen).
+          const locFolders = state.hierarchy.folders.filter((f) => f.location_id === l.id);
+          const renderFolderTree = (parentId, depth) =>
+            locFolders.filter((f) => (f.parent_folder_id || null) === parentId).map((f) => `
+              <div style="display:flex;align-items:center;padding:3px 0 3px ${40 + depth * 16}px;color:var(--subtext);font-size:12px">
+                <span style="flex:1">📁 ${esc(f.name)}</span>
+                <button class="action-btn" data-add-subfolder="${f.id}" data-loc="${l.id}" title="Unterordner anlegen">＋</button>
+                <button class="action-btn" data-del-folder="${f.id}" data-folder-name="${esc(f.name)}" title="Ordner löschen (Unterordner werden entfernt, Clients bleiben in der Location)">🗑</button>
+              </div>${renderFolderTree(f.id, depth + 1)}`).join("");
+          const foldersHtml = renderFolderTree(null, 0);
           return `<div style="display:flex;align-items:center;padding:4px 0 4px 20px;color:var(--subtext);font-size:13px">
             <span style="flex:1">📍 ${esc(l.name)}</span>
+            <button class="action-btn" data-add-folder="${l.id}" title="Ordner in diesem Standort anlegen">＋ Ordner</button>
             ${isDefaultLoc ? "" : `<button class="action-btn" data-del-loc="${l.id}" data-loc-name="${esc(l.name)}" title="Standort löschen (Clients wandern nach Uncategorized/Default)">🗑</button>`}
-          </div>`;
+          </div>${foldersHtml}`;
         }).join("") || `<div style="padding:4px 0 4px 20px;color:var(--subtext);font-size:12px">— noch keine Standorte —</div>`;
 
         return `
@@ -102,6 +113,44 @@ export function renderManage(body, win) {
           } catch (e) {
             alert("Fehler: " + e.message);
           }
+        })
+      );
+
+      // ---- Ordner anlegen (in einer Location, oberste Ebene) ----
+      listEl.querySelectorAll("[data-add-folder]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const name = prompt("Name des neuen Ordners:");
+          if (!name || !name.trim()) return;
+          try {
+            await api.createFolder(btn.dataset.addFolder, name.trim(), null);
+            if (onChanged) await onChanged();
+            draw();
+          } catch (e) { alert("Fehler: " + e.message); }
+        })
+      );
+
+      // ---- Unterordner anlegen (unter einem bestehenden Ordner) ----
+      listEl.querySelectorAll("[data-add-subfolder]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const name = prompt("Name des Unterordners:");
+          if (!name || !name.trim()) return;
+          try {
+            await api.createFolder(btn.dataset.loc, name.trim(), btn.dataset.addSubfolder);
+            if (onChanged) await onChanged();
+            draw();
+          } catch (e) { alert("Fehler: " + e.message); }
+        })
+      );
+
+      // ---- Ordner löschen ----
+      listEl.querySelectorAll("[data-del-folder]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          if (!confirm(`Ordner "${btn.dataset.folderName}" löschen?\n\nUnterordner werden mitentfernt. Clients bleiben in ihrer Location (verlieren nur die Ordner-Zuordnung).`)) return;
+          try {
+            await api.deleteFolder(btn.dataset.delFolder);
+            if (onChanged) await onChanged();
+            draw();
+          } catch (e) { alert("Fehler: " + e.message); }
         })
       );
 

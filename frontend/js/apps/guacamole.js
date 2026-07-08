@@ -70,7 +70,10 @@ export function renderGuacamole(body, win) {
           </select>
         </div>
         <div id="guac-form-msg-${win.key}" style="margin-top:10px;font-size:12px;color:var(--subtext)"></div>
-        <button class="btn-primary" id="gf-connect-${win.key}" style="width:auto;margin-top:12px">🔌 Verbinden</button>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn-primary" id="gf-connect-${win.key}" style="width:auto">🔌 Verbinden</button>
+          ${clientId ? `<button class="action-btn" id="gf-save-${win.key}" title="Login für diesen Client speichern (ohne Passwort)">💾 Login speichern</button>` : ""}
+        </div>
       </div>
 
       <div id="guac-display-${win.key}" tabindex="0"
@@ -502,6 +505,48 @@ export function renderGuacamole(body, win) {
 
   connectBtn.addEventListener("click", connect);
   discBtn.addEventListener("click", () => { cleanupClient(); setStatus("Getrennt", "var(--subtext)"); });
+
+  // --- Gespeichertes Login (ohne Passwort) pro Client laden/speichern ---
+  const userInput = body.querySelector(`#gf-user-${win.key}`);
+  const hostInput = body.querySelector(`#gf-host-${win.key}`);
+  const saveBtn = body.querySelector(`#gf-save-${win.key}`);
+
+  if (clientId) {
+    api.getGuacProfile(clientId).then((res) => {
+      const prof = res && res.profile;
+      if (!prof) return;
+      // Vorhandene Werte NICHT überschreiben, wenn sie schon aus den Props kamen
+      if (prof.protocol) { protoSel.value = prof.protocol; syncProtoUI(); }
+      if (prof.host) hostInput.value = prof.host;
+      if (prof.port) portInput.value = prof.port;
+      if (prof.username) userInput.value = prof.username;
+      if (prof.domain) domainInput.value = prof.domain;
+      if (prof.resolution) resSel.value = prof.resolution;
+      if (prof.quality) qualSel.value = prof.quality;
+      formMsg.innerHTML = `<span style="color:var(--subtext)">Gespeichertes Login geladen (Passwort bitte eingeben).</span>`;
+    }).catch(() => {});
+  }
+
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const profile = {
+        protocol: protoSel.value,
+        host: hostInput.value.trim(),
+        port: portInput.value.trim(),
+        username: userInput.value,
+        domain: domainInput.value.trim(),
+        resolution: resSel.value,
+        quality: qualSel.value,
+      };
+      try {
+        await api.saveGuacProfile(clientId, profile);
+        window.notify?.("Guacamole-Login gespeichert (ohne Passwort)", "success");
+      } catch (e) {
+        window.notify?.("Speichern fehlgeschlagen: " + e.message, "error");
+      }
+    });
+  }
+
   cadBtn.addEventListener("click", () => {
     if (!client) return;
     // Strg+Alt+Entf: Keysyms 0xFFE3 (Ctrl), 0xFFE9 (Alt), 0xFFFF (Delete)

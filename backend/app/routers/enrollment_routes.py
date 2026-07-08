@@ -448,7 +448,14 @@ Write-Host "(Log-Datei bei Problemen: $InstallDir\\agent.log)"
 # Onboarding-Token, weil ein bereits installierter Agent seine Identität über
 # die Datei ".device-id" behält - ein Update/Deinstall ändert daran nichts.
 # Der Agent ruft diese Skripte selbst auf, wenn er die Events "update-agent"
-# bzw. "uninstall-agent" empfängt (siehe agent.py).
+# bzw. "uninstall-agent" empfängt (siehe agent.py, _run_dist_command).
+#
+# WICHTIG (Zuverlässigkeit):
+#  - Update MUSS den Dienst am Ende NEU STARTEN (Autostart-Unit ggf. neu
+#    schreiben, dann restart/Start-ScheduledTask).
+#  - Uninstall läuft SYNCHRON (kein Hintergrund-Job): Der Agent startet das
+#    Skript in einem eigenen systemd-Scope bzw. als losgelöster Prozess, sodass
+#    es den Stop des eigenen Dienstes überlebt und die Dateien wirklich löscht.
 # ==========================================================================
 
 @router.get("/agent-dist/agent.zip")
@@ -464,8 +471,12 @@ async def agent_dist_zip(request: Request):
 
 @router.get("/agent-dist/update.sh", response_class=PlainTextResponse)
 async def agent_update_sh(request: Request):
-    """Reinstalliert/aktualisiert den Agenten (Linux) - identisch zur Erstinstallation,
-    aber ohne Token. Bestehende .device-id bleibt erhalten -> gleiche Client-Identität."""
+    """
+    Aktualisiert den Agenten (Linux) und startet den Autostart-Dienst NEU.
+    Die systemd-Unit wird sicherheitshalber neu geschrieben, damit der Neustart
+    auch dann klappt, wenn die Unit fehlte/veraltet war. Bestehende .device-id
+    bleibt erhalten -> gleiche Client-Identität.
+    """
     backend_url = _backend_url(request)
     script = f"""#!/bin/bash
 # RAPALLE.net RMM - Agent-Update (Linux)
@@ -477,20 +488,50 @@ sudo mkdir -p "$INSTALL_DIR"
 rm -rf /tmp/rapalle-agent-extract
 mkdir -p /tmp/rapalle-agent-extract
 unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract >/dev/null
-# Laufenden Dienst stoppen, damit die alte agent.py nicht weiterläuft.
+
+# Laufenden Agenten stoppen, damit die alte agent.py nicht weiterlaeuft.
 sudo systemctl stop rapalle-agent 2>/dev/null || true
-# .env NICHT überschreiben (behält evtl. angepasste Werte) - agent.py ersetzen.
-sudo find /tmp/rapalle-agent-extract/agent -maxdepth 1 -type f ! -name '.env' -exec cp {{}} "$INSTALL_DIR/" \\;
-# BACKEND_URL sicherheitshalber aktualisieren.
+sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
+
+# Alle Dateien AUSSER .env ersetzen (.env behaelt Konfiguration).
+sudo find /tmp/rapalle-agent-extract/agent -maxdepth 1 -type f ! -name '.env' -exec cp {{}} "$INSTALL_DIR/" ';'
+# .env anlegen, falls noch keine da ist; danach BACKEND_URL aktualisieren.
+if [ ! -f "$INSTALL_DIR/.env" ] && [ -f /tmp/rapalle-agent-extract/agent/.env ]; then
+  sudo cp /tmp/rapalle-agent-extract/agent/.env "$INSTALL_DIR/.env"
+fi
 if [ -f "$INSTALL_DIR/.env" ]; then
   sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
 fi
+
 cd "$INSTALL_DIR"
-if [ -x "$INSTALL_DIR/venv/bin/pip" ]; then
+# Python-Interpreter bestimmen (venv bevorzugt) und Abhaengigkeiten nachziehen.
+if [ -x "$INSTALL_DIR/venv/bin/python" ]; then
+  PYEXEC="$INSTALL_DIR/venv/bin/python"
   sudo ./venv/bin/pip install --quiet -r requirements.txt || true
+else
+  PYEXEC="$(command -v python3)"
 fi
-sudo systemctl daemon-reload 2>/dev/null || true
-sudo systemctl start rapalle-agent 2>/dev/null || true
+
+# Autostart-Unit (neu) schreiben -> garantiert vorhanden fuer den Neustart.
+sudo tee /etc/systemd/system/rapalle-agent.service > /dev/null <<UNIT
+[Unit]
+Description=RAPALLE.net RMM Agent
+After=network.target
+
+[Service]
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$PYEXEC $INSTALL_DIR/agent.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable rapalle-agent 2>/dev/null || true
+# NEU STARTEN (nicht nur start) - bringt den Agenten mit neuer Version hoch.
+sudo systemctl restart rapalle-agent
 echo "Update fertig - Agent neu gestartet."
 """
     return PlainTextResponse(script, media_type="text/x-sh")
@@ -498,7 +539,8 @@ echo "Update fertig - Agent neu gestartet."
 
 @router.get("/agent-dist/update.ps1", response_class=PlainTextResponse)
 async def agent_update_ps1(request: Request):
-    """Reinstalliert/aktualisiert den Agenten (Windows) ohne Token."""
+    """Aktualisiert den Agenten (Windows) und startet den Autostart-Task NEU
+    (Task wird bei Bedarf neu registriert)."""
     backend_url = _backend_url(request)
     script = f"""# RAPALLE.net RMM - Agent-Update (Windows) - als Administrator ausfuehren
 $ErrorActionPreference = "Stop"
@@ -507,14 +549,16 @@ Write-Host "Lade neueste Agent-Version..."
 Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
 if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
 Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
+
 # Laufenden Agenten stoppen (Task + Prozesse), damit die alte agent.py endet.
 try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
 try {{
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-        Where-Object {{ $_.CommandLine -like "*agent.py*" }} |
+        Where-Object {{ $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" }} |
         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 }} catch {{}}
 Start-Sleep -Seconds 2
+
 # Alle Dateien AUSSER .env ersetzen (behaelt Konfiguration/Device-ID).
 Get-ChildItem "$env:TEMP\\rapalle-agent-extract\\agent" -File | Where-Object {{ $_.Name -ne ".env" }} |
     ForEach-Object {{ Copy-Item $_.FullName -Destination $InstallDir -Force }}
@@ -524,6 +568,19 @@ if (Test-Path "$InstallDir\\.env") {{
 if (Test-Path "$InstallDir\\venv\\Scripts\\pip.exe") {{
     & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt" --quiet
 }}
+
+# Autostart-Task neu registrieren, falls er fehlt.
+$task = Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue
+if (-not $task) {{
+    $CurrentUser = "$env:USERDOMAIN\\$env:USERNAME"
+    $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
+    $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
+    $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+    Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+}}
+
+# NEU STARTEN.
 Start-ScheduledTask -TaskName "RapalleRmmAgent"
 Write-Host "Update fertig - Agent neu gestartet."
 """
@@ -532,7 +589,12 @@ Write-Host "Update fertig - Agent neu gestartet."
 
 @router.get("/agent-dist/uninstall.sh", response_class=PlainTextResponse)
 async def agent_uninstall_sh(request: Request):
-    """Deinstalliert den Agenten (Linux): Dienst weg, Dateien weg."""
+    """
+    Deinstalliert den Agenten (Linux) SYNCHRON: Dienst stoppen/entfernen,
+    Prozesse killen, dann Programmordner löschen. Läuft in einem eigenen
+    systemd-Scope (siehe agent.py), daher überlebt das Skript den Stop des
+    eigenen Dienstes und löscht die Dateien tatsächlich. KEIN Hintergrund-Job.
+    """
     script = """#!/bin/bash
 # RAPALLE.net RMM - Agent-Deinstallation (Linux)
 INSTALL_DIR="/opt/rapalle-rmm-agent"
@@ -541,31 +603,37 @@ sudo systemctl stop rapalle-agent 2>/dev/null || true
 sudo systemctl disable rapalle-agent 2>/dev/null || true
 sudo rm -f /etc/systemd/system/rapalle-agent.service
 sudo systemctl daemon-reload 2>/dev/null || true
-# Prozesse sicherheitshalber beenden.
-sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
-# Programmordner (inkl. .device-id) entfernen. Nach einem kurzen Delay, damit
-# dieses Skript (das evtl. aus dem Ordner heraus laeuft) noch fertig wird.
-( sleep 3; sudo rm -rf "$INSTALL_DIR" ) &
-echo "Agent deinstalliert."
+# Prozesse sicher beenden (Agent haengt sonst im Speicher / bleibt online).
+sudo pkill -9 -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
+sleep 1
+# Programmordner (inkl. .device-id) SYNCHRON entfernen. Das Skript wurde per
+# 'curl | bash' aus dem Speicher gestartet und braucht INSTALL_DIR nicht mehr.
+sudo rm -rf "$INSTALL_DIR"
+echo "Agent deinstalliert - Dateien entfernt."
 """
     return PlainTextResponse(script, media_type="text/x-sh")
 
 
 @router.get("/agent-dist/uninstall.ps1", response_class=PlainTextResponse)
 async def agent_uninstall_ps1(request: Request):
-    """Deinstalliert den Agenten (Windows): Task weg, Prozesse weg, Dateien weg."""
+    """
+    Deinstalliert den Agenten (Windows) SYNCHRON: Task entfernen, Prozesse
+    killen, dann Programmordner löschen (kein Start-Job, der beim Beenden der
+    Shell abgebrochen würde).
+    """
     script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows) - als Administrator ausfuehren
 $ErrorActionPreference = "SilentlyContinue"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
 Write-Host "Stoppe und entferne Agent-Autostart..."
 Stop-ScheduledTask -TaskName "RapalleRmmAgent"
 Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false
+# Agent-Prozesse beenden (breiter Filter: Pfad ODER agent.py), sonst bleibt er online.
 Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-    Where-Object { $_.CommandLine -like "*agent.py*" } |
+    Where-Object { $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Start-Sleep -Seconds 2
-# Programmordner nach kurzem Delay entfernen (dieses Skript laeuft evtl. daraus).
-Start-Job -ScriptBlock { Start-Sleep -Seconds 3; Remove-Item -Recurse -Force "C:\\Program Files\\RapalleRmmAgent" } | Out-Null
-Write-Host "Agent deinstalliert."
+# Programmordner SYNCHRON entfernen (dieses Skript laeuft NICHT aus dem Ordner).
+Remove-Item -Recurse -Force $InstallDir
+Write-Host "Agent deinstalliert - Dateien entfernt."
 """
     return PlainTextResponse(script, media_type="text/plain")

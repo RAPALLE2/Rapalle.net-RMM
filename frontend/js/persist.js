@@ -44,6 +44,7 @@ export function saveNow(state) {
       v: 1,
       expanded: _getExpanded(),
       selection: state.selection || null,
+      sidebar: state.sidebar || null,
       focusOrder: state.focusOrder || [],
       windows: (state.windows || []).map((w) => ({
         key: w.key,

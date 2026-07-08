@@ -66,6 +66,56 @@ async def guac_token(body: GuacTokenBody, user: dict = Depends(get_current_user)
 
 
 # ------------------------------------------------------------------
+# Gespeicherte Guacamole-Logins PRO CLIENT (alles außer Passwort).
+# Wird als JSON im settings-Key/Value-Speicher abgelegt (Key
+# "guacprofile:<client_id>"). Das Passwort wird bewusst NIE gespeichert.
+# ------------------------------------------------------------------
+import json as _json
+from pydantic import BaseModel as _BaseModel
+
+
+class GuacProfileBody(_BaseModel):
+    protocol: str | None = None
+    host: str | None = None
+    port: str | None = None
+    username: str | None = None
+    domain: str | None = None
+    resolution: str | None = None
+    quality: str | None = None
+
+
+def _guac_profile_key(client_id: str) -> str:
+    return f"guacprofile:{client_id}"
+
+
+@router.get("/profile/{client_id}")
+async def get_guac_profile(client_id: str, user: dict = Depends(get_current_user)):
+    """Gespeichertes Guacamole-Login eines Clients (ohne Passwort) lesen."""
+    if not can_access_client(user, client_id):
+        from fastapi import HTTPException
+        raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_guacamole", client_id)
+    raw = db.get_setting(_guac_profile_key(client_id), "")
+    try:
+        return {"profile": _json.loads(raw) if raw else None}
+    except Exception:
+        return {"profile": None}
+
+
+@router.put("/profile/{client_id}")
+async def save_guac_profile(client_id: str, body: GuacProfileBody, user: dict = Depends(get_current_user)):
+    """Guacamole-Login eines Clients speichern. Passwort wird NIE gespeichert."""
+    if not can_access_client(user, client_id):
+        from fastapi import HTTPException
+        raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_guacamole", client_id)
+    profile = {k: v for k, v in body.model_dump().items() if v not in (None, "")}
+    db.set_setting(_guac_profile_key(client_id), _json.dumps(profile))
+    db.add_audit_entry(user["username"], "guac.profile_saved", target=client_id)
+    return {"ok": True, "profile": profile}
+
+
+# ------------------------------------------------------------------
 # WebSocket-Tunnel. Wird von main.py als /guac/tunnel registriert.
 # Authentifizierung läuft über das Einmal-Token (WS kann keine Header setzen).
 # ------------------------------------------------------------------

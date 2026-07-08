@@ -191,6 +191,16 @@ function fillOverview(el, client) {
   // --- METRICS ---
   const cpuPct = m.cpuLoad ?? 0;
   const ramPct = m.memTotal ? (m.memUsed / m.memTotal) * 100 : 0;
+  const swapTotal = m.swapTotal ?? 0;
+  const swapUsed = m.swapUsed ?? 0;
+  const swapPct = swapTotal ? (swapUsed / swapTotal) * 100 : 0;
+
+  // Optionaler Swap-Donut (nur wenn der Client überhaupt Swap hat, z.B. Linux).
+  const swapDonut = swapTotal > 0 ? `
+    <div class="donut-wrap">
+      ${gradientDonutSvg(swapPct, RAM_GRADIENT, "Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`)}
+      <div class="metric-sub">${t("free")}: ${formatBytes(swapTotal - swapUsed)}</div>
+    </div>` : "";
 
   // Obere Reihe: nur CPU-Donut + Infos und RAM-Donut + Infos.
   // Der Netzwerk-Verlauf wandert nach unten zu den CPU-/RAM-Charts, damit
@@ -206,6 +216,7 @@ function fillOverview(el, client) {
       ${gradientDonutSvg(ramPct, RAM_GRADIENT, "RAM", `${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}`)}
       <div class="metric-sub">${t("free")}: ${formatBytes(m.memAvailable ?? (m.memTotal - m.memUsed))}</div>
     </div>
+    ${swapDonut}
   `;
   target.appendChild(topRow);
 

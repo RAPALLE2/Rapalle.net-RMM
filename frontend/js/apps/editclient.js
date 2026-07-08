@@ -33,6 +33,23 @@ export function renderEditClient(body, win) {
       .join("");
   }
 
+  // Ordner einer Location als (verschachtelte) Optionsliste. Unterordner werden
+  // mit Einrückung dargestellt. selectedId wird vorausgewählt.
+  function folderOptionsFor(locationId, selectedId) {
+    if (!locationId) return "";
+    const all = state.hierarchy.folders.filter((f) => f.location_id === locationId);
+    const out = [];
+    const walk = (parentId, depth) => {
+      all.filter((f) => (f.parent_folder_id || null) === parentId).forEach((f) => {
+        const indent = depth > 0 ? "\u00A0\u00A0".repeat(depth) + "↳ " : "";
+        out.push(`<option value="${f.id}" ${selectedId === f.id ? "selected" : ""}>${indent}${esc(f.name)}</option>`);
+        walk(f.id, depth + 1);
+      });
+    };
+    walk(null, 0);
+    return out.join("");
+  }
+
   body.innerHTML = `
     <div class="settings-section">
       <div class="form-row">
@@ -48,6 +65,11 @@ export function renderEditClient(body, win) {
       <div class="form-row">
         <label>Standort</label>
         <select id="ec-location"><option value="">— keiner —</option>${locationOptionsFor(client.tenant_id)}</select>
+      </div>
+
+      <div class="form-row">
+        <label>Ordner</label>
+        <select id="ec-folder"><option value="">— keiner —</option>${folderOptionsFor(client.location_id, client.folder_id)}</select>
       </div>
 
       <div class="form-row">
@@ -98,8 +120,15 @@ export function renderEditClient(body, win) {
 
   const tenantSel = body.querySelector("#ec-tenant");
   const locationSel = body.querySelector("#ec-location");
+  const folderSel = body.querySelector("#ec-folder");
   const devTypeSel = body.querySelector("#ec-devtype");
   const hostRow = body.querySelector("#ec-host-row");
+
+  // Ordner-Auswahl passend zur aktuell gewählten Location neu aufbauen.
+  function refreshFolders() {
+    folderSel.innerHTML = `<option value="">— keiner —</option>` +
+      folderOptionsFor(locationSel.value, null);
+  }
 
   // Host-Auswahl nur zeigen, wenn VM oder LXC gewählt ist
   devTypeSel.addEventListener("change", () => {
@@ -108,13 +137,18 @@ export function renderEditClient(body, win) {
   });
 
   // Wenn der Tenant gewechselt wird, die Standort-Auswahl passend neu befüllen
+  // (und danach die Ordner-Auswahl zurücksetzen, da sie an der Location hängt).
   tenantSel.addEventListener("change", () => {
     locationSel.innerHTML = `<option value="">— keiner —</option>` +
       state.hierarchy.locations
         .filter((l) => l.tenant_id === tenantSel.value)
         .map((l) => `<option value="${l.id}">${esc(l.name)}</option>`)
         .join("");
+    refreshFolders();
   });
+
+  // Standortwechsel -> Ordner-Auswahl neu aufbauen.
+  locationSel.addEventListener("change", refreshFolders);
 
   body.querySelector("#ec-save").addEventListener("click", async () => {
     try {
@@ -122,6 +156,7 @@ export function renderEditClient(body, win) {
         hostname: body.querySelector("#ec-name").value,
         tenant_id: tenantSel.value || null,
         location_id: locationSel.value || null,
+        folder_id: folderSel.value || null,
         color: body.querySelector("#ec-color").value,
         status_override: body.querySelector("#ec-status").value || null,
         active: body.querySelector("#ec-active").checked,

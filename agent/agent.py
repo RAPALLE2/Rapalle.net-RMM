@@ -251,6 +251,15 @@ def collect_metrics() -> dict:
     """
     cpu_percent = psutil.cpu_percent(interval=0.5)
     memory = psutil.virtual_memory()
+    # Swap / Auslagerungsspeicher (auf Linux die "swap partition/file", auf
+    # Windows die Auslagerungsdatei). swap_memory() gibt es auf beiden Systemen.
+    try:
+        swap = psutil.swap_memory()
+        swap_used = int(swap.used)
+        swap_total = int(swap.total)
+    except Exception:
+        swap_used = 0
+        swap_total = 0
     disk_path = "C:\\" if IS_WINDOWS else "/"
     disk = psutil.disk_usage(disk_path)
 
@@ -291,6 +300,8 @@ def collect_metrics() -> dict:
         "memUsed": memory.total - memory.available,
         "memTotal": memory.total,
         "memAvailable": memory.available,   # freier/verfügbarer RAM
+        "swapUsed": swap_used,               # belegter Auslagerungsspeicher (Bytes)
+        "swapTotal": swap_total,             # gesamter Auslagerungsspeicher (Bytes)
         "diskUsed": disk.used,
         "diskTotal": disk.total,
         "disks": disks,

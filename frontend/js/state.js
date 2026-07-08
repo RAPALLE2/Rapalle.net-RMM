@@ -15,6 +15,7 @@ export const state = {
   selection: null,         // aktuell in der Sidebar ausgewählt: {type: "tenant"|"location"|"client", id}
   windows: [],             // aktuell offene Fenster: {key, appId, title, x, y, w, h, minimized, props}
   focusOrder: [],          // Reihenfolge der Fenster nach zuletzt fokussiert (letztes = oberstes)
+  sidebar: { width: 260, collapsed: false },  // Breite + Ein-/Ausklapp-Zustand (persistiert)
 };
 
 export function findClient(id) {
