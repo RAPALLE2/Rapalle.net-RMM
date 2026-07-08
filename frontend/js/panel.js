@@ -323,12 +323,25 @@ async function handleQuickAction(action, client) {
     return;
   }
   if (action === "uninstall") {
-    if (!confirm(`${client.hostname}: Agent WIRKLICH deinstallieren?\n\nDer Autostart-Dienst wird entfernt und die Programmdateien gelöscht.\nDer Client geht offline und erscheint nicht mehr automatisch.\n(Der Eintrag im Dashboard bleibt, bis du ihn löschst.)`)) return;
+    if (!confirm(`${client.hostname}: Agent WIRKLICH deinstallieren?\n\n` +
+      `Es wird: 1) der Agent gestoppt, 2) alle Agent-Daten auf dem Client gelöscht,\n` +
+      `3) der Client aus dem Dashboard entfernt – aber nur, wenn er wirklich offline geht.\n\n` +
+      `Das kann bis zu 60 Sekunden dauern. Bitte warten.`)) return;
+    window.notify?.(`Deinstalliere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000);
     try {
-      await api.uninstallAgent(client.id);
-      window.notify?.(`Deinstallation auf ${client.hostname} gestartet. Der Client geht in Kürze offline.`, "success", 8000);
+      const res = await api.uninstallAgent(client.id);
+      if (res && res.removed) {
+        // Aus dem Dashboard entfernt. Auswahl leeren, falls dieser Client gewählt war.
+        if (state.selection && state.selection.type === "client" && state.selection.id === client.id) {
+          state.selection = null;
+        }
+        window.notify?.(`Agent auf ${client.hostname} deinstalliert und aus dem Dashboard entfernt.`, "success", 8000);
+        renderMainContent();
+      } else {
+        window.notify?.(`Deinstallation auf ${client.hostname} abgeschlossen.`, "success", 6000);
+      }
     } catch (e) {
-      window.notify?.("Deinstallation fehlgeschlagen: " + e.message, "error");
+      window.notify?.("Deinstallation fehlgeschlagen: " + e.message, "error", 12000);
     }
   }
 }

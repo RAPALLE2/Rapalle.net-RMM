@@ -241,18 +241,65 @@ async def update_client_agent(client_id: str, user: dict = Depends(get_current_u
 @router.post("/{client_id}/uninstall-agent")
 async def uninstall_client_agent(client_id: str, user: dict = Depends(get_current_user)):
     """
-    Weist den Agenten an, sich selbst zu DEINSTALLIEREN: Er lädt das
-    Uninstall-Skript vom Backend und führt es in einer Shell aus (stoppt den
-    Autostart-Dienst/Task und entfernt die Programmdateien). Danach ist der
-    Client offline und erscheint nicht mehr neu - der DB-Eintrag bleibt, bis
-    er im Dashboard gelöscht wird.
+    Deinstalliert den Agenten vollständig und entfernt den Client aus dem
+    Dashboard - aber NUR, wenn er wirklich verschwindet. Ablauf:
+
+      1. Uninstall-Befehl an den Agenten schicken (stoppt den Dienst und löscht
+         ALLE Agent-Daten auf dem Client, siehe agent.py / uninstall.sh|ps1).
+      2. Bis zu 60 Sekunden warten, bis der Client wirklich offline geht
+         (= der Agent-Prozess ist beendet, die Socket-Verbindung getrennt).
+      3a. Geht er in dieser Zeit offline -> Client aus der Datenbank entfernen
+          (verschwindet aus dem Dashboard) und Erfolg melden.
+      3b. Ist er nach 60 s IMMER NOCH online -> Fehlermeldung; der Client wird
+          NICHT entfernt (die Deinstallation ist offenbar fehlgeschlagen).
     """
     _require_client_perm(user, client_id, "manage_agent")
+
+    client = db.get_client(client_id)
+    if not client:
+        raise HTTPException(404, "Client nicht gefunden")
+
+    # Der Agent muss verbunden sein, damit er den Uninstall-Befehl empfangen und
+    # ausführen kann. Einen bereits offline/toten Client entfernt man über den
+    # normalen "Löschen"-Button im Bearbeiten-Dialog.
+    if not state.is_online(client_id):
+        raise HTTPException(
+            409,
+            "Der Agent ist nicht verbunden. Eine Fern-Deinstallation ist nur bei "
+            "verbundenem Agent möglich. Einen bereits offline Client kannst du über "
+            "'Bearbeiten → Löschen' aus dem Dashboard entfernen.",
+        )
+
+    # 1. Uninstall anstoßen
     ok = await send_to_agent(client_id, "uninstall-agent", {})
     if not ok:
         raise HTTPException(503, "Client ist offline")
-    db.add_audit_entry(user["username"], "agent.uninstall_triggered", target=client_id)
-    return {"ok": True}
+    db.add_audit_entry(user["username"], "agent.uninstall_triggered", target=client_id,
+                       details=client.get("hostname"))
+
+    # 2. Auf "offline" warten (max. 60 s, alle 2 s prüfen).
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        await asyncio.sleep(2.0)
+        if not state.is_online(client_id):
+            # 3a. Wirklich weg -> aus dem Dashboard entfernen.
+            db.delete_client(client_id)
+            db.add_audit_entry(user["username"], "agent.uninstalled", target=client_id,
+                               details=client.get("hostname"))
+            # Alle Dashboards über die geänderte Client-Liste informieren.
+            from app.sockets import sio
+            await sio.emit("clients:changed", namespace="/dashboard")
+            return {"ok": True, "removed": True, "hostname": client.get("hostname")}
+
+    # 3b. Timeout: Agent ist nicht offline gegangen -> Fehler, Client bleibt.
+    db.add_audit_entry(user["username"], "agent.uninstall_timeout", target=client_id,
+                       details=client.get("hostname"))
+    raise HTTPException(
+        504,
+        "Der Agent ist nicht innerhalb von 60 Sekunden offline gegangen. "
+        "Die Deinstallation ist möglicherweise fehlgeschlagen - der Client wurde "
+        "NICHT aus dem Dashboard entfernt. Bitte den Client prüfen und ggf. erneut versuchen.",
+    )
 
 
 @router.get("/{client_id}/rdp-file")

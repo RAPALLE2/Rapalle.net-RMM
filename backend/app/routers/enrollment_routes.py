@@ -597,19 +597,43 @@ async def agent_uninstall_sh(request: Request):
     """
     script = """#!/bin/bash
 # RAPALLE.net RMM - Agent-Deinstallation (Linux)
+# Laeuft in einem eigenen systemd-Scope (siehe agent.py) und ueberlebt daher
+# den Stop des eigenen Dienstes. Reihenfolge: Dienst stoppen/entfernen ->
+# Prozesse killen -> Programmordner loeschen (mit Wiederholung).
 INSTALL_DIR="/opt/rapalle-rmm-agent"
-echo "Stoppe und entferne Agent-Dienst..."
+
+echo "1) Stoppe und entferne Agent-Dienst..."
 sudo systemctl stop rapalle-agent 2>/dev/null || true
 sudo systemctl disable rapalle-agent 2>/dev/null || true
+sudo systemctl kill rapalle-agent 2>/dev/null || true
 sudo rm -f /etc/systemd/system/rapalle-agent.service
 sudo systemctl daemon-reload 2>/dev/null || true
-# Prozesse sicher beenden (Agent haengt sonst im Speicher / bleibt online).
-sudo pkill -9 -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
-sleep 1
-# Programmordner (inkl. .device-id) SYNCHRON entfernen. Das Skript wurde per
-# 'curl | bash' aus dem Speicher gestartet und braucht INSTALL_DIR nicht mehr.
-sudo rm -rf "$INSTALL_DIR"
-echo "Agent deinstalliert - Dateien entfernt."
+sudo systemctl reset-failed rapalle-agent 2>/dev/null || true
+
+echo "2) Beende Agent-Prozesse..."
+# Mehrere Muster, damit der Prozess sicher getroffen wird (venv-Pfad, agent.py,
+# Installationsordner). Zwei Runden, dann Kontrolle.
+for i in 1 2 3; do
+  sudo pkill -9 -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
+  sudo pkill -9 -f "$INSTALL_DIR" 2>/dev/null || true
+  sudo pkill -9 -f "rapalle-rmm-agent" 2>/dev/null || true
+  sleep 1
+  if ! pgrep -f "$INSTALL_DIR/agent.py" >/dev/null 2>&1; then break; fi
+done
+
+echo "3) Loesche alle Agent-Daten..."
+# Bis zu 5 Versuche, falls eine Datei noch kurz gehalten wird.
+for i in 1 2 3 4 5; do
+  sudo rm -rf "$INSTALL_DIR" 2>/dev/null || true
+  [ ! -e "$INSTALL_DIR" ] && break
+  sleep 1
+done
+
+if [ -e "$INSTALL_DIR" ]; then
+  echo "WARNUNG: $INSTALL_DIR konnte nicht vollstaendig entfernt werden."
+else
+  echo "Agent deinstalliert - alle Daten entfernt."
+fi
 """
     return PlainTextResponse(script, media_type="text/x-sh")
 
@@ -624,16 +648,34 @@ async def agent_uninstall_ps1(request: Request):
     script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows) - als Administrator ausfuehren
 $ErrorActionPreference = "SilentlyContinue"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
-Write-Host "Stoppe und entferne Agent-Autostart..."
+
+Write-Host "1) Stoppe und entferne Agent-Autostart..."
 Stop-ScheduledTask -TaskName "RapalleRmmAgent"
 Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false
-# Agent-Prozesse beenden (breiter Filter: Pfad ODER agent.py), sonst bleibt er online.
-Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-    Where-Object { $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-Start-Sleep -Seconds 2
-# Programmordner SYNCHRON entfernen (dieses Skript laeuft NICHT aus dem Ordner).
-Remove-Item -Recurse -Force $InstallDir
-Write-Host "Agent deinstalliert - Dateien entfernt."
+
+Write-Host "2) Beende Agent-Prozesse..."
+# Zwei Runden: Prozesse, die agent.py ODER etwas im Installationsordner ausfuehren.
+for ($i = 0; $i -lt 3; $i++) {
+    $procs = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+        Where-Object { $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or $_.ExecutablePath -like "$InstallDir*" }
+    if (-not $procs) { break }
+    $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    Start-Sleep -Seconds 1
+}
+Start-Sleep -Seconds 1
+
+Write-Host "3) Loesche alle Agent-Daten..."
+# Bis zu 5 Versuche, falls eine Datei (z.B. agent.log) noch kurz gehalten wird.
+for ($i = 0; $i -lt 5; $i++) {
+    Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+    if (-not (Test-Path $InstallDir)) { break }
+    Start-Sleep -Seconds 1
+}
+
+if (Test-Path $InstallDir) {
+    Write-Host "WARNUNG: $InstallDir konnte nicht vollstaendig entfernt werden."
+} else {
+    Write-Host "Agent deinstalliert - alle Daten entfernt."
+}
 """
     return PlainTextResponse(script, media_type="text/plain")
