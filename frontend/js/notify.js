@@ -18,6 +18,9 @@ const LEVELS = {
 };
 
 let container = null;
+// Aktive Benachrichtigungen mit "tag": eine neue Meldung gleichen Tags ersetzt
+// die vorherige (z.B. "Aktualisiere Client…" -> "Client aktualisiert").
+const _tagged = new Map();
 
 function ensureContainer() {
   if (container) return container;
@@ -32,9 +35,17 @@ function ensureContainer() {
   return container;
 }
 
-export function notify(message, level = "info", durationMs = 5000) {
+export function notify(message, level = "info", durationMs = 5000, opts = {}) {
   const cfg = LEVELS[level] || LEVELS.info;
   const root = ensureContainer();
+
+  // Gibt es schon eine Meldung mit demselben Tag? -> sofort entfernen (die neue
+  // "aktualisiert die Situation", z.B. Erfolg ersetzt die laufende Fortschritts-Box).
+  const tag = opts && opts.tag;
+  if (tag && _tagged.has(tag)) {
+    try { _tagged.get(tag)(); } catch {}
+    _tagged.delete(tag);
+  }
 
   const box = document.createElement("div");
   box.style.cssText = `
@@ -112,6 +123,7 @@ export function notify(message, level = "info", durationMs = 5000) {
   function close() {
     if (closed) return;
     closed = true;
+    if (tag && _tagged.get(tag) === close) _tagged.delete(tag);
     if (rafId) cancelAnimationFrame(rafId);
     box.style.transform = "translateY(-120%)";
     box.style.opacity = "0";
@@ -124,6 +136,7 @@ export function notify(message, level = "info", durationMs = 5000) {
   box.querySelector(".notify-close").addEventListener("click", close);
 
   if (durationMs > 0) startCountdown();
+  if (tag) _tagged.set(tag, close);
   return close;
 }
 

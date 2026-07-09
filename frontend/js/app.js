@@ -18,7 +18,7 @@ import { setLanguage, applyStaticTranslations } from "./i18n_apply.js";
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
 import { renderTaskbar, initTaskbar } from "./taskbar.js";
-import { setContentRenderer, setOnWindowsChanged, openWindow } from "./windowmanager.js";
+import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
 import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded } from "./persist.js";
@@ -395,7 +395,7 @@ function initMenusAndButtons() {
       else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
       else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
       else if (app === "notifications") openWindow({ key: "notifications", appId: "notifications", title: "Benachrichtigungen", w: 600, h: 560 });
-      else if (app === "clients") { state.selection = null; renderMainContent(); }
+      else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
     })
   );
 
@@ -526,7 +526,7 @@ function initLiveUpdates() {
     let msg = `${name}: ${kind} – ${d.stage}`;
     if (d.detail) msg += `\n${d.detail}`;
     if (d.agent_version) msg += `\n(Agent-Version: ${d.agent_version})`;
-    window.notify?.(msg, level, 10000);
+    window.notify?.(msg, level, 10000, { tag: `agent-${d.kind}:${d.id}` });
   });
 
   // Fehler bei der Bildschirmübertragung (z.B. headless VM) als Notification

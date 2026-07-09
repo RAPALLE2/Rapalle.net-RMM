@@ -331,16 +331,16 @@ async function handleQuickAction(action, client) {
   }
   if (action === "update") {
     if (!confirm(`${client.hostname}: Agent auf die neueste Version aktualisieren?\n\nDer Agent lädt die neue Version, ersetzt sich selbst und startet neu.\nDas kann bis zu 60 Sekunden dauern (Bestätigung wird abgewartet).`)) return;
-    window.notify?.(`Aktualisiere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000);
+    window.notify?.(`Aktualisiere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-update:" + client.id });
     try {
       const res = await api.updateAgent(client.id);
       if (res && res.updated) {
-        window.notify?.(`Agent auf ${client.hostname} erfolgreich aktualisiert und wieder verbunden.`, "success", 8000);
+        window.notify?.(`Agent auf ${client.hostname} erfolgreich aktualisiert und wieder verbunden.`, "success", 8000, { tag: "agent-update:" + client.id });
       } else {
-        window.notify?.(`Agent-Update auf ${client.hostname} abgeschlossen.`, "success", 6000);
+        window.notify?.(`Agent-Update auf ${client.hostname} abgeschlossen.`, "success", 6000, { tag: "agent-update:" + client.id });
       }
     } catch (e) {
-      window.notify?.("Update fehlgeschlagen: " + e.message, "error", 14000);
+      window.notify?.("Update fehlgeschlagen: " + e.message, "error", 14000, { tag: "agent-update:" + client.id });
     }
     return;
   }
@@ -349,7 +349,7 @@ async function handleQuickAction(action, client) {
       `Es wird: 1) der Agent gestoppt, 2) alle Agent-Daten auf dem Client gelöscht,\n` +
       `3) der Client aus dem Dashboard entfernt – aber nur, wenn er wirklich offline geht.\n\n` +
       `Das kann bis zu 60 Sekunden dauern. Bitte warten.`)) return;
-    window.notify?.(`Deinstalliere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000);
+    window.notify?.(`Deinstalliere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-uninstall:" + client.id });
     try {
       const res = await api.uninstallAgent(client.id);
       if (res && res.removed) {
@@ -357,13 +357,13 @@ async function handleQuickAction(action, client) {
         if (state.selection && state.selection.type === "client" && state.selection.id === client.id) {
           state.selection = null;
         }
-        window.notify?.(`Agent auf ${client.hostname} deinstalliert und aus dem Dashboard entfernt.`, "success", 8000);
+        window.notify?.(`Agent auf ${client.hostname} deinstalliert und aus dem Dashboard entfernt.`, "success", 8000, { tag: "agent-uninstall:" + client.id });
         renderMainContent();
       } else {
-        window.notify?.(`Deinstallation auf ${client.hostname} abgeschlossen.`, "success", 6000);
+        window.notify?.(`Deinstallation auf ${client.hostname} abgeschlossen.`, "success", 6000, { tag: "agent-uninstall:" + client.id });
       }
     } catch (e) {
-      window.notify?.("Deinstallation fehlgeschlagen: " + e.message, "error", 12000);
+      window.notify?.("Deinstallation fehlgeschlagen: " + e.message, "error", 12000, { tag: "agent-uninstall:" + client.id });
     }
   }
 }
