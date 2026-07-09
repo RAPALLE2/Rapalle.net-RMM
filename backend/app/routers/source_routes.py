@@ -14,9 +14,12 @@ ACHTUNG: Diese Endpunkte geben einem Admin vollen Zugriff auf Dateien und
 Datenbank des Backend-Hosts. Sie sind bewusst NUR für Super-Admins freigegeben.
 """
 
+import io
+import shutil
+import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
 from app import db
@@ -161,6 +164,99 @@ async def db_table(name: str, limit: int = 200, offset: int = 0,
     total = db._conn.execute(f'SELECT COUNT(*) AS c FROM "{name}"').fetchone()["c"]
     return {"name": name, "columns": cols, "rows": rows,
             "total": total, "limit": limit, "offset": offset}
+
+
+# ------------------------------------------------------------------
+# ZIP-Upload + intelligente Extraktion
+# ------------------------------------------------------------------
+PROJECT_MARKERS = {"frontend", "backend", "agent"}
+
+
+def _extract_target_and_root(names: list[str], current_path: str):
+    """
+    Bestimmt (Ziel-Ordner, Content-Root im ZIP) anhand des ZIP-Inhalts:
+
+    - frontend/backend/agent direkt im ZIP-Root -> Ziel = PROJECT_ROOT, Root = "".
+    - EIN Wrapper-Ordner (z.B. "Rapalle.net-RMM/"), darin frontend/backend/agent
+      -> Ziel = PROJECT_ROOT, Root = "<wrapper>/" (Wrapper wird abgestreift).
+    - sonst -> Ziel = aktuell geöffneter Explorer-Ordner, Root = "".
+    """
+    def top(n: str) -> str:
+        return n.split("/", 1)[0]
+
+    tops = {top(n) for n in names if n.strip() and top(n)}
+
+    if tops & PROJECT_MARKERS:
+        return PROJECT_ROOT, ""
+
+    if len(tops) == 1:
+        wrapper = next(iter(tops))
+        second = set()
+        for n in names:
+            parts = n.split("/")
+            if len(parts) >= 2 and parts[0] == wrapper and parts[1]:
+                second.add(parts[1])
+        if second & PROJECT_MARKERS:
+            return PROJECT_ROOT, wrapper + "/"
+
+    return _safe_path(current_path), ""
+
+
+@router.post("/upload-zip")
+async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
+                     user: dict = Depends(get_current_user)):
+    """
+    Lädt ein ZIP hoch und extrahiert es (bestehende Dateien werden ÜBERSCHRIEBEN).
+    Projekt-ZIPs (mit frontend/backend/agent - auch in einem Wrapper-Ordner)
+    landen im Projekt-Root; sonstige ZIPs im aktuell geöffneten Explorer-Ordner.
+    """
+    require_admin(user)
+    raw = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Keine gültige ZIP-Datei")
+
+    names = zf.namelist()
+    dest, content_root = _extract_target_and_root(names, path)
+
+    extracted, skipped = [], []
+    for info in zf.infolist():
+        name = info.filename
+        if content_root:
+            if not name.startswith(content_root):
+                continue
+            rel = name[len(content_root):]
+        else:
+            rel = name
+        if not rel or rel.endswith("/"):
+            continue  # Ordner-Einträge werden implizit angelegt
+
+        target = (dest / rel).resolve()
+        # Zip-Slip-Schutz: Ziel muss innerhalb des Projekts liegen.
+        if target != PROJECT_ROOT and PROJECT_ROOT not in target.parents:
+            skipped.append(rel)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as out:  # wb = überschreiben
+            shutil.copyfileobj(src, out)
+        try:
+            extracted.append(str(target.relative_to(PROJECT_ROOT)))
+        except ValueError:
+            extracted.append(str(target))
+
+    db.add_audit_entry(user["username"], "source.zip_extracted",
+                       target=("(root)" if dest == PROJECT_ROOT else str(dest.relative_to(PROJECT_ROOT))),
+                       details=f"{len(extracted)} Dateien aus {file.filename}")
+    return {
+        "ok": True,
+        "dest": "" if dest == PROJECT_ROOT else str(dest.relative_to(PROJECT_ROOT)),
+        "extracted": extracted,
+        "count": len(extracted),
+        "skipped": skipped,
+        "project_update": dest == PROJECT_ROOT,
+    }
 
 
 class SqlBody(BaseModel):

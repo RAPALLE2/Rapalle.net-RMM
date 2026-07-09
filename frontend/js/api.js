@@ -136,6 +136,23 @@ export const api = {
     request(`/api/source/db/table?name=${encodeURIComponent(name)}&limit=${limit}&offset=${offset}`),
   sourceDbQuery: (sql) =>
     request("/api/source/db/query", { method: "POST", body: JSON.stringify({ sql }) }),
+  // ZIP hochladen + extrahieren (multipart; NICHT über request(), da FormData).
+  sourceUploadZip: async (fileObj, path = "") => {
+    const fd = new FormData();
+    fd.append("file", fileObj);
+    fd.append("path", path || "");
+    const res = await fetch(`${BACKEND_URL}/api/source/upload-zip`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${getToken()}` },   // KEIN Content-Type (Browser setzt boundary)
+      body: fd,
+    });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.json();
+  },
 
   // --- AD-Gruppen aus einem Realm laden / importieren (Admin) ---
   getRealmAdGroups: (realmId) => request(`/api/admin/realms/${realmId}/ad-groups`),

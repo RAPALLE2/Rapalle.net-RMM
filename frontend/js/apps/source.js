@@ -110,7 +110,12 @@ function renderBackendLog(panel) {
 // ---------------------------------------------------------------
 async function renderExplorer(panel) {
   panel.innerHTML = `
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="src-roots"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px" id="src-roots"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input type="file" id="src-zip-input" accept=".zip" style="display:none" />
+      <button class="taskbar-btn" id="src-zip-btn" title="ZIP in den aktuellen Ordner extrahieren (überschreibt vorhandene Dateien). Projekt-ZIPs mit frontend/backend/agent landen automatisch im Projekt-Root.">⬆️ ZIP hochladen & extrahieren</button>
+      <span id="src-zip-status" style="font-size:12px;color:var(--subtext)"></span>
+    </div>
     <div style="display:flex;gap:10px;min-height:0">
       <div style="flex:0 0 300px;border:1px solid var(--border);border-radius:8px;overflow:auto;max-height:440px">
         <div id="src-path" style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--subtext);word-break:break-all"></div>
@@ -133,6 +138,30 @@ async function renderExplorer(panel) {
   const saveBtn = panel.querySelector("#src-file-save");
   const contentEl = panel.querySelector("#src-file-content");
   let openPath = null;
+  let curDir = "backend";   // aktuell geöffneter Ordner (für ZIP-Ziel)
+
+  // --- ZIP-Upload ---
+  const zipInput = panel.querySelector("#src-zip-input");
+  const zipStatus = panel.querySelector("#src-zip-status");
+  panel.querySelector("#src-zip-btn").addEventListener("click", () => zipInput.click());
+  zipInput.addEventListener("change", async () => {
+    const f = zipInput.files && zipInput.files[0];
+    if (!f) return;
+    zipStatus.textContent = `Extrahiere ${f.name}…`;
+    try {
+      const res = await api.sourceUploadZip(f, curDir);
+      const where = res.project_update ? "Projekt-Root" : ("/" + (res.dest || ""));
+      zipStatus.textContent = `${res.count} Datei(en) nach ${where} extrahiert.`;
+      window.notify?.(`${res.count} Datei(en) aus ${f.name} nach ${where} extrahiert${res.skipped?.length ? ` (${res.skipped.length} übersprungen)` : ""}.`, "success", 8000);
+      loadDir(curDir);   // Ansicht aktualisieren
+    } catch (e) {
+      zipStatus.textContent = "";
+      window.notify?.("ZIP-Extraktion fehlgeschlagen: " + e.message, "error", 10000);
+    } finally {
+      zipInput.value = "";   // gleiche Datei erneut wählbar machen
+    }
+  });
+
 
   try {
     const r = await api.sourceRoots();
@@ -148,6 +177,7 @@ async function renderExplorer(panel) {
   async function loadDir(path) {
     try {
       const d = await api.sourceList(path);
+      curDir = d.path || "";     // aktuellen Ordner für den ZIP-Upload merken
       pathEl.textContent = "/" + (d.path || "");
       const up = d.path ? `<div class="src-row" data-dir="${esc(d.parent)}" style="padding:6px 8px;cursor:pointer;font-size:12px">📁 ..</div>` : "";
       entriesEl.innerHTML = up + d.entries.map((e) => {
