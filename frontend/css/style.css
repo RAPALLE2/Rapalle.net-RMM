@@ -766,3 +766,110 @@ button:active, .btn-primary:active, .action-btn:active, .taskbar-btn:active {
 
 /* ---- Modale/Panels: sanftes Erscheinen ---- */
 .panel { transition: box-shadow 0.2s ease, transform 0.15s ease; }
+
+
+
+
+/* ==========================================================
+   Globale moderne Dropdown-Menüs
+========================================================== */
+
+
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+
+    width: 100%;
+
+    padding: 12px 48px 12px 16px;
+
+    color: var(--text);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(var(--accent-2-rgb), 0.12),
+            rgba(var(--accent-rgb), 0.08)
+        ),
+        var(--panel-2);
+
+    border: 1px solid rgba(var(--accent-2-rgb), 0.18);
+
+    border-radius: 18px;
+
+    font-size: 14px;
+    font-weight: 500;
+
+    cursor: pointer;
+
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.05),
+        0 4px 16px rgba(0,0,0,.25);
+
+    transition: all .18s ease;
+
+    background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+
+    background-repeat: no-repeat;
+    background-position: right 16px center;
+    background-size: 16px;
+}
+
+
+
+select:hover {
+    background:
+        linear-gradient(
+            135deg,
+            rgba(var(--accent-2-rgb), 0.22),
+            rgba(var(--accent-rgb), 0.14)
+        ),
+        var(--panel-2);
+
+    border-color: var(--accent-2);
+
+    box-shadow:
+        0 0 0 4px rgba(var(--accent-2-rgb), .10),
+        0 8px 28px rgba(var(--accent-2-rgb), .18);
+
+    transform: translateY(-1px);
+}
+
+
+
+select:focus {
+    outline: none;
+
+    border-color: var(--accent-2);
+
+    box-shadow:
+        0 0 0 4px rgba(var(--accent-2-rgb), .18),
+        0 0 32px rgba(var(--accent-rgb), .15);
+}
+
+
+select:active {
+    transform: scale(0.99);
+}
+
+
+select option {
+    background: #1f2c40;
+    color: var(--text);
+}
+
+
+
+select option:checked {
+    background: rgba(var(--accent-2-rgb), .35);
+    color: #fff;
+    font-weight: 600;
+}
+
+
+select:disabled {
+    opacity: .6;
+    cursor: not-allowed;
+}
