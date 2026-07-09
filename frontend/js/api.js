@@ -119,6 +119,17 @@ export const api = {
   setGrants: (subjectType, subjectId, grants) =>
     request(`/api/admin/grants/${subjectType}/${subjectId}`, { method: "PUT", body: JSON.stringify({ grants }) }),
 
+  // --- Backend neu starten (Admin) ---
+  restartBackend: () => request("/api/admin/restart", { method: "POST" }),
+
+  // --- Neueste ausgelieferte Agent-Version (für "veraltet"-Hinweis) ---
+  getAgentVersion: () => request("/api/agent/version"),
+
+  // --- AD-Gruppen aus einem Realm laden / importieren (Admin) ---
+  getRealmAdGroups: (realmId) => request(`/api/admin/realms/${realmId}/ad-groups`),
+  importRealmAdGroups: (realmId, names = []) =>
+    request(`/api/admin/realms/${realmId}/ad-groups/import`, { method: "POST", body: JSON.stringify({ names }) }),
+
   // --- Branding (Logos per Upload ersetzen) ---
   getBranding: () => request("/api/admin/branding"),
   // Roh-Upload (KEIN multipart, KEIN JSON-Header) - Backend liest den Body direkt.

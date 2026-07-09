@@ -191,6 +191,35 @@ def get_or_create_device_id() -> str:
 
 DEVICE_ID = get_or_create_device_id()
 
+# Nach einem Update legt das Update-Skript die Markerdatei ".updated" an. Beim
+# nächsten Start liest der Agent sie, meldet dem Backend "updated: true" (damit
+# das Dashboard das Update als erfolgreich bestätigen kann) und löscht sie.
+UPDATED_MARKER = Path(__file__).resolve().parent / ".updated"
+
+
+def _consume_update_marker() -> bool:
+    try:
+        if UPDATED_MARKER.exists():
+            UPDATED_MARKER.unlink()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+_JUST_UPDATED = _consume_update_marker()
+
+# Eigene Agent-Version (aus version.txt neben diesem Skript), damit das Dashboard
+# "veraltete" Agenten erkennen kann.
+def _read_agent_version() -> str:
+    try:
+        return (Path(__file__).resolve().parent / "version.txt").read_text(encoding="utf-8").strip() or "unbekannt"
+    except Exception:
+        return "unbekannt"
+
+
+AGENT_VERSION = _read_agent_version()
+
 # Der Socket.IO-Client, über den die gesamte Kommunikation läuft
 sio = socketio.AsyncClient(reconnection=True, reconnection_delay=3)
 
@@ -214,6 +243,7 @@ def get_local_ip() -> str | None:
 @sio.event(namespace="/agent")
 async def connect():
     """Wird automatisch aufgerufen, sobald die Verbindung zum Backend steht."""
+    global _JUST_UPDATED
     _print(f"[agent] Verbunden mit {BACKEND_URL} als '{DEVICE_NAME}' ({DEVICE_ID})")
     await sio.emit(
         "register",
@@ -225,9 +255,14 @@ async def connect():
             "release": OS_RELEASE,                # z.B. "Ubuntu 22.04" / "Windows 11"
             "ip": get_local_ip(),
             "enrollment_token": ENROLLMENT_TOKEN,  # nur beim ersten Mal relevant
+            "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
+            "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
         },
         namespace="/agent",
     )
+    if _JUST_UPDATED:
+        _print("[agent] Update-Bestätigung an das Backend gesendet.")
+        _JUST_UPDATED = False  # nur einmal melden, nicht bei jedem Reconnect
 
 
 @sio.event(namespace="/agent")
@@ -1252,8 +1287,10 @@ async def on_update_agent(data):
     den Dienst neu - deshalb läuft der Befehl LOSGELÖST vom Agent-Prozess.
     """
     _print("[agent] Update angefordert - starte Update-Befehl in eigener Shell...")
+    await _emit_action_log("update", "received", "Update-Befehl empfangen")
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _run_dist_command, "update")
+    detail = await loop.run_in_executor(None, _run_dist_command, "update")
+    await _emit_action_log("update", detail.get("stage", "launched"), detail.get("detail", ""))
 
 
 @sio.on("uninstall-agent", namespace="/agent")
@@ -1264,54 +1301,179 @@ async def on_uninstall_agent(data):
     den eigenen Prozess beendet.
     """
     _print("[agent] Deinstallation angefordert - starte Uninstall-Befehl in eigener Shell...")
+    await _emit_action_log("uninstall", "received", "Uninstall-Befehl empfangen")
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _run_dist_command, "uninstall")
+    detail = await loop.run_in_executor(None, _run_dist_command, "uninstall")
+    await _emit_action_log("uninstall", detail.get("stage", "launched"), detail.get("detail", ""))
+
+
+async def _emit_action_log(kind: str, stage: str, detail: str = ""):
+    """Meldet dem Backend (und damit dem Dashboard), was bei Update/Uninstall passiert."""
+    try:
+        await sio.emit("agent-action-log", {
+            "id": DEVICE_ID, "kind": kind, "stage": stage, "detail": detail,
+            "agent_version": AGENT_VERSION,
+        }, namespace="/agent")
+    except Exception:
+        pass
 
 
 def _run_dist_command(kind: str):
     """
-    Startet den Update- bzw. Uninstall-Befehl als EIGENSTÄNDIGEN Prozess, der
-    den Tod des Agent-Prozesses überlebt (das Skript beendet den Agenten selbst).
+    Startet den Update- bzw. Uninstall-Befehl als EIGENSTÄNDIGEN Prozess, der den
+    Tod des Agent-Prozesses überlebt (das Skript stoppt den Agenten selbst).
+
+    Linux: Wir starten den Befehl als TRANSIENTEN systemd-Dienst
+    (`systemd-run --collect`). Ein solcher Dienst läuft in einem EIGENEN cgroup,
+    unabhängig vom Dienst des Agenten. Dadurch überlebt er zuverlässig das
+    `systemctl stop rapalle-agent` (dessen KillMode=control-group sonst alle
+    Kindprozesse mitreißt - das war der Grund, warum der Uninstall zuvor
+    scheinbar nichts tat).
 
     kind: 'update' | 'uninstall'
+
+    Der exakte Befehl wird ins Agent-Log geschrieben, damit man ihn zum Testen
+    auch von Hand auf dem Client ausführen kann.
     """
     import shutil
 
     try:
         if IS_WINDOWS:
+            import base64
             fname = "update.ps1" if kind == "update" else "uninstall.ps1"
             url = f"{BACKEND_URL}/agent-dist/{fname}"
-            ps = f"iwr '{url}' -UseBasicParsing | iex"
-            # DETACHED_PROCESS(0x8) + CREATE_NEW_PROCESS_GROUP(0x200): überlebt,
-            # wenn das Skript gleich die eigenen python-Prozesse beendet.
-            flags = 0x00000008 | 0x00000200
+            inner_ps = f"iwr '{url}' -UseBasicParsing | iex"
+            enc = base64.b64encode(inner_ps.encode("utf-16-le")).decode()
+            taskname = "RapalleRmmUpdate" if kind == "update" else "RapalleRmmUninstall"
+            event_id = "812" if kind == "update" else "811"
+            tr = f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {enc}"
+
+            _print(f"[agent] {kind}: exakter Befehl (Windows, ELEVATED PowerShell):")
+            _print(f'         powershell -NoProfile -ExecutionPolicy Bypass -Command "{inner_ps}"')
+
+            # (A) Bevorzugt: vorautorisierten SYSTEM-Task per EVENT auslösen. Das
+            #     braucht KEINE Admin-Rechte im Agenten - die Aufgabenplanung führt
+            #     das Skript als SYSTEM aus. Voraussetzung: elevate.ps1 wurde einmal
+            #     ausgeführt (bzw. der Installer hat die Tasks eingerichtet).
+            try:
+                q = subprocess.run(["schtasks", "/query", "/tn", taskname],
+                                   capture_output=True, text=True)
+                task_exists = (q.returncode == 0)
+            except Exception:
+                task_exists = False
+            if task_exists:
+                triggered = False
+                trig_err = ""
+                # Primär: Write-EventLog -> Provider ist garantiert 'RapalleRMM'
+                # (matcht die Event-Subscription des SYSTEM-Tasks sicher).
+                try:
+                    w = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         f"Write-EventLog -LogName Application -Source 'RapalleRMM' "
+                         f"-EventId {event_id} -EntryType Information -Message 'rmm {kind}'"],
+                        capture_output=True, text=True,
+                    )
+                    triggered = (w.returncode == 0)
+                    if not triggered:
+                        trig_err = (w.stderr or w.stdout or "").strip()
+                except Exception as e:
+                    trig_err = str(e)
+                # Fallback: eventcreate (falls Write-EventLog nicht verfügbar/fehlerhaft)
+                if not triggered:
+                    try:
+                        ev = subprocess.run(
+                            ["eventcreate", "/L", "Application", "/SO", "RapalleRMM",
+                             "/T", "INFORMATION", "/ID", event_id, "/D", f"rmm {kind}"],
+                            capture_output=True, text=True,
+                        )
+                        triggered = (ev.returncode == 0)
+                        if not triggered:
+                            trig_err = (ev.stderr or ev.stdout or "").strip()
+                    except Exception as e:
+                        trig_err = str(e)
+                if triggered:
+                    _print(f"[agent] {kind}: SYSTEM-Task '{taskname}' per Event {event_id} ausgelöst (elevated).")
+                    return {"stage": "launched",
+                            "detail": f"SYSTEM-Task '{taskname}' per Event ausgelöst (elevated)."}
+                else:
+                    _print(f"[agent] Event-Auslösung fehlgeschlagen: {trig_err}")
+
+            # (B) Sonst: SYSTEM-Task direkt anlegen (klappt nur, wenn Agent elevated).
+            created = False
+            schtasks_err = ""
+            try:
+                r = subprocess.run(
+                    ["schtasks", "/create", "/tn", taskname, "/ru", "SYSTEM",
+                     "/rl", "HIGHEST", "/sc", "ONCE", "/st", "00:00", "/f", "/tr", tr],
+                    capture_output=True, text=True,
+                )
+                if r.returncode == 0:
+                    subprocess.run(["schtasks", "/run", "/tn", taskname],
+                                   capture_output=True, text=True)
+                    created = True
+                    _print(f"[agent] {kind}-Befehl als SYSTEM-Task '{taskname}' gestartet.")
+                else:
+                    schtasks_err = (r.stderr or r.stdout or "").strip()
+                    _print(f"[agent] schtasks (SYSTEM) fehlgeschlagen: {schtasks_err} - Fallback.")
+            except Exception as e:
+                schtasks_err = str(e)
+                _print(f"[agent] schtasks-Aufruf fehlgeschlagen ({e}) - Fallback.")
+            if created:
+                return {"stage": "launched", "detail": f"SYSTEM-Task '{taskname}' gestartet."}
+
+            # (C) Fallback: losgelöste PowerShell mit Agent-Rechten (reicht nur, wenn
+            #     der Agent schon elevated läuft).
+            flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
             subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-Command", inner_ps],
                 creationflags=flags, close_fds=True,
             )
-            _print(f"[agent] {kind}-Befehl (Windows) gestartet: {url}")
+            _print(f"[agent] {kind}-Befehl (Windows Fallback, losgelöst) gestartet.")
+            return {"stage": "launched-fallback",
+                    "detail": ("Kein elevated Weg verfügbar (Agent nicht als Admin und "
+                               "keine Wartungs-Tasks installiert). EINMALIG als Administrator "
+                               f"ausführen: powershell -NoProfile -ExecutionPolicy Bypass -Command "
+                               f"\"iwr '{BACKEND_URL}/agent-dist/elevate.ps1' -UseBasicParsing | iex\"")}
         else:
             fname = "update.sh" if kind == "update" else "uninstall.sh"
             url = f"{BACKEND_URL}/agent-dist/{fname}"
-            inner = f"curl -sSL '{url}' | bash"
+            inner = f"curl -fsSL '{url}' | bash"
             logf = f"/tmp/rapalle-agent-{kind}.log"
-            # Bevorzugt systemd-run --scope: eigener cgroup -> überlebt
-            # 'systemctl stop rapalle-agent' (KillMode=control-group).
-            if shutil.which("systemd-run"):
+            _print(f"[agent] {kind}: exakter Befehl (Linux, als root):")
+            _print(f"         {inner}   (Log: {logf})")
+
+            systemd_run = shutil.which("systemd-run") or (
+                "/usr/bin/systemd-run" if os.path.exists("/usr/bin/systemd-run") else None
+            )
+            launched = False
+            if systemd_run:
+                try:
+                    # Transienter, unabhängiger Dienst (eigener cgroup) -> überlebt
+                    # das Stoppen des Agent-Dienstes. --collect räumt ihn nach Ende auf.
+                    subprocess.Popen(
+                        [systemd_run, "--collect", "--quiet",
+                         "bash", "-c", f"{inner} >{logf} 2>&1"],
+                        start_new_session=True, close_fds=True,
+                    )
+                    launched = True
+                    _print(f"[agent] {kind}-Befehl über systemd-run (transienter Dienst) gestartet.")
+                except Exception as e:
+                    _print(f"[agent] systemd-run fehlgeschlagen ({e}) - nutze Fallback.")
+            if not launched:
+                # Fallback ohne systemd: vollständig losgelöste Shell (setsid+nohup+&).
                 subprocess.Popen(
-                    ["systemd-run", "--scope", "--quiet",
-                     "bash", "-c", f"{inner} >{logf} 2>&1"],
+                    ["setsid", "bash", "-c", f"nohup {inner} >{logf} 2>&1 &"],
                     start_new_session=True, close_fds=True,
                 )
-            else:
-                # Fallback: eigene Session, vom Agent-Prozess losgelöst.
-                subprocess.Popen(
-                    ["setsid", "bash", "-c", f"nohup {inner} >{logf} 2>&1"],
-                    start_new_session=True, close_fds=True,
-                )
-            _print(f"[agent] {kind}-Befehl (Linux) gestartet: {url} (Log: {logf})")
+                _print(f"[agent] {kind}-Befehl über setsid/nohup (Fallback) gestartet.")
+                return {"stage": "launched-fallback",
+                        "detail": f"ohne systemd gestartet (Log: {logf})"}
+            return {"stage": "launched", "detail": f"systemd-run gestartet (Log: {logf})"}
     except Exception as e:
         _print(f"[agent] {kind}-Befehl fehlgeschlagen: {e}")
+        return {"stage": "error", "detail": str(e)}
+    return {"stage": "launched", "detail": ""}
 
 
 @sio.on("screen-input", namespace="/agent")

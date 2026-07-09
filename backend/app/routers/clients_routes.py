@@ -228,14 +228,45 @@ async def update_client_agent(client_id: str, user: dict = Depends(get_current_u
     """
     Weist den Agenten an, sich selbst zu aktualisieren: Er startet den
     Client-Update-Befehl in einer eigenen Shell-Session (lädt das aktuelle
-    Agent-Paket, ersetzt agent.py und startet den Dienst neu).
+    Agent-Paket, ersetzt agent.py und startet den Dienst neu). Nach dem Neustart
+    meldet der Agent "updated" zurück.
+
+    Der Endpunkt wartet bis zu 60 Sekunden auf diese Bestätigung:
+      - kommt sie -> Update erfolgreich.
+      - kommt sie nicht -> Fehler (das Update ist vermutlich fehlgeschlagen).
     """
     _require_client_perm(user, client_id, "manage_agent")
+    if not state.is_online(client_id):
+        raise HTTPException(409, "Der Agent ist nicht verbunden.")
+
+    client = db.get_client(client_id)
+    # Eventuelle alte Bestätigung verwerfen, damit wir nur auf die neue reagieren.
+    state.update_confirmed.pop(client_id, None)
+
     ok = await send_to_agent(client_id, "update-agent", {})
     if not ok:
         raise HTTPException(503, "Client ist offline")
-    db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id)
-    return {"ok": True}
+    db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id,
+                       details=(client or {}).get("hostname"))
+
+    # Auf "updated"-Bestätigung warten (max. 60 s, alle 1 s prüfen).
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        await asyncio.sleep(1.0)
+        if client_id in state.update_confirmed:
+            state.update_confirmed.pop(client_id, None)
+            db.add_audit_entry(user["username"], "agent.updated", target=client_id,
+                               details=(client or {}).get("hostname"))
+            return {"ok": True, "updated": True}
+
+    db.add_audit_entry(user["username"], "agent.update_timeout", target=client_id,
+                       details=(client or {}).get("hostname"))
+    raise HTTPException(
+        504,
+        "Der Agent hat innerhalb von 60 Sekunden kein erfolgreiches Update "
+        "bestätigt. Das Update ist möglicherweise fehlgeschlagen - bitte den "
+        "Client bzw. das Log /tmp/rapalle-agent-update.log prüfen.",
+    )
 
 
 @router.post("/{client_id}/uninstall-agent")

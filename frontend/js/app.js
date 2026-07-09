@@ -515,6 +515,20 @@ function initLiveUpdates() {
     applyAppVisibility();
   });
 
+  // Live-Rückmeldungen des Agenten zu Update/Uninstall (Diagnose): zeigt an,
+  // was auf dem Client passiert - statt nur eines 60s-Timeouts.
+  dashboardSocket.on("client:action-log", (d) => {
+    const c = state.clients.find((x) => x.id === d.id);
+    const name = c ? c.hostname : (d.id || "Client");
+    const kind = d.kind === "uninstall" ? "Deinstallation" : "Update";
+    const level = d.stage === "error" ? "error"
+      : (d.stage === "launched-fallback" ? "warn" : "info");
+    let msg = `${name}: ${kind} – ${d.stage}`;
+    if (d.detail) msg += `\n${d.detail}`;
+    if (d.agent_version) msg += `\n(Agent-Version: ${d.agent_version})`;
+    window.notify?.(msg, level, 10000);
+  });
+
   // Fehler bei der Bildschirmübertragung (z.B. headless VM) als Notification
   // + Eintrag im Audit-Log
   dashboardSocket.on("screen-error", (data) => {

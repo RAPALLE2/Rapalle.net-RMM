@@ -285,6 +285,7 @@ def init_db() -> None:
     # Migration: Spalten für VM/LXC-Kennzeichnung nachrüsten, falls die
     # clients-Tabelle noch aus einer älteren Version stammt.
     _migrate_add_column("clients", "device_type", "TEXT DEFAULT 'physical'")  # 'physical' | 'vm' | 'lxc'
+    _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
     _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optionaler Wunschname beim Onboarding
     _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # persönliche Farbpalette
     _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = lokaler User, sonst Realm-ID (AD)
@@ -611,6 +612,14 @@ def get_client(client_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def set_agent_version(client_id: str, version: str | None) -> None:
+    """Speichert die vom Agenten gemeldete Version (für den 'veraltet'-Hinweis)."""
+    if not version:
+        return
+    _conn.execute("UPDATE clients SET agent_version = ? WHERE id = ?", (version, client_id))
+    _conn.commit()
+
+
 def update_client(client_id: str, fields: dict) -> dict | None:
     """
     Generisches Update für den Edit-Dialog im Frontend.
@@ -902,6 +911,24 @@ def list_groups() -> list[dict]:
 def get_group(group_id: str) -> dict | None:
     row = _conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
     return dict(row) if row else None
+
+
+def get_group_by_name(name: str) -> dict | None:
+    row = _conn.execute("SELECT * FROM groups WHERE name = ?", (name,)).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_ad_group(name: str) -> dict:
+    """
+    Legt eine AD-Gruppe (is_ad_group=1) an, falls sie noch nicht existiert, und
+    gibt sie zurück. Existiert bereits eine gleichnamige Gruppe (egal ob lokal
+    oder AD), wird diese unverändert zurückgegeben (Namen sind der Matching-Key
+    zwischen AD-Gruppen und RMM-Gruppen).
+    """
+    existing = get_group_by_name(name)
+    if existing:
+        return existing
+    return create_group(name, [], is_ad_group=True)
 
 
 def create_group(name: str, permissions: list[str], is_ad_group: bool = False) -> dict:

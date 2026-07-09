@@ -24,6 +24,7 @@ export function renderPermissions(body, win) {
   // ---- lokaler Zustand des Fensters ----
   let subjectKind = "user";      // "user" | "group"
   let subjects = { user: [], group: [] };
+  let realms = [];               // AD/LDAP-Realms (für AD-Gruppen-Import)
   let catalog = { labels: {}, general: [], client: [] };
   let selected = null;           // {type, id, name}
   let activeTab = "general";     // "general" | "clients"
@@ -60,6 +61,7 @@ export function renderPermissions(body, win) {
           <input type="text" id="pm-subj-search" placeholder="Suchen…"
             style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px" />
         </div>
+        <div id="pm-ad-row" style="padding:0 8px 8px;display:none"></div>
         <div id="pm-subj-list" style="flex:1;overflow:auto;padding:0 6px 8px"></div>
       </div>
 
@@ -138,6 +140,38 @@ export function renderPermissions(body, win) {
   function drawSubjects() {
     body.querySelector("#pm-kind-user").classList.toggle("active", subjectKind === "user");
     body.querySelector("#pm-kind-group").classList.toggle("active", subjectKind === "group");
+
+    // AD-Gruppen-Import nur im Gruppen-Modus und wenn Realms konfiguriert sind.
+    const adRow = body.querySelector("#pm-ad-row");
+    if (subjectKind === "group" && realms.length) {
+      adRow.style.display = "";
+      adRow.innerHTML = `
+        <div style="display:flex;gap:4px">
+          <select id="pm-ad-realm" style="flex:1;min-width:0;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+            ${realms.map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}
+          </select>
+          <button class="action-btn" id="pm-ad-load" title="AD-Gruppen aus diesem Realm importieren, um ihnen Rechte zu geben">AD laden</button>
+        </div>`;
+      adRow.querySelector("#pm-ad-load").addEventListener("click", async () => {
+        const realmId = adRow.querySelector("#pm-ad-realm").value;
+        const btn = adRow.querySelector("#pm-ad-load");
+        btn.disabled = true; const orig = btn.textContent; btn.textContent = "…";
+        try {
+          const res = await api.importRealmAdGroups(realmId, []); // [] = alle
+          subjects.group = await api.getGroups();
+          window.notify?.(`${res.count} AD-Gruppe(n) importiert. Du kannst ihnen jetzt Rechte geben.`, "success");
+          drawSubjects();
+        } catch (e) {
+          window.notify?.("AD-Gruppen laden fehlgeschlagen: " + e.message, "error");
+        } finally {
+          btn.disabled = false; btn.textContent = orig;
+        }
+      });
+    } else {
+      adRow.style.display = "none";
+      adRow.innerHTML = "";
+    }
+
     const list = subjects[subjectKind] || [];
     const q = subjSearch.toLowerCase();
     const filtered = list.filter((s) => {
@@ -307,14 +341,16 @@ export function renderPermissions(body, win) {
   // ---------------------------------------------------------------
   (async () => {
     try {
-      const [cat, users, groups] = await Promise.all([
+      const [cat, users, groups, realmList] = await Promise.all([
         api.getPermissionCatalog(),
         api.getUsers().catch(() => []),
         api.getGroups().catch(() => []),
+        api.getRealms().catch(() => []),
       ]);
       catalog = cat;
       subjects.user = users;
       subjects.group = groups;
+      realms = realmList || [];
       drawSubjects();
     } catch (e) {
       subjListEl.innerHTML = `<div style="color:var(--danger);font-size:12px;padding:8px">${esc(e.message)}</div>`;

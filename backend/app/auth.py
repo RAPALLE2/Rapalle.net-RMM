@@ -153,6 +153,55 @@ def test_realm_connection(realm: dict) -> dict:
     return info
 
 
+def list_realm_groups(realm: dict) -> list[str]:
+    """
+    Listet die Gruppennamen (CN) eines AD/LDAP-Verzeichnisses auf. Wird benutzt,
+    um AD-Gruppen ins RMM zu importieren, damit man ihnen VORAB Rechte geben kann
+    (ohne dass sich erst ein Mitglied anmelden muss).
+    """
+    ldap3, _ = _import_ldap3()
+    server = _build_ldap_server(realm)
+    base_dn = realm.get("base_dn") or ""
+    try:
+        conn = ldap3.Connection(
+            server,
+            user=realm.get("bind_user") or None,
+            password=realm.get("bind_password") or None,
+            auto_bind=True,
+        )
+    except Exception as e:
+        raise HTTPException(502, f"AD-Verbindung fehlgeschlagen: {e}")
+    try:
+        names: set[str] = set()
+        # Paginiert suchen, damit auch große Verzeichnisse vollständig geladen werden.
+        conn.search(
+            base_dn, "(objectClass=group)", search_scope=ldap3.SUBTREE,
+            attributes=["cn"], paged_size=500,
+        )
+        for e in conn.entries:
+            if "cn" in e and str(e.cn):
+                names.add(str(e.cn))
+        # Weitere Seiten holen, falls vorhanden.
+        while True:
+            cookie = (conn.result.get("controls", {})
+                      .get("1.2.840.113556.1.4.319", {})
+                      .get("value", {}).get("cookie"))
+            if not cookie:
+                break
+            conn.search(
+                base_dn, "(objectClass=group)", search_scope=ldap3.SUBTREE,
+                attributes=["cn"], paged_size=500, paged_cookie=cookie,
+            )
+            for e in conn.entries:
+                if "cn" in e and str(e.cn):
+                    names.add(str(e.cn))
+    except Exception as e:
+        conn.unbind()
+        raise HTTPException(502, f"Gruppensuche fehlgeschlagen: {e}")
+    conn.unbind()
+    return sorted(names)
+
+
 def authenticate_realm(username: str, password: str, realm_id: str) -> dict | None:
     """
     Authentifiziert einen Benutzer gegen ein konfiguriertes Verzeichnis (LDAP/AD).

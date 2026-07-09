@@ -54,6 +54,10 @@ class ConnectionState:
         self.live_metrics: dict[str, dict] = {}      # Client-ID -> letzte gemeldete Metriken
         self.last_metric_save: dict[str, int] = {}   # Client-ID -> Zeitstempel des letzten gespeicherten Punkts
         self.pending_requests: dict[str, asyncio.Future] = {}  # request_id -> wartendes Future
+        # Client-ID -> Zeitpunkt (monotonic), zu dem der Agent nach einem Update
+        # frisch registriert hat ("updated: true"). Wird vom Update-Endpunkt
+        # abgefragt, um ein Update als erfolgreich zu bestätigen.
+        self.update_confirmed: dict[str, float] = {}
 
     def is_online(self, client_id: str) -> bool:
         return client_id in self.client_id_to_sid
@@ -221,6 +225,17 @@ async def on_register(sid, payload):
     state.client_id_to_sid[client_id] = sid
     state.sid_to_client_id[sid] = client_id
 
+    # Kommt der Agent frisch aus einem Update? Dann Zeitpunkt merken, damit der
+    # Update-Endpunkt das Update als erfolgreich bestätigen kann, und das
+    # Dashboard informieren.
+    if payload.get("updated"):
+        import time as _time
+        state.update_confirmed[client_id] = _time.monotonic()
+        await sio.emit("client:updated", {"id": client_id}, namespace="/dashboard")
+
+    # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
+    db.set_agent_version(client_id, payload.get("agent_version"))
+
     # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
     db.upsert_client(
         client_id,
@@ -317,6 +332,22 @@ async def on_exec_result(sid, payload):
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
+
+
+@sio.on("agent-action-log", namespace="/agent")
+async def on_agent_action_log(sid, payload):
+    """
+    Fortschritts-/Fehlermeldung des Agenten zu Update/Uninstall. Wird direkt an
+    die Dashboards weitergereicht, damit man in Echtzeit sieht, was auf dem
+    Client passiert (statt nur eines generischen 60s-Timeouts).
+    """
+    await sio.emit("client:action-log", {
+        "id": payload.get("id"),
+        "kind": payload.get("kind"),
+        "stage": payload.get("stage"),
+        "detail": payload.get("detail"),
+        "agent_version": payload.get("agent_version"),
+    }, namespace="/dashboard")
 
 
 @sio.on("fs-result", namespace="/agent")

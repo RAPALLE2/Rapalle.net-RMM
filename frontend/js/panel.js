@@ -19,6 +19,22 @@ import {
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
+
+// Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
+let _latestAgentVersion = null;
+api.getAgentVersion().then((r) => { _latestAgentVersion = r && r.version; }).catch(() => {});
+
+// Zeigt die gemeldete Agent-Version; weicht sie von der neuesten ab, wird ein
+// deutlicher "veraltet"-Hinweis angezeigt (häufige Ursache dafür, dass
+// Update/Uninstall über das Dashboard nicht greift).
+function agentVersionBadge(client) {
+  const v = client.agent_version;
+  if (!v) return `<span style="color:var(--subtext)">unbekannt</span>`;
+  if (_latestAgentVersion && v !== _latestAgentVersion) {
+    return `<span title="Neu: ${esc(_latestAgentVersion)}">${esc(v)} <span style="color:var(--warn)">⚠ veraltet</span></span>`;
+  }
+  return `<span>${esc(v)}</span>`;
+}
 import { t, osIcon, osLabel } from "./i18n.js";
 
 // Zustand der Übersicht (pro Ansicht gemerkt)
@@ -81,6 +97,7 @@ function renderClientView(el, clientId) {
             <div><span>${t("hostname")}</span><b>${esc(client.hostname)}</b></div>
             <div><span>${t("arch")}</span><b>${esc(client.arch || "?")}</b></div>
             <div><span>${t("uptime")}</span><b>${m ? formatUptime(m.uptime) : "–"}</b></div>
+            <div><span>Agent</span><b>${agentVersionBadge(client)}</b></div>
           </div>
           <div class="quick-actions">
             <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
@@ -313,12 +330,17 @@ async function handleQuickAction(action, client) {
     return;
   }
   if (action === "update") {
-    if (!confirm(`${client.hostname}: Agent auf die neueste Version aktualisieren?\nDer Agent lädt die neue Version, ersetzt sich selbst und startet neu.`)) return;
+    if (!confirm(`${client.hostname}: Agent auf die neueste Version aktualisieren?\n\nDer Agent lädt die neue Version, ersetzt sich selbst und startet neu.\nDas kann bis zu 60 Sekunden dauern (Bestätigung wird abgewartet).`)) return;
+    window.notify?.(`Aktualisiere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000);
     try {
-      await api.updateAgent(client.id);
-      window.notify?.(`Agent-Update auf ${client.hostname} gestartet. Der Client verbindet sich in Kürze neu.`, "success", 8000);
+      const res = await api.updateAgent(client.id);
+      if (res && res.updated) {
+        window.notify?.(`Agent auf ${client.hostname} erfolgreich aktualisiert und wieder verbunden.`, "success", 8000);
+      } else {
+        window.notify?.(`Agent-Update auf ${client.hostname} abgeschlossen.`, "success", 6000);
+      }
     } catch (e) {
-      window.notify?.("Update fehlgeschlagen: " + e.message, "error");
+      window.notify?.("Update fehlgeschlagen: " + e.message, "error", 14000);
     }
     return;
   }

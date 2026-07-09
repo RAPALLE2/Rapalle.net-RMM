@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, list_realm_groups
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -243,6 +243,82 @@ async def delete_realm(realm_id: str, user: dict = Depends(get_current_user)):
     db.delete_realm(realm_id)
     db.add_audit_entry(user["username"], "realm.deleted", target=realm_id)
     return {"ok": True}
+
+
+@router.get("/realms/{realm_id}/ad-groups")
+async def get_realm_ad_groups(realm_id: str, user: dict = Depends(get_current_user)):
+    """
+    Listet die Gruppen des AD/LDAP-Verzeichnisses auf und markiert, welche davon
+    bereits als RMM-Gruppe importiert sind (damit man ihnen Rechte geben kann).
+    """
+    require_admin(user)
+    realm = db.get_realm(realm_id)
+    if not realm:
+        raise HTTPException(404, "Realm nicht gefunden")
+    names = list_realm_groups(realm)
+    existing = {g["name"] for g in db.list_groups()}
+    return {
+        "groups": [{"name": n, "imported": n in existing} for n in names],
+        "count": len(names),
+    }
+
+
+class ImportAdGroupsBody(BaseModel):
+    names: list[str] = []          # leer = alle gefundenen importieren
+
+
+@router.post("/realms/{realm_id}/ad-groups/import")
+async def import_realm_ad_groups(realm_id: str, body: ImportAdGroupsBody,
+                                 user: dict = Depends(get_current_user)):
+    """
+    Importiert AD-Gruppen als RMM-Gruppen (is_ad_group=1). Anschließend können in
+    der Berechtigungen-App Rechte an diese Gruppen vergeben werden. Mitglieder
+    der AD-Gruppe erben diese Rechte beim Login automatisch (Match über Namen).
+    """
+    require_admin(user)
+    realm = db.get_realm(realm_id)
+    if not realm:
+        raise HTTPException(404, "Realm nicht gefunden")
+
+    names = body.names
+    if not names:
+        names = list_realm_groups(realm)   # nichts angegeben -> alle importieren
+
+    imported = []
+    for name in names:
+        g = db.upsert_ad_group(name)
+        imported.append(g["name"])
+    db.add_audit_entry(user["username"], "ad_groups.imported", target=realm_id,
+                       details=f"{len(imported)} Gruppen")
+    return {"ok": True, "imported": imported, "count": len(imported)}
+
+
+@router.post("/restart")
+async def restart_backend(user: dict = Depends(get_current_user)):
+    """
+    Startet den Backend-Prozess neu (re-exec des laufenden Python-Prozesses).
+    Läuft das Backend unter einem Prozess-Manager (systemd o.ä.) mit Auto-Restart,
+    genügt alternativ ein sauberer Exit - re-exec funktioniert aber in beiden
+    Fällen. Antwortet SOFORT und startet ~1 s später neu, damit die Antwort noch
+    beim Client ankommt.
+    """
+    require_admin(user)
+    db.add_audit_entry(user["username"], "backend.restart")
+
+    import sys as _sys
+    import asyncio as _asyncio
+
+    async def _do_restart():
+        await _asyncio.sleep(1.0)
+        try:
+            os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+        except Exception:
+            # Falls re-exec scheitert: hart beenden, damit ein Prozess-Manager
+            # (systemd Restart=always) uns neu startet.
+            os._exit(0)
+
+    _asyncio.create_task(_do_restart())
+    return {"ok": True, "message": "Backend startet in ca. 1 Sekunde neu…"}
 
 
 # ==================================================================

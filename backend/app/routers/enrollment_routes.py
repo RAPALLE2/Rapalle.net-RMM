@@ -429,6 +429,12 @@ Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $Tri
 # --- 5. Agent SOFORT starten (versteckt, in der aktuellen Sitzung) ---
 Start-ScheduledTask -TaskName "RapalleRmmAgent"
 
+# --- 6. Elevated Wartungs-Tasks (Update/Uninstall als SYSTEM, per Event) ---
+# Damit funktionieren Dashboard-Update/-Uninstall auch, obwohl der Agent selbst
+# in der (nicht-privilegierten) Benutzersitzung laeuft.
+Write-Host "Richte elevated Wartungs-Tasks (Update/Uninstall) ein..."
+try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (Wartungs-Tasks konnten nicht eingerichtet werden: $_)" }}
+
 Write-Host ""
 Write-Host "=== FERTIG! ===" -ForegroundColor Green
 Write-Host "Der Agent laeuft jetzt unsichtbar im Hintergrund und startet automatisch mit Windows."
@@ -530,6 +536,8 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable rapalle-agent 2>/dev/null || true
+# Marker anlegen: nach dem Neustart meldet der Agent dem Backend "updated".
+sudo touch "$INSTALL_DIR/.updated"
 # NEU STARTEN (nicht nur start) - bringt den Agenten mit neuer Version hoch.
 sudo systemctl restart rapalle-agent
 echo "Update fertig - Agent neu gestartet."
@@ -581,9 +589,119 @@ if (-not $task) {{
 }}
 
 # NEU STARTEN.
+New-Item -ItemType File -Force "$InstallDir\\.updated" | Out-Null
 Start-ScheduledTask -TaskName "RapalleRmmAgent"
 Write-Host "Update fertig - Agent neu gestartet."
 """
+    return PlainTextResponse(script, media_type="text/plain")
+
+
+@router.get("/agent-dist/elevate.ps1", response_class=PlainTextResponse)
+async def agent_elevate_ps1(request: Request):
+    """
+    Richtet EINMALIG (elevated auszuführen) zwei vorautorisierte SYSTEM-Tasks ein,
+    die per Windows-Event ausgelöst werden:
+        RapalleRmmUpdate    (EventID 812)  -> update.ps1
+        RapalleRmmUninstall (EventID 811)  -> uninstall.ps1
+    Danach kann der (nicht-privilegierte) Agent Update/Uninstall auslösen, indem
+    er nur ein Event schreibt - die Aufgabenplanung führt das Skript dann als
+    SYSTEM (elevated) aus. Der Agent selbst bleibt in der Benutzersitzung (damit
+    Remote-Screen weiter funktioniert).
+
+    Aufruf auf dem Client (als Administrator):
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr '<BACKEND>/agent-dist/elevate.ps1' -UseBasicParsing | iex"
+    """
+    backend_url = _backend_url(request)
+    template = r'''$ErrorActionPreference = "Continue"
+$Backend = "__BACKEND__"
+
+Write-Host "RapalleRMM: richte elevated Update/Uninstall (SYSTEM, per Event ausgeloest) ein..."
+
+# Event-Quelle anlegen (idempotent). Der Agent schreibt spaeter Events dieser
+# Quelle; die SYSTEM-Tasks werden dadurch getriggert.
+try {
+    if (-not [System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {
+        New-EventLog -LogName Application -Source "RapalleRMM" -ErrorAction Stop
+        Write-Host "  Event-Quelle 'RapalleRMM' angelegt."
+    } else {
+        Write-Host "  Event-Quelle 'RapalleRMM' vorhanden."
+    }
+} catch {
+    Write-Host "  WARNUNG: Event-Quelle konnte nicht angelegt werden: $_"
+}
+
+function Register-RmmSystemTask($name, $eventId, $scriptName) {
+    # Task-Definition als XML (robust ueber alle Windows-Versionen; kein CIM noetig).
+    # SYSTEM = SID S-1-5-18. EventTrigger horcht auf Application-Events der Quelle
+    # 'RapalleRMM' mit der passenden EventID.
+    $argLine = "-NoProfile -ExecutionPolicy Bypass -Command ""iwr '$Backend/agent-dist/$scriptName' -UseBasicParsing | iex"""
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>RapalleRMM $name</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name='RapalleRMM'] and (EventID=$eventId)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>$argLine</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+    $tmp = Join-Path $env:TEMP ("rmm_task_" + $name + ".xml")
+    [System.IO.File]::WriteAllText($tmp, $xml, [System.Text.Encoding]::Unicode)
+    # Vorhandenen Task entfernen, dann neu aus XML anlegen (als SYSTEM).
+    schtasks /delete /tn $name /f 2>$null | Out-Null
+    $out = schtasks /create /tn $name /xml "$tmp" /ru "SYSTEM" /f 2>&1
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    # Verifizieren.
+    schtasks /query /tn $name 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  -> Task '$name' (EventID $eventId) OK."
+        return $true
+    } else {
+        Write-Host "  -> Task '$name' FEHLER: $out"
+        return $false
+    }
+}
+
+$ok1 = Register-RmmSystemTask "RapalleRmmUpdate" 812 "update.ps1"
+$ok2 = Register-RmmSystemTask "RapalleRmmUninstall" 811 "uninstall.ps1"
+
+Write-Host ""
+if ($ok1 -and $ok2) {
+    Write-Host "FERTIG. Dashboard-Update/-Uninstall funktionieren jetzt auch bei NICHT-Admin-Agent." -ForegroundColor Green
+} else {
+    Write-Host "ACHTUNG: Mindestens ein Task konnte nicht angelegt werden. Bitte dieses Fenster ALS ADMINISTRATOR ausfuehren." -ForegroundColor Yellow
+}
+Write-Host "Pruefen mit:  schtasks /query /tn RapalleRmmUninstall"
+'''
+    script = template.replace("__BACKEND__", backend_url)
     return PlainTextResponse(script, media_type="text/plain")
 
 
@@ -645,35 +763,52 @@ async def agent_uninstall_ps1(request: Request):
     killen, dann Programmordner löschen (kein Start-Job, der beim Beenden der
     Shell abgebrochen würde).
     """
-    script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows) - als Administrator ausfuehren
+    script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows)
+# Wird bevorzugt als SYSTEM-Task ausgefuehrt (elevated). Reihenfolge:
+# Autostart entfernen -> Prozesse hart beenden -> alle Daten loeschen.
 $ErrorActionPreference = "SilentlyContinue"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
 
 Write-Host "1) Stoppe und entferne Agent-Autostart..."
-Stop-ScheduledTask -TaskName "RapalleRmmAgent"
+schtasks /end /tn "RapalleRmmAgent" 2>$null | Out-Null
+schtasks /delete /tn "RapalleRmmAgent" /f 2>$null | Out-Null
 Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false
 
 Write-Host "2) Beende Agent-Prozesse..."
-# Zwei Runden: Prozesse, die agent.py ODER etwas im Installationsordner ausfuehren.
-for ($i = 0; $i -lt 3; $i++) {
-    $procs = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-        Where-Object { $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or $_.ExecutablePath -like "$InstallDir*" }
-    if (-not $procs) { break }
-    $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-    Start-Sleep -Seconds 1
+for ($i = 0; $i -lt 4; $i++) {
+    $ids = @()
+    $ids += (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$InstallDir*" }).Id
+    $ids += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or
+        ($_.ExecutablePath -and $_.ExecutablePath -like "$InstallDir*")
+    }).ProcessId
+    $ids = $ids | Where-Object { $_ } | Sort-Object -Unique
+    if (-not $ids) { break }
+    foreach ($id in $ids) {
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+        cmd /c "taskkill /PID $id /F /T" 2>$null | Out-Null
+    }
+    Start-Sleep -Seconds 2
 }
-Start-Sleep -Seconds 1
+Start-Sleep -Seconds 2
 
 Write-Host "3) Loesche alle Agent-Daten..."
-# Bis zu 5 Versuche, falls eine Datei (z.B. agent.log) noch kurz gehalten wird.
-for ($i = 0; $i -lt 5; $i++) {
-    Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+for ($i = 0; $i -lt 6; $i++) {
     if (-not (Test-Path $InstallDir)) { break }
-    Start-Sleep -Seconds 1
+    # Schreibschutz/Attribute entfernen, dann mit zwei Methoden loeschen.
+    cmd /c "attrib -r -s -h `"$InstallDir\\*.*`" /s /d" 2>$null | Out-Null
+    Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $InstallDir) { cmd /c "rmdir /s /q `"$InstallDir`"" 2>$null | Out-Null }
+    Start-Sleep -Seconds 2
 }
 
+# Falls per SYSTEM-Task/Event gestartet: Hilfstasks + Event-Quelle wieder entfernen.
+schtasks /delete /tn "RapalleRmmUninstall" /f 2>$null | Out-Null
+schtasks /delete /tn "RapalleRmmUpdate" /f 2>$null | Out-Null
+try { Remove-EventLog -Source "RapalleRMM" -ErrorAction SilentlyContinue } catch {}
+
 if (Test-Path $InstallDir) {
-    Write-Host "WARNUNG: $InstallDir konnte nicht vollstaendig entfernt werden."
+    Write-Host "WARNUNG: $InstallDir konnte nicht vollstaendig entfernt werden (Datei evtl. noch gesperrt). Nach einem Neustart erneut versuchen."
 } else {
     Write-Host "Agent deinstalliert - alle Daten entfernt."
 }

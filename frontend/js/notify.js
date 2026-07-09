@@ -57,7 +57,7 @@ export function notify(message, level = "info", durationMs = 5000) {
     <button class="notify-close" style="position:absolute;top:10px;right:10px;background:none;
       border:none;color:var(--subtext,#8fa3bd);cursor:pointer;font-size:14px;line-height:1">✕</button>
     <div class="notify-bar" style="position:absolute;bottom:0;left:0;height:3px;width:100%;
-      background:${cfg.color};transform-origin:left;transition:transform linear"></div>
+      background:${cfg.color};transform-origin:left;transform:scaleX(1)"></div>
   `;
 
   root.appendChild(box);
@@ -69,38 +69,50 @@ export function notify(message, level = "info", durationMs = 5000) {
   });
 
   const bar = box.querySelector(".notify-bar");
-  let remaining = durationMs;
-  let startTime = Date.now();
-  let timer = null;
+  // Countdown per requestAnimationFrame steuern (robust: Hover pausiert, danach
+  // läuft der Balken exakt weiter statt zu verschwinden). Bewusst KEINE
+  // CSS-Transition auf dem Balken - wir setzen scaleX pro Frame selbst.
+  let remaining = durationMs;   // verbleibende Zeit in ms
+  let lastTs = null;            // Zeitstempel des letzten Frames
+  let rafId = null;
   let paused = false;
+  let closed = false;
+
+  function tick(ts) {
+    if (paused || closed) return;
+    if (lastTs == null) lastTs = ts;
+    remaining -= ts - lastTs;
+    lastTs = ts;
+    const frac = Math.max(0, remaining / durationMs);
+    bar.style.transform = `scaleX(${frac})`;
+    if (remaining <= 0) { close(); return; }
+    rafId = requestAnimationFrame(tick);
+  }
 
   function startCountdown() {
-    startTime = Date.now();
-    // Balken von voll (scaleX 1) auf 0 schrumpfen über die verbleibende Zeit
-    bar.style.transition = `transform ${remaining}ms linear`;
-    requestAnimationFrame(() => { bar.style.transform = "scaleX(0)"; });
-    timer = setTimeout(close, remaining);
+    if (closed) return;
+    lastTs = null;
+    paused = false;
+    rafId = requestAnimationFrame(tick);
   }
 
   function pauseCountdown() {
-    if (paused) return;
+    if (paused || closed) return;
     paused = true;
-    clearTimeout(timer);
-    remaining -= Date.now() - startTime;
-    // Balken an aktueller Position einfrieren
-    const computed = getComputedStyle(bar).transform;
-    bar.style.transition = "none";
-    bar.style.transform = computed;
+    if (rafId) cancelAnimationFrame(rafId);
   }
 
   function resumeCountdown() {
-    if (!paused) return;
+    if (!paused || closed) return;
+    lastTs = null;             // Zeitbasis zurücksetzen, sonst großer "Sprung"
     paused = false;
-    startCountdown();
+    rafId = requestAnimationFrame(tick);
   }
 
   function close() {
-    clearTimeout(timer);
+    if (closed) return;
+    closed = true;
+    if (rafId) cancelAnimationFrame(rafId);
     box.style.transform = "translateY(-120%)";
     box.style.opacity = "0";
     setTimeout(() => box.remove(), 350);

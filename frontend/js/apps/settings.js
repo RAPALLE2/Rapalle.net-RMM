@@ -226,8 +226,28 @@ export function renderSettings(body, win) {
           <button class="btn-primary" id="guacd-save" style="width:auto;margin:0">${t("save")}</button>
           <button class="taskbar-btn" id="guacd-test">${t("guac_test")}</button>
         </div>
+
+        <h3 style="margin-top:26px">Wartung</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Startet den Backend-Dienst neu (z.B. nach Konfigurationsänderungen).
+          Alle Sitzungen werden dabei kurz getrennt und verbinden sich automatisch
+          wieder. Läuft das Backend unter systemd, kommt es sofort wieder hoch.
+        </p>
+        <button class="taskbar-btn" id="ge-restart-backend" style="border-color:var(--warn);color:var(--warn)">↻ Backend neu starten</button>
       </div>
     `;
+
+    root.querySelector("#ge-restart-backend").addEventListener("click", async () => {
+      if (!confirm("Backend wirklich neu starten?\n\nDas Dashboard trennt sich kurz und verbindet sich danach automatisch wieder.")) return;
+      try {
+        await api.restartBackend();
+        window.notify?.("Backend startet neu… Die Seite verbindet sich in ein paar Sekunden automatisch wieder.", "info", 12000);
+        // Nach ein paar Sekunden neu laden, damit die frische Verbindung sauber steht.
+        setTimeout(() => window.location.reload(), 6000);
+      } catch (e) {
+        window.notify?.("Neustart fehlgeschlagen: " + e.message, "error");
+      }
+    });
 
     root.querySelector("#ge-save").addEventListener("click", async () => {
       const err = root.querySelector("#ge-error");
