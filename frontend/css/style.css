@@ -188,6 +188,20 @@ body {
   background-clip: content-box;
 }
 
+/* ---- Dashboard (Donut-Charts) ---- */
+.dash-wrap { padding: 20px; }
+.dash-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+.dash-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+.dash-card {
+  background: var(--panel, #131c2b); border: 1px solid var(--border, #2a3550);
+  border-radius: 14px; padding: 16px 18px;
+}
+.dash-card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+.dash-legend-row:hover { background: var(--panel-2, #1b2740); }
+
 .sidebar-resizer:hover, .sidebar-resizer.active { background: var(--accent); opacity: 0.5; }
 
 /* Drag & Drop von Clients in der Sidebar */

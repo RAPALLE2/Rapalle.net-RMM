@@ -19,6 +19,7 @@ import {
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
+import { renderDashboard } from "./apps/dashboard.js";
 
 // Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
 let _latestAgentVersion = null;
@@ -47,8 +48,8 @@ const content = () => document.getElementById("main-content");
 
 export function renderMainContent() {
   const el = content();
-  if (!state.selection) {
-    el.innerHTML = `<div class="empty-state">${t("select_hint")}</div>`;
+  if (!state.selection || state.selection.type === "dashboard") {
+    renderDashboard(el);
     return;
   }
   if (state.selection.type === "client") renderClientView(el, state.selection.id);

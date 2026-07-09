@@ -410,8 +410,11 @@ export function initSidebarNav() {
   });
   const dash = document.getElementById("sidebar-dashboard");
   if (dash) dash.addEventListener("click", () => {
-    // Platzhalter für die Zukunft - aktuell nur visuelles Feedback.
     dash.classList.add("nav-pulse");
     setTimeout(() => dash.classList.remove("nav-pulse"), 400);
+    state.selection = { type: "dashboard" };
+    renderSidebar();
+    if (onSelectCallback) onSelectCallback();
+    if (onTreeStateChanged) onTreeStateChanged();
   });
 }
