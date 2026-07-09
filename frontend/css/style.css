@@ -166,6 +166,15 @@ body {
 }
 .sidebar-resizer:hover, .sidebar-resizer.active { background: var(--accent); opacity: 0.5; }
 
+/* Drag & Drop von Clients in der Sidebar */
+.tree-row[data-drag-client] { cursor: grab; }
+.tree-row.dragging { opacity: 0.45; }
+.tree-row.drag-over {
+  outline: 2px dashed var(--accent); outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 4px;
+}
+
 .sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 12px; font-size: 12px; text-transform: uppercase; color: var(--subtext);

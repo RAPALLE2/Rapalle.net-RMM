@@ -19,6 +19,12 @@ Startet man den Agenten mehrfach hintereinander, behält er über die Datei
 Client nicht bei jedem Neustart.
 """
 
+# WICHTIG: macht alle Typ-Annotationen "lazy" (werden als Strings gespeichert und
+# nicht zur Laufzeit ausgewertet). Dadurch funktioniert die moderne Schreibweise
+# "str | None" auch auf Python 3.8/3.9 (viele Windows-Installationen), wo sie
+# sonst einen TypeError wirft. MUSS die allererste Anweisung nach dem Docstring sein.
+from __future__ import annotations
+
 import asyncio
 import base64
 import io
@@ -221,7 +227,24 @@ def _read_agent_version() -> str:
 AGENT_VERSION = _read_agent_version()
 
 # Der Socket.IO-Client, über den die gesamte Kommunikation läuft
-sio = socketio.AsyncClient(reconnection=True, reconnection_delay=3)
+# EINEN festen Event-Loop erzeugen und als aktuellen setzen, BEVOR der
+# socketio-Client erstellt wird. Grund: 'sio' wird beim Import gebaut; würde man
+# main() später über asyncio.run() starten, liefe alles auf einem ANDEREN Loop
+# -> "Future attached to a different loop". Wir laufen main() unten explizit auf
+# genau diesem Loop (run_until_complete).
+try:
+    _AGENT_LOOP = asyncio.get_event_loop()
+    if _AGENT_LOOP.is_closed():
+        raise RuntimeError("closed")
+except RuntimeError:
+    _AGENT_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(_AGENT_LOOP)
+
+# reconnection=False: Wir steuern das Wiederverbinden SELBST (siehe main()).
+# Sonst kämpfen die interne Auto-Reconnection und unsere Schleife gegeneinander
+# -> Fehler "Already connected" und "Future attached to a different loop", weil
+# sich zwei Verbindungs-Lebenszyklen überlappen.
+sio = socketio.AsyncClient(reconnection=False)
 
 
 def get_local_ip() -> str | None:
@@ -267,7 +290,8 @@ async def connect():
 
 @sio.event(namespace="/agent")
 async def connect_error(data):
-    _print(f"[agent] Verbindungsfehler: {data}")
+    _print(f"[agent] Verbindungsfehler zu {BACKEND_URL}: {data!r} "
+           f"(Prüfen: erreichbar? TLS-Zertifikat gültig? Proxy leitet /socket.io weiter?)")
 
 
 # --------------------------------------------------------------
@@ -1560,15 +1584,46 @@ async def main():
     # Heartbeat läuft als eigene Hintergrund-Aufgabe, unabhängig von der Verbindung
     asyncio.create_task(heartbeat_loop())
 
-    # Verbindungsschleife: falls die Verbindung abbricht, wird es alle 3s erneut versucht
+    # Verbindungsschleife: WIR steuern das Wiederverbinden selbst. Vor jedem
+    # Versuch sauber trennen, damit die interne Client-Zustand nicht auf
+    # "Already connected" hängen bleibt.
+    if any(x in BACKEND_URL for x in ("localhost", "127.0.0.1")):
+        _print(f"[agent] WARNUNG: BACKEND_URL zeigt auf {BACKEND_URL} - ein entfernter/"
+               f"öffentlicher Client kann das NICHT erreichen. In der .env die öffentliche "
+               f"Adresse eintragen (z.B. https://domain) bzw. im Dashboard unter "
+               f"Einstellungen -> Allgemein -> 'Server-URL' setzen.")
     while True:
         try:
-            await sio.connect(BACKEND_URL, auth={"token": AGENT_TOKEN}, namespaces=["/agent"])
-            await sio.wait()  # hält das Programm am Laufen, solange die Verbindung steht
+            if sio.connected:
+                try:
+                    await sio.disconnect()
+                except Exception:
+                    pass
+            _print(f"[agent] Verbinde zu {BACKEND_URL} (Namespace /agent)...")
+            await sio.connect(BACKEND_URL, auth={"token": AGENT_TOKEN},
+                              namespaces=["/agent"], wait_timeout=15)
+            await sio.wait()  # blockiert, solange die Verbindung steht
+            _print("[agent] Verbindung getrennt.")
         except Exception as e:
-            _print(f"[agent] Verbindung fehlgeschlagen ({e}), neuer Versuch in 3s...")
-            await asyncio.sleep(3)
+            _print(f"[agent] Verbindung zu {BACKEND_URL} fehlgeschlagen ({e!r}), neuer Versuch in 3s...")
+        # Immer sauber trennen, bevor der nächste Versuch startet.
+        try:
+            await sio.disconnect()
+        except Exception:
+            pass
+        await asyncio.sleep(3)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # WICHTIG: auf dem OBEN gesetzten Loop laufen (nicht asyncio.run(), das einen
+    # neuen Loop anlegen würde) -> derselbe Loop, auf dem 'sio' erstellt wurde.
+    asyncio.set_event_loop(_AGENT_LOOP)
+    try:
+        _AGENT_LOOP.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            _AGENT_LOOP.close()
+        except Exception:
+            pass

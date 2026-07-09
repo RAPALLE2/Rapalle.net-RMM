@@ -146,6 +146,17 @@ def _backend_url(request: Request) -> str:
             return f"{scheme}://{target}"
         return f"{scheme}://{target}:{port}"
 
+    # 3. Automatisch aus dem Request ableiten - dabei Reverse-Proxy-Header
+    #    beachten. Läuft das Backend hinter einem Proxy (https://domain ->
+    #    http://ip:4000), setzt der Proxy üblicherweise X-Forwarded-Proto/Host.
+    #    Ohne diese Header sähe request.base_url nur die interne Adresse
+    #    (http://ip:4000), die ein öffentlicher Client NICHT erreichen kann.
+    fproto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    fhost = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = fhost or request.headers.get("host") or request.url.netloc
+    scheme = fproto or request.url.scheme or "http"
+    if host:
+        return f"{scheme}://{host}".rstrip("/")
     return str(request.base_url).rstrip("/")
 
 

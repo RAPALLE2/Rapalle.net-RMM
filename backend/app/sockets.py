@@ -483,7 +483,14 @@ async def send_to_agent(client_id: str, event: str, data: dict) -> bool:
 
 @sio.on("connect", namespace="/dashboard")
 async def dashboard_connect(sid, environ, auth):
-    pass  # Verbindung wird einfach angenommen
+    # Beim Verbinden die BOOT_ID des laufenden Backend-Prozesses schicken. Das
+    # Frontend erkennt daran einen Neustart (BOOT_ID ändert sich) und lädt neu -
+    # so entfällt das sekündliche Polling von /api/boot-id.
+    try:
+        from app.main import BOOT_ID
+        await sio.emit("boot:id", {"boot_id": BOOT_ID}, to=sid, namespace="/dashboard")
+    except Exception:
+        pass
 
 
 @sio.on("disconnect", namespace="/dashboard")

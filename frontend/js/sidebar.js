@@ -10,6 +10,7 @@
 import { state } from "./state.js";
 import { esc } from "./utils.js";
 import { t } from "./i18n.js";
+import { api } from "./api.js";
 
 // Wird von app.js gesetzt, um bei Auswahl das Haupt-Panel zu aktualisieren
 let onSelectCallback = null;
@@ -136,7 +137,7 @@ function renderFolderChildren(locationId, parentFolderId) {
     const isOpen = expanded.has(folder.id);
     html += `
       <div class="tree-node">
-        <div class="tree-row" data-toggle="${folder.id}">
+        <div class="tree-row" data-toggle="${folder.id}" data-drop-folder="${folder.id}">
           <span>${isOpen ? "▾" : "▸"}</span> 📁 ${esc(folder.name)}
         </div>
         ${isOpen ? `<div class="tree-children">${renderFolderChildren(locationId, folder.id)}</div>` : ""}
@@ -160,7 +161,7 @@ function renderClientNode(client) {
 
   return `
     <div class="tree-node">
-      <div class="tree-row row-anim ${selected ? "selected" : ""}" data-select-client="${client.id}">
+      <div class="tree-row row-anim ${selected ? "selected" : ""}" data-select-client="${client.id}" data-drag-client="${client.id}" draggable="true">
         ${children.length ? `<span data-toggle="${client.id}">${isOpen ? "▾" : "▸"}</span>` : `<span style="width:10px;display:inline-block"></span>`}
         ${clientDot(client)} <span style="flex:1">${esc(client.hostname)}</span>
         ${favStar("clients", client.id)}
@@ -183,7 +184,7 @@ export function renderSidebar() {
 
     html += `
       <div class="tree-node">
-        <div class="tree-row row-anim ${selected ? "selected" : ""}">
+        <div class="tree-row row-anim ${selected ? "selected" : ""}" data-drop-tenant="${tenant.id}">
           <span data-toggle="${tenant.id}">${isOpen ? "▾" : "▸"}</span>
           <span data-select-tenant="${tenant.id}" style="flex:1">
             <span class="dot" style="background:${esc(tenant.color)}"></span> ${esc(tenant.name)}
@@ -199,7 +200,7 @@ export function renderSidebar() {
         const locSelected = state.selection?.type === "location" && state.selection.id === location.id;
         html += `
           <div class="tree-node">
-            <div class="tree-row ${locSelected ? "selected" : ""}">
+            <div class="tree-row ${locSelected ? "selected" : ""}" data-drop-location="${location.id}">
               <span data-toggle="${location.id}">${locOpen ? "▾" : "▸"}</span>
               <span data-select-location="${location.id}" style="flex:1">📍 ${esc(location.name)}</span>
             </div>
@@ -207,6 +208,12 @@ export function renderSidebar() {
           </div>
         `;
       }
+      // Clients, die direkt im Tenant liegen (Tenant gesetzt, aber keine Location)
+      // - z.B. nach dem Ziehen auf einen Tenant. Damit sie sichtbar bleiben.
+      const tenantClients = state.clients.filter(
+        (c) => c.tenant_id === tenant.id && !c.location_id && !c.parent_client_id
+      );
+      for (const c of tenantClients) html += renderClientNode(c);
       html += `</div>`;
     }
 
@@ -250,7 +257,88 @@ export function renderSidebar() {
     })
   );
 
+  // --- Drag & Drop: Client in anderen Tenant / Location / Ordner ziehen ---
+  tree.querySelectorAll("[data-drag-client]").forEach((el) => {
+    el.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", el.dataset.dragClient);
+      e.dataTransfer.effectAllowed = "move";
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => {
+      el.classList.remove("dragging");
+      tree.querySelectorAll(".drag-over").forEach((x) => x.classList.remove("drag-over"));
+    });
+  });
+
+  const dropSel = "[data-drop-tenant],[data-drop-location],[data-drop-folder]";
+  tree.querySelectorAll(dropSel).forEach((el) => {
+    el.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();               // nur das innerste Ziel hervorheben
+      e.dataTransfer.dropEffect = "move";
+      tree.querySelectorAll(".drag-over").forEach((x) => x.classList.remove("drag-over"));
+      el.classList.add("drag-over");
+    });
+    el.addEventListener("dragleave", (e) => {
+      if (!el.contains(e.relatedTarget)) el.classList.remove("drag-over");
+    });
+    el.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove("drag-over");
+      const clientId = e.dataTransfer.getData("text/plain");
+      moveClient(clientId, {
+        tenant: el.dataset.dropTenant,
+        location: el.dataset.dropLocation,
+        folder: el.dataset.dropFolder,
+      });
+    });
+  });
+
   renderFavorites();
+}
+
+// Verschiebt einen Client per Drag&Drop in einen Tenant/eine Location/einen Ordner.
+// Wirkt wie das Bearbeiten der Eigenschaften (tenant_id/location_id/folder_id).
+async function moveClient(clientId, target) {
+  const c = state.clients.find((x) => x.id === clientId);
+  if (!c) return;
+
+  let fields = null;
+  if (target.folder) {
+    const folder = state.hierarchy.folders.find((f) => f.id === target.folder);
+    if (!folder) return;
+    const loc = state.hierarchy.locations.find((l) => l.id === folder.location_id);
+    fields = { tenant_id: loc ? loc.tenant_id : c.tenant_id, location_id: folder.location_id, folder_id: folder.id };
+  } else if (target.location) {
+    const loc = state.hierarchy.locations.find((l) => l.id === target.location);
+    if (!loc) return;
+    fields = { tenant_id: loc.tenant_id, location_id: loc.id, folder_id: null };
+  } else if (target.tenant) {
+    fields = { tenant_id: target.tenant, location_id: null, folder_id: null };
+  }
+  if (!fields) return;
+
+  // Keine Änderung? -> nichts tun.
+  if (c.tenant_id === fields.tenant_id &&
+      (c.location_id || null) === (fields.location_id || null) &&
+      (c.folder_id || null) === (fields.folder_id || null)) {
+    return;
+  }
+
+  try {
+    await api.updateClient(clientId, fields);
+    Object.assign(c, fields);            // lokalen Zustand sofort aktualisieren
+    // Zielpfad aufklappen, damit der Client sichtbar bleibt.
+    if (fields.tenant_id) expanded.add(fields.tenant_id);
+    if (fields.location_id) expanded.add(fields.location_id);
+    if (fields.folder_id) expanded.add(fields.folder_id);
+    renderSidebar();
+    if (onSelectCallback) onSelectCallback();   // Hauptpanel ggf. aktualisieren
+    window.notify?.(`${c.hostname} verschoben.`, "success", 2500);
+  } catch (e) {
+    window.notify?.("Verschieben fehlgeschlagen: " + e.message, "error", 6000);
+  }
 }
 
 // -----------------------------------------------------------------

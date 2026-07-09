@@ -166,6 +166,12 @@ export function renderSettings(body, win) {
           <label>${t("general_server_url_advanced")}</label>
           <input type="text" id="ge-server-url" placeholder="https://rmm.meinefirma.de" value="${esc(s.server_url || "")}" />
         </div>
+        <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
+          Öffentlicher Zugriff / Reverse-Proxy: Trage hier die <b>öffentliche Adresse</b> ein
+          (z.B. <code>https://rmm.meinefirma.de</code>), unter der Agenten das Backend erreichen.
+          Dieser Wert wird in die Agent-Installation eingebaut — sonst bekommt ein Agent die
+          interne IP (<code>http://ip:4000</code>), die ein externer Client nicht erreichen kann.
+        </p>
 
         <h3 style="margin-top:24px">${t("general_metrics_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">${t("general_metrics_hint")}</p>
