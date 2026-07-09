@@ -22,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import db
+from app import loghub as _loghub
+_loghub.install()  # idempotent: fängt Backend-Ausgabe ab (falls nicht via run.py)
 from app.config import CORS_ORIGIN
 from app.sockets import sio
 from app.routers import (
@@ -38,6 +40,7 @@ from app.routers import (
     admin_routes,
     agent_update_routes,
     guac_routes,
+    source_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -77,6 +80,7 @@ api.include_router(scripts_routes.router)
 api.include_router(admin_routes.router)
 api.include_router(agent_update_routes.router)
 api.include_router(guac_routes.router)
+api.include_router(source_routes.router)
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.

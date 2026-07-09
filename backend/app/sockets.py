@@ -488,7 +488,12 @@ async def dashboard_connect(sid, environ, auth):
 
 @sio.on("disconnect", namespace="/dashboard")
 async def dashboard_disconnect(sid):
-    pass  # nichts Besonderes zu tun
+    # Falls dieser Client die Backend-Ausgabe abonniert hatte, austragen.
+    try:
+        from app.loghub import hub as _h
+        _h.subscribers.discard(sid)
+    except Exception:
+        pass
 
 
 # --- Rechteprüfung im (unauthentifizierten) Dashboard-Namespace ------------
@@ -718,3 +723,47 @@ def _finalize_term_session(session: str) -> None:
                f"----- Sitzungsverlauf -----\n{transcript}")
     _db.add_audit_entry(meta["username"], "terminal.session",
                         target=meta["client_id"], details=details)
+
+
+# ==========================================================================
+# BACKEND-AUSGABE (Live-Log) - "Source"-Tab
+# --------------------------------------------------------------------------
+# Read-only: streamt die Konsolenausgabe (stdout/stderr) des laufenden
+# Backend-Prozesses (run.py) an eingeschriebene Admin-Dashboards. Es gibt KEINE
+# Eingabe/Shell mehr - nur Anzeige. Auth über das JWT des Admins.
+# ==========================================================================
+
+from app.loghub import hub as _loghub_hub
+
+
+def _admin_from_token(token: str):
+    """Gibt den Admin-User zurück, wenn das Token gültig und role=='admin' ist."""
+    try:
+        from app.auth import decode_access_token
+        payload = decode_access_token(token)
+        u = db.get_user_by_id(payload.get("sub"))
+        if u and u.get("role") == "admin":
+            return u
+    except Exception:
+        pass
+    return None
+
+
+@sio.on("backend-log-open", namespace="/dashboard")
+async def backend_log_open(sid, data):
+    """Admin abonniert die Backend-Ausgabe; bekommt zuerst den Verlauf."""
+    if not _admin_from_token(data.get("token")):
+        await sio.emit("backend-log-history",
+                       {"data": "[Nicht autorisiert - nur Super-Admins]\n"},
+                       to=sid, namespace="/dashboard")
+        return
+    # Event-Loop merken (für Broadcasts aus Fremd-Threads) + Zuhörer registrieren.
+    _loghub_hub.set_loop(asyncio.get_event_loop())
+    _loghub_hub.subscribers.add(sid)
+    await sio.emit("backend-log-history", {"data": _loghub_hub.history()},
+                   to=sid, namespace="/dashboard")
+
+
+@sio.on("backend-log-close", namespace="/dashboard")
+async def backend_log_close(sid, data):
+    _loghub_hub.subscribers.discard(sid)

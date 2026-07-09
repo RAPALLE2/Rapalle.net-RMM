@@ -18,6 +18,11 @@ import uvicorn
 from app.bootstrap_deps import ensure_dependencies
 ensure_dependencies()
 
+# Konsolenausgabe des Backends abgreifen (fuer den Source-Tab "Backend-Ausgabe").
+# Muss VOR uvicorn.run passieren, damit auch uvicorn-Logs erfasst werden.
+from app import loghub
+loghub.install()
+
 from app.config import PORT
 
 if __name__ == "__main__":

@@ -12,11 +12,22 @@
 import { api } from "../api.js";
 import { esc } from "../utils.js";
 import { t } from "../i18n.js";
+import { isAdmin } from "../state.js";
+import { renderSource } from "./source.js";
+import { registerCleanup } from "../windowmanager.js";
 
 export function renderSettings(body, win) {
   let activeTab = "general";
+  let sourceCleanup = null;  // Aufräumen der Source-Shell (Socket/PTY) beim Verlassen
+
+  // Beim Schließen des Einstellungen-Fensters die Source-Shell sicher beenden.
+  if (win && win.key) {
+    registerCleanup(win.key, () => { if (sourceCleanup) { try { sourceCleanup(); } catch {} } });
+  }
 
   function draw() {
+    // Vorherige Source-Shell sauber schließen, bevor neu gezeichnet wird.
+    if (sourceCleanup) { try { sourceCleanup(); } catch {} sourceCleanup = null; }
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
         <div class="tab-bar" style="padding:10px 14px;border-bottom:1px solid var(--border);gap:6px">
@@ -26,6 +37,7 @@ export function renderSettings(body, win) {
           <button class="tab-btn ${activeTab === "sso" ? "active" : ""}" data-t="sso">${t("tab_sso")}</button>
           <button class="tab-btn ${activeTab === "branding" ? "active" : ""}" data-t="branding">Branding</button>
           <button class="tab-btn ${activeTab === "notifications" ? "active" : ""}" data-t="notifications">${t("tab_notifications")}</button>
+          ${isAdmin() ? `<button class="tab-btn ${activeTab === "source" ? "active" : ""}" data-t="source">Source</button>` : ""}
         </div>
         <div id="set-content" style="flex:1;overflow:auto"></div>
       </div>
@@ -40,6 +52,7 @@ export function renderSettings(body, win) {
     else if (activeTab === "sso") renderSsoTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
     else if (activeTab === "notifications") renderNotifTab(content);
+    else if (activeTab === "source") sourceCleanup = renderSource(content);
   }
 
   // ---------------- BRANDING (Logos per Upload ersetzen) ----------------
@@ -226,28 +239,8 @@ export function renderSettings(body, win) {
           <button class="btn-primary" id="guacd-save" style="width:auto;margin:0">${t("save")}</button>
           <button class="taskbar-btn" id="guacd-test">${t("guac_test")}</button>
         </div>
-
-        <h3 style="margin-top:26px">Wartung</h3>
-        <p style="color:var(--subtext);font-size:13px">
-          Startet den Backend-Dienst neu (z.B. nach Konfigurationsänderungen).
-          Alle Sitzungen werden dabei kurz getrennt und verbinden sich automatisch
-          wieder. Läuft das Backend unter systemd, kommt es sofort wieder hoch.
-        </p>
-        <button class="taskbar-btn" id="ge-restart-backend" style="border-color:var(--warn);color:var(--warn)">↻ Backend neu starten</button>
       </div>
     `;
-
-    root.querySelector("#ge-restart-backend").addEventListener("click", async () => {
-      if (!confirm("Backend wirklich neu starten?\n\nDas Dashboard trennt sich kurz und verbindet sich danach automatisch wieder.")) return;
-      try {
-        await api.restartBackend();
-        window.notify?.("Backend startet neu… Die Seite verbindet sich in ein paar Sekunden automatisch wieder.", "info", 12000);
-        // Nach ein paar Sekunden neu laden, damit die frische Verbindung sauber steht.
-        setTimeout(() => window.location.reload(), 6000);
-      } catch (e) {
-        window.notify?.("Neustart fehlgeschlagen: " + e.message, "error");
-      }
-    });
 
     root.querySelector("#ge-save").addEventListener("click", async () => {
       const err = root.querySelector("#ge-error");

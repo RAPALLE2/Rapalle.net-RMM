@@ -7,7 +7,7 @@
 
 import { BACKEND_URL } from "./config.js";
 
-function getToken() {
+export function getToken() {
   return localStorage.getItem("rmm_token");
 }
 
@@ -124,6 +124,18 @@ export const api = {
 
   // --- Neueste ausgelieferte Agent-Version (für "veraltet"-Hinweis) ---
   getAgentVersion: () => request("/api/agent/version"),
+
+  // --- Source-Tab (Admin): Explorer + Datenbank ---
+  sourceRoots: () => request("/api/source/roots"),
+  sourceList: (path = "") => request(`/api/source/list?path=${encodeURIComponent(path)}`),
+  sourceRead: (path) => request(`/api/source/read?path=${encodeURIComponent(path)}`),
+  sourceWrite: (path, content) =>
+    request("/api/source/write", { method: "PUT", body: JSON.stringify({ path, content }) }),
+  sourceDbTables: () => request("/api/source/db/tables"),
+  sourceDbTable: (name, limit = 200, offset = 0) =>
+    request(`/api/source/db/table?name=${encodeURIComponent(name)}&limit=${limit}&offset=${offset}`),
+  sourceDbQuery: (sql) =>
+    request("/api/source/db/query", { method: "POST", body: JSON.stringify({ sql }) }),
 
   // --- AD-Gruppen aus einem Realm laden / importieren (Admin) ---
   getRealmAdGroups: (realmId) => request(`/api/admin/realms/${realmId}/ad-groups`),
