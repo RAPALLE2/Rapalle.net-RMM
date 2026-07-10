@@ -27,7 +27,7 @@ from app.auth import (
     get_current_user, require_perm, can_access_client,
     visible_client_ids, user_has_permission,
 )
-from app.sockets import state, request_exec, request_fs_list, request_proc_list, request_proc_kill, request_fs_read, send_to_agent
+from app.sockets import state, request_exec, request_fs_list, request_proc_list, request_proc_kill, request_fs_read, request_fs_op, send_to_agent
 
 
 def _require_client_perm(user: dict, client_id: str, perm: str) -> None:
@@ -327,6 +327,71 @@ async def read_client_file(client_id: str, path: str, user: dict = Depends(get_c
     except Exception as e:
         raise HTTPException(504, str(e))
     db.add_audit_entry(user["username"], "file.download", target=client_id, details=path)
+    return result
+
+
+# ------------------------------------------------------------------
+# Schreibende Datei-Operationen auf einem Client (Upload/Ordner/Löschen/…)
+# Alle brauchen das Recht "use_explorer".
+# ------------------------------------------------------------------
+
+class FsWriteBody(BaseModel):
+    path: str          # Zielpfad inkl. Dateiname
+    data: str          # base64-kodierter Inhalt
+
+
+class FsPathBody(BaseModel):
+    path: str
+
+
+class FsRenameBody(BaseModel):
+    src: str
+    dst: str
+
+
+@router.post("/{client_id}/fs/write")
+async def write_client_file(client_id: str, body: FsWriteBody, user: dict = Depends(get_current_user)):
+    """Lädt eine Datei hoch oder schreibt eine editierte Datei zurück."""
+    _require_client_perm(user, client_id, "use_explorer")
+    try:
+        result = await request_fs_op(client_id, "fs-write", {"path": body.path, "data": body.data})
+    except Exception as e:
+        raise HTTPException(504, str(e))
+    db.add_audit_entry(user["username"], "file.upload", target=client_id, details=body.path)
+    return result
+
+
+@router.post("/{client_id}/fs/mkdir")
+async def mkdir_client(client_id: str, body: FsPathBody, user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "use_explorer")
+    try:
+        result = await request_fs_op(client_id, "fs-mkdir", {"path": body.path})
+    except Exception as e:
+        raise HTTPException(504, str(e))
+    db.add_audit_entry(user["username"], "file.mkdir", target=client_id, details=body.path)
+    return result
+
+
+@router.post("/{client_id}/fs/delete")
+async def delete_client_path(client_id: str, body: FsPathBody, user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "use_explorer")
+    try:
+        result = await request_fs_op(client_id, "fs-delete", {"path": body.path})
+    except Exception as e:
+        raise HTTPException(504, str(e))
+    db.add_audit_entry(user["username"], "file.delete", target=client_id, details=body.path)
+    return result
+
+
+@router.post("/{client_id}/fs/rename")
+async def rename_client_path(client_id: str, body: FsRenameBody, user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "use_explorer")
+    try:
+        result = await request_fs_op(client_id, "fs-rename", {"src": body.src, "dst": body.dst})
+    except Exception as e:
+        raise HTTPException(504, str(e))
+    db.add_audit_entry(user["username"], "file.rename", target=client_id,
+                       details=f"{body.src} -> {body.dst}")
     return result
 
 

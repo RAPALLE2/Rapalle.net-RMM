@@ -193,6 +193,33 @@ async def request_fs_read(client_id: str, path: str, timeout_seconds: float = 30
     return payload
 
 
+async def request_fs_op(client_id: str, event: str, data: dict,
+                        timeout_seconds: float = 60.0) -> dict:
+    """
+    Generischer Helfer für schreibende FS-Operationen auf einem Client:
+    fs-write (Upload/Editieren), fs-mkdir, fs-delete, fs-rename.
+    Alle antworten mit dem Event 'fs-op-result'.
+    """
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Client ist offline")
+
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+
+    await sio.emit(event, {"requestId": request_id, **data}, to=sid, namespace="/agent")
+
+    try:
+        payload = await asyncio.wait_for(future, timeout=timeout_seconds)
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+    return payload
+
+
 # ====================================================================
 # Handler für den /agent Namespace (Verbindungen von den Agent-Programmen)
 # ====================================================================
@@ -377,6 +404,15 @@ async def on_proc_kill_result(sid, payload):
 @sio.on("fs-read-result", namespace="/agent")
 async def on_fs_read_result(sid, payload):
     """Antwort eines Agenten mit dem Inhalt einer Datei (Download)."""
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("fs-op-result", namespace="/agent")
+async def on_fs_op_result(sid, payload):
+    """Antwort eines Agenten auf eine schreibende FS-Operation
+    (Upload/Ordner anlegen/Löschen/Umbenennen)."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)

@@ -897,6 +897,76 @@ def _list_windows_drives() -> list[dict]:
     return drives or [{"name": "C:", "path": "C:\\", "isDir": True, "size": 0, "mtime": 0}]
 
 
+def _perm_string(mode: int, is_dir: bool, is_link: bool = False) -> str:
+    """Baut einen 'ls -al'-artigen Rechte-String, z.B. 'drwxr-xr-x'."""
+    import stat as _stat
+    if is_link:
+        type_char = "l"
+    elif is_dir:
+        type_char = "d"
+    elif _stat.S_ISCHR(mode):
+        type_char = "c"
+    elif _stat.S_ISBLK(mode):
+        type_char = "b"
+    elif _stat.S_ISFIFO(mode):
+        type_char = "p"
+    elif _stat.S_ISSOCK(mode):
+        type_char = "s"
+    else:
+        type_char = "-"
+    perms = ""
+    for who, r, w, x in (
+        ("USR", _stat.S_IRUSR, _stat.S_IWUSR, _stat.S_IXUSR),
+        ("GRP", _stat.S_IRGRP, _stat.S_IWGRP, _stat.S_IXGRP),
+        ("OTH", _stat.S_IROTH, _stat.S_IWOTH, _stat.S_IXOTH),
+    ):
+        perms += "r" if mode & r else "-"
+        perms += "w" if mode & w else "-"
+        perms += "x" if mode & x else "-"
+    return type_char + perms
+
+
+def _owner_group(stat_res) -> tuple[str, str]:
+    """Ermittelt Besitzer- und Gruppennamen (Linux/Mac). Unter Windows bzw.
+    bei fehlenden Modulen wird die numerische UID/GID zurückgegeben."""
+    uid = getattr(stat_res, "st_uid", 0)
+    gid = getattr(stat_res, "st_gid", 0)
+    owner, group = str(uid), str(gid)
+    if not IS_WINDOWS:
+        try:
+            import pwd
+            owner = pwd.getpwuid(uid).pw_name
+        except Exception:
+            pass
+        try:
+            import grp
+            group = grp.getgrgid(gid).gr_name
+        except Exception:
+            pass
+    return owner, group
+
+
+def _entry_meta(full_path: str, is_dir: bool) -> dict:
+    """Sammelt Größe, mtime, Rechte, Besitzer, Gruppe und Oktal-Modus einer
+    Datei/eines Ordners - so, wie es 'ls -al' anzeigen würde."""
+    import stat as _stat
+    meta = {"size": 0, "mtime": 0, "perms": "", "owner": "", "group": "",
+            "mode": "", "is_link": False}
+    try:
+        is_link = os.path.islink(full_path)
+        st = os.lstat(full_path) if is_link else os.stat(full_path)
+        meta["size"] = st.st_size
+        meta["mtime"] = int(st.st_mtime * 1000)
+        meta["is_link"] = is_link
+        meta["perms"] = _perm_string(st.st_mode, is_dir, is_link)
+        meta["mode"] = oct(_stat.S_IMODE(st.st_mode))[-3:]
+        owner, group = _owner_group(st)
+        meta["owner"], meta["group"] = owner, group
+    except Exception:
+        pass
+    return meta
+
+
 def _list_directory(path: str) -> list[dict]:
     """Listet den Inhalt eines Ordners auf. Bei leerem Pfad: Laufwerke bzw. Root/Home zeigen."""
     if not path:
@@ -930,16 +1000,15 @@ def _list_directory(path: str) -> list[dict]:
     with os.scandir(path) as it:
         for entry in it:
             try:
-                stat = entry.stat()
-                size, mtime = stat.st_size, int(stat.st_mtime * 1000)
+                is_dir = entry.is_dir()
             except Exception:
-                size, mtime = 0, 0  # z.B. bei kaputten Symlinks - einfach ignorieren
+                is_dir = False
+            meta = _entry_meta(entry.path, is_dir)
             entries.append({
                 "name": entry.name,
                 "path": os.path.join(path, entry.name),
-                "isDir": entry.is_dir(),
-                "size": size,
-                "mtime": mtime,
+                "isDir": is_dir,
+                **meta,
             })
     entries.sort(key=lambda e: (not e["isDir"], e["name"].lower()))
     return entries
@@ -983,6 +1052,87 @@ async def on_fs_read(data):
         await sio.emit("fs-read-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-read-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
+
+
+# --------------------------------------------------------------
+# Schreibende Datei-Operationen (Upload, Ordner, Löschen, Umbenennen, Editieren)
+# --------------------------------------------------------------
+
+def _write_file_b64(path: str, data_b64: str) -> dict:
+    """Schreibt eine (hochgeladene oder editierte) Datei an den Zielpfad."""
+    content = base64.b64decode(data_b64)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(content)
+    return {"ok": True, "path": path, "size": len(content)}
+
+
+def _make_dir(path: str) -> dict:
+    os.makedirs(path, exist_ok=False)
+    return {"ok": True, "path": path}
+
+
+def _delete_path(path: str) -> dict:
+    """Löscht eine Datei oder einen (auch nicht-leeren) Ordner."""
+    import shutil
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+    return {"ok": True, "path": path}
+
+
+def _rename_path(src: str, dst: str) -> dict:
+    os.rename(src, dst)
+    return {"ok": True, "src": src, "dst": dst}
+
+
+@sio.on("fs-write", namespace="/agent")
+async def on_fs_write(data):
+    """Datei hochladen oder eine editierte Datei zurückschreiben."""
+    request_id = data.get("requestId")
+    path = data.get("path", "")
+    payload = data.get("data", "")
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, _write_file_b64, path, payload)
+        await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
+    except Exception as e:
+        await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
+
+
+@sio.on("fs-mkdir", namespace="/agent")
+async def on_fs_mkdir(data):
+    request_id = data.get("requestId")
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, _make_dir, data.get("path", ""))
+        await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
+    except Exception as e:
+        await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
+
+
+@sio.on("fs-delete", namespace="/agent")
+async def on_fs_delete(data):
+    request_id = data.get("requestId")
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, _delete_path, data.get("path", ""))
+        await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
+    except Exception as e:
+        await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
+
+
+@sio.on("fs-rename", namespace="/agent")
+async def on_fs_rename(data):
+    request_id = data.get("requestId")
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, _rename_path,
+                                             data.get("src", ""), data.get("dst", ""))
+        await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
+    except Exception as e:
+        await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
 
 
 # --------------------------------------------------------------

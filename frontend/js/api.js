@@ -66,6 +66,17 @@ export const api = {
   listProcesses: (id) => request(`/api/clients/${id}/processes`),
   killProcess: (id, pid) => request(`/api/clients/${id}/processes/kill`, { method: "POST", body: JSON.stringify({ pid }) }),
   readClientFile: (id, path) => request(`/api/clients/${id}/fs/read?path=${encodeURIComponent(path)}`),
+  writeClientFile: (id, path, data) => request(`/api/clients/${id}/fs/write`, { method: "POST", body: JSON.stringify({ path, data }) }),
+  mkdirClient: (id, path) => request(`/api/clients/${id}/fs/mkdir`, { method: "POST", body: JSON.stringify({ path }) }),
+  deleteClientPath: (id, path) => request(`/api/clients/${id}/fs/delete`, { method: "POST", body: JSON.stringify({ path }) }),
+  renameClientPath: (id, src, dst) => request(`/api/clients/${id}/fs/rename`, { method: "POST", body: JSON.stringify({ src, dst }) }),
+
+  // --- Server-Dateisystem: lesen/schreiben ---
+  readServerFile: (path) => request(`/api/server-files/read?path=${encodeURIComponent(path)}`),
+  writeServerFile: (path, data) => request(`/api/server-files/write`, { method: "POST", body: JSON.stringify({ path, data }) }),
+  mkdirServer: (path) => request(`/api/server-files/mkdir`, { method: "POST", body: JSON.stringify({ path }) }),
+  deleteServerPath: (path) => request(`/api/server-files/delete`, { method: "POST", body: JSON.stringify({ path }) }),
+  renameServerPath: (src, dst) => request(`/api/server-files/rename`, { method: "POST", body: JSON.stringify({ src, dst }) }),
 
   // --- Client-Websites (Quick Access / Favoriten / Uptime-Monitoring) ---
   getClientWebsites: (id) => request(`/api/clients/${id}/websites`),
