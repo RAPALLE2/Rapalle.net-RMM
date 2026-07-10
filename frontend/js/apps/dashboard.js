@@ -11,6 +11,7 @@
 import { state } from "../state.js";
 import { esc } from "../utils.js";
 import { osLabel } from "../i18n.js";
+import { api } from "../api.js";
 
 // Farbpalette für Kategorien (OS/Versionen). Online/Offline haben feste Farben.
 const PALETTE = [
@@ -152,10 +153,38 @@ export function renderDashboard(target) {
         <h2 style="margin:0">Dashboard</h2>
         <span style="color:var(--subtext);font-size:13px">${clients.length} verwaltete Clients</span>
       </div>
+      <div id="dash-favorites" style="display:none;margin-bottom:14px"></div>
       <div class="dash-grid" id="dash-grid"></div>
     </div>
   `;
   const grid = target.querySelector("#dash-grid");
+
+  // Angeheftete Website-Favoriten (★ im Client-Bearbeiten-Dialog) als
+  // Quick-Access-Leiste über den Diagrammen. Ampel zeigt den Uptime-Status.
+  api.getFavoriteWebsites().then((favs) => {
+    if (!favs || !favs.length) return;
+    const box = target.querySelector("#dash-favorites");
+    if (!box) return;
+    box.style.display = "";
+    box.innerHTML = `
+      <h3 style="margin:0 0 8px;font-size:14px;color:var(--subtext)">★ Angeheftete Websites</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        ${favs.map((w) => {
+          const dotColor = !w.monitor_enabled ? "var(--subtext)"
+            : w.last_status === "up" ? "var(--online, #3ecf8e)"
+            : w.last_status === "down" ? "var(--danger, #ff4d6d)"
+            : "var(--subtext)";
+          return `
+          <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer" class="panel"
+             title="${esc(w.url)} (${esc(w.client_hostname || "")})"
+             style="display:flex;align-items:center;gap:8px;padding:8px 12px;text-decoration:none;color:var(--text)">
+            <span style="color:${dotColor}">●</span>
+            <span style="font-weight:600">${esc(w.name)}</span>
+            <span style="font-size:11px;color:var(--subtext)">${esc(w.client_hostname || "")}</span>
+          </a>`;
+        }).join("")}
+      </div>`;
+  }).catch(() => { /* Favoriten sind optional */ });
 
   // 1) Online / Offline (inkl. Wartung)
   const statusSegs = groupBy(

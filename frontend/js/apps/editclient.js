@@ -109,6 +109,58 @@ export function renderEditClient(body, win) {
         </select>
       </div>
 
+      <h3 style="margin-top:22px">🔗 Verknüpfte Websites (Quick Access)</h3>
+      <p style="color:var(--subtext);font-size:12px;margin:4px 0 10px">
+        Binde Websites an diesen Client (z.B. Web-Interfaces, Portale). Favoriten (★)
+        werden zusätzlich im Dashboard angeheftet. Optional prüft der Uptime-Monitor
+        die URL regelmäßig und benachrichtigt per Webhook und In-App-Notification.
+      </p>
+      <div id="ec-websites-list" style="margin-bottom:10px"></div>
+
+      <div class="panel" style="padding:10px">
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" id="ec-ws-name" placeholder="z.B. Proxmox Web-UI" />
+        </div>
+        <div class="form-row">
+          <label>URL</label>
+          <input type="text" id="ec-ws-url" placeholder="https://..." />
+        </div>
+        <div class="form-row">
+          <label><input type="checkbox" id="ec-ws-fav" /> ★ Als Favorit anheften (im Dashboard sichtbar)</label>
+        </div>
+        <div class="form-row">
+          <label><input type="checkbox" id="ec-ws-monitor" /> Uptime-Monitoring aktivieren</label>
+        </div>
+        <div id="ec-ws-monitor-opts" style="display:none">
+          <div class="form-row">
+            <label>Benachrichtigen…</label>
+            <select id="ec-ws-notify">
+              <option value="down" selected>…wenn der Scan fehlgeschlagen ist (Website DOWN)</option>
+              <option value="up">…wenn der Scan erfolgreich war (Website UP)</option>
+              <option value="always">…immer (nach jedem Scan)</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Delay zwischen den Scans</label>
+            <select id="ec-ws-interval">
+              <option value="30">30 Sekunden</option>
+              <option value="60">1 Minute</option>
+              <option value="300" selected>5 Minuten</option>
+              <option value="900">15 Minuten</option>
+              <option value="1800">30 Minuten</option>
+              <option value="3600">1 Stunde</option>
+            </select>
+          </div>
+          <p style="color:var(--subtext);font-size:11px;margin:2px 0 6px">
+            Hinweis: Bei „DOWN" / „UP" wird nur beim Statuswechsel benachrichtigt (kein Spam).
+            „Immer" sendet nach jedem einzelnen Scan.
+          </p>
+        </div>
+        <div id="ec-ws-error" class="form-error hidden"></div>
+        <button class="btn-primary" id="ec-ws-add" style="margin-top:4px">+ Website hinzufügen</button>
+      </div>
+
       <div id="ec-error" class="form-error hidden"></div>
 
       <div style="display:flex;gap:8px;margin-top:16px">
@@ -117,6 +169,113 @@ export function renderEditClient(body, win) {
       </div>
     </div>
   `;
+
+  // -----------------------------------------------------------------
+  // Verknüpfte Websites: Liste laden/rendern, hinzufügen, ändern, löschen
+  // -----------------------------------------------------------------
+  const NOTIFY_LABELS = { down: "bei DOWN", up: "bei UP", always: "immer" };
+
+  function intervalLabel(sec) {
+    if (sec >= 3600) return `${Math.round(sec / 3600)} h`;
+    if (sec >= 60) return `${Math.round(sec / 60)} min`;
+    return `${sec} s`;
+  }
+
+  async function loadWebsites() {
+    const listEl = body.querySelector("#ec-websites-list");
+    if (!listEl) return;
+    try {
+      const sites = await api.getClientWebsites(client.id);
+      if (!sites.length) {
+        listEl.innerHTML = `<div style="color:var(--subtext);font-size:12px">Noch keine Websites verknüpft.</div>`;
+        return;
+      }
+      listEl.innerHTML = sites.map((w) => {
+        const dot = !w.monitor_enabled ? "" :
+          w.last_status === "up"
+            ? `<span title="Erreichbar" style="color:var(--online,#3ecf8e)">●</span>`
+            : w.last_status === "down"
+              ? `<span title="Nicht erreichbar${w.last_error ? ": " + esc(w.last_error) : ""}" style="color:var(--danger,#ff4d6d)">●</span>`
+              : `<span title="Noch nicht geprüft" style="color:var(--subtext)">●</span>`;
+        const monitorInfo = w.monitor_enabled
+          ? `<span style="font-size:11px;color:var(--subtext)">Monitoring: alle ${intervalLabel(w.monitor_interval_seconds)}, ${NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}</span>`
+          : `<span style="font-size:11px;color:var(--subtext)">kein Monitoring</span>`;
+        return `
+        <div class="panel" style="margin-bottom:6px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="min-width:0">
+            <div style="display:flex;align-items:center;gap:6px">
+              ${dot}
+              <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer" style="font-weight:600">${esc(w.name)}</a>
+            </div>
+            <div style="font-size:11px;color:var(--subtext);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.url)}</div>
+            ${monitorInfo}
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <button class="taskbar-btn" data-ws-fav="${w.id}" title="${w.favorite ? "Favorit entfernen" : "Als Favorit anheften"}">${w.favorite ? "★" : "☆"}</button>
+            <button class="taskbar-btn" data-ws-mon="${w.id}" title="Monitoring ${w.monitor_enabled ? "ausschalten" : "einschalten"}">${w.monitor_enabled ? "📡 an" : "📡 aus"}</button>
+            <button class="taskbar-btn" data-ws-del="${w.id}">🗑</button>
+          </div>
+        </div>`;
+      }).join("");
+
+      listEl.querySelectorAll("[data-ws-fav]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const s = sites.find((x) => x.id === btn.dataset.wsFav);
+          await api.updateClientWebsite(client.id, s.id, { favorite: !s.favorite });
+          loadWebsites();
+        })
+      );
+      listEl.querySelectorAll("[data-ws-mon]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const s = sites.find((x) => x.id === btn.dataset.wsMon);
+          await api.updateClientWebsite(client.id, s.id, { monitor_enabled: !s.monitor_enabled });
+          loadWebsites();
+        })
+      );
+      listEl.querySelectorAll("[data-ws-del]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          if (!confirm("Website-Verknüpfung löschen?")) return;
+          await api.deleteClientWebsite(client.id, btn.dataset.wsDel);
+          loadWebsites();
+        })
+      );
+    } catch (e) {
+      listEl.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
+    }
+  }
+
+  // Monitoring-Optionen nur zeigen, wenn Monitoring aktiviert ist
+  const wsMonitorCheck = body.querySelector("#ec-ws-monitor");
+  wsMonitorCheck.addEventListener("change", () => {
+    body.querySelector("#ec-ws-monitor-opts").style.display = wsMonitorCheck.checked ? "" : "none";
+  });
+
+  body.querySelector("#ec-ws-add").addEventListener("click", async () => {
+    const err = body.querySelector("#ec-ws-error");
+    err.classList.add("hidden");
+    const name = body.querySelector("#ec-ws-name").value.trim();
+    const url = body.querySelector("#ec-ws-url").value.trim();
+    if (!name || !url) {
+      err.textContent = "Name und URL erforderlich"; err.classList.remove("hidden"); return;
+    }
+    try {
+      await api.createClientWebsite(client.id, {
+        name, url,
+        favorite: body.querySelector("#ec-ws-fav").checked,
+        monitor_enabled: wsMonitorCheck.checked,
+        monitor_notify: body.querySelector("#ec-ws-notify").value,
+        monitor_interval_seconds: parseInt(body.querySelector("#ec-ws-interval").value, 10),
+      });
+      body.querySelector("#ec-ws-name").value = "";
+      body.querySelector("#ec-ws-url").value = "";
+      window.notify?.("Website verknüpft", "success");
+      loadWebsites();
+    } catch (e) {
+      err.textContent = e.message; err.classList.remove("hidden");
+    }
+  });
+
+  loadWebsites();
 
   const tenantSel = body.querySelector("#ec-tenant");
   const locationSel = body.querySelector("#ec-location");

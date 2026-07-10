@@ -67,6 +67,13 @@ export const api = {
   killProcess: (id, pid) => request(`/api/clients/${id}/processes/kill`, { method: "POST", body: JSON.stringify({ pid }) }),
   readClientFile: (id, path) => request(`/api/clients/${id}/fs/read?path=${encodeURIComponent(path)}`),
 
+  // --- Client-Websites (Quick Access / Favoriten / Uptime-Monitoring) ---
+  getClientWebsites: (id) => request(`/api/clients/${id}/websites`),
+  createClientWebsite: (id, data) => request(`/api/clients/${id}/websites`, { method: "POST", body: JSON.stringify(data) }),
+  updateClientWebsite: (id, websiteId, data) => request(`/api/clients/${id}/websites/${websiteId}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteClientWebsite: (id, websiteId) => request(`/api/clients/${id}/websites/${websiteId}`, { method: "DELETE" }),
+  getFavoriteWebsites: () => request("/api/clients/websites/favorites"),
+
   // --- Server-Dateisystem (Backend-Rechner selbst) ---
   listServerFs: (path) => request(`/api/server-files?path=${encodeURIComponent(path)}`),
 

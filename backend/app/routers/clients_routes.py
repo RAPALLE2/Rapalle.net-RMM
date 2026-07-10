@@ -40,6 +40,113 @@ def _require_client_perm(user: dict, client_id: str, perm: str) -> None:
 router = APIRouter(prefix="/api/clients", tags=["clients"])
 
 
+# ==================================================================
+# Client-Websites (Quick Access + Favoriten + Uptime-Monitoring)
+# ==================================================================
+
+# Erlaubte Benachrichtigungs-Modi für das Uptime-Monitoring:
+#   'up'     -> Benachrichtigung, wenn ein Scan ERFOLGREICH war (bei Statuswechsel)
+#   'down'   -> Benachrichtigung, wenn ein Scan FEHLGESCHLAGEN ist (bei Statuswechsel)
+#   'always' -> Benachrichtigung nach JEDEM Scan (Erfolg und Fehler)
+_NOTIFY_MODES = {"up", "down", "always"}
+
+
+class WebsiteBody(BaseModel):
+    name: str
+    url: str
+    favorite: bool = False
+    monitor_enabled: bool = False
+    monitor_notify: str = "down"              # 'up' | 'down' | 'always'
+    monitor_interval_seconds: int = 300       # Delay zwischen den Scans
+
+
+class WebsiteUpdateBody(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    favorite: bool | None = None
+    monitor_enabled: bool | None = None
+    monitor_notify: str | None = None
+    monitor_interval_seconds: int | None = None
+
+
+def _validate_website(url: str | None, notify: str | None, interval: int | None) -> None:
+    if url is not None and not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(400, "Die URL muss mit http:// oder https:// beginnen")
+    if notify is not None and notify not in _NOTIFY_MODES:
+        raise HTTPException(400, "monitor_notify muss 'up', 'down' oder 'always' sein")
+    if interval is not None and interval < 10:
+        raise HTTPException(400, "Das Scan-Intervall muss mindestens 10 Sekunden betragen")
+
+
+# Wichtig: Literal-Route VOR den /{client_id}/...-Routen definieren.
+@router.get("/websites/favorites")
+async def get_favorite_websites(user: dict = Depends(get_current_user)):
+    """Alle als Favorit angehefteten Websites - gefiltert auf Clients,
+    die der Benutzer überhaupt sehen darf."""
+    favs = db.list_favorite_websites()
+    visible = visible_client_ids(user, [w["client_id"] for w in favs])
+    return [w for w in favs if w["client_id"] in visible]
+
+
+@router.get("/{client_id}/websites")
+async def get_client_websites(client_id: str, user: dict = Depends(get_current_user)):
+    if not db.get_client(client_id) or not can_access_client(user, client_id):
+        raise HTTPException(404, "Client nicht gefunden")
+    return db.list_client_websites(client_id)
+
+
+@router.post("/{client_id}/websites")
+async def create_client_website(client_id: str, body: WebsiteBody,
+                                user: dict = Depends(get_current_user)):
+    if not db.get_client(client_id):
+        raise HTTPException(404, "Client nicht gefunden")
+    _require_client_perm(user, client_id, "manage_clients")
+    _validate_website(body.url, body.monitor_notify, body.monitor_interval_seconds)
+
+    w = db.create_client_website(
+        client_id, body.name.strip(), body.url.strip(),
+        favorite=body.favorite, monitor_enabled=body.monitor_enabled,
+        monitor_notify=body.monitor_notify,
+        monitor_interval_seconds=body.monitor_interval_seconds,
+    )
+    db.add_audit_entry(user["username"], "website.created", target=client_id,
+                       details=f"{body.name} ({body.url})")
+    return w
+
+
+@router.put("/{client_id}/websites/{website_id}")
+async def update_client_website(client_id: str, website_id: str, body: WebsiteUpdateBody,
+                                user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "manage_clients")
+    site = db.get_client_website(website_id)
+    if not site or site["client_id"] != client_id:
+        raise HTTPException(404, "Website nicht gefunden")
+
+    fields = body.model_dump(exclude_unset=True)
+    _validate_website(fields.get("url"), fields.get("monitor_notify"),
+                      fields.get("monitor_interval_seconds"))
+    for key in ("favorite", "monitor_enabled"):
+        if key in fields:
+            fields[key] = int(fields[key])
+
+    updated = db.update_client_website(website_id, fields)
+    db.add_audit_entry(user["username"], "website.updated", target=client_id, details=str(fields))
+    return updated
+
+
+@router.delete("/{client_id}/websites/{website_id}")
+async def delete_client_website(client_id: str, website_id: str,
+                                user: dict = Depends(get_current_user)):
+    _require_client_perm(user, client_id, "manage_clients")
+    site = db.get_client_website(website_id)
+    if not site or site["client_id"] != client_id:
+        raise HTTPException(404, "Website nicht gefunden")
+    db.delete_client_website(website_id)
+    db.add_audit_entry(user["username"], "website.deleted", target=client_id,
+                       details=site.get("name"))
+    return {"ok": True}
+
+
 @router.get("/{client_id}/metrics/history")
 async def get_client_metrics_history(client_id: str, user: dict = Depends(get_current_user)):
     """

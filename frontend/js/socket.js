@@ -19,6 +19,13 @@ export const dashboardSocket = io(`${BACKEND_URL}/dashboard`, {
 // (neuer Code/Deploy) -> Seite neu laden. Kein Polling mehr nötig.
 let _knownBootId = null;
 
+// --- Server-Benachrichtigungen (z.B. Uptime-Monitor) ---------------------
+// Das Backend kann jederzeit eine "normale" In-App-Notification an alle
+// Dashboards schicken. Wird als Toast über notify.js angezeigt.
+dashboardSocket.on("notify", ({ message, level }) => {
+  if (window.notify && message) window.notify(message, level || "info", 8000);
+});
+
 dashboardSocket.on("boot:id", ({ boot_id }) => {
   if (!boot_id) return;
   if (_knownBootId === null) {

@@ -219,6 +219,25 @@ def init_db() -> None:
             created_at INTEGER NOT NULL
         );
 
+        -- Websites, die an einen Client "gebunden" sind (Quick Access).
+        -- Optional mit Uptime-Monitoring: das Backend ruft die URL im
+        -- gewählten Intervall auf und benachrichtigt je nach notify-Modus.
+        CREATE TABLE IF NOT EXISTS client_websites (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            favorite INTEGER NOT NULL DEFAULT 0,          -- 1 = als Favorit angeheftet
+            monitor_enabled INTEGER NOT NULL DEFAULT 0,   -- 1 = Uptime-Monitoring aktiv
+            monitor_notify TEXT NOT NULL DEFAULT 'down',  -- 'up' | 'down' | 'always'
+            monitor_interval_seconds INTEGER NOT NULL DEFAULT 300, -- Delay zwischen Scans
+            last_status TEXT,                             -- 'up' | 'down' | NULL (noch nie geprüft)
+            last_checked INTEGER,                         -- Zeitstempel (ms) des letzten Scans
+            last_status_change INTEGER,                   -- wann der Status zuletzt wechselte (ms)
+            last_error TEXT,                              -- letzte Fehlermeldung (bei down)
+            created_at INTEGER NOT NULL
+        );
+
         -- Webhook-Ziele für Benachrichtigungen (Discord oder custom).
         CREATE TABLE IF NOT EXISTS webhooks (
             id TEXT PRIMARY KEY,
@@ -1233,6 +1252,101 @@ def prune_metrics_history(older_than_ts: int) -> None:
 # ------------------------------------------------------------------
 # WEBHOOKS (Benachrichtigungen)
 # ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Client-Websites (Quick Access + Uptime-Monitoring)
+# ------------------------------------------------------------------
+
+def list_client_websites(client_id: str) -> list[dict]:
+    """Alle an einen Client gebundenen Websites (für den Quick Access)."""
+    rows = _conn.execute(
+        "SELECT * FROM client_websites WHERE client_id = ? ORDER BY favorite DESC, name",
+        (client_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_favorite_websites() -> list[dict]:
+    """Alle als Favorit angehefteten Websites (über alle Clients hinweg),
+    angereichert um den Hostnamen des zugehörigen Clients."""
+    rows = _conn.execute(
+        """SELECT w.*, c.hostname AS client_hostname
+           FROM client_websites w
+           JOIN clients c ON c.id = w.client_id
+           WHERE w.favorite = 1
+           ORDER BY w.name""",
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_monitored_websites() -> list[dict]:
+    """Alle Websites mit aktivem Uptime-Monitoring (für die Monitor-Engine)."""
+    rows = _conn.execute(
+        """SELECT w.*, c.hostname AS client_hostname, c.tenant_id, c.location_id
+           FROM client_websites w
+           JOIN clients c ON c.id = w.client_id
+           WHERE w.monitor_enabled = 1""",
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_client_website(website_id: str) -> dict | None:
+    row = _conn.execute("SELECT * FROM client_websites WHERE id = ?", (website_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def create_client_website(client_id: str, name: str, url: str, favorite: bool = False,
+                          monitor_enabled: bool = False, monitor_notify: str = "down",
+                          monitor_interval_seconds: int = 300) -> dict:
+    wid = _new_id()
+    _conn.execute(
+        """INSERT INTO client_websites
+           (id, client_id, name, url, favorite, monitor_enabled, monitor_notify,
+            monitor_interval_seconds, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (wid, client_id, name, url, int(favorite), int(monitor_enabled),
+         monitor_notify, int(monitor_interval_seconds), _now_ms()),
+    )
+    _conn.commit()
+    return get_client_website(wid)
+
+
+def update_client_website(website_id: str, fields: dict) -> dict | None:
+    """Aktualisiert nur die übergebenen Felder (analog update_client)."""
+    allowed = {"name", "url", "favorite", "monitor_enabled", "monitor_notify",
+               "monitor_interval_seconds"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if fields:
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        _conn.execute(f"UPDATE client_websites SET {sets} WHERE id = ?",
+                      (*fields.values(), website_id))
+        _conn.commit()
+    return get_client_website(website_id)
+
+
+def delete_client_website(website_id: str) -> None:
+    _conn.execute("DELETE FROM client_websites WHERE id = ?", (website_id,))
+    _conn.commit()
+
+
+def set_website_check_result(website_id: str, status: str, error: str | None = None) -> None:
+    """Ergebnis eines Uptime-Scans speichern ('up'/'down'). Aktualisiert
+    last_checked immer, last_status_change nur bei tatsächlichem Wechsel."""
+    now = _now_ms()
+    prev = _conn.execute("SELECT last_status FROM client_websites WHERE id = ?",
+                         (website_id,)).fetchone()
+    changed = (prev is None) or (prev["last_status"] != status)
+    if changed:
+        _conn.execute(
+            """UPDATE client_websites SET last_status = ?, last_checked = ?,
+               last_status_change = ?, last_error = ? WHERE id = ?""",
+            (status, now, now, error, website_id))
+    else:
+        _conn.execute(
+            "UPDATE client_websites SET last_checked = ?, last_error = ? WHERE id = ?",
+            (now, error, website_id))
+    _conn.commit()
+
 
 def list_webhooks() -> list[dict]:
     return [dict(r) for r in _conn.execute("SELECT * FROM webhooks ORDER BY name").fetchall()]

@@ -182,9 +182,134 @@ async def _automation_engine():
         await _asyncio.sleep(30)  # alle 30 Sekunden prüfen
 
 
+# ------------------------------------------------------------------
+# Uptime-Monitor: prüft die an Clients gebundenen Websites (client_websites
+# mit monitor_enabled=1) im jeweils konfigurierten Intervall per HTTP-Request.
+# Je nach monitor_notify wird benachrichtigt:
+#   'up'     -> nur wenn ein Scan erfolgreich war  (beim Statuswechsel down->up
+#               bzw. beim allerersten erfolgreichen Scan)
+#   'down'   -> nur wenn ein Scan fehlgeschlagen ist (beim Statuswechsel up->down
+#               bzw. beim allerersten fehlgeschlagenen Scan)
+#   'always' -> nach JEDEM Scan (Erfolg und Fehler)
+# Benachrichtigt wird über ALLE konfigurierten Webhooks UND als normale
+# In-App-Notification (Socket-Event "notify" an alle Dashboards).
+# ------------------------------------------------------------------
+import urllib.request as _urlreq
+import urllib.error as _urlerr
+
+from app.routers.admin_routes import build_notification as _build_notification
+from app.routers.admin_routes import send_webhook as _send_webhook
+
+
+def _check_website(url: str) -> tuple[bool, str | None]:
+    """Ruft die URL auf (synchron, läuft via to_thread). 2xx/3xx = up.
+    Rückgabe: (ok, fehlermeldung)."""
+    req = _urlreq.Request(url, headers={"User-Agent": "RAPALLE-RMM-UptimeMonitor/1.0"})
+    try:
+        with _urlreq.urlopen(req, timeout=15) as resp:
+            code = getattr(resp, "status", 200)
+            if 200 <= code < 400:
+                return True, None
+            return False, f"HTTP {code}"
+    except _urlerr.HTTPError as e:
+        return False, f"HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
+    """Baut die Notification und verschickt sie an Webhooks + Dashboards."""
+    client = db.get_client(site["client_id"]) or {}
+    tenant_name = location_name = None
+    try:
+        if client.get("tenant_id"):
+            tenant_name = next((t["name"] for t in db.list_tenants()
+                                if t["id"] == client["tenant_id"]), None)
+        if client.get("location_id"):
+            location_name = next((l["name"] for l in db.list_locations()
+                                  if l["id"] == client["location_id"]), None)
+    except Exception:
+        pass
+
+    if ok:
+        head = f"✅ Website erreichbar – {site['name']}"
+        body_txt = f"{site['url']} hat auf den Uptime-Scan geantwortet (UP)."
+        level = "success"
+    else:
+        head = f"🚨 Website nicht erreichbar – {site['name']}"
+        body_txt = f"{site['url']} hat auf den Uptime-Scan NICHT geantwortet (DOWN)." \
+                   + (f" Fehler: {error}" if error else "")
+        level = "error"
+
+    notification = _build_notification(
+        body_txt, head=head, body=body_txt,
+        tenant=tenant_name, location=location_name,
+        client=client.get("hostname"), service="Uptime-Monitor", level=level,
+    )
+
+    # 1) Alle Webhooks (synchroner HTTP-Call -> in Thread auslagern)
+    for hook in db.list_webhooks():
+        try:
+            await _asyncio.to_thread(_send_webhook, hook, notification)
+        except Exception as e:
+            print(f"[uptime] Webhook '{hook.get('name')}' fehlgeschlagen: {e}")
+
+    # 2) Normale In-App-Notification an alle verbundenen Dashboards
+    try:
+        await sio.emit("notify", {
+            "message": f"{head}\n{body_txt}",
+            "level": level,
+        }, namespace="/dashboard")
+    except Exception as e:
+        print(f"[uptime] Dashboard-Notify fehlgeschlagen: {e}")
+
+    db.add_audit_entry("system", "website.uptime", target=site["client_id"],
+                       details=f"{site['name']} -> {'UP' if ok else 'DOWN'}")
+
+
+async def _uptime_monitor_engine():
+    while True:
+        try:
+            import time as _time
+            now_ms = int(_time.time() * 1000)
+            for site in db.list_monitored_websites():
+                interval_ms = max(10, int(site["monitor_interval_seconds"] or 300)) * 1000
+                last = site["last_checked"] or 0
+                if now_ms - last < interval_ms:
+                    continue  # noch nicht fällig
+
+                ok, error = await _asyncio.to_thread(_check_website, site["url"])
+                new_status = "up" if ok else "down"
+                prev_status = site["last_status"]   # None = noch nie geprüft
+                db.set_website_check_result(site["id"], new_status, error)
+
+                mode = site["monitor_notify"] or "down"
+                changed = prev_status != new_status  # inkl. allererstem Scan
+                should_notify = (
+                    mode == "always"
+                    or (mode == "up" and ok and changed)
+                    or (mode == "down" and not ok and changed)
+                )
+                if should_notify:
+                    await _notify_uptime(site, ok, error)
+
+                # Dashboards über neuen Status informieren (Panel aktualisiert Ampel)
+                try:
+                    await sio.emit("website:status", {
+                        "id": site["id"], "client_id": site["client_id"],
+                        "status": new_status,
+                    }, namespace="/dashboard")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[uptime] Engine-Fehler: {e}")
+        await _asyncio.sleep(5)  # alle 5 Sekunden prüfen, welche Scans fällig sind
+
+
 @api.on_event("startup")
 async def _start_background_tasks():
     _asyncio.create_task(_automation_engine())
+    _asyncio.create_task(_uptime_monitor_engine())
 
 
 # 3) Frontend-Ordner als statische Dateien einhängen.

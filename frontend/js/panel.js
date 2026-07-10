@@ -118,6 +118,12 @@ function renderClientView(el, clientId) {
           ${hasClientPerm(client.id, "use_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
           ${hasClientPerm(client.id, "use_taskmanager") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}
         </div>
+
+        <!-- Quick Access: an diesen Client gebundene Websites -->
+        <div class="panel actions-panel" id="client-websites-panel" style="display:none">
+          <h3>🔗 Websites</h3>
+          <div id="client-websites-list"></div>
+        </div>
       </div>
 
       <!-- RECHTE SPALTE: Metrics-Übersicht -->
@@ -134,6 +140,31 @@ function renderClientView(el, clientId) {
       </div>
     </div>
   `;
+
+  // Quick Access: verknüpfte Websites laden und als Buttons anzeigen.
+  // Ampel: grün = up, rot = down, grau = Monitoring aus / noch nicht geprüft.
+  api.getClientWebsites(client.id).then((sites) => {
+    if (!sites || !sites.length) return;
+    const panel = el.querySelector("#client-websites-panel");
+    const list = el.querySelector("#client-websites-list");
+    if (!panel || !list) return;
+    panel.style.display = "";
+    list.innerHTML = sites.map((w) => {
+      const dotColor = !w.monitor_enabled ? "var(--subtext)"
+        : w.last_status === "up" ? "var(--online, #3ecf8e)"
+        : w.last_status === "down" ? "var(--danger, #ff4d6d)"
+        : "var(--subtext)";
+      const title = w.monitor_enabled
+        ? (w.last_status === "down" && w.last_error ? `DOWN: ${esc(w.last_error)}` : (w.last_status || "noch nicht geprüft"))
+        : "kein Monitoring";
+      return `
+        <a class="action-btn" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
+           style="display:flex;align-items:center;gap:8px;text-decoration:none" title="${title}">
+          <span style="color:${dotColor}">●</span>
+          <span>${w.favorite ? "★ " : ""}${esc(w.name)}</span>
+        </a>`;
+    }).join("");
+  }).catch(() => { /* Websites sind optional */ });
 
   // Übersichts-Tab-Inhalt einsetzen (als DOM, wegen interaktiver Charts)
   fillOverview(el, client);
