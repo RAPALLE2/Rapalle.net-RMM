@@ -153,9 +153,14 @@ async def tunnel_endpoint(ws: WebSocket):
     # Master-Schalter "recording_enabled" kann alles abschalten. Funktioniert
     # für ALLE Protokolle mit Bildstrom (RDP, VNC und auch SSH/Telnet, die
     # guacd als Terminal-Bild rendert).
+    # Standardmäßig zeichnet jetzt der BROWSER 1:1 auf (genau das, was der Nutzer
+    # sieht) und lädt das Video am Ende hoch. Die alte serverseitige guacd-Aufnahme
+    # (Pillow) bleibt nur als Fallback und ist per Default AUS. Über die Einstellung
+    # "server_side_recording"=1 lässt sie sich wieder aktivieren.
     recorder = None
     _rec_on = db.get_setting("recording_enabled", "1") == "1"
-    if entry.get("record") and _rec_on:
+    _server_rec = db.get_setting("server_side_recording", "0") == "1"
+    if entry.get("record") and _rec_on and _server_rec:
         try:
             from app.guac_recording import GuacSessionRecorder
             recorder = GuacSessionRecorder(

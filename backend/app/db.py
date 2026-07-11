@@ -311,6 +311,7 @@ def init_db() -> None:
     _migrate_add_column("users", "relay_password", "TEXT")  # (alt, ungenutzt) - früheres Einmalpasswort
     _migrate_add_column("users", "relay_ha1", "TEXT")  # Digest-HA1 = MD5(user:realm:konto-passwort), bei Login gesetzt
     _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = im Explorer-Relay freigegeben
+    _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
 
     # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
     # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
@@ -809,6 +810,20 @@ def create_recording(client_id: str, client_hostname: str, username: str, file_p
            (id, client_id, client_hostname, username, started_at, file_path)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (rec_id, client_id, client_hostname, username, _now_ms(), file_path),
+    )
+    _conn.commit()
+    return rec_id
+
+
+def create_video_recording(client_id: str, client_hostname: str, username: str,
+                           file_path: str, started_at: int, ended_at: int) -> str:
+    """Legt einen Eintrag für eine im Browser aufgenommene 1:1-Video-Aufzeichnung an."""
+    rec_id = _new_id()
+    _conn.execute(
+        """INSERT INTO screen_recordings
+           (id, client_id, client_hostname, username, started_at, ended_at, frame_count, file_path, format)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'video')""",
+        (rec_id, client_id, client_hostname, username, started_at, ended_at, file_path),
     )
     _conn.commit()
     return rec_id

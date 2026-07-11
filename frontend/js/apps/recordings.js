@@ -62,11 +62,17 @@ export function renderRecordings(body, win) {
   let playTimer = null;
   let currentIdx = 0;
   let imgEl = null;
+  let allRecordings = [];
+  let videoUrl = null;   // Object-URL des aktuell geladenen Videos
 
   function stopPlayback() {
     playing = false;
     playBtn.textContent = "▶";
     if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  }
+
+  function releaseVideo() {
+    if (videoUrl) { try { URL.revokeObjectURL(videoUrl); } catch {} videoUrl = null; }
   }
 
   function showFrame(idx) {
@@ -106,7 +112,24 @@ export function renderRecordings(body, win) {
 
   async function loadRecording(recId) {
     stopPlayback();
+    releaseVideo();
+    const rec = allRecordings.find((r) => r.id === recId);
     playerEl.innerHTML = `<span style="color:var(--subtext)">Lädt Aufzeichnung...</span>`;
+
+    // Neue 1:1-Aufzeichnungen sind Videos (WebM) und werden direkt abgespielt.
+    if (rec && rec.format === "video") {
+      controlsEl.style.display = "none";   // <video> bringt eigene Steuerung mit
+      try {
+        const blob = await api.getRecordingVideoBlob(recId);
+        videoUrl = URL.createObjectURL(blob);
+        playerEl.innerHTML = `<video controls autoplay style="max-width:100%;max-height:100%;background:#000" src="${videoUrl}"></video>`;
+      } catch (e) {
+        playerEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+      }
+      return;
+    }
+
+    // Alte Frame-basierte Aufzeichnungen (Rückwärtskompatibilität).
     try {
       const res = await api.getRecordingFrames(recId);
       frames = res.frames || [];
@@ -128,6 +151,7 @@ export function renderRecordings(body, win) {
   async function loadList() {
     try {
       const recordings = await api.getRecordings();
+      allRecordings = recordings;
       if (!recordings.length) {
         listEl.innerHTML = `<tr><td style="color:var(--subtext)">Noch keine Aufzeichnungen.</td></tr>`;
         return;
@@ -138,7 +162,7 @@ export function renderRecordings(body, win) {
             <div style="font-weight:500">${esc(r.client_hostname || "?")}</div>
             <div style="font-size:11px;color:var(--subtext)">
               ${new Date(r.started_at).toLocaleString("de-DE")}<br>
-              ${formatDuration(r.duration_ms)} · ${r.frame_count} Frames · ${esc(r.username || "")}
+              ${formatDuration(r.duration_ms)} · ${r.format === "video" ? "🎬 Video" : `${r.frame_count} Frames`} · ${esc(r.username || "")}
             </div>
           </td>
           <td style="width:30px"><button class="taskbar-btn" data-del="${r.id}" title="Löschen">✕</button></td>
@@ -180,6 +204,6 @@ export function renderRecordings(body, win) {
   }
 
   body.querySelector(`#rec-refresh-${win.key}`).addEventListener("click", loadList);
-  registerCleanup(win.key, stopPlayback);
+  registerCleanup(win.key, () => { stopPlayback(); releaseVideo(); });
   loadList();
 }

@@ -118,6 +118,10 @@ export function renderGuacamole(body, win) {
   let lastBeat = Date.now();
   let lastScale = 0;
   let rescalePending = false;
+  // 1:1-Bildschirmaufzeichnung (genau das, was der Nutzer sieht) via MediaRecorder
+  let mediaRecorder = null;
+  let recChunks = [];
+  let recStartedAt = 0;
 
   function stopSizePoll() {
     if (sizePoll) { clearInterval(sizePoll); sizePoll = null; }
@@ -435,6 +439,9 @@ export function renderGuacamole(body, win) {
       if (st === 3) {
         setStatus(`Verbunden (${proto.toUpperCase()})`, "var(--accent)");
         startWatchdog();   // erst ab hier auf Einfrieren achten (nicht während des Aufbaus)
+        // 1:1-Aufzeichnung starten (nur wenn an einen Client gebunden, da die
+        // Aufzeichnung diesem zugeordnet und rechtegeprüft gespeichert wird).
+        if (clientId) setTimeout(() => startScreenRecording(display), 600);
       } else if (st === 5 && !disconnected) {
         cleanupClient();
         setStatus("Verbindung getrennt", "var(--danger)");
@@ -493,8 +500,55 @@ export function renderGuacamole(body, win) {
     displayEl.focus();
   }
 
+  // -----------------------------------------------------------------
+  // 1:1-Bildschirmaufzeichnung: greift die tatsächlich gerenderte Guacamole-
+  // Canvas (das, was der Nutzer sieht) per captureStream ab und nimmt sie mit
+  // MediaRecorder als WebM auf. Beim Trennen wird das Video hochgeladen.
+  // -----------------------------------------------------------------
+  function startScreenRecording(display) {
+    if (mediaRecorder) return;
+    try {
+      if (!window.MediaRecorder || !display) return;
+      const layer = display.getDefaultLayer && display.getDefaultLayer();
+      const canvas = layer && layer.getCanvas && layer.getCanvas();
+      if (!canvas || !canvas.captureStream) return;
+      const stream = canvas.captureStream(12);   // 12 Bilder/s
+      let mime = "video/webm;codecs=vp9";
+      if (!MediaRecorder.isTypeSupported(mime)) mime = "video/webm;codecs=vp8";
+      if (!MediaRecorder.isTypeSupported(mime)) mime = "video/webm";
+      recChunks = [];
+      mediaRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000 });
+      mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+      recStartedAt = Date.now();
+      mediaRecorder.start(2000);   // alle 2 s ein Datenblock (robust bei langen Sessions)
+    } catch (e) {
+      mediaRecorder = null;
+      console.warn("[guac] Aufzeichnung konnte nicht starten:", e);
+    }
+  }
+
+  async function stopScreenRecording() {
+    const mr = mediaRecorder;
+    mediaRecorder = null;
+    if (!mr) return;
+    try {
+      const stopped = new Promise((res) => { mr.onstop = res; });
+      if (mr.state !== "inactive") mr.stop();
+      await stopped;
+      if (!recChunks.length) return;
+      const blob = new Blob(recChunks, { type: "video/webm" });
+      recChunks = [];
+      const hostname = (body.querySelector(`#gf-host-${win.key}`)?.value || p.clientName || "").trim();
+      await api.uploadRecordingVideo(clientId || "guac", hostname, recStartedAt, Date.now(), blob);
+      window.notify?.("Aufzeichnung gespeichert", "success");
+    } catch (e) {
+      console.warn("[guac] Aufzeichnung-Upload fehlgeschlagen:", e);
+    }
+  }
+
   function cleanupClient() {
     disconnected = true;
+    stopScreenRecording();   // Aufnahme flushen + hochladen (fire-and-forget)
     stopWatchdog();
     stopSizePoll();
     try { if (keyboard) { keyboard.onkeydown = null; keyboard.onkeyup = null; } } catch {}

@@ -34,6 +34,26 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  // --- Screen-Recording (Guacamole 1:1-Video) ---
+  uploadRecordingVideo: async (clientId, hostname, startedAt, endedAt, blob) => {
+    const q = new URLSearchParams({ client_id: clientId, hostname: hostname || "", started_at: String(startedAt), ended_at: String(endedAt) });
+    const token = getToken();
+    const res = await fetch(`${BACKEND_URL}/api/recordings/upload?${q.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "video/webm", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`Upload fehlgeschlagen (${res.status})`);
+    return res.json();
+  },
+  getRecordingVideoBlob: async (recId) => {
+    const token = getToken();
+    const res = await fetch(`${BACKEND_URL}/api/recordings/${recId}/video`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Video laden fehlgeschlagen (${res.status})`);
+    return res.blob();
+  },
   // --- Auth ---
   login: (username, password, realm = "local") =>
     request("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, realm }) }),
