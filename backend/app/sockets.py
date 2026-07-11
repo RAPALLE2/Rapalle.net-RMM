@@ -609,6 +609,15 @@ async def dashboard_screen_input(sid, data):
         await send_to_agent(client_id, "screen-input", data)
 
 
+@sio.on("screen-set-monitor", namespace="/dashboard")
+async def dashboard_screen_set_monitor(sid, data):
+    """Bildschirm-Wechsel (Multi-Monitor) an den Agenten weiterreichen."""
+    client_id = data.get("clientId")
+    monitor = data.get("monitor")
+    if client_id and monitor is not None:
+        await send_to_agent(client_id, "screen-set-monitor", {"monitor": int(monitor)})
+
+
 # ------------------------------------------------------------------
 # EXPERIMENTELLES RDP-GATEWAY (für headless VMs)
 # Das Dashboard bittet das Backend, sich selbst per RDP zur VM zu verbinden

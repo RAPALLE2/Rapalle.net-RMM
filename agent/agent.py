@@ -1201,7 +1201,9 @@ async def on_proc_kill(data):
 # die Frames anders empfangen, der Rest bliebe gleich.
 
 _screen_stream = {"active": False, "thread": None, "sid_loop": None,
-                  "quality": 55, "fps": 10}
+                  "quality": 55, "fps": 10,
+                  "monitor": 1,          # gewählter Bildschirm (1 = primär)
+                  "mon_left": 0, "mon_top": 0}   # Offset des gewählten Bildschirms
 
 
 def _detect_from_xorg_process():
@@ -1300,12 +1302,33 @@ def _screen_capture_loop(loop):
         _screen_stream["active"] = False
         return
 
-    monitor = sct.monitors[1]  # der primäre Bildschirm
-    screen_w, screen_h = monitor["width"], monitor["height"]
+    # Verfügbare Einzel-Bildschirme: sct.monitors[0] ist die Gesamtfläche,
+    # ab Index 1 die einzelnen Monitore. Anzahl = len - 1.
+    mon_count = max(1, len(sct.monitors) - 1)
+    cur_idx = -1
+    monitor = None
+    screen_w = screen_h = 0
+
+    def _select_monitor(idx):
+        nonlocal monitor, screen_w, screen_h, cur_idx
+        idx = max(1, min(int(idx), mon_count))
+        monitor = sct.monitors[idx]
+        screen_w, screen_h = monitor["width"], monitor["height"]
+        _screen_stream["mon_left"] = monitor.get("left", 0)
+        _screen_stream["mon_top"] = monitor.get("top", 0)
+        cur_idx = idx
+        return idx
+
+    _select_monitor(_screen_stream.get("monitor", 1))
     consecutive_errors = 0
 
     while _screen_stream["active"]:
         try:
+            # Live-Wechsel: hat das Dashboard einen anderen Monitor gewählt?
+            want = max(1, min(int(_screen_stream.get("monitor", 1)), mon_count))
+            if want != cur_idx:
+                _select_monitor(want)
+
             raw = sct.grab(monitor)
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
             consecutive_errors = 0  # erfolgreich -> Fehlerzähler zurücksetzen
@@ -1330,6 +1353,8 @@ def _screen_capture_loop(loop):
                     "image": b64,
                     "width": screen_w,
                     "height": screen_h,
+                    "monitor_index": cur_idx,      # aktuell gestreamter Monitor
+                    "monitor_count": mon_count,    # Anzahl verfügbarer Monitore
                 }, namespace="/agent"),
                 loop,
             )
@@ -1435,6 +1460,18 @@ async def on_screen_stop(data):
     """Stoppt das Bildschirm-Streaming."""
     _screen_stream["active"] = False
     _print("[agent] Bildschirm-Streaming gestoppt")
+
+
+@sio.on("screen-set-monitor", namespace="/agent")
+async def on_screen_set_monitor(data):
+    """Wechselt den gestreamten Bildschirm (Multi-Monitor). Der Capture-Loop
+    übernimmt die Auswahl beim nächsten Frame automatisch."""
+    if isinstance(data, dict) and data.get("monitor") is not None:
+        try:
+            _screen_stream["monitor"] = max(1, int(data["monitor"]))
+            _print(f"[agent] Bildschirm gewechselt auf #{_screen_stream['monitor']}")
+        except Exception:
+            pass
 
 
 # Umrechnungstabelle für Sondertasten vom Browser zu pynput
@@ -1668,30 +1705,39 @@ def _apply_input(data):
     """Führt die eigentliche Eingabe-Simulation aus (läuft im Thread-Pool)."""
     try:
         kind = data.get("type")
+        # Der gestreamte Monitor kann einen Offset zur Gesamtfläche haben
+        # (z.B. zweiter Monitor rechts). Browser-Koordinaten sind relativ zum
+        # gestreamten Bild -> Offset addieren, damit der Klick auf dem richtigen
+        # Monitor landet.
+        ox = int(_screen_stream.get("mon_left", 0) or 0)
+        oy = int(_screen_stream.get("mon_top", 0) or 0)
+
+        def _pos(d):
+            return (int(d["x"]) + ox, int(d["y"]) + oy)
 
         if kind == "move":
-            _mouse.position = (int(data["x"]), int(data["y"]))
+            _mouse.position = _pos(data)
 
         elif kind == "click":
-            _mouse.position = (int(data["x"]), int(data["y"]))
+            _mouse.position = _pos(data)
             button = MouseButton.right if data.get("button") == "right" else MouseButton.left
             _mouse.click(button, 1)
 
         elif kind == "down":
             # Maustaste DRÜCKEN und gedrückt halten (Beginn eines Drag)
-            _mouse.position = (int(data["x"]), int(data["y"]))
+            _mouse.position = _pos(data)
             button = MouseButton.right if data.get("button") == "right" else MouseButton.left
             _mouse.press(button)
 
         elif kind == "up":
             # Maustaste LOSLASSEN (Ende eines Drag)
-            _mouse.position = (int(data["x"]), int(data["y"]))
+            _mouse.position = _pos(data)
             button = MouseButton.right if data.get("button") == "right" else MouseButton.left
             _mouse.release(button)
 
         elif kind == "double":
             # Doppelklick
-            _mouse.position = (int(data["x"]), int(data["y"]))
+            _mouse.position = _pos(data)
             _mouse.click(MouseButton.left, 2)
 
         elif kind == "scroll":

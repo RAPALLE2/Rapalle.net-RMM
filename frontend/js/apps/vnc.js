@@ -28,6 +28,7 @@ export function renderVnc(body, win) {
         <label style="color:var(--subtext);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="vnc-control-${win.key}" checked /> Steuerung aktiv
         </label>
+        <button class="taskbar-btn" id="vnc-monitor-${win.key}" style="display:none" title="Zwischen den Bildschirmen des Remote-PCs wechseln">🖥️ Bildschirm 1/1</button>
         <button class="taskbar-btn" id="vnc-ctrlaltdel-${win.key}">Strg+Alt+Entf</button>
       </div>
       <div style="flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative">
@@ -57,12 +58,23 @@ export function renderVnc(body, win) {
   const statusEl = body.querySelector(`#vnc-status-${win.key}`);
   const controlToggle = body.querySelector(`#vnc-control-${win.key}`);
   const ctrlAltDelBtn = body.querySelector(`#vnc-ctrlaltdel-${win.key}`);
+  const monitorBtn = body.querySelector(`#vnc-monitor-${win.key}`);
+
+  // Bildschirm wechseln (Multi-Monitor): schaltet zyklisch durch die Monitore.
+  monitorBtn.addEventListener("click", () => {
+    if (monitorCount <= 1) return;
+    const next = (monitorIndex % monitorCount) + 1;   // 1..count zyklisch
+    dashboardSocket.emit("screen-set-monitor", { clientId, monitor: next });
+    monitorBtn.textContent = `🖥️ wechsle zu ${next}…`;
+  });
 
   // Echte Bildschirmauflösung des Clients (kommt mit jedem Frame mit),
   // um Klick-Koordinaten korrekt umzurechnen.
   let remoteWidth = 1920;
   let remoteHeight = 1080;
   let framesReceived = 0;
+  let monitorCount = 1;
+  let monitorIndex = 1;
   let rdpActive = false;  // true, wenn gerade das experimentelle RDP-Streaming läuft
   let shellActive = false; // true, sobald auf Shell-Modus umgeschaltet wurde
 
@@ -126,6 +138,16 @@ export function renderVnc(body, win) {
     img.src = "data:image/jpeg;base64," + data.image;
     remoteWidth = data.width;
     remoteHeight = data.height;
+    // Multi-Monitor: Button anzeigen/aktualisieren, wenn mehr als ein Bildschirm da ist.
+    if (typeof data.monitor_count === "number") {
+      monitorCount = data.monitor_count;
+      monitorIndex = data.monitor_index || 1;
+      const monBtn = body.querySelector(`#vnc-monitor-${win.key}`);
+      if (monBtn) {
+        monBtn.style.display = monitorCount > 1 ? "" : "none";
+        monBtn.textContent = `🖥️ Bildschirm ${monitorIndex}/${monitorCount}`;
+      }
+    }
     framesReceived++;
     const mode = rdpActive ? "RDP" : "Live";
     statusEl.textContent = `Verbunden (${mode}) · ${remoteWidth}×${remoteHeight} · ${framesReceived} Frames`;
