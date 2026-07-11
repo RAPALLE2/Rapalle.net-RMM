@@ -83,6 +83,9 @@ export const api = {
   createClientWebsite: (id, data) => request(`/api/clients/${id}/websites`, { method: "POST", body: JSON.stringify(data) }),
   updateClientWebsite: (id, websiteId, data) => request(`/api/clients/${id}/websites/${websiteId}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteClientWebsite: (id, websiteId) => request(`/api/clients/${id}/websites/${websiteId}`, { method: "DELETE" }),
+  getServerAddress: () => request("/api/server-address"),
+  getRelayStatus: (clientId) => request(`/api/relay/status?client_id=${encodeURIComponent(clientId)}`),
+  toggleRelay: (clientId) => request(`/api/relay/toggle?client_id=${encodeURIComponent(clientId)}`, { method: "POST" }),
   getFavoriteWebsites: () => request("/api/clients/websites/favorites"),
 
   // --- Server-Dateisystem (Backend-Rechner selbst) ---

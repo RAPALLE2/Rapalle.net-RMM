@@ -14,6 +14,7 @@
 import { api } from "../api.js";
 import { formatBytes, esc } from "../utils.js";
 import { BACKEND_URL } from "../config.js";
+import { isAdmin as userIsAdmin, state } from "../state.js";
 
 const TEXT_EXT = new Set(["txt","log","md","json","xml","yml","yaml","ini","conf","cfg",
   "csv","js","ts","py","sh","bat","ps1","html","css","c","cpp","h","java","go","rs","sql","env"]);
@@ -290,49 +291,152 @@ export function renderExplorer(body, win) {
   }
   function closeOverlay() { if (overlayEl) { overlayEl.remove(); overlayEl = null; } }
 
-  function renderRelay() {
+  async function renderRelay() {
     if (!relayPane) return;
-    const origin = BACKEND_URL || window.location.origin;
-    const httpUrl = `${origin.replace(/\/$/, "")}/dav/${clientId}`;
-    relayPane.innerHTML = `
-      <h3 style="margin-top:0">🔌 Explorer-Relay als Netzlaufwerk verbinden</h3>
-      <p style="color:var(--subtext);font-size:13px">
-        Verbinde ein Netzlaufwerk, das über das Backend auf <b>${esc(clientName || clientId)}</b>
-        zeigt. Alle Laufwerke des Clients erscheinen dann als Ordner (z.B. <code>C</code>,
-        darin <code>Windows</code> …). Angemeldet wird mit deinen Dashboard-Zugangsdaten.
-      </p>
+    relayPane.innerHTML = `<div style="color:var(--subtext);padding:20px">Lädt…</div>`;
 
-      <div class="form-row">
-        <label>WebDAV-URL (macOS Finder / Linux)</label>
-        <input type="text" readonly value="${esc(httpUrl)}" onclick="this.select()" />
-      </div>
-      <div class="form-row">
-        <label>Windows (Explorer → „Netzlaufwerk verbinden")</label>
-        <input type="text" readonly value="${esc(httpUrl)}" onclick="this.select()" />
-      </div>
+    // --- Adresse bestimmen (die, über die das Dashboard läuft; Port aus Config) ---
+    const testBase = (BACKEND_URL || window.location.origin).replace(/\/$/, "");
+    const testIsLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(testBase);
+    let base = testBase;
+    let backendPort = window.location.port || "";
+    if (testIsLocalhost) {
+      try {
+        const res = await api.getServerAddress();
+        if (res) {
+          if (res.backend_port) backendPort = String(res.backend_port);
+          if (res.base_url) {
+            let cand = res.base_url.replace(/\/$/, "");
+            if (!/^https?:\/\//i.test(cand)) cand = `${window.location.protocol}//${cand}`;
+            base = cand;
+          }
+        }
+      } catch {}
+    }
+    if (!/^https?:\/\//i.test(base)) base = `${window.location.protocol}//${base}`;
 
-      <div class="panel" style="padding:12px;margin-top:8px">
-        <b>Anmeldung</b>
-        <ul style="margin:6px 0 0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.7">
-          <li>Lokaler Login: einfach <b>Benutzername</b> + <b>Passwort</b> wie im Dashboard.</li>
-          <li>SSO / Verzeichnis (Realm): Benutzername als <code>benutzer@&lt;realm-id&gt;</code> eingeben.</li>
+    const pm = base.match(/^(https?):\/\/([^/:]+)(?::(\d+))?/i);
+    const scheme = pm ? pm[1].toLowerCase() : "http";
+    const host = pm ? pm[2] : "";
+    const port = (pm && pm[3]) || backendPort || (scheme === "https" ? "443" : "80");
+    const baseWithPort = `${scheme}://${host}:${port}`;
+
+    // Wurzel-Mount: EIN Netzlaufwerk, darin je Client ein Ordner.
+    // Windows „Netzlaufwerk verbinden"/„Netzwerkadresse hinzufügen" akzeptiert die
+    // http://ip:port/dav-Form (mit :Port) direkt - das ist die zuverlässige Variante.
+    const httpRoot = `${baseWithPort}/dav`;
+
+    // --- Status (pro Client) + Benutzer ---
+    let enabled = false, isAdmin = false, username = "";
+    try { enabled = (await api.getRelayStatus(clientId)).enabled; } catch {}
+    try { isAdmin = userIsAdmin(); } catch {}
+    try { username = state.user?.username || ""; } catch {}
+
+    const card = (inner, accent) =>
+      `<div class="panel" style="padding:16px;margin-bottom:14px${accent ? `;border-color:${accent}` : ""}">${inner}</div>`;
+
+    const badge = enabled
+      ? `<span style="background:var(--online,#3ecf8e);color:#052e1c;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600">● Freigegeben</span>`
+      : `<span style="background:var(--danger,#ff4d6d);color:#3a0510;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600">● Gesperrt</span>`;
+
+    const toggleBtn = `<button id="relay-toggle" class="${enabled ? "taskbar-btn" : "btn-primary"}" style="margin:0">
+        ${enabled ? "Freigabe aufheben" : "Diesen Client freigeben"}</button>`;
+
+    const header = card(`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:4px">🔌 Explorer-Relay ${badge}</div>
+          <div style="color:var(--subtext);font-size:13px">
+            Gibt <b>${esc(clientName || clientId)}</b> im gemeinsamen Netzlaufwerk frei.
+          </div>
+        </div>
+        ${toggleBtn}
+      </div>`, enabled ? "var(--online,#3ecf8e)" : "var(--danger,#ff4d6d)");
+
+    const copyField = (label, value) => `
+      <div style="color:var(--subtext);font-size:13px">${label}</div>
+      <div style="display:flex;gap:6px">
+        <input type="text" readonly value="${esc(value)}" onclick="this.select()" style="flex:1;font-family:monospace" />
+        <button class="taskbar-btn" data-copy="${esc(value)}">Kopieren</button>
+      </div>`;
+
+    const address = card(`
+      <div style="font-weight:700;margin-bottom:6px">📍 Ein Netzlaufwerk für alle freigegebenen Clients</div>
+      <div style="color:var(--subtext);font-size:13px;margin-bottom:10px">
+        Du verbindest EINMAL dieses Laufwerk. Darin erscheint pro freigegebenem Client ein
+        Ordner, und darin die Festplatten. Mehrere Clients gleichzeitig, ganz automatisch.
+      </div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center">
+        ${copyField("Windows / macOS / Linux", httpRoot)}
+      </div>
+      <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        In „Netzlaufwerk verbinden" bzw. „Netzwerkadresse hinzufügen" genau diese
+        <b>http://…:Port/dav</b>-Adresse eintragen (mit Doppelpunkt vor dem Port).
+      </div>`);
+
+    const login = card(`
+      <div style="font-weight:700;margin-bottom:6px">🔑 Anmeldung</div>
+      <div style="color:var(--subtext);font-size:13px;line-height:1.7">
+        Mit deinem <b>normalen Dashboard-Login</b> anmelden:
+        <ul style="margin:6px 0 0;padding-left:18px">
+          <li>Benutzername: <b>${esc(username || "dein Benutzername")}</b></li>
+          <li>Passwort: dein gewohntes Dashboard-Passwort</li>
         </ul>
-      </div>
+        <div style="font-size:12px;margin-top:8px">
+          Hinweis: Nach diesem Update bitte einmal am Dashboard neu anmelden – dabei wird
+          die Netzlaufwerk-Anmeldung für dein Konto scharf geschaltet.
+        </div>
+      </div>`);
 
-      <div class="panel" style="padding:12px;margin-top:8px">
-        <b>Schnellanleitung Windows</b>
-        <ol style="margin:6px 0 0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.7">
-          <li>Explorer öffnen → „Dieser PC" → „Netzlaufwerk verbinden".</li>
-          <li>Ordner: <code>${esc(httpUrl)}</code></li>
-          <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken.</li>
-          <li>Zugangsdaten wie oben beschrieben eingeben.</li>
-        </ol>
-        <p style="color:var(--subtext);font-size:12px;margin:8px 0 0">
-          Hinweis: Der Client muss online sein. Über HTTP verlangt Windows evtl. den
-          Registry-Wert <code>BasicAuthLevel = 2</code> für WebDAV.
-        </p>
-      </div>
-    `;
+    const netUse = username ? card(`
+      <div style="font-weight:700;margin-bottom:6px">⚡ Schnellster Weg (Windows-Eingabeaufforderung)</div>
+      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use * ${httpRoot} /user:${username} `)}
+      <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        In <code>cmd</code> einfügen, dein Passwort direkt dahinter schreiben, Enter. Windows
+        mappt das Laufwerk dann per Digest über HTTP – ohne Registry-Änderung.
+      </div>`) : "";
+
+    const guide = card(`
+      <div style="font-weight:700;margin-bottom:6px">🪟 Windows-Tipps</div>
+      <ol style="margin:0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.8">
+        <li>Dienst „WebClient" muss laufen: in <code>cmd</code> (als Admin)
+          <code>net start webclient</code>.</li>
+        <li>Adresse als <b>http://…:Port/dav</b> eintragen (genau wie oben).</li>
+        <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken und deinen
+          Dashboard-Login eingeben.</li>
+      </ol>
+      <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        Der jeweilige Client muss online sein, damit sein Ordner Inhalte zeigt.
+      </div>`);
+
+    if (!enabled) {
+      relayPane.innerHTML = header + card(`
+        <div style="color:var(--subtext);font-size:13px;line-height:1.7">
+          Dieser Client ist <b>nicht freigegeben</b> und erscheint daher nicht im Netzlaufwerk.
+          ${isAdmin ? "Gib ihn oben frei." : "Ein Administrator muss ihn freigeben."}
+        </div>`) + address;
+      wire();
+      return;
+    }
+
+    relayPane.innerHTML = header + address + login + netUse + guide;
+    wire();
+
+    function wire() {
+      const btn = relayPane.querySelector("#relay-toggle");
+      if (btn) {
+        if (!isAdmin) { btn.disabled = true; btn.title = "Nur Administratoren"; }
+        else btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try { await api.toggleRelay(clientId); window.notify?.("Gespeichert", "success"); renderRelay(); }
+          catch (e) { window.notify?.("Fehler: " + e.message, "error"); btn.disabled = false; }
+        });
+      }
+      relayPane.querySelectorAll("[data-copy]").forEach((b) =>
+        b.addEventListener("click", () =>
+          navigator.clipboard?.writeText(b.dataset.copy).then(
+            () => window.notify?.("Kopiert", "success"), () => {})));
+    }
   }
 
   const tabFiles = body.querySelector(`#exp-tab-files-${win.key}`);

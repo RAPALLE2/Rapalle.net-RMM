@@ -103,6 +103,12 @@ async def login(body: LoginBody):
         raise HTTPException(403, "Keine Berechtigung zur Anmeldung an diesem System")
 
     db.add_audit_entry(user["username"], "login.success", details=f"realm:{body.realm}")
+    # HA1 fürs Netzlaufwerk (Digest) aus dem Klartext-Passwort ableiten und ablegen,
+    # damit sich der Nutzer am Relay mit seinem normalen Passwort anmelden kann.
+    try:
+        db.store_relay_secret(user["id"], body.password)
+    except Exception:
+        pass
     token = create_access_token(user)
     return {"token": token, "user": _public_user(user)}
 
@@ -122,6 +128,11 @@ async def change_password(body: ChangePasswordBody, user: dict = Depends(get_cur
         raise HTTPException(400, "Neues Passwort muss mindestens 8 Zeichen haben")
 
     db.update_user_password(user["id"], hash_password(body.new_password), must_change_pw=False)
+    # HA1 fürs Netzlaufwerk mit dem neuen Passwort aktualisieren.
+    try:
+        db.store_relay_secret(user["id"], body.new_password)
+    except Exception:
+        pass
     db.add_audit_entry(user["username"], "password.changed", target=user["username"])
     return {"ok": True}
 

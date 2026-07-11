@@ -308,6 +308,9 @@ def init_db() -> None:
     _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optionaler Wunschname beim Onboarding
     _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # persönliche Farbpalette
     _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = lokaler User, sonst Realm-ID (AD)
+    _migrate_add_column("users", "relay_password", "TEXT")  # (alt, ungenutzt) - früheres Einmalpasswort
+    _migrate_add_column("users", "relay_ha1", "TEXT")  # Digest-HA1 = MD5(user:realm:konto-passwort), bei Login gesetzt
+    _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = im Explorer-Relay freigegeben
 
     # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
     # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
@@ -353,6 +356,82 @@ def get_user_by_id(user_id: str) -> dict | None:
 
 def list_users() -> list[dict]:
     rows = _conn.execute("SELECT * FROM users ORDER BY username").fetchall()
+    return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------------------
+# Explorer-Relay: Anmeldung + Freigabe pro Client
+# ------------------------------------------------------------------
+# Für die Digest-Authentifizierung (damit Windows sich OHNE Registry-Änderung
+# über HTTP anmelden kann) braucht der Server das HA1 = MD5(user:realm:passwort).
+# Da wir Passwörter nur als bcrypt speichern, berechnen wir das HA1 EINMAL bei
+# der normalen Dashboard-Anmeldung (dort liegt das Klartext-Passwort vor) und
+# legen es ab. So kann sich der Nutzer am Netzlaufwerk mit seinem GANZ NORMALEN
+# Konto-Passwort anmelden.
+RELAY_REALM = "RAPALLE.net RMM Relay"
+
+
+def _relay_fernet():
+    """Fernet-Instanz, deren Schlüssel aus dem JWT_SECRET abgeleitet wird.
+    Damit wird das Konto-Passwort für die Netzlaufwerk-Anmeldung (Digest)
+    verschlüsselt abgelegt - nötig, weil Digest das Klartext-Passwort braucht,
+    um HA1 für den vom Client gesendeten Benutzernamen zu berechnen."""
+    import base64, hashlib
+    from cryptography.fernet import Fernet
+    from app.config import JWT_SECRET
+    key = base64.urlsafe_b64encode(hashlib.sha256(JWT_SECRET.encode()).digest())
+    return Fernet(key)
+
+
+def store_relay_secret(user_id: str, plain_password: str) -> None:
+    """Verschlüsseltes Konto-Passwort für den Relay speichern (im Feld relay_password)."""
+    try:
+        token = _relay_fernet().encrypt(plain_password.encode()).decode("ascii")
+        _conn.execute("UPDATE users SET relay_password = ? WHERE id = ?", (token, user_id))
+        _conn.commit()
+    except Exception:
+        pass
+
+
+def get_relay_secret(user_id: str) -> str | None:
+    """Entschlüsseltes Konto-Passwort für die Digest-Berechnung (oder None)."""
+    row = _conn.execute("SELECT relay_password FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row or not row["relay_password"]:
+        return None
+    try:
+        return _relay_fernet().decrypt(row["relay_password"].encode()).decode()
+    except Exception:
+        return None
+
+
+# Rückwärtskompatible Namen (falls anderswo referenziert)
+def store_relay_ha1(user_id: str, username: str, plain_password: str) -> None:
+    store_relay_secret(user_id, plain_password)
+
+
+def get_relay_ha1(user_id: str) -> str | None:
+    return None
+
+
+def get_user_by_username_any(username: str) -> dict | None:
+    """Benutzer nur anhand des Benutzernamens (ohne Realm-Suffix) suchen."""
+    return get_user_by_username(username)
+
+
+def set_client_relay_enabled(client_id: str, enabled: bool) -> None:
+    _conn.execute("UPDATE clients SET relay_enabled = ? WHERE id = ?",
+                  (1 if enabled else 0, client_id))
+    _conn.commit()
+
+
+def is_client_relay_enabled(client_id: str) -> bool:
+    row = _conn.execute("SELECT relay_enabled FROM clients WHERE id = ?", (client_id,)).fetchone()
+    return bool(row and row["relay_enabled"])
+
+
+def list_relay_enabled_clients() -> list[dict]:
+    rows = _conn.execute(
+        "SELECT * FROM clients WHERE relay_enabled = 1 ORDER BY hostname").fetchall()
     return [dict(r) for r in rows]
 
 

@@ -142,6 +142,62 @@ async def boot_id():
     return {"boot_id": BOOT_ID}
 
 
+from fastapi import Request as _Request
+
+
+@api.get("/api/server-address")
+async def server_address(request: _Request):
+    """
+    Liefert die "beste" öffentlich erreichbare Basis-URL des Backends - für
+    Dinge wie den Explorer-Relay (Netzlaufwerk-URL) und Install-Befehle.
+
+    Priorität:
+      1. server_url  (vollständige, manuell gesetzte URL, z.B. https://rmm.firma.de)
+      2. server_domain bzw. server_host + server_backend_port
+      3. Fallback: Host aus der aufgerufenen Anfrage (request), ersetzt aber
+         'localhost'/'127.0.0.1' NICHT durch sich selbst - stattdessen wird der
+         Host-Header genutzt, damit die Adresse für ENTFERNTE Rechner stimmt.
+
+    Das Frontend soll diese URL statt 'localhost' anzeigen, da ein
+    Netzlaufwerk auf einem ANDEREN PC 'localhost' nie erreichen kann.
+    """
+    # 1) Komplette URL gesetzt?
+    server_url = (db.get_setting("server_url") or "").strip()
+    if server_url:
+        # Sicherstellen, dass ein Schema vorhanden ist - sonst wird die Adresse
+        # im Browser als RELATIVER Pfad interpretiert (führte zu /<ip>/dav 404).
+        if not server_url.lower().startswith(("http://", "https://")):
+            server_url = f"{request.url.scheme}://{server_url}"
+        return {"base_url": server_url.rstrip("/"), "source": "server_url",
+                "backend_port": (db.get_setting("server_backend_port") or "4000").strip()}
+
+    # 2) Domain/Host + Port aus den Einstellungen
+    domain = (db.get_setting("server_domain") or "").strip()
+    host = (db.get_setting("server_host") or "").strip()
+    backend_port = (db.get_setting("server_backend_port") or "4000").strip()
+
+    chosen = domain or host
+    # Falls versehentlich mit Schema eingetragen (z.B. "http://10.0.0.1"),
+    # das Schema entfernen - wir setzen es selbst.
+    chosen = chosen.replace("https://", "").replace("http://", "").strip("/")
+    scheme = request.url.scheme or "http"
+    if chosen:
+        # Bei Standard-Ports keinen Port anhängen
+        if (scheme == "http" and backend_port == "80") or (scheme == "https" and backend_port == "443"):
+            base = f"{scheme}://{chosen}"
+        else:
+            base = f"{scheme}://{chosen}:{backend_port}"
+        return {"base_url": base, "source": "settings", "backend_port": backend_port}
+
+    # 3) Fallback: Host-Header der Anfrage (funktioniert für den aufrufenden
+    #    Browser; kann 'localhost' sein, wenn lokal geöffnet).
+    host_header = request.headers.get("host") or request.url.netloc
+    base = f"{scheme}://{host_header}"
+    return {"base_url": base.rstrip("/"), "source": "request",
+            "backend_port": backend_port,
+            "is_localhost": host_header.split(":")[0] in ("localhost", "127.0.0.1")}
+
+
 # ------------------------------------------------------------------
 # Automation-Engine: prüft jede Minute, ob geplante Automationen fällig
 # sind, und führt deren Befehl auf den Ziel-Clients aus. Läuft als
