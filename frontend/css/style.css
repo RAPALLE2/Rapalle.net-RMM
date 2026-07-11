@@ -876,3 +876,162 @@ select:disabled {
     opacity: .6;
     cursor: not-allowed;
 }
+/* ---- Snap-System: Windows-artige Fensteranordnung ---- */
+.snap-preview {
+  position: absolute;
+  z-index: 9990;
+  pointer-events: none;
+  opacity: 0;
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 2px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 10px;
+  box-shadow: inset 0 0 40px rgba(var(--accent-rgb), 0.08);
+  transition: left 0.14s cubic-bezier(0.22,1,0.36,1),
+              top 0.14s cubic-bezier(0.22,1,0.36,1),
+              width 0.14s cubic-bezier(0.22,1,0.36,1),
+              height 0.14s cubic-bezier(0.22,1,0.36,1),
+              opacity 0.12s ease;
+}
+/* Unsichtbarer Griff auf der Trennlinie zwischen gesnappten Fenstern.
+   Ziehen resized alle angrenzenden Fenster gemeinsam. */
+.snap-divider {
+  position: absolute;
+  z-index: 9500;
+  pointer-events: auto;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.snap-divider:hover, .snap-divider.dragging {
+  background: rgba(var(--accent-rgb), 0.35);
+  border-radius: 4px;
+}
+.snap-divider-v { cursor: ew-resize; }
+.snap-divider-h { cursor: ns-resize; }
+/* Snap-Assist: Auswahl "welches Fenster soll in diese Zone?" */
+.snap-assist {
+  position: absolute;
+  z-index: 9800;
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  overflow: auto;
+  background: rgba(10, 16, 26, 0.72);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(3px);
+  animation: win-open 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.snap-assist-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.snap-assist-tile:hover {
+  transform: scale(1.04);
+  border-color: var(--accent);
+  background: var(--panel);
+}
+.snap-assist-tile span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snap-assist-tile .client-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+/* ================================================================ */
+/* Anpassbares Dashboard-Layout (dashlayout.js)                     */
+/* ================================================================ */
+.dash-edit-toggle {
+  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--subtext); cursor: pointer; font-size: 12px;
+}
+.dash-edit-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.dash-edit-toggle.on {
+  background: rgba(var(--accent-rgb), 0.16); color: var(--accent); border-color: var(--accent);
+}
+.dash-edit-tools { display: inline-flex; gap: 6px; margin-left: 8px; }
+.dash-edit-tools button {
+  padding: 5px 10px; border-radius: 6px; border: 1px dashed var(--border);
+  background: none; color: var(--subtext); cursor: pointer; font-size: 12px;
+}
+.dash-edit-tools button:hover { color: var(--accent); border-color: var(--accent); }
+
+.dash-layout {
+  display: grid;
+  grid-template-columns: repeat(var(--dash-cols, 12), 1fr);
+  gap: 14px; align-items: start;
+}
+.dash-lp {
+  position: relative;
+  transition: box-shadow 0.18s ease, transform 0.12s ease, opacity 0.15s ease;
+}
+.dash-lp-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: -14px -14px 12px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-lp-title {
+  font-size: 13px; text-transform: uppercase; color: var(--subtext);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dash-lp-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.dash-lp-btn {
+  background: none; border: none; color: var(--subtext); cursor: pointer;
+  font-size: 13px; padding: 2px 6px; border-radius: 5px; line-height: 1;
+}
+.dash-lp-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+.dash-lp-body { min-height: 60px; }
+.dash-lp-body.overview-content { min-height: 260px; }
+.dash-lp-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* Edit-Modus: Karten wirken "fassbar" */
+.dash-layout.editing .dash-lp {
+  outline: 1px dashed rgba(var(--accent-rgb), 0.4); outline-offset: 2px;
+}
+.dash-layout.editing .dash-lp-head { cursor: grab; }
+.dash-lp.dragging { opacity: 0.9; box-shadow: 0 12px 40px rgba(0,0,0,0.5); cursor: grabbing; }
+.dash-lp.detach-hint { outline: 2px solid var(--accent); }
+.dash-lp.drop-target { outline: 2px dashed var(--accent); background: rgba(var(--accent-rgb), 0.08); }
+.dash-lp-placeholder {
+  border: 2px dashed rgba(var(--accent-rgb), 0.5); border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.06); min-height: 80px;
+}
+/* Breiten-Griff rechts (nur Edit) */
+.dash-lp-resizer {
+  position: absolute; top: 0; right: -7px; width: 12px; height: 100%;
+  cursor: ew-resize; z-index: 3;
+}
+.dash-lp-resizer::after {
+  content: ""; position: absolute; top: 50%; right: 5px; width: 3px; height: 34px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--border);
+  transition: background 0.15s ease;
+}
+.dash-lp-resizer:hover::after { background: var(--accent); }
+/* Sub-Tabs im Ordner: im Edit ziehbar */
+.dash-layout.editing .dash-folder-tabs .tab-btn { cursor: grab; }
+
+/* Desktop-Drop-Hinweis beim Client-Ziehen */
+.desktop-drop-hint {
+  outline: 2px dashed var(--accent); outline-offset: -8px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+/* Herausgelöstes Part-Fenster */
+.panelpart-wrap { display: flex; flex-direction: column; height: 100%; padding: 12px; box-sizing: border-box; }
+.panelpart-tabs { margin-bottom: 10px; }
+.panelpart-body { flex: 1; overflow: auto; }
+.panelpart-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }

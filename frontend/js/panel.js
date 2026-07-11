@@ -21,6 +21,7 @@ import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
 import { renderDashboard } from "./apps/dashboard.js";
 import { favStarHtml } from "./sidebar.js";
+import { renderClientLayout } from "./dashlayout.js";
 
 // Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
 let _latestAgentVersion = null;
@@ -39,8 +40,8 @@ function agentVersionBadge(client) {
 }
 import { t, osIcon, osLabel } from "./i18n.js";
 
-// Zustand der Übersicht (pro Ansicht gemerkt)
-let activeTab = "metrics";       // "metrics" | "notes" | "disk"
+// Zustand der Übersicht (pro Ansicht gemerkt). Die Tab-Auswahl wird jetzt PRO
+// Ordner-Instanz gehalten (mehrere Übersicht-Ordner möglich), Default hier.
 let showNetIn = true;
 let showNetOut = true;
 let timeRangeIndex = 0;           // Index in TIME_RANGES (Standard: 5 Min)
@@ -77,7 +78,6 @@ function renderClientView(el, clientId) {
   if (!client) { el.innerHTML = `<div class="empty-state">${t("client_not_found")}</div>`; return; }
 
   const status = statusInfo(client);
-  const m = client.metrics;
 
   el.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -85,77 +85,72 @@ function renderClientView(el, clientId) {
         <span class="status-dot-lg ${status.cls}"></span>${esc(client.hostname)}
         ${favStarHtml("clients", client.id)}
       </h2>
-      <span style="color:var(--subtext);font-size:13px">${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))} · ${esc(client.ip || "")}</span>
+      <span style="display:flex;align-items:center;gap:12px">
+        <span style="color:var(--subtext);font-size:13px">${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))} · ${esc(client.ip || "")}</span>
+        <span id="dash-layout-toolbar"></span>
+      </span>
     </div>
-
-    <div class="dash-grid">
-      <!-- LINKE SPALTE: Status + Aktionen untereinander -->
-      <div class="dash-left-col">
-        <div class="panel dash-panel">
-          <h3>${t("status")}</h3>
-          <div class="status-label"><span class="status-dot-lg ${status.cls}"></span>${status.label}</div>
-          <div class="status-info">
-            <div><span>${t("os")}</span><b>${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))}</b></div>
-            <div><span>${t("ip")}</span><b>${esc(client.ip || "–")}</b></div>
-            <div><span>${t("hostname")}</span><b>${esc(client.hostname)}</b></div>
-            <div><span>${t("arch")}</span><b>${esc(client.arch || "?")}</b></div>
-            <div><span>${t("uptime")}</span><b>${m ? formatUptime(m.uptime) : "–"}</b></div>
-            <div><span>Agent</span><b>${agentVersionBadge(client)}</b></div>
-          </div>
-          <div class="quick-actions">
-            <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
-            <button data-quick="shutdown" ${client.online ? "" : "disabled"}>⏻ ${t("shutdown")}</button>
-            ${hasClientPerm(client.id, "manage_agent") ? `
-            <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
-            <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
-            ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✎ ${t("edit")}</button>` : ""}
-          </div>
-        </div>
-
-        <div class="panel actions-panel">
-          <h3>${t("actions")}</h3>
-          ${hasClientPerm(client.id, "use_explorer") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
-          ${hasClientPerm(client.id, "use_terminal") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
-          ${hasClientPerm(client.id, "use_screen") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>` : ""}
-          ${hasClientPerm(client.id, "use_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
-          ${hasClientPerm(client.id, "use_taskmanager") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}
-        </div>
-
-        <!-- Quick Access: an diesen Client gebundene Websites -->
-        <div class="panel actions-panel" id="client-websites-panel" style="display:none">
-          <h3>🔗 Websites</h3>
-          <div id="client-websites-list"></div>
-        </div>
-      </div>
-
-      <!-- RECHTE SPALTE: Metrics-Übersicht -->
-      <div class="panel dash-panel">
-        <h3>
-          ${t("overview")}
-          <span class="tab-bar">
-            <button class="tab-btn ${activeTab === "metrics" ? "active" : ""}" data-tab="metrics">${t("tab_metrics")}</button>
-            <button class="tab-btn ${activeTab === "notes" ? "active" : ""}" data-tab="notes">${t("tab_notes")}</button>
-            <button class="tab-btn ${activeTab === "disk" ? "active" : ""}" data-tab="disk">${t("tab_disk")}</button>
-          </span>
-        </h3>
-        <div id="overview-tab-content" class="overview-content"></div>
-      </div>
-    </div>
+    <div id="dash-layout-host"></div>
   `;
 
-  // Quick Access: verknüpfte Websites laden und als Buttons anzeigen.
-  // Ampel: grün = up, rot = down, grau = Monitoring aus / noch nicht geprüft.
+  // Anpassbares Layout (Status/Aktionen/Übersicht-Ordner) rendern.
+  renderClientLayout(el.querySelector("#dash-layout-host"),
+                     el.querySelector("#dash-layout-toolbar"), client);
+}
+
+// -----------------------------------------------------------------
+// Wiederverwendbare Bausteine ("Parts") der Client-Ansicht. Jeder Part
+// rendert sich in ein übergebenes Ziel-Element und kann sowohl im Dashboard-
+// Layout als auch in einem herausgelösten Fenster (apps/panelpart.js) leben.
+// -----------------------------------------------------------------
+
+// --- STATUS-Part ---
+export function renderStatusPart(target, client) {
+  const status = statusInfo(client);
+  const m = client.metrics;
+  target.innerHTML = `
+    <div class="status-label"><span class="status-dot-lg ${status.cls}"></span>${status.label}</div>
+    <div class="status-info">
+      <div><span>${t("os")}</span><b>${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))}</b></div>
+      <div><span>${t("ip")}</span><b>${esc(client.ip || "–")}</b></div>
+      <div><span>${t("hostname")}</span><b>${esc(client.hostname)}</b></div>
+      <div><span>${t("arch")}</span><b>${esc(client.arch || "?")}</b></div>
+      <div><span>${t("uptime")}</span><b>${m ? formatUptime(m.uptime) : "–"}</b></div>
+      <div><span>Agent</span><b>${agentVersionBadge(client)}</b></div>
+    </div>
+    <div class="quick-actions">
+      <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
+      <button data-quick="shutdown" ${client.online ? "" : "disabled"}>⏻ ${t("shutdown")}</button>
+      ${hasClientPerm(client.id, "manage_agent") ? `
+      <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
+      <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
+      ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✎ ${t("edit")}</button>` : ""}
+    </div>`;
+  target.querySelectorAll("[data-quick]").forEach((btn) =>
+    btn.addEventListener("click", () => handleQuickAction(btn.dataset.quick, client)));
+}
+
+// --- AKTIONEN-Part ---
+export function renderActionsPart(target, client) {
+  target.innerHTML = `
+    ${hasClientPerm(client.id, "use_explorer") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
+    ${hasClientPerm(client.id, "use_terminal") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
+    ${hasClientPerm(client.id, "use_screen") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>` : ""}
+    ${hasClientPerm(client.id, "use_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
+    ${hasClientPerm(client.id, "use_taskmanager") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}`;
+  target.querySelectorAll("[data-action]").forEach((btn) =>
+    btn.addEventListener("click", () => handleAction(btn.dataset.action, client)));
+}
+
+// --- WEBSITES-Part (Quick-Access) ---
+export function renderWebsitesPart(target, client) {
+  target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
   api.getClientWebsites(client.id).then((sites) => {
-    if (!sites || !sites.length) return;
-    const panel = el.querySelector("#client-websites-panel");
-    const list = el.querySelector("#client-websites-list");
-    if (!panel || !list) return;
-    panel.style.display = "";
-    list.innerHTML = sites.map((w) => {
+    if (!sites || !sites.length) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Websites verknüpft.</div>`; return; }
+    target.innerHTML = sites.map((w) => {
       const dotColor = !w.monitor_enabled ? "var(--subtext)"
         : w.last_status === "up" ? "var(--online, #3ecf8e)"
-        : w.last_status === "down" ? "var(--danger, #ff4d6d)"
-        : "var(--subtext)";
+        : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
       const title = w.monitor_enabled
         ? (w.last_status === "down" && w.last_error ? `DOWN: ${esc(w.last_error)}` : (w.last_status || "noch nicht geprüft"))
         : "kein Monitoring";
@@ -164,52 +159,34 @@ function renderClientView(el, clientId) {
         <div class="action-btn" style="display:flex;align-items:center;gap:8px;padding-right:8px">
           <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
              style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit" title="${title}">
-            <span style="color:${dotColor}">●</span>
-            <span>${esc(w.name)}</span>
+            <span style="color:${dotColor}">●</span><span>${esc(w.name)}</span>
           </a>
           ${favStarHtml("websites", w.id, favMeta)}
         </div>`;
     }).join("");
-  }).catch(() => { /* Websites sind optional */ });
-
-  // Übersichts-Tab-Inhalt einsetzen (als DOM, wegen interaktiver Charts)
-  fillOverview(el, client);
-
-  el.querySelectorAll("[data-tab]").forEach((btn) =>
-    btn.addEventListener("click", () => { activeTab = btn.dataset.tab; renderMainContent(); })
-  );
-  el.querySelectorAll("[data-quick]").forEach((btn) =>
-    btn.addEventListener("click", () => handleQuickAction(btn.dataset.quick, client))
-  );
-  el.querySelectorAll("[data-action]").forEach((btn) =>
-    btn.addEventListener("click", () => handleAction(btn.dataset.action, client))
-  );
+  }).catch(() => { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Websites.</div>`; });
 }
 
-// Füllt den Übersichts-Tab (Metrics/Notes/Disk) als DOM-Inhalt
-function fillOverview(el, client) {
-  const target = el.querySelector("#overview-tab-content");
-  if (!target) return;
+// Ob ein Client überhaupt verknüpfte Websites hat (für Auto-Ausblenden im Default-Layout).
+export function clientHasWebsites(clientId) {
+  return api.getClientWebsites(clientId).then((s) => !!(s && s.length)).catch(() => false);
+}
 
-  // Beim ersten Anzeigen dieses Clients die gespeicherte Historie vom Backend
-  // holen, damit die Graphen nicht bei 0 anfangen. Danach einmal neu rendern.
+// --- ÜBERSICHT-Part (einzelne Sub-Ansicht: metrics|notes|disk) ---
+// tab wählt die anzuzeigende Sub-Ansicht. rerender() erlaubt Toggles/Zeitspanne.
+export function renderOverviewSub(target, client, tab, rerender) {
+  // Historie beim ersten Anzeigen laden.
   if (!hasSeeded(client.id)) {
-    seedHistory(client.id, []); // sofort als "geladen" markieren -> kein Doppelabruf
-    api.getMetricsHistory(client.id)
-      .then((res) => {
-        seedHistory(client.id, res.points || []);
-        if (state.selection && state.selection.type === "client" && state.selection.id === client.id) {
-          fillOverview(el, client);
-        }
-      })
-      .catch(() => { /* keine Historie / offline: einfach ignorieren */ });
+    seedHistory(client.id, []);
+    api.getMetricsHistory(client.id).then((res) => {
+      seedHistory(client.id, res.points || []);
+      if (state.selection && state.selection.type === "client" && state.selection.id === client.id) rerender?.();
+    }).catch(() => {});
   }
-
   target.innerHTML = "";
   const m = client.metrics;
 
-  // --- NOTES ---
-  if (activeTab === "notes") {
+  if (tab === "notes") {
     const ta = document.createElement("textarea");
     ta.className = "notes-textarea";
     ta.placeholder = t("notes_placeholder");
@@ -222,13 +199,9 @@ function fillOverview(el, client) {
     return;
   }
 
-  if (!m) {
-    target.innerHTML = `<div style="color:var(--subtext);padding:20px 0">${t("no_live_data")}</div>`;
-    return;
-  }
+  if (!m) { target.innerHTML = `<div style="color:var(--subtext);padding:20px 0">${t("no_live_data")}</div>`; return; }
 
-  // --- DISK ---
-  if (activeTab === "disk") {
+  if (tab === "disk") {
     const disks = (m.disks && m.disks.length) ? m.disks
       : [{ device: "System", mountpoint: "", used: m.diskUsed, total: m.diskTotal }];
     const row = document.createElement("div");
@@ -243,23 +216,17 @@ function fillOverview(el, client) {
     return;
   }
 
-  // --- METRICS ---
+  // metrics
   const cpuPct = m.cpuLoad ?? 0;
   const ramPct = m.memTotal ? (m.memUsed / m.memTotal) * 100 : 0;
-  const swapTotal = m.swapTotal ?? 0;
-  const swapUsed = m.swapUsed ?? 0;
+  const swapTotal = m.swapTotal ?? 0, swapUsed = m.swapUsed ?? 0;
   const swapPct = swapTotal ? (swapUsed / swapTotal) * 100 : 0;
-
-  // Optionaler Swap-Donut (nur wenn der Client überhaupt Swap hat, z.B. Linux).
   const swapDonut = swapTotal > 0 ? `
     <div class="donut-wrap">
       ${gradientDonutSvg(swapPct, RAM_GRADIENT, "Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`)}
       <div class="metric-sub">${t("free")}: ${formatBytes(swapTotal - swapUsed)}</div>
     </div>` : "";
 
-  // Obere Reihe: nur CPU-Donut + Infos und RAM-Donut + Infos.
-  // Der Netzwerk-Verlauf wandert nach unten zu den CPU-/RAM-Charts, damit
-  // alle drei Diagramme exakt gleich groß sind.
   const topRow = document.createElement("div");
   topRow.className = "metrics-row";
   topRow.innerHTML = `
@@ -271,43 +238,29 @@ function fillOverview(el, client) {
       ${gradientDonutSvg(ramPct, RAM_GRADIENT, "RAM", `${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}`)}
       <div class="metric-sub">${t("free")}: ${formatBytes(m.memAvailable ?? (m.memTotal - m.memUsed))}</div>
     </div>
-    ${swapDonut}
-  `;
+    ${swapDonut}`;
   target.appendChild(topRow);
 
   const range = getHistoryRange(client.id, TIME_RANGES[timeRangeIndex].ms);
-
-  // Zeitspannen-Dropdown
   const rangeBar = document.createElement("div");
   rangeBar.style.cssText = "display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:14px 0 4px";
   rangeBar.innerHTML = `
     <span style="font-size:11px;color:var(--subtext)">${t("time_range")}:</span>
-    <select id="time-range-select" style="padding:3px 6px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+    <select class="ov-time-range" style="padding:3px 6px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
       ${TIME_RANGES.map((r, i) => `<option value="${i}" ${i === timeRangeIndex ? "selected" : ""}>${r.label}</option>`).join("")}
     </select>`;
   target.appendChild(rangeBar);
 
-  // Verlaufs-Diagramme (beschriftet, mit Hover-Tooltip)
   const chartsRow = document.createElement("div");
   chartsRow.style.cssText = "display:flex;gap:20px;flex-wrap:wrap";
-
   const cpuChartWrap = document.createElement("div");
   cpuChartWrap.className = "mini-chart";
   cpuChartWrap.innerHTML = `<div style="font-size:11px;color:var(--subtext);margin-bottom:4px">${t("cpu_history")} (%)</div>`;
-  cpuChartWrap.appendChild(interactiveChart(
-    [{ label: "CPU", color: "#a97cff", values: range.cpu, timestamps: range.ts }],
-    { unit: "%", yMax: 100 }
-  ));
-
+  cpuChartWrap.appendChild(interactiveChart([{ label: "CPU", color: "#a97cff", values: range.cpu, timestamps: range.ts }], { unit: "%", yMax: 100 }));
   const ramChartWrap = document.createElement("div");
   ramChartWrap.className = "mini-chart";
   ramChartWrap.innerHTML = `<div style="font-size:11px;color:var(--subtext);margin-bottom:4px">${t("ram_history")} (%)</div>`;
-  ramChartWrap.appendChild(interactiveChart(
-    [{ label: "RAM", color: "#c7d34a", values: range.ram, timestamps: range.ts }],
-    { unit: "%", yMax: 100 }
-  ));
-
-  // Netzwerk-Chart - gleiche Größe wie CPU/RAM, mit In/Out-Toggle im Header.
+  ramChartWrap.appendChild(interactiveChart([{ label: "RAM", color: "#c7d34a", values: range.ram, timestamps: range.ts }], { unit: "%", yMax: 100 }));
   const netChartWrap = document.createElement("div");
   netChartWrap.className = "mini-chart";
   const netHeader = document.createElement("div");
@@ -315,43 +268,37 @@ function fillOverview(el, client) {
   netHeader.innerHTML = `
     <span style="font-size:11px;color:var(--subtext)">${t("network")}</span>
     <span style="font-size:11px">
-      <label style="color:#3ecf8e;margin-right:8px;cursor:pointer">
-        <input type="checkbox" id="net-in-toggle" ${showNetIn ? "checked" : ""} /> ↓ ${formatBytes(m.netIn ?? 0)}/s
-      </label>
-      <label style="color:#f5a524;cursor:pointer">
-        <input type="checkbox" id="net-out-toggle" ${showNetOut ? "checked" : ""} /> ↑ ${formatBytes(m.netOut ?? 0)}/s
-      </label>
+      <label style="color:#3ecf8e;margin-right:8px;cursor:pointer"><input type="checkbox" class="ov-net-in" ${showNetIn ? "checked" : ""} /> ↓ ${formatBytes(m.netIn ?? 0)}/s</label>
+      <label style="color:#f5a524;cursor:pointer"><input type="checkbox" class="ov-net-out" ${showNetOut ? "checked" : ""} /> ↑ ${formatBytes(m.netOut ?? 0)}/s</label>
     </span>`;
   netChartWrap.appendChild(netHeader);
   const netSeries = [];
   if (showNetIn) netSeries.push({ label: "↓ In", color: "#3ecf8e", values: range.netIn, timestamps: range.ts });
   if (showNetOut) netSeries.push({ label: "↑ Out", color: "#f5a524", values: range.netOut, timestamps: range.ts });
-  if (netSeries.length) {
-    netChartWrap.appendChild(interactiveChart(netSeries, {
-      formatValue: (v) => formatBytes(v) + "/s",
-    }));
-  }
-
-  chartsRow.appendChild(cpuChartWrap);
-  chartsRow.appendChild(ramChartWrap);
-  chartsRow.appendChild(netChartWrap);
+  if (netSeries.length) netChartWrap.appendChild(interactiveChart(netSeries, { formatValue: (v) => formatBytes(v) + "/s" }));
+  chartsRow.appendChild(cpuChartWrap); chartsRow.appendChild(ramChartWrap); chartsRow.appendChild(netChartWrap);
   target.appendChild(chartsRow);
 
-  // --- Handler für Toggles + Zeitspanne ---
-  const rerender = () => fillOverview(el, client);
-  const netIn = target.querySelector("#net-in-toggle");
-  const netOut = target.querySelector("#net-out-toggle");
-  const rangeSel = target.querySelector("#time-range-select");
-  if (netIn) netIn.addEventListener("change", () => { showNetIn = netIn.checked; rerender(); });
-  if (netOut) netOut.addEventListener("change", () => { showNetOut = netOut.checked; rerender(); });
-  if (rangeSel) rangeSel.addEventListener("change", () => { timeRangeIndex = parseInt(rangeSel.value); rerender(); });
+  const netIn = target.querySelector(".ov-net-in");
+  const netOut = target.querySelector(".ov-net-out");
+  const rangeSel = target.querySelector(".ov-time-range");
+  if (netIn) netIn.addEventListener("change", () => { showNetIn = netIn.checked; rerender?.(); });
+  if (netOut) netOut.addEventListener("change", () => { showNetOut = netOut.checked; rerender?.(); });
+  if (rangeSel) rangeSel.addEventListener("change", () => { timeRangeIndex = parseInt(rangeSel.value); rerender?.(); });
 }
+
+// Metadaten für die einzelnen Sub-Ansichten eines Übersicht-Ordners.
+export const OVERVIEW_SUBS = {
+  metrics: () => t("tab_metrics"),
+  notes: () => t("tab_notes"),
+  disk: () => t("tab_disk"),
+};
 
 // -----------------------------------------------------------------
 // Quick Actions & Actions
 // -----------------------------------------------------------------
 
-async function handleQuickAction(action, client) {
+export async function handleQuickAction(action, client) {
   if (action === "edit") {
     openWindow({ key: `edit-${client.id}`, appId: "edit-client", title: `${t("edit")} — ${client.hostname}`, props: { clientId: client.id }, w: 480, h: 520 });
     return;
@@ -406,7 +353,7 @@ async function handleQuickAction(action, client) {
   }
 }
 
-function handleAction(action, client) {
+export function handleAction(action, client) {
   const colorProps = { clientColor: client.color };
   const props = { clientId: client.id, clientName: client.hostname, platform: client.platform };
   if (action === "terminal") {

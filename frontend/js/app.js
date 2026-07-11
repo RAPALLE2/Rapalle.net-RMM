@@ -50,6 +50,7 @@ import { renderSettings } from "./apps/settings.js";
 import { renderPermissions } from "./apps/permissions.js";
 import { renderAudit } from "./apps/audit.js";
 import { renderProfile } from "./apps/profile.js";
+import { renderPanelPart } from "./apps/panelpart.js";
 
 // -----------------------------------------------------------------
 // Content-Router: welcher Renderer gehört zu welchem appId?
@@ -77,6 +78,7 @@ const APP_RENDERERS = {
   permissions: renderPermissions,
   audit: renderAudit,
   profile: renderProfile,
+  panelpart: renderPanelPart,
 };
 
 function renderWindowContent(body, win) {
@@ -570,6 +572,42 @@ function initLiveUpdates() {
 // Start
 // -----------------------------------------------------------------
 
+// Legt einen Client-Drop auf dem Desktop (Fenster-Layer) als eigenes
+// Client-Fenster ab. Der Client bleibt in der Seitenleiste erhalten.
+function initDesktopDrop() {
+  const layer = document.getElementById("window-layer");
+  const dropZone = document.getElementById("main-content") || document.body;
+  if (!dropZone) return;
+  dropZone.addEventListener("dragover", (e) => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("text/x-rmm-client")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      dropZone.classList.add("desktop-drop-hint");
+    }
+  });
+  dropZone.addEventListener("dragleave", (e) => {
+    if (e.target === dropZone) dropZone.classList.remove("desktop-drop-hint");
+  });
+  dropZone.addEventListener("drop", (e) => {
+    const clientId = e.dataTransfer?.getData("text/x-rmm-client");
+    dropZone.classList.remove("desktop-drop-hint");
+    if (!clientId) return;
+    e.preventDefault();
+    const client = state.clients.find((c) => c.id === clientId);
+    if (!client) return;
+    const r = (layer || dropZone).getBoundingClientRect();
+    openWindow({
+      key: `panelpart-${clientId}-client-x`, appId: "panelpart",
+      title: client.hostname,
+      props: { clientId, part: "client" },
+      clientColor: client.color,
+      x: Math.max(0, e.clientX - r.left - 60),
+      y: Math.max(0, e.clientY - r.top - 20),
+      w: 900, h: 620,
+    });
+  });
+}
+
 async function main() {
   // Renderer für Fenster-Inhalte registrieren
   setContentRenderer(renderWindowContent);
@@ -585,6 +623,7 @@ async function main() {
   initMenusAndButtons();
   initTaskbar();
   initLiveUpdates();
+  initDesktopDrop();
 
   // Ist noch ein gültiges Token vorhanden? Dann direkt einloggen.
   const token = localStorage.getItem("rmm_token");

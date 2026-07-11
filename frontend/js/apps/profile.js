@@ -10,6 +10,7 @@ import { applyTheme, applyAccent, ACCENT_PALETTES } from "../theme.js";
 import { setLanguage, applyStaticTranslations } from "../i18n_apply.js";
 import { renderSidebar } from "../sidebar.js";
 import { renderMainContent } from "../panel.js";
+import { getDashEdit, setDashEdit, scheduleSave } from "../persist.js";
 
 export function renderProfile(body, win) {
   const u = state.user;
@@ -46,6 +47,23 @@ export function renderProfile(body, win) {
       </div>
       <button class="btn-primary" id="pr-save" style="margin-top:6px">Profil speichern</button>
 
+      <h3 style="margin-top:26px">Dashboard</h3>
+      <div class="form-row" style="align-items:center">
+        <label>Layout-Bearbeitung</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+          <input type="checkbox" id="pr-dashedit" ${getDashEdit() ? "checked" : ""} />
+          Ansichten frei verschieben, in Größe ändern & Ordner anpassen
+        </label>
+      </div>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+        Ist die Bearbeitung an, kannst du in der Client-Ansicht Status, Aktionen und
+        Übersicht-Ordner per Ziehen anordnen, ihre Breite ziehen, weitere Ordner
+        anlegen und Sub-Ansichten (Metrics/Notes/Disk) zwischen Ordnern verschieben.
+        Über das ⧉-Symbol lässt sich jeder Baustein als eigenes Fenster herauslösen
+        (auch ohne Bearbeitung). Clients kannst du aus der Seitenleiste direkt auf
+        die Arbeitsfläche ziehen.
+      </p>
+
       <h3 style="margin-top:26px">Passwort ändern</h3>
       ${u.auth_realm ? `
       <p style="color:var(--subtext);font-size:13px;max-width:520px">
@@ -66,6 +84,13 @@ export function renderProfile(body, win) {
       `}
     </div>
   `;
+
+  // Dashboard-Bearbeitung an/aus (sofort wirksam; pro Benutzer gespeichert)
+  body.querySelector("#pr-dashedit")?.addEventListener("change", (e) => {
+    setDashEdit(e.target.checked);
+    scheduleSave(state);
+    renderMainContent();   // Client-Ansicht mit/ohne Edit-Werkzeuge neu zeichnen
+  });
 
   // Live-Vorschau: Theme sofort umschalten, wenn im Dropdown geändert
   body.querySelector("#pr-theme").addEventListener("change", (e) => applyTheme(e.target.value));

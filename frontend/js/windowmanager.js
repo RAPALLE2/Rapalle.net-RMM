@@ -45,8 +45,10 @@ window.addEventListener("resize", () => {
   clearTimeout(_resizeClampTimer);
   _resizeClampTimer = setTimeout(() => {
     for (const win of state.windows) {
-      if (!win.minimized && !win.maximized) clampWindowIntoView(win);
+      if (!win.minimized && !win.maximized && !win.snap) clampWindowIntoView(win);
     }
+    relayoutSnapped(false);   // gesnappte Fenster an die neue Layer-Größe anpassen
+    updateSnapDividers();
   }, 100);
 });
 
@@ -131,6 +133,8 @@ function _removeWindow(key) {
   state.windows = state.windows.filter((w) => w.key !== key);
   state.focusOrder = state.focusOrder.filter((k) => k !== key);
   applyFocusZIndex();
+  clearSnapAssist();
+  updateSnapDividers();
   notifyChanged();
 }
 
@@ -161,12 +165,17 @@ export function toggleMinimize(key) {
     }
   }
   if (!win.minimized) focusWindow(key);
+  updateSnapDividers();
   notifyChanged();
 }
 
 export function toggleMaximize(key) {
   const win = state.windows.find((w) => w.key === key);
   if (!win || !win._el) return;
+
+  // Ein gesnapptes Fenster verlässt beim Maximieren das Snap-Layout.
+  if (win.snap) { win.snap = null; updateSnapDividers(); }
+  clearSnapAssist();
 
   // Für die Dauer des Wechsels sanfte Geometrie-Transition aktivieren.
   win._el.classList.add("win-animate-geo");
@@ -313,13 +322,44 @@ function makeDraggable(handle, windowEl, win) {
     if (e.target.closest(".win-controls")) return;
     e.preventDefault();
     focusWindow(win.key);
+    clearSnapAssist();
 
     const startX = e.clientX;
     const startY = e.clientY;
-    const startLeft = win.x;
-    const startTop = win.y;
+    let startLeft = win.x;
+    let startTop = win.y;
+    // Wo (relativ, 0..1) hat der Nutzer die Titelleiste gegriffen? Wird beim
+    // Loslösen aus Snap/Maximiert gebraucht, damit das Fenster unter dem
+    // Cursor "einrastet" statt wegzuspringen (Windows-Verhalten).
+    const grabFrac = (e.clientX - windowEl.getBoundingClientRect().left) /
+                     Math.max(1, windowEl.offsetWidth);
+    let dragging = false;
+    let released = false;   // wurde ein gesnapptes/maximiertes Fenster schon gelöst?
+
+    function releaseFromSnap(ev) {
+      // Fenster aus Snap/Maximiert lösen: alte Größe wiederherstellen und so
+      // positionieren, dass der Cursor proportional auf der Titelleiste bleibt.
+      const r = (win.maximized ? win._restore : win._snapRestore) || { w: 640, h: 460 };
+      win.maximized = false;
+      win.snap = null;
+      win.w = r.w; win.h = r.h;
+      const lay = layer();
+      const layRect = lay ? lay.getBoundingClientRect() : { left: 0, top: 0 };
+      win.x = Math.round(ev.clientX - layRect.left - grabFrac * r.w);
+      win.y = Math.max(0, Math.round(ev.clientY - layRect.top - 14));
+      windowEl.style.width = `${win.w}px`;
+      windowEl.style.height = `${win.h}px`;
+      // Bezugspunkte neu setzen, damit die Drag-Formel nahtlos weiterläuft.
+      startLeft = win.x - (ev.clientX - startX);
+      startTop = win.y - (ev.clientY - startY);
+      updateSnapDividers();
+    }
 
     function onMove(ev) {
+      if (!dragging && Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < 4) return;
+      dragging = true;
+      if (!released && (win.snap || win.maximized)) { releaseFromSnap(ev); released = true; }
+
       let nx = startLeft + (ev.clientX - startX);
       let ny = startTop + (ev.clientY - startY);
       // In die Grenzen des Fensterbereichs (layer) klemmen, damit kein Rand
@@ -336,10 +376,16 @@ function makeDraggable(handle, windowEl, win) {
       win.y = ny;
       windowEl.style.left = `${win.x}px`;
       windowEl.style.top = `${win.y}px`;
+
+      // Snap-Zone unter dem Cursor ermitteln + Vorschau anzeigen.
+      showSnapPreview(zoneForPointer(ev.clientX, ev.clientY));
     }
-    function onUp() {
+    function onUp(ev) {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      const zone = dragging ? zoneForPointer(ev.clientX, ev.clientY) : null;
+      showSnapPreview(null);
+      if (zone) snapWindowTo(win.key, zone);
       notifyChanged();   // neue Position speichern
     }
     document.addEventListener("mousemove", onMove);
@@ -357,6 +403,9 @@ function makeResizable(handle, windowEl, win, axis = "both") {
     e.stopPropagation();
     // Wenn maximiert, erst wiederherstellen (sonst ergibt Resizen keinen Sinn)
     if (win.maximized) return;
+    // Manuelles Resizen löst das Fenster aus dem Snap-Layout (aktuelle
+    // Geometrie bleibt als Ausgangspunkt erhalten).
+    if (win.snap) { win.snap = null; updateSnapDividers(); }
 
     const startX = e.clientX;
     const startY = e.clientY;
@@ -389,4 +438,292 @@ function makeResizable(handle, windowEl, win, axis = "both") {
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   });
+}
+
+// =================================================================
+// SNAP-SYSTEM: Windows-artige Fensteranordnung
+// -----------------------------------------------------------------
+// - Fenster an eine Kante/Ecke ziehen -> rastet mit Animation ein:
+//     oben mittig            = Maximieren
+//     links/rechts           = halbe Breite (2 Fenster nebeneinander)
+//     oben/unten (seitlich)  = halbe Höhe   (2 Fenster übereinander)
+//     Ecken                  = Viertel (3er-/4er-Layouts)
+// - Die Trennlinien merken sich globale Teilungsverhältnisse (splits.v/h).
+//   Zieht man an einer Grenze, an der auf BEIDEN Seiten gesnappte Fenster
+//   liegen, werden ALLE angrenzenden Fenster gemeinsam resized (wie Windows).
+// - Snap-Assist: nach dem Einrasten zeigt jede noch freie Nachbar-Zone eine
+//   Auswahl der übrigen Fenster - Klick snappt das Fenster dorthin.
+// =================================================================
+
+const splits = { v: 0.5, h: 0.5 };   // vertikale/horizontale Teilung (0..1)
+let _snapPreviewEl = null;
+let _dividerV = null;
+let _dividerH = null;
+let _assistEls = [];
+
+// Zonen, die links/rechts bzw. oben/unten der Trennlinie liegen.
+const _LEFT_ZONES = ["left", "tl", "bl"];
+const _RIGHT_ZONES = ["right", "tr", "br"];
+const _TOP_ZONES = ["top", "tl", "tr"];
+const _BOTTOM_ZONES = ["bottom", "bl", "br"];
+
+// Ziel-Rechteck (px) einer Zone, abhängig von den aktuellen Teilungen.
+function snapRect(zone) {
+  const lay = layer();
+  if (!lay) return null;
+  const W = lay.clientWidth, H = lay.clientHeight;
+  const v = Math.round(W * splits.v), h = Math.round(H * splits.h);
+  switch (zone) {
+    case "max":    return { x: 0, y: 0, w: W, h: H };
+    case "left":   return { x: 0, y: 0, w: v, h: H };
+    case "right":  return { x: v, y: 0, w: W - v, h: H };
+    case "top":    return { x: 0, y: 0, w: W, h: h };
+    case "bottom": return { x: 0, y: h, w: W, h: H - h };
+    case "tl":     return { x: 0, y: 0, w: v, h: h };
+    case "tr":     return { x: v, y: 0, w: W - v, h: h };
+    case "bl":     return { x: 0, y: h, w: v, h: H - h };
+    case "br":     return { x: v, y: h, w: W - v, h: H - h };
+  }
+  return null;
+}
+
+// Welche Zone liegt unter dem Mauszeiger? (null = keine)
+function zoneForPointer(cx, cy) {
+  const lay = layer();
+  if (!lay) return null;
+  const r = lay.getBoundingClientRect();
+  const x = cx - r.left, y = cy - r.top, W = r.width, H = r.height;
+  const T = 14;    // Kanten-Nähe in px
+  const C = 150;   // Ecken-Bereich entlang der Kante in px
+  const nearL = x < T, nearR = x > W - T, nearT = y < T, nearB = y > H - T;
+  if (!nearL && !nearR && !nearT && !nearB) return null;
+  if (nearT) {
+    if (x < C) return "tl";
+    if (x > W - C) return "tr";
+    if (x > W / 3 && x < (2 * W) / 3) return "max";   // oben MITTIG = maximieren
+    return "top";                                       // oben seitlich = obere Hälfte
+  }
+  if (nearB) {
+    if (x < C) return "bl";
+    if (x > W - C) return "br";
+    return "bottom";
+  }
+  if (nearL) return y < C ? "tl" : (y > H - C ? "bl" : "left");
+  return y < C ? "tr" : (y > H - C ? "br" : "right");
+}
+
+// Halbtransparente Vorschau der Ziel-Zone während des Ziehens.
+function showSnapPreview(zone) {
+  const lay = layer();
+  if (!lay) return;
+  if (!zone) {
+    if (_snapPreviewEl) { _snapPreviewEl.style.opacity = "0"; }
+    return;
+  }
+  const rect = snapRect(zone);
+  if (!rect) return;
+  if (!_snapPreviewEl) {
+    _snapPreviewEl = document.createElement("div");
+    _snapPreviewEl.className = "snap-preview";
+    lay.appendChild(_snapPreviewEl);
+  }
+  _snapPreviewEl.style.opacity = "1";
+  _snapPreviewEl.style.left = `${rect.x}px`;
+  _snapPreviewEl.style.top = `${rect.y}px`;
+  _snapPreviewEl.style.width = `${rect.w}px`;
+  _snapPreviewEl.style.height = `${rect.h}px`;
+}
+
+// Geometrie anwenden (optional mit sanfter Animation über win-animate-geo).
+function applySnapGeometry(win, rect, animate = true) {
+  if (!win._el || !rect) return;
+  if (animate) {
+    win._el.classList.add("win-animate-geo");
+    setTimeout(() => { if (win._el) win._el.classList.remove("win-animate-geo"); }, 230);
+  }
+  win.x = rect.x; win.y = rect.y; win.w = rect.w; win.h = rect.h;
+  win._el.style.left = `${rect.x}px`;
+  win._el.style.top = `${rect.y}px`;
+  win._el.style.width = `${rect.w}px`;
+  win._el.style.height = `${rect.h}px`;
+}
+
+// Fenster in eine Zone snappen.
+export function snapWindowTo(key, zone, { assist = true, animate = true } = {}) {
+  const win = state.windows.find((w) => w.key === key);
+  if (!win || !win._el) return;
+  const rect = snapRect(zone);
+  if (!rect) return;
+  // Vor dem ERSTEN Snap die normale Geometrie merken (fürs Herausziehen).
+  if (!win.snap && !win.maximized) {
+    win._snapRestore = { x: win.x, y: win.y, w: win.w, h: win.h };
+  }
+  win.maximized = false;
+  win.snap = zone;
+  win.minimized = false;
+  win._el.style.display = "flex";
+  applySnapGeometry(win, rect, animate);
+  focusWindow(key);
+  updateSnapDividers();
+  notifyChanged();
+  if (assist) showSnapAssist(win, zone);
+}
+
+// Alle gesnappten Fenster an die aktuellen Teilungen/Layer-Größe anpassen.
+function relayoutSnapped(animate = false) {
+  for (const win of state.windows) {
+    if (win.snap && !win.minimized) {
+      applySnapGeometry(win, snapRect(win.snap), animate);
+    }
+  }
+}
+
+// -----------------------------------------------------------------
+// Gemeinsame Grenzen: unsichtbare Griffe auf den Trennlinien. Ziehen
+// verschiebt die Teilung und resized ALLE angrenzenden Fenster live.
+// -----------------------------------------------------------------
+function updateSnapDividers() {
+  const lay = layer();
+  if (!lay) return;
+  const zones = state.windows.filter((w) => w.snap && !w.minimized).map((w) => w.snap);
+  const needV = zones.some((z) => _LEFT_ZONES.includes(z)) &&
+                zones.some((z) => _RIGHT_ZONES.includes(z));
+  const needH = zones.some((z) => _TOP_ZONES.includes(z)) &&
+                zones.some((z) => _BOTTOM_ZONES.includes(z));
+
+  if (needV) {
+    if (!_dividerV) {
+      _dividerV = document.createElement("div");
+      _dividerV.className = "snap-divider snap-divider-v";
+      _makeDividerDraggable(_dividerV, "v");
+      lay.appendChild(_dividerV);
+    }
+    _dividerV.style.left = `${Math.round(lay.clientWidth * splits.v) - 4}px`;
+    _dividerV.style.top = "0px";
+    _dividerV.style.width = "8px";
+    _dividerV.style.height = `${lay.clientHeight}px`;
+  } else if (_dividerV) { _dividerV.remove(); _dividerV = null; }
+
+  if (needH) {
+    if (!_dividerH) {
+      _dividerH = document.createElement("div");
+      _dividerH.className = "snap-divider snap-divider-h";
+      _makeDividerDraggable(_dividerH, "h");
+      lay.appendChild(_dividerH);
+    }
+    _dividerH.style.top = `${Math.round(lay.clientHeight * splits.h) - 4}px`;
+    _dividerH.style.left = "0px";
+    _dividerH.style.height = "8px";
+    _dividerH.style.width = `${lay.clientWidth}px`;
+  } else if (_dividerH) { _dividerH.remove(); _dividerH = null; }
+}
+
+function _makeDividerDraggable(el, axis) {
+  el.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.add("dragging");
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = axis === "v" ? "ew-resize" : "ns-resize";
+
+    function onMove(ev) {
+      const lay = layer();
+      if (!lay) return;
+      const r = lay.getBoundingClientRect();
+      if (axis === "v") {
+        splits.v = Math.min(0.85, Math.max(0.15, (ev.clientX - r.left) / r.width));
+      } else {
+        splits.h = Math.min(0.85, Math.max(0.15, (ev.clientY - r.top) / r.height));
+      }
+      relayoutSnapped(false);   // live, ohne Animation (folgt dem Cursor)
+      updateSnapDividers();
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      el.classList.remove("dragging");
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      notifyChanged();
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
+// -----------------------------------------------------------------
+// Snap-Assist: freie Nachbar-Zonen zeigen eine Auswahl der übrigen
+// Fenster (wie Windows) - Klick snappt das gewählte Fenster dorthin.
+// -----------------------------------------------------------------
+const _COMPLEMENTS = {
+  left: ["right"], right: ["left"], top: ["bottom"], bottom: ["top"],
+  tl: ["tr", "bl", "br"], tr: ["tl", "br", "bl"],
+  bl: ["br", "tl", "tr"], br: ["bl", "tr", "tl"], max: [],
+};
+
+export function clearSnapAssist() {
+  _assistEls.forEach((el) => { try { el.remove(); } catch {} });
+  _assistEls = [];
+  document.removeEventListener("keydown", _assistEsc, true);
+}
+function _assistEsc(e) { if (e.key === "Escape") clearSnapAssist(); }
+
+function showSnapAssist(sourceWin, zone) {
+  clearSnapAssist();
+  const lay = layer();
+  if (!lay) return;
+  const occupied = new Set(
+    state.windows.filter((w) => w.snap && w.key !== sourceWin.key).map((w) => w.snap)
+  );
+  const empty = (_COMPLEMENTS[zone] || []).filter((z) => !occupied.has(z));
+  // Kandidaten: alle anderen, noch nicht gesnappten Fenster.
+  let candidates = state.windows.filter((w) => w.key !== sourceWin.key && !w.snap);
+  if (!empty.length || !candidates.length) return;
+
+  for (const z of empty) {
+    const rect = snapRect(z);
+    if (!rect) continue;
+    const overlay = document.createElement("div");
+    overlay.className = "snap-assist";
+    overlay.style.left = `${rect.x + 8}px`;
+    overlay.style.top = `${rect.y + 8}px`;
+    overlay.style.width = `${rect.w - 16}px`;
+    overlay.style.height = `${rect.h - 16}px`;
+    overlay.dataset.zone = z;
+    lay.appendChild(overlay);
+    _assistEls.push(overlay);
+  }
+  if (!_assistEls.length) return;
+
+  function renderTiles() {
+    candidates = candidates.filter((w) => state.windows.includes(w) && !w.snap);
+    for (const overlay of [..._assistEls]) {
+      overlay.innerHTML = "";
+      if (!candidates.length) { clearSnapAssist(); return; }
+      for (const cand of candidates) {
+        const tile = document.createElement("button");
+        tile.className = "snap-assist-tile";
+        tile.innerHTML = `${cand.clientColor ? `<span class="client-dot" style="background:${esc(cand.clientColor)}"></span>` : ""}<span>${esc(cand.title)}</span>`;
+        tile.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const targetZone = overlay.dataset.zone;
+          overlay.remove();
+          _assistEls = _assistEls.filter((x) => x !== overlay);
+          snapWindowTo(cand.key, targetZone, { assist: false });
+          if (_assistEls.length) renderTiles(); else clearSnapAssist();
+        });
+        overlay.appendChild(tile);
+      }
+      // Klick auf die freie Fläche = Auswahl abbrechen (nur diese Zone).
+      overlay.addEventListener("mousedown", (e) => {
+        if (e.target === overlay) {
+          overlay.remove();
+          _assistEls = _assistEls.filter((x) => x !== overlay);
+          if (!_assistEls.length) clearSnapAssist();
+        }
+      });
+    }
+  }
+  renderTiles();
+  document.addEventListener("keydown", _assistEsc, true);
 }

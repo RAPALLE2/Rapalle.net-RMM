@@ -23,6 +23,15 @@ let _saveTimer = null;
 let _getExpanded = () => [];
 let _setExpanded = () => {};
 
+// Dashboard-Layout (anpassbare Client-Ansicht) + Edit-Modus pro Benutzer.
+// Wird komplett clientseitig gehalten (wie der übrige UI-Zustand).
+let _dashLayout = null;
+let _dashEdit = false;
+export function getDashLayout() { return _dashLayout; }
+export function setDashLayout(layout) { _dashLayout = layout; }
+export function getDashEdit() { return _dashEdit; }
+export function setDashEdit(on) { _dashEdit = !!on; }
+
 export function configurePersistence({ username, getExpanded, setExpanded }) {
   _key = KEY_PREFIX + (username || "anon");
   if (getExpanded) _getExpanded = getExpanded;
@@ -45,6 +54,8 @@ export function saveNow(state) {
       expanded: _getExpanded(),
       selection: state.selection || null,
       sidebar: state.sidebar || null,
+      dashLayout: _dashLayout,
+      dashEdit: _dashEdit,
       focusOrder: state.focusOrder || [],
       windows: (state.windows || []).map((w) => ({
         key: w.key,
@@ -82,6 +93,8 @@ export function loadState() {
 // Aufgeklappte Knoten in die Sidebar zurückspielen (vor dem ersten Render).
 export function applyExpanded(data) {
   if (data && Array.isArray(data.expanded)) _setExpanded(data.expanded);
+  if (data && data.dashLayout) _dashLayout = data.dashLayout;
+  if (data && typeof data.dashEdit === "boolean") _dashEdit = data.dashEdit;
 }
 
 export function clearPersisted() {

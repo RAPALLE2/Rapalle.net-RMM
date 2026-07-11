@@ -316,7 +316,10 @@ export function renderSidebar() {
   tree.querySelectorAll("[data-drag-client]").forEach((el) => {
     el.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", el.dataset.dragClient);
-      e.dataTransfer.effectAllowed = "move";
+      // Zusätzlicher Typ: erlaubt das Ablegen auf dem Desktop (Fenster-Layer),
+      // um den Client als eigenes Fenster herauszuziehen.
+      e.dataTransfer.setData("text/x-rmm-client", el.dataset.dragClient);
+      e.dataTransfer.effectAllowed = "copyMove";
       el.classList.add("dragging");
     });
     el.addEventListener("dragend", () => {
