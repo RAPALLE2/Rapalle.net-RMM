@@ -221,7 +221,7 @@ def _need_auth() -> Response:
 # Wir bilden ihn eindeutig auf den echten Pfad des Clients ab.
 # ------------------------------------------------------------------
 def _drive_map(client_id: str, drives: list[dict]) -> dict:
-    """Bildet einen url-sicheren Laufwerksnamen -> echter Root-Pfad ab."""
+    """Bildet einen url-sicheren Laufwerksnamen -> echter Root-Pfad ab (nur Windows)."""
     mapping = {}
     for d in drives:
         real = d.get("path", "")
@@ -235,6 +235,54 @@ def _drive_map(client_id: str, drives: list[dict]) -> dict:
             key = real.strip("/").replace("/", "_") or "root"
         mapping[key] = real
     return mapping
+
+
+def _is_posix(drives: list[dict]) -> bool:
+    """True, wenn der Client ein POSIX-System ist (Linux/Mac): Pfade beginnen mit
+    '/' und sind keine Windows-Laufwerke ('C:\\'). Dann hosten wir direkt '/'
+    statt einer Zwischenebene 'root'."""
+    for d in drives:
+        p = d.get("path", "")
+        if len(p) >= 2 and p[1] == ":":
+            return False   # Windows-Laufwerk gefunden
+    return True
+
+
+def _client_display_names(clients: list[dict]) -> dict:
+    """display_name -> client_id, für die als Relay freigegebenen Clients.
+    Nutzt den Hostnamen (Anzeigename); bei Dubletten wird die Kurz-ID angehängt."""
+    counts = {}
+    for c in clients:
+        h = (c.get("hostname") or c["id"]).strip() or c["id"]
+        counts[h.lower()] = counts.get(h.lower(), 0) + 1
+    mapping = {}
+    for c in clients:
+        h = (c.get("hostname") or c["id"]).strip() or c["id"]
+        name = h if counts[h.lower()] == 1 else f"{h}-{c['id'][:8]}"
+        mapping[name] = c["id"]
+    return mapping
+
+
+def _resolve_client_segment(segment: str, user) -> tuple[str | None, str]:
+    """Übersetzt das erste Pfadsegment (Anzeigename ODER Client-ID) in die
+    Client-ID. Rückgabe: (client_id|None, anzeige_segment)."""
+    import urllib.parse
+    seg = urllib.parse.unquote(segment or "")
+    enabled = [c for c in db.list_relay_enabled_clients() if can_access_client(user, c["id"])]
+    names = _client_display_names(enabled)
+    # 1) exakter Anzeigename
+    for name, cid in names.items():
+        if name.lower() == seg.lower():
+            return cid, name
+    # 2) Rückwärtskompatibel: direkte Client-ID
+    for c in enabled:
+        if c["id"] == seg:
+            # Anzeigenamen zu dieser ID zurückgeben
+            for name, cid in names.items():
+                if cid == c["id"]:
+                    return c["id"], name
+            return c["id"], seg
+    return None, seg
 
 
 async def _drives_for(client_id: str) -> list[dict]:
@@ -255,22 +303,193 @@ def _join(root: str, rest: str) -> str:
 
 
 def _parse(path: str) -> tuple[str | None, list[str]]:
-    """/dav/<client_id>/<drive>/<a>/<b> -> (client_id, [drive, a, b])."""
+    """/dav/<segment>/<a>/<b> -> (segment, [a, b]). segment = Anzeigename ODER ID."""
     parts = [p for p in path.split("/") if p not in ("", "dav")]
     if not parts:
         return None, []
-    client_id = parts[0]
-    return client_id, parts[1:]
+    return parts[0], parts[1:]
+
+
+# ==================================================================
+# Hierarchie-Navigation: Tenant -> Location -> (Ordner...) -> Client
+# ==================================================================
+NO_TENANT = "(ohne Mandant)"
+NO_LOCATION = "(ohne Standort)"
+
+
+def _relay_clients(user) -> list[dict]:
+    """Alle für den Relay freigegebenen und für den User sichtbaren Clients."""
+    return [c for c in db.list_relay_enabled_clients() if can_access_client(user, c["id"])]
+
+
+def _dedup(pairs: list[tuple[str, str]]) -> dict:
+    """[(name, key)] -> {display_name: key}. Bei Namensdubletten wird die
+    Kurz-Kennung angehängt, damit jeder Ordner eindeutig ist."""
+    from collections import Counter
+    cnt = Counter(n.lower() for n, _ in pairs)
+    out = {}
+    for n, k in pairs:
+        disp = n if cnt[n.lower()] == 1 else f"{n}-{str(k)[:8]}"
+        out[disp] = k
+    return out
+
+
+def _match(dispmap: dict, seg: str):
+    """URL-decodiertes Segment gegen Anzeigenamen (case-insensitiv) auflösen."""
+    import urllib.parse
+    s = urllib.parse.unquote(seg or "").lower()
+    for disp, key in dispmap.items():
+        if disp.lower() == s:
+            return disp, key
+    return None, None
+
+
+def _tenant_display(clients: list[dict]) -> dict:
+    names = {t["id"]: t["name"] for t in db.list_tenants()}
+    seen = {}
+    for c in clients:
+        tid = c.get("tenant_id") or ""
+        seen[tid] = names.get(tid, NO_TENANT) if tid else NO_TENANT
+    return _dedup([(n, k or "\u0000") for k, n in seen.items()])
+
+
+def _location_display(clients: list[dict]) -> dict:
+    names = {l["id"]: l["name"] for l in db.list_locations()}
+    seen = {}
+    for c in clients:
+        lid = c.get("location_id") or ""
+        seen[lid] = names.get(lid, NO_LOCATION) if lid else NO_LOCATION
+    return _dedup([(n, k or "\u0000") for k, n in seen.items()])
+
+
+def _folder_parent_map() -> dict:
+    return {f["id"]: f.get("parent_folder_id") for f in db.list_folders()}
+
+
+def _populated_folders(clients: list[dict], parent_map: dict) -> set:
+    """Ordner-IDs, die (direkt oder über Unterordner) freigegebene Clients enthalten."""
+    pop = set()
+    for c in clients:
+        fid = c.get("folder_id")
+        while fid and fid not in pop:
+            pop.add(fid)
+            fid = parent_map.get(fid)
+    return pop
+
+
+def _folder_display(location_key: str, parent_folder, pop: set) -> dict:
+    fnames = {f["id"]: f["name"] for f in db.list_folders()}
+    pairs = []
+    for f in db.list_folders(location_key or None):
+        if f["id"] in pop and (f.get("parent_folder_id") or None) == (parent_folder or None):
+            pairs.append((fnames[f["id"]], f["id"]))
+    return _dedup(pairs)
+
+
+def _client_display_at(clients: list[dict], folder) -> dict:
+    pairs = [((c.get("hostname") or c["id"]), c["id"])
+             for c in clients if (c.get("folder_id") or None) == (folder or None)]
+    return _dedup(pairs)
+
+
+def _key_real(key: str):
+    """'\u0000'-Sentinel -> '' (kein Tenant/keine Location)."""
+    return "" if key == "\u0000" else key
+
+
+def _walk_relay(segments: list[str], user) -> dict:
+    """Läuft die Pfadsegmente durch die Hierarchie. Rückgabe u.a.:
+    node = 'root'|'tenant'|'location'|'folder'|'client'|None(=404),
+    consumed = verbrauchte Anzeigenamen (für href-Aufbau),
+    bei 'client': client_id, client_display, rest (Pfad danach),
+    für Listen: die passende Client-Teilmenge + Ebenen-Infos."""
+    clients = _relay_clients(user)
+    consumed: list[str] = []
+
+    if not segments:
+        return {"node": "root", "consumed": consumed, "clients": clients}
+
+    # --- Tenant ---
+    tmap = _tenant_display(clients)
+    tdisp, tkey = _match(tmap, segments[0])
+    if tkey is None:
+        return {"node": None}
+    consumed.append(tdisp)
+    tkey_r = _key_real(tkey)
+    t_clients = [c for c in clients if (c.get("tenant_id") or "") == tkey_r]
+    if len(segments) == 1:
+        return {"node": "tenant", "consumed": consumed, "clients": t_clients}
+
+    # --- Location ---
+    lmap = _location_display(t_clients)
+    ldisp, lkey = _match(lmap, segments[1])
+    if lkey is None:
+        return {"node": None}
+    consumed.append(ldisp)
+    lkey_r = _key_real(lkey)
+    l_clients = [c for c in t_clients if (c.get("location_id") or "") == lkey_r]
+    if len(segments) == 2:
+        return {"node": "location", "consumed": consumed, "clients": l_clients,
+                "location_key": lkey_r}
+
+    # --- Ordner (verschachtelt) + Client ---
+    parent_map = _folder_parent_map()
+    pop = _populated_folders(l_clients, parent_map)
+    cur_folder = None
+    i = 2
+    while i < len(segments):
+        seg = segments[i]
+        fmap = _folder_display(lkey_r, cur_folder, pop)
+        fdisp, fkey = _match(fmap, seg)
+        if fkey is not None:
+            consumed.append(fdisp)
+            cur_folder = fkey
+            i += 1
+            continue
+        cmap = _client_display_at(l_clients, cur_folder)
+        cdisp, ckey = _match(cmap, seg)
+        if ckey is not None:
+            consumed.append(cdisp)
+            return {"node": "client", "consumed": consumed, "client_id": ckey,
+                    "client_display": cdisp, "rest": segments[i + 1:]}
+        return {"node": None}
+
+    # Pfad endet auf einem Ordner -> dessen Inhalt auflisten
+    return {"node": "folder", "consumed": consumed, "clients": l_clients,
+            "location_key": lkey_r, "folder_key": cur_folder}
+
+
+def _relay_children(walk: dict, user) -> list[str]:
+    """Anzeigenamen der Kind-Ordner eines Zwischenknotens (alle sind Ordner)."""
+    node = walk["node"]
+    if node == "root":
+        return list(_tenant_display(walk["clients"]).keys())
+    if node == "tenant":
+        return list(_location_display(walk["clients"]).keys())
+    if node in ("location", "folder"):
+        parent_map = _folder_parent_map()
+        pop = _populated_folders(walk["clients"], parent_map)
+        parent = walk.get("folder_key")
+        folders = list(_folder_display(walk["location_key"], parent, pop).keys())
+        cl = list(_client_display_at(walk["clients"], parent).keys())
+        return folders + cl
+    return []
 
 
 async def _resolve_real_path(client_id: str, sub: list[str]) -> tuple[str | None, list[dict] | None]:
     """
-    Übersetzt [drive, rest...] in den echten Client-Pfad.
-    Rückgabe: (real_path oder None wenn Root/Drive-Liste, drives-Liste).
+    Übersetzt [laufwerk/pfad...] in den echten Client-Pfad.
+    - POSIX (Linux/Mac): der Client-Ordner IST '/' -> kein 'root'-Zwischenordner.
+    - Windows: erste Ebene = Laufwerk (C, D, ...).
+    Rückgabe: (real_path oder None=Laufwerksliste, drives).
     """
     drives = await _drives_for(client_id)
+    if _is_posix(drives):
+        # '/' direkt hosten: /dav/<client>/etc -> /etc ; Root -> '/'
+        return _join("/", "/".join(sub)), drives
+    # Windows: Laufwerks-Ebene
     if not sub:
-        return None, drives          # Root: Laufwerks-Liste
+        return None, drives          # Root: Laufwerks-Liste (C:, D:, ...)
     mapping = _drive_map(client_id, drives)
     drive = sub[0]
     if drive not in mapping:
@@ -356,36 +575,46 @@ async def dav(request: Request, full_path: str = ""):
     _log.info("Relay-Auth OK [%s %s] user=%s (%s)", method, full_path,
               user.get("username"), reason)
 
-    client_id, sub = _parse(full_path)
+    import urllib.parse as _up
+    segments = [p for p in full_path.split("/") if p not in ("", "dav")]
+    walk = _walk_relay(segments, user)
+    node = walk.get("node")
 
-    # /dav (Wurzel) -> nur die FREIGEGEBENEN, für den User sichtbaren Clients
-    # als Ordner. Mehrere Clients erscheinen gleichzeitig nebeneinander.
-    if not client_id:
-        enabled_clients = [c for c in db.list_relay_enabled_clients()
-                           if can_access_client(user, c["id"])]
-        if method == "PROPFIND":
-            responses = [_propfind_response("/dav/", "RMM Relay", True, 0, 0)]
-            depth = request.headers.get("depth", "1")
-            if depth != "0":
-                for c in enabled_clients:
-                    responses.append(_propfind_response(
-                        f"/dav/{c['id']}/", c.get("hostname") or c["id"], True, 0, 0))
-            return _multistatus(responses)
-        # Browser: klickbare Übersicht der freigegebenen Clients
-        rows = "".join(
-            f'<li>🖥️ <a href="/dav/{_xml.escape(c["id"])}/">{_xml.escape(c.get("hostname") or c["id"])}</a></li>'
-            for c in enabled_clients)
-        html = (f"<!doctype html><meta charset=utf-8><title>RMM Relay</title>"
-                f"<body style='font-family:sans-serif'><h3>🔌 RMM Relay — freigegebene Clients</h3>"
-                f"<ul>{rows or '<li>(keine Clients freigegeben)</li>'}</ul></body>")
-        return Response(content=html, media_type="text/html")
-
-    # Ab hier: konkreter Client. Nur wenn für den Relay FREIGEGEBEN.
-    if not db.is_client_relay_enabled(client_id):
+    if node is None:
         return PlainTextResponse("Not Found", status_code=404)
-    # Kein Zugriff auf DIESEN Client -> 403 (NICHT 401!).
+
+    def _href_base(consumed):
+        return "/dav" + ("/" + "/".join(_up.quote(s) for s in consumed) if consumed else "")
+
+    # --- Zwischenebenen (Mandant/Standort/Ordner) als Ordner auflisten ---
+    if node in ("root", "tenant", "location", "folder"):
+        base_href = _href_base(walk["consumed"])
+        self_name = walk["consumed"][-1] if walk["consumed"] else "RMM Relay"
+        children = _relay_children(walk, user)
+        if method == "PROPFIND":
+            responses = [_propfind_response(base_href + "/", self_name, True, 0, 0)]
+            if request.headers.get("depth", "1") != "0":
+                for n in children:
+                    responses.append(_propfind_response(
+                        f"{base_href}/{_up.quote(n)}/", n, True, 0, 0))
+            return _multistatus(responses)
+        if method in ("GET", "HEAD"):
+            if method == "HEAD":
+                return Response(status_code=200)
+            rows = "".join(
+                f'<li>📁 <a href="{base_href}/{_up.quote(n)}/">{_xml.escape(n)}</a></li>'
+                for n in children)
+            html = ("<!doctype html><meta charset=utf-8><title>RMM Relay</title>"
+                    f"<body style='font-family:sans-serif'><h3>🔌 {_xml.escape(self_name)}</h3>"
+                    f"<ul>{rows or '<li>(leer)</li>'}</ul></body>")
+            return Response(content=html, media_type="text/html")
+        return PlainTextResponse("Nur lesbar", status_code=403)
+
+    # --- Konkreter Client ---
+    client_id = walk["client_id"]
+    display_name = walk["client_display"]
+    sub = walk.get("rest", [])
     if not can_access_client(user, client_id):
-        _log.info("Relay: %s hat keinen Zugriff auf Client %s", user.get("username"), client_id)
         return PlainTextResponse("Kein Zugriff auf diesen Client", status_code=403)
     if not state.is_online(client_id):
         return PlainTextResponse("Client ist offline", status_code=503)
@@ -394,11 +623,10 @@ async def dav(request: Request, full_path: str = ""):
         real_path, drives = await _resolve_real_path(client_id, sub)
     except Exception as e:
         return PlainTextResponse(f"Fehler: {e}", status_code=502)
-
     if real_path == "__404__":
         return PlainTextResponse("Laufwerk nicht gefunden", status_code=404)
 
-    base_href = "/dav/" + client_id
+    base_href = _href_base(walk["consumed"])
 
     # ---------------- PROPFIND (Verzeichnis/Datei-Infos) ----------------
     if method == "PROPFIND":
@@ -407,7 +635,7 @@ async def dav(request: Request, full_path: str = ""):
         # Root des Clients -> Laufwerke als Ordner
         if real_path is None:
             mapping = _drive_map(client_id, drives)
-            responses = [_propfind_response(base_href + "/", client_id, True, 0, 0)]
+            responses = [_propfind_response(base_href + "/", display_name, True, 0, 0)]
             if depth != "0":
                 for key in mapping:
                     responses.append(_propfind_response(
@@ -425,7 +653,7 @@ async def dav(request: Request, full_path: str = ""):
 
         if is_dir:
             responses = [_propfind_response(href_self.rstrip("/") + "/",
-                                            sub[-1] if sub else client_id, True, 0, 0)]
+                                            sub[-1] if sub else display_name, True, 0, 0)]
             if depth != "0":
                 for e in entries:
                     child_href = href_self.rstrip("/") + "/" + _xml.escape(e["name"])
@@ -533,13 +761,16 @@ async def dav(request: Request, full_path: str = ""):
     # ---------------- MOVE (umbenennen/verschieben) ----------------
     if method == "MOVE":
         dest = request.headers.get("destination", "")
-        # Destination ist eine volle URL; wir extrahieren den /dav-Teil.
         idx = dest.find("/dav/")
         if idx < 0 or real_path is None:
             return PlainTextResponse("Ungültiges Ziel", status_code=400)
-        dcid, dsub = _parse(dest[idx:])
+        # Ziel durch die Hierarchie auflösen (muss innerhalb desselben Clients bleiben).
+        dsegs = [p for p in dest[idx:].split("/") if p not in ("", "dav")]
+        dwalk = _walk_relay(dsegs, user)
+        if dwalk.get("node") != "client" or dwalk.get("client_id") != client_id:
+            return PlainTextResponse("Ziel muss im selben Client liegen", status_code=400)
         try:
-            dreal, _ = await _resolve_real_path(dcid or client_id, dsub)
+            dreal, _ = await _resolve_real_path(client_id, dwalk.get("rest", []))
         except Exception as e:
             return PlainTextResponse(f"Fehler: {e}", status_code=502)
         if not dreal or dreal == "__404__":

@@ -388,24 +388,42 @@ export function renderExplorer(body, win) {
         </div>
       </div>`);
 
+    // Netzlaufwerk MIT Laufwerksbuchstaben (Z:). net use akzeptiert die
+    // http://ip:port/dav-Form direkt und vergibt einen Laufwerksbuchstaben.
     const netUse = username ? card(`
-      <div style="font-weight:700;margin-bottom:6px">⚡ Schnellster Weg (Windows-Eingabeaufforderung)</div>
-      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use * ${httpRoot} /user:${username} `)}
+      <div style="font-weight:700;margin-bottom:6px">💽 Als Netzlaufwerk (mit Laufwerksbuchstaben Z:)</div>
+      <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
+        Zuverlässigster Weg für einen echten Laufwerksbuchstaben: in der
+        <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
+      </div>
+      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use Z: ${httpRoot} /user:${username} `)}
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        In <code>cmd</code> einfügen, dein Passwort direkt dahinter schreiben, Enter. Windows
-        mappt das Laufwerk dann per Digest über HTTP – ohne Registry-Änderung.
+        Statt <code>Z:</code> geht jeder freie Buchstabe. <code>/persistent:yes</code> anhängen,
+        damit das Laufwerk nach dem Neustart bleibt. Windows mappt es per Digest über HTTP –
+        ohne Registry-Änderung.
+      </div>
+      <div style="color:var(--subtext);font-size:12px;margin-top:6px">
+        Trennen später mit: <code>net use Z: /delete</code>
       </div>`) : "";
 
     const guide = card(`
-      <div style="font-weight:700;margin-bottom:6px">🪟 Windows-Tipps</div>
+      <div style="font-weight:700;margin-bottom:6px">🪟 Windows – Netzlaufwerk verbinden (grafisch)</div>
       <ol style="margin:0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.8">
         <li>Dienst „WebClient" muss laufen: in <code>cmd</code> (als Admin)
           <code>net start webclient</code>.</li>
-        <li>Adresse als <b>http://…:Port/dav</b> eintragen (genau wie oben).</li>
-        <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken und deinen
+        <li>Explorer → „Dieser PC" → „Netzlaufwerk verbinden".</li>
+        <li>Laufwerksbuchstaben wählen, als Ordner die <b>http://…:Port/dav</b>-Adresse von oben
+          eintragen (mit Doppelpunkt vor dem Port).</li>
+        <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken → Fertig stellen →
           Dashboard-Login eingeben.</li>
       </ol>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        Wichtig: <b>niemals</b> die Form <code>\\\\host:Port\\dav</code> mit Backslashes verwenden –
+        damit versucht Windows SMB und meldet <code>0x800704b3</code>. Immer die
+        <code>http://…/dav</code>-Adresse nehmen (im Dialog oder per <code>net use</code>).
+        Klappt der grafische Dialog nicht, den <code>net use</code>-Befehl oben verwenden.
+      </div>
+      <div style="color:var(--subtext);font-size:12px;margin-top:6px">
         Der jeweilige Client muss online sein, damit sein Ordner Inhalte zeigt.
       </div>`);
 
@@ -419,7 +437,7 @@ export function renderExplorer(body, win) {
       return;
     }
 
-    relayPane.innerHTML = header + address + login + netUse + guide;
+    relayPane.innerHTML = header + address + netUse + login + guide;
     wire();
 
     function wire() {
