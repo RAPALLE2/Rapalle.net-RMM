@@ -26,12 +26,32 @@ export function renderGuacamole(body, win) {
       <div id="guac-bar-${win.key}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
         <span id="guac-status-${win.key}" style="color:var(--subtext)">Nicht verbunden</span>
         <span style="flex:1"></span>
+        <span class="guac-tools-${win.key}" style="display:none;align-items:center;gap:6px">
+          <button class="taskbar-btn" id="guac-mod-ctrl-${win.key}" title="Strg gedrückt halten (Toggle) · Doppelklick = einmal tippen">Strg</button>
+          <button class="taskbar-btn" id="guac-mod-alt-${win.key}" title="Alt gedrückt halten (Toggle) · Doppelklick = einmal tippen">Alt</button>
+          <button class="taskbar-btn" id="guac-mod-win-${win.key}" title="Windows-Taste gedrückt halten (Toggle) · Doppelklick = einmal tippen">Win</button>
+          <button class="taskbar-btn" id="guac-key-tab-${win.key}" title="Tab senden">Tab</button>
+          <button class="taskbar-btn" id="guac-key-esc-${win.key}" title="Esc senden">Esc</button>
+        </span>
         <button class="taskbar-btn" id="guac-cad-${win.key}" style="display:none">Strg+Alt+Entf</button>
+        <span class="guac-tools-${win.key}" style="display:none;align-items:center;gap:6px">
+          <button class="taskbar-btn" id="guac-clip-send-${win.key}" title="Lokale Zwischenablage an den Remote-PC senden">📋→</button>
+          <button class="taskbar-btn" id="guac-clip-get-${win.key}" title="Zuletzt vom Remote-PC empfangene Zwischenablage übernehmen">→📋</button>
+        </span>
         <button class="taskbar-btn" id="guac-disc-${win.key}" style="display:none">Trennen</button>
       </div>
 
       <div id="guac-form-${win.key}" style="padding:14px;overflow:auto;color:var(--text)">
         <div style="display:grid;grid-template-columns:120px 1fr;gap:8px 10px;max-width:460px">
+          ${clientId ? `
+          <label style="align-self:center;color:var(--subtext)">Login</label>
+          <div style="display:flex;gap:6px">
+            <select id="gf-profile-${win.key}" title="Gespeichertes Login auswählen"
+              style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)">
+              <option value="">— Login auswählen —</option>
+            </select>
+            <button class="taskbar-btn" id="gf-profile-del-${win.key}" title="Gewähltes Login löschen">🗑️</button>
+          </div>` : ""}
           <label style="align-self:center;color:var(--subtext)">Protokoll</label>
           <select id="gf-proto-${win.key}" style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)">
             <option value="rdp">RDP (Windows-Desktop)</option>
@@ -54,7 +74,7 @@ export function renderGuacamole(body, win) {
           <label style="align-self:center;color:var(--subtext)" id="gf-dom-label-${win.key}">Domäne</label>
           <input type="text" id="gf-domain-${win.key}" placeholder="(optional)"
             style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" />
-          <label style="align-self:center;color:var(--subtext)">Auflösung</label>
+          <label style="align-self:center;color:var(--subtext)" id="gf-res-label-${win.key}">Auflösung</label>
           <select id="gf-res-${win.key}" style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)">
             <option value="1024x768">1024 × 768 (klein, stabil)</option>
             <option value="1280x720" selected>1280 × 720 (Standard)</option>
@@ -62,7 +82,7 @@ export function renderGuacamole(body, win) {
             <option value="1600x900">1600 × 900</option>
             <option value="1920x1080">1920 × 1080 (scharf, mehr Last)</option>
           </select>
-          <label style="align-self:center;color:var(--subtext)">Qualität</label>
+          <label style="align-self:center;color:var(--subtext)" id="gf-qual-label-${win.key}">Qualität</label>
           <select id="gf-qual-${win.key}" style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)">
             <option value="low" selected>Flüssig (niedrig, empfohlen)</option>
             <option value="balanced">Ausgewogen</option>
@@ -72,12 +92,28 @@ export function renderGuacamole(body, win) {
         <div id="guac-form-msg-${win.key}" style="margin-top:10px;font-size:12px;color:var(--subtext)"></div>
         <div style="display:flex;gap:8px;margin-top:12px">
           <button class="btn-primary" id="gf-connect-${win.key}" style="width:auto">🔌 Verbinden</button>
-          ${clientId ? `<button class="action-btn" id="gf-save-${win.key}" title="Login für diesen Client speichern (ohne Passwort)">💾 Login speichern</button>` : ""}
+          ${clientId ? `<button class="action-btn" id="gf-save-${win.key}" title="Login für diesen Client speichern (inkl. Passwort)">💾 Login speichern</button>` : ""}
         </div>
       </div>
 
       <div id="guac-display-${win.key}" tabindex="0"
         style="flex:1;display:none;align-items:center;justify-content:center;overflow:hidden;position:relative;outline:none"></div>
+
+      <div id="guac-sendbar-${win.key}" style="flex:none;display:none;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border)">
+        <span style="color:var(--subtext)">Text senden:</span>
+        <select id="guac-layout-${win.key}" title="Tastaturlayout: Zeichen werden als layout-unabhängige Keysyms gesendet - 1:1 ist fast immer richtig"
+          style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
+          <option value="raw">1:1 (empfohlen)</option>
+          <option value="us">US-Layout</option>
+          <option value="de">DE-Layout</option>
+        </select>
+        <input type="text" id="guac-text-${win.key}" placeholder="Text eingeben, dann Senden oder Enter..."
+          style="flex:1;padding:5px 8px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text)" />
+        <label style="color:var(--subtext);display:flex;align-items:center;gap:4px" title="Nach dem Text zusätzlich Enter senden">
+          <input type="checkbox" id="guac-enter-${win.key}" /> +Enter
+        </label>
+        <button class="taskbar-btn" id="guac-send-${win.key}">Senden</button>
+      </div>
     </div>
   `;
 
@@ -95,6 +131,9 @@ export function renderGuacamole(body, win) {
   const resSel = body.querySelector(`#gf-res-${win.key}`);
   const qualSel = body.querySelector(`#gf-qual-${win.key}`);
 
+  const qualLabel = body.querySelector(`#gf-qual-label-${win.key}`);
+  const resLabel = body.querySelector(`#gf-res-label-${win.key}`);
+
   protoSel.value = presetProtocol;
   function syncProtoUI() {
     const proto = protoSel.value;
@@ -104,9 +143,143 @@ export function renderGuacamole(body, win) {
     const showDomain = proto === "rdp";
     domLabel.style.display = showDomain ? "" : "none";
     domainInput.style.display = showDomain ? "" : "none";
+    // Qualität und Auflösung sind nur für Bild-Protokolle (RDP/VNC) relevant.
+    // Bei SSH/Telnet rendert guacd ein Terminal - beides ausblenden (die
+    // Terminalgröße wird automatisch aus der Fenstergröße bestimmt).
+    const gfx = proto === "rdp" || proto === "vnc";
+    if (qualLabel) qualLabel.style.display = gfx ? "" : "none";
+    qualSel.style.display = gfx ? "" : "none";
+    if (resLabel) resLabel.style.display = gfx ? "" : "none";
+    resSel.style.display = gfx ? "" : "none";
   }
   protoSel.addEventListener("change", syncProtoUI);
   syncProtoUI();
+
+  // ---------------------------------------------------------------
+  // Zusatz-Werkzeuge (wie beim Remote Screen): Sticky-Modifier, Tab/Esc,
+  // Clipboard-Sync, Text-Sendeleiste. Sichtbar erst ab Verbindung.
+  // ---------------------------------------------------------------
+  const KEYSYM = { Control: 0xFFE3, Alt: 0xFFE9, Meta: 0xFFEB,
+                   Tab: 0xFF09, Escape: 0xFF1B, Delete: 0xFFFF, Enter: 0xFF0D };
+  const toolSpans = body.querySelectorAll(`.guac-tools-${win.key}`);
+  const sendBar = body.querySelector(`#guac-sendbar-${win.key}`);
+  const guacTextInput = body.querySelector(`#guac-text-${win.key}`);
+  const guacEnterChk = body.querySelector(`#guac-enter-${win.key}`);
+  const guacModState = { Control: false, Alt: false, Meta: false };
+  const guacModBtns = {
+    Control: body.querySelector(`#guac-mod-ctrl-${win.key}`),
+    Alt: body.querySelector(`#guac-mod-alt-${win.key}`),
+    Meta: body.querySelector(`#guac-mod-win-${win.key}`),
+  };
+  let remoteClipboard = "";     // zuletzt vom Remote-PC empfangene Zwischenablage
+
+  function showTools(show) {
+    toolSpans.forEach((el) => { el.style.display = show ? "inline-flex" : "none"; });
+    if (sendBar) sendBar.style.display = show ? "flex" : "none";
+  }
+  function updateGuacModBtn(name) {
+    const b = guacModBtns[name];
+    if (!b) return;
+    b.style.background = guacModState[name] ? "var(--accent)" : "";
+    b.style.color = guacModState[name] ? "#0b0f14" : "";
+  }
+  // Alle gehaltenen Modifier loslassen (bei Trennen/Fensterschluss wichtig,
+  // damit auf dem Remote-PC keine Taste "hängen" bleibt).
+  function releaseGuacMods(sendUp = true) {
+    Object.keys(guacModState).forEach((name) => {
+      if (guacModState[name] && sendUp) {
+        try { client?.sendKeyEvent(0, KEYSYM[name]); } catch {}
+      }
+      guacModState[name] = false;
+      updateGuacModBtn(name);
+    });
+  }
+  Object.keys(guacModBtns).forEach((name) => {
+    guacModBtns[name]?.addEventListener("click", () => {
+      if (!client) return;
+      guacModState[name] = !guacModState[name];
+      try { client.sendKeyEvent(guacModState[name] ? 1 : 0, KEYSYM[name]); } catch {}
+      updateGuacModBtn(name);
+      displayEl.focus();
+    });
+    // Doppelklick: Taste sofort einmal tippen (z.B. Win -> Startmenü). Die
+    // beiden Einzelklicks davor haben gedrückt+losgelassen - Zustand ist
+    // danach sauber "aus", hier nur noch der Tipp.
+    guacModBtns[name]?.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      if (!client) return;
+      releaseGuacMods();
+      try { client.sendKeyEvent(1, KEYSYM[name]); client.sendKeyEvent(0, KEYSYM[name]); } catch {}
+      displayEl.focus();
+    });
+  });
+  function guacTapKey(sym) {
+    if (!client) return;
+    try { client.sendKeyEvent(1, sym); client.sendKeyEvent(0, sym); } catch {}
+    displayEl.focus();
+  }
+  body.querySelector(`#guac-key-tab-${win.key}`)?.addEventListener("click", () => guacTapKey(KEYSYM.Tab));
+  body.querySelector(`#guac-key-esc-${win.key}`)?.addEventListener("click", () => guacTapKey(KEYSYM.Escape));
+
+  // Zeichen -> X11-Keysym (layout-unabhängig): ASCII/Latin-1 direkt,
+  // alle anderen Unicode-Zeichen über den 0x01000000-Bereich.
+  function keysymFromChar(ch) {
+    const cp = ch.codePointAt(0);
+    if (cp === 10 || cp === 13) return KEYSYM.Enter;
+    if (cp === 9) return KEYSYM.Tab;
+    return cp < 0x100 ? cp : (0x01000000 | cp);
+  }
+  function guacSendText() {
+    if (!client || !guacTextInput) return;
+    const text = guacTextInput.value;
+    if (!text) return;
+    for (const ch of text) guacTapKey(keysymFromChar(ch));
+    if (guacEnterChk?.checked) guacTapKey(KEYSYM.Enter);
+    guacTextInput.value = "";
+    guacTextInput.focus();
+  }
+  body.querySelector(`#guac-send-${win.key}`)?.addEventListener("click", guacSendText);
+  guacTextInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); guacSendText(); }
+  });
+
+  // --- Zwischenablage synchronisieren ---
+  // Senden: lokale Zwischenablage lesen und als Guacamole-Clipboard-Stream
+  // an den Remote-PC schicken (guacd setzt sie dort in der Session).
+  body.querySelector(`#guac-clip-send-${win.key}`)?.addEventListener("click", async () => {
+    if (!client) return;
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch {}
+    if (!text) {
+      window.notify?.("Lokale Zwischenablage ist leer oder Zugriff verweigert (HTTPS nötig).", "warn");
+      return;
+    }
+    try {
+      const stream = client.createClipboardStream("text/plain");
+      const writer = new Guacamole.StringWriter(stream);
+      writer.sendText(text);
+      writer.sendEnd();
+      window.notify?.("Zwischenablage an Remote-Session gesendet", "success");
+    } catch (e) {
+      window.notify?.("Senden fehlgeschlagen: " + e.message, "error");
+    }
+    displayEl.focus();
+  });
+  // Holen: guacd pusht Clipboard-Änderungen der Remote-Session automatisch
+  // (client.onclipboard, siehe connect()). Der Button übernimmt den zuletzt
+  // empfangenen Stand in die lokale Zwischenablage.
+  body.querySelector(`#guac-clip-get-${win.key}`)?.addEventListener("click", async () => {
+    if (!remoteClipboard) {
+      window.notify?.("Noch nichts vom Remote-PC empfangen - dort erst etwas kopieren.", "warn");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(remoteClipboard);
+      window.notify?.("Remote-Zwischenablage übernommen (" + remoteClipboard.length + " Zeichen)", "success");
+    } catch {
+      prompt("Remote-Zwischenablage (Strg+C zum Kopieren):", remoteClipboard);
+    }
+  });
 
   let client = null;
   let keyboard = null;
@@ -264,6 +437,12 @@ export function renderGuacamole(body, win) {
     } else if (proto === "vnc") {
       params.width = String(width);
       params.height = String(height);
+      // Qualität -> Farbtiefe (guacd-VNC): weniger Farben = weniger Bandbreite.
+      const q = qualSel.value;
+      params["color-depth"] = q === "high" ? "32" : q === "balanced" ? "24" : "16";
+      // Cursor lokal rendern lassen (flüssiger); Server, die das nicht können,
+      // ignorieren den Parameter.
+      params.cursor = "local";
     }
     return { proto, params, width, height };
   }
@@ -376,7 +555,7 @@ export function renderGuacamole(body, win) {
     // Anzeige vorbereiten
     formEl.style.display = "none";
     displayEl.style.display = "flex";
-    cadBtn.style.display = proto === "rdp" ? "" : "none";
+    cadBtn.style.display = "";     // Strg+Alt+Entf für alle Protokolle verfügbar
     discBtn.style.display = "";
     setStatus("Verbinde...", "var(--subtext)");
 
@@ -393,6 +572,19 @@ export function renderGuacamole(body, win) {
       tunnel.unstableThreshold = 6000;
     } catch {}
     client = new Guacamole.Client(tunnel);
+
+    // Clipboard-Änderungen der Remote-Session empfangen und zwischenspeichern
+    // (Übernahme in die lokale Zwischenablage per →📋-Button, da Browser
+    // Schreibzugriffe nur nach Nutzeraktion erlauben).
+    client.onclipboard = (stream, mimetype) => {
+      if (!/^text\//.test(mimetype)) { try { stream.sendAck("OK", 0); } catch {} return; }
+      try {
+        const reader = new Guacamole.StringReader(stream);
+        let buf = "";
+        reader.ontext = (t) => { buf += t; };
+        reader.onend = () => { remoteClipboard = buf; };
+      } catch {}
+    };
 
     const displayElement = client.getDisplay().getElement();
     displayEl.innerHTML = "";
@@ -438,9 +630,14 @@ export function renderGuacamole(body, win) {
       // 0 IDLE,1 CONNECTING,2 WAITING,3 CONNECTED,4 DISCONNECTING,5 DISCONNECTED
       if (st === 3) {
         setStatus(`Verbunden (${proto.toUpperCase()})`, "var(--accent)");
+        showTools(true);
         startWatchdog();   // erst ab hier auf Einfrieren achten (nicht während des Aufbaus)
         // 1:1-Aufzeichnung starten (nur wenn an einen Client gebunden, da die
         // Aufzeichnung diesem zugeordnet und rechtegeprüft gespeichert wird).
+        // Gilt für ALLE Protokolle: RDP, VNC und auch SSH/Telnet - guacd
+        // rendert das Terminal als Bild auf die Canvas, die hier mitgeschnitten
+        // wird. SSH/Telnet-Sitzungen werden damit als Video-Replay geloggt
+        // statt als einzelne Befehle/Ausgaben.
         if (clientId) setTimeout(() => startScreenRecording(display), 600);
       } else if (st === 5 && !disconnected) {
         cleanupClient();
@@ -547,6 +744,8 @@ export function renderGuacamole(body, win) {
   }
 
   function cleanupClient() {
+    releaseGuacMods();       // gehaltene Strg/Alt/Win-Tasten sauber loslassen
+    showTools(false);
     disconnected = true;
     stopScreenRecording();   // Aufnahme flushen + hochladen (fire-and-forget)
     stopWatchdog();
@@ -560,41 +759,103 @@ export function renderGuacamole(body, win) {
   connectBtn.addEventListener("click", connect);
   discBtn.addEventListener("click", () => { cleanupClient(); setStatus("Getrennt", "var(--subtext)"); });
 
-  // --- Gespeichertes Login (ohne Passwort) pro Client laden/speichern ---
+  // --- Gespeicherte Logins (MEHRERE pro Client, MIT Passwort) ---
+  // Auswahl-Dropdown neben dem Speichern-Button: Logins werden getrennt je
+  // Protokoll benannt (z.B. eigenes Login für SSH/Telnet und eines für RDP).
   const userInput = body.querySelector(`#gf-user-${win.key}`);
+  const passInput = body.querySelector(`#gf-pass-${win.key}`);
   const hostInput = body.querySelector(`#gf-host-${win.key}`);
   const saveBtn = body.querySelector(`#gf-save-${win.key}`);
+  const profileSel = body.querySelector(`#gf-profile-${win.key}`);
+  const profileDelBtn = body.querySelector(`#gf-profile-del-${win.key}`);
+  let savedProfiles = [];
 
-  if (clientId) {
-    api.getGuacProfile(clientId).then((res) => {
-      const prof = res && res.profile;
-      if (!prof) return;
-      // Vorhandene Werte NICHT überschreiben, wenn sie schon aus den Props kamen
-      if (prof.protocol) { protoSel.value = prof.protocol; syncProtoUI(); }
-      if (prof.host) hostInput.value = prof.host;
-      if (prof.port) portInput.value = prof.port;
-      if (prof.username) userInput.value = prof.username;
-      if (prof.domain) domainInput.value = prof.domain;
-      if (prof.resolution) resSel.value = prof.resolution;
-      if (prof.quality) qualSel.value = prof.quality;
-      formMsg.innerHTML = `<span style="color:var(--subtext)">Gespeichertes Login geladen (Passwort bitte eingeben).</span>`;
-    }).catch(() => {});
+  function applyProfile(prof) {
+    if (!prof) return;
+    if (prof.protocol) protoSel.value = prof.protocol;
+    if (prof.host) hostInput.value = prof.host;
+    if (prof.port) portInput.value = prof.port;
+    userInput.value = prof.username || "";
+    passInput.value = prof.password || "";
+    domainInput.value = prof.domain || "";
+    if (prof.resolution) resSel.value = prof.resolution;
+    if (prof.quality) qualSel.value = prof.quality;
+    syncProtoUI();
+    formMsg.innerHTML = `<span style="color:var(--subtext)">Login „${esc(prof.name || "")}" geladen${prof.password ? " (inkl. Passwort)" : " (ohne Passwort)"}.</span>`;
   }
+
+  function renderProfileOptions(selectedId) {
+    if (!profileSel) return;
+    profileSel.innerHTML = `<option value="">— Login auswählen —</option>` +
+      savedProfiles.map((pr) =>
+        `<option value="${esc(pr.id)}">${esc(pr.name || "?")} · ${esc((pr.protocol || "").toUpperCase())}</option>`
+      ).join("");
+    if (selectedId) profileSel.value = selectedId;
+  }
+
+  async function loadProfiles(preselectId) {
+    if (!clientId || !profileSel) return;
+    try {
+      const res = await api.listGuacProfiles(clientId);
+      savedProfiles = res.profiles || [];
+      renderProfileOptions(preselectId);
+      if (preselectId) {
+        applyProfile(savedProfiles.find((pr) => pr.id === preselectId));
+        return;
+      }
+      // Passendes Login zum voreingestellten Protokoll automatisch anwenden.
+      const match = savedProfiles.find((pr) => pr.protocol === protoSel.value) || null;
+      if (match) { profileSel.value = match.id; applyProfile(match); }
+      else if (!savedProfiles.length) {
+        // Rückwärtskompatibilität: altes Einzel-Profil (ohne Passwort) laden.
+        api.getGuacProfile(clientId).then((r) => {
+          if (r && r.profile) applyProfile({ ...r.profile, name: "Alt-Profil" });
+        }).catch(() => {});
+      }
+    } catch { /* Liste optional */ }
+  }
+
+  profileSel?.addEventListener("change", () => {
+    applyProfile(savedProfiles.find((pr) => pr.id === profileSel.value));
+  });
+
+  profileDelBtn?.addEventListener("click", async () => {
+    const id = profileSel?.value;
+    if (!id) { window.notify?.("Kein Login ausgewählt.", "warn"); return; }
+    const prof = savedProfiles.find((pr) => pr.id === id);
+    if (!confirm(`Login „${prof?.name || id}" wirklich löschen?`)) return;
+    try {
+      await api.deleteGuacProfile(clientId, id);
+      window.notify?.("Login gelöscht", "success");
+      loadProfiles();
+    } catch (e) {
+      window.notify?.("Löschen fehlgeschlagen: " + e.message, "error");
+    }
+  });
+
+  if (clientId) loadProfiles();
 
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
+      const proto = protoSel.value;
+      const defName = `${proto.toUpperCase()} ${userInput.value ? userInput.value + "@" : ""}${hostInput.value.trim()}`;
+      const name = prompt("Name für dieses Login:", defName);
+      if (name === null) return;
       const profile = {
-        protocol: protoSel.value,
+        name: (name || defName).trim(),
+        protocol: proto,
         host: hostInput.value.trim(),
         port: portInput.value.trim(),
         username: userInput.value,
+        password: passInput.value,          // wird MIT gespeichert
         domain: domainInput.value.trim(),
         resolution: resSel.value,
         quality: qualSel.value,
       };
       try {
-        await api.saveGuacProfile(clientId, profile);
-        window.notify?.("Guacamole-Login gespeichert (ohne Passwort)", "success");
+        const res = await api.addGuacProfile(clientId, profile);
+        window.notify?.("Guacamole-Login gespeichert (inkl. Passwort)", "success");
+        loadProfiles(res?.profile?.id);
       } catch (e) {
         window.notify?.("Speichern fehlgeschlagen: " + e.message, "error");
       }

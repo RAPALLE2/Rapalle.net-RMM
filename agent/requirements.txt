@@ -12,6 +12,7 @@ python-dotenv>=1.0.0                     # liest die .env Konfigurationsdatei
 mss>=9.0.0                               # schnelle Bildschirm-Screenshots (Remote Screen)
 Pillow>=10.0.0                           # Bildbearbeitung/JPEG-Kodierung der Screenshots
 pynput>=1.7.0                            # Maus-/Tastatur-Simulation (Fernsteuerung)
+pyperclip>=1.8.0                         # Zwischenablage-Synchronisierung (Remote Screen)
 
 # Interaktives Terminal auf Windows (ConPTY); nur dort benoetigt.
 pywinpty>=2.0.0; sys_platform == "win32"

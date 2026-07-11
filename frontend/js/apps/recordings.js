@@ -8,6 +8,7 @@
 import { api } from "../api.js";
 import { registerCleanup } from "../windowmanager.js";
 import { esc } from "../utils.js";
+import { MiniTerm } from "./miniterm.js";
 
 function formatDuration(ms) {
   if (ms == null) return "–";
@@ -64,6 +65,8 @@ export function renderRecordings(body, win) {
   let imgEl = null;
   let allRecordings = [];
   let videoUrl = null;   // Object-URL des aktuell geladenen Videos
+  let termMode = false;  // aktuell ein Terminal-Replay (format 'term')?
+  let replayTerm = null; // MiniTerm-Instanz für Terminal-Replays
 
   function stopPlayback() {
     playing = false;
@@ -71,11 +74,40 @@ export function renderRecordings(body, win) {
     if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   }
 
+  function disposeTerm() {
+    try { replayTerm?.dispose(); } catch {}
+    replayTerm = null;
+    termMode = false;
+  }
+
+  // --- Terminal-Replay: Frames sind {t: ms, d: rohe Shell-Ausgabe}. Zum
+  // Anzeigen bis Index N wird die Ausgabe 0..N durch den Terminal-Emulator
+  // geschickt (Neuaufbau bei Rücksprung, sonst inkrementell). ---
+  let termWrittenUpTo = -1;
+  function showTermFrame(idx) {
+    if (!frames.length || !replayTerm) return;
+    currentIdx = Math.max(0, Math.min(frames.length - 1, idx));
+    if (currentIdx < termWrittenUpTo) {
+      // Rückwärts gespult -> Terminal neu aufbauen und bis idx erneut schreiben.
+      const host = replayTerm.host;
+      try { replayTerm.dispose(); } catch {}
+      replayTerm = new MiniTerm(host, {});
+      termWrittenUpTo = -1;
+    }
+    for (let i = termWrittenUpTo + 1; i <= currentIdx; i++) {
+      replayTerm.write(frames[i].d || "");
+    }
+    termWrittenUpTo = currentIdx;
+    seekBar.value = frames.length > 1 ? (currentIdx / (frames.length - 1)) * 100 : 100;
+    timeLabel.textContent = Math.round(frames[currentIdx].t / 1000) + "s";
+  }
+
   function releaseVideo() {
     if (videoUrl) { try { URL.revokeObjectURL(videoUrl); } catch {} videoUrl = null; }
   }
 
   function showFrame(idx) {
+    if (termMode) { showTermFrame(idx); return; }
     if (!frames.length || !imgEl) return;
     currentIdx = Math.max(0, Math.min(frames.length - 1, idx));
     const frame = frames[currentIdx];
@@ -113,8 +145,36 @@ export function renderRecordings(body, win) {
   async function loadRecording(recId) {
     stopPlayback();
     releaseVideo();
+    disposeTerm();
     const rec = allRecordings.find((r) => r.id === recId);
     playerEl.innerHTML = `<span style="color:var(--subtext)">Lädt Aufzeichnung...</span>`;
+
+    // Terminal-Replays (format 'term'): rohe Shell-Ausgabe mit Zeitstempeln,
+    // Wiedergabe über den eingebauten Terminal-Emulator (MiniTerm).
+    if (rec && rec.format === "term") {
+      try {
+        const res = await api.getRecordingFrames(recId);
+        frames = res.frames || [];
+        if (!frames.length) {
+          playerEl.innerHTML = `<span style="color:var(--subtext)">Keine Daten in dieser Aufzeichnung.</span>`;
+          controlsEl.style.display = "none";
+          return;
+        }
+        playerEl.innerHTML = "";
+        const host = document.createElement("div");
+        host.style.cssText = "width:100%;height:100%;min-height:0";
+        playerEl.appendChild(host);
+        replayTerm = new MiniTerm(host, {});
+        termMode = true;
+        termWrittenUpTo = -1;
+        controlsEl.style.display = "flex";
+        currentIdx = 0;
+        showFrame(0);
+      } catch (e) {
+        playerEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+      }
+      return;
+    }
 
     // Neue 1:1-Aufzeichnungen sind Videos (WebM) und werden direkt abgespielt.
     if (rec && rec.format === "video") {
@@ -162,7 +222,7 @@ export function renderRecordings(body, win) {
             <div style="font-weight:500">${esc(r.client_hostname || "?")}</div>
             <div style="font-size:11px;color:var(--subtext)">
               ${new Date(r.started_at).toLocaleString("de-DE")}<br>
-              ${formatDuration(r.duration_ms)} · ${r.format === "video" ? "🎬 Video" : `${r.frame_count} Frames`} · ${esc(r.username || "")}
+              ${formatDuration(r.duration_ms)} · ${r.format === "video" ? "🎬 Video" : r.format === "term" ? "⌨️ Terminal" : `${r.frame_count} Frames`} · ${esc(r.username || "")}
             </div>
           </td>
           <td style="width:30px"><button class="taskbar-btn" data-del="${r.id}" title="Löschen">✕</button></td>
@@ -204,6 +264,6 @@ export function renderRecordings(body, win) {
   }
 
   body.querySelector(`#rec-refresh-${win.key}`).addEventListener("click", loadList);
-  registerCleanup(win.key, () => { stopPlayback(); releaseVideo(); });
+  registerCleanup(win.key, () => { stopPlayback(); releaseVideo(); disposeTerm(); });
   loadList();
 }

@@ -28,8 +28,18 @@ export function renderVnc(body, win) {
         <label style="color:var(--subtext);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="vnc-control-${win.key}" checked /> Steuerung aktiv
         </label>
-        <button class="taskbar-btn" id="vnc-monitor-${win.key}" style="display:none" title="Zwischen den Bildschirmen des Remote-PCs wechseln">🖥️ Bildschirm 1/1</button>
+        <select id="vnc-monitor-${win.key}" style="display:none;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px"
+          title="Bildschirm des Remote-PCs auswählen"></select>
+        <span style="width:1px;height:16px;background:var(--border)"></span>
+        <button class="taskbar-btn" id="vnc-mod-ctrl-${win.key}" title="Strg gedrückt halten (Toggle) - wirkt auf folgende Tasten">Strg</button>
+        <button class="taskbar-btn" id="vnc-mod-alt-${win.key}" title="Alt gedrückt halten (Toggle) - wirkt auf folgende Tasten">Alt</button>
+        <button class="taskbar-btn" id="vnc-mod-win-${win.key}" title="Windows-Taste gedrückt halten (Toggle) - wirkt auf folgende Tasten">Win</button>
+        <button class="taskbar-btn" id="vnc-key-tab-${win.key}" title="Tab senden">Tab</button>
+        <button class="taskbar-btn" id="vnc-key-esc-${win.key}" title="Esc senden">Esc</button>
         <button class="taskbar-btn" id="vnc-ctrlaltdel-${win.key}">Strg+Alt+Entf</button>
+        <span style="width:1px;height:16px;background:var(--border)"></span>
+        <button class="taskbar-btn" id="vnc-clip-send-${win.key}" title="Lokale Zwischenablage an den Remote-PC senden">📋→</button>
+        <button class="taskbar-btn" id="vnc-clip-get-${win.key}" title="Zwischenablage des Remote-PCs holen">→📋</button>
       </div>
       <div style="flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative">
         <img id="vnc-img-${win.key}" style="max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair"
@@ -58,15 +68,98 @@ export function renderVnc(body, win) {
   const statusEl = body.querySelector(`#vnc-status-${win.key}`);
   const controlToggle = body.querySelector(`#vnc-control-${win.key}`);
   const ctrlAltDelBtn = body.querySelector(`#vnc-ctrlaltdel-${win.key}`);
-  const monitorBtn = body.querySelector(`#vnc-monitor-${win.key}`);
+  const monitorSel = body.querySelector(`#vnc-monitor-${win.key}`);
 
-  // Bildschirm wechseln (Multi-Monitor): schaltet zyklisch durch die Monitore.
-  monitorBtn.addEventListener("click", () => {
-    if (monitorCount <= 1) return;
-    const next = (monitorIndex % monitorCount) + 1;   // 1..count zyklisch
-    dashboardSocket.emit("screen-set-monitor", { clientId, monitor: next });
-    monitorBtn.textContent = `🖥️ wechsle zu ${next}…`;
+  // Bildschirm wechseln (Multi-Monitor): direkte Auswahl per Dropdown.
+  monitorSel.addEventListener("change", () => {
+    const next = parseInt(monitorSel.value, 10);   // 0 = Alle Bildschirme
+    if (!isNaN(next) && next !== monitorIndex) {
+      dashboardSocket.emit("screen-set-monitor", { clientId, monitor: next });
+    }
   });
+
+  // --- Sticky-Modifier (wie in Proxmox): Strg/Alt/Win als Toggle. Aktive
+  //     Modifier werden auf alle folgenden Tastatureingaben angewendet. ---
+  const modState = { Control: false, Alt: false, Meta: false };
+  const modBtns = {
+    Control: body.querySelector(`#vnc-mod-ctrl-${win.key}`),
+    Alt: body.querySelector(`#vnc-mod-alt-${win.key}`),
+    Meta: body.querySelector(`#vnc-mod-win-${win.key}`),
+  };
+  function updateModBtn(name) {
+    const b = modBtns[name];
+    if (!b) return;
+    b.style.background = modState[name] ? "var(--accent)" : "";
+    b.style.color = modState[name] ? "#0b0f14" : "";
+  }
+  Object.keys(modBtns).forEach((name) => {
+    modBtns[name].addEventListener("click", () => {
+      modState[name] = !modState[name];
+      updateModBtn(name);
+      img.focus();
+    });
+    // Doppelklick: Taste SOFORT einmal drücken+loslassen (z.B. Win öffnet das
+    // Startmenü). Die zwei Einzelklicks davor haben den Toggle an+aus
+    // geschaltet - hier sicherheitshalber auf "aus" setzen.
+    modBtns[name].addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      modState[name] = false;
+      updateModBtn(name);
+      dashboardSocket.emit("screen-input", { clientId, type: "key", key: name });
+      img.focus();
+    });
+  });
+  function activeMods() {
+    return Object.keys(modState).filter((k) => modState[k]);
+  }
+  // Schickt eine Taste unter Berücksichtigung der aktiven Toggles. Nach einer
+  // Kombination werden die Toggles automatisch gelöst (wie in Proxmox).
+  function sendKeyWithMods(key) {
+    const mods = activeMods();
+    if (mods.length) {
+      dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: [...mods, key] });
+      releaseMods();
+    } else if (key.length === 1) {
+      dashboardSocket.emit("screen-input", { clientId, type: "text", text: key });
+    } else {
+      dashboardSocket.emit("screen-input", { clientId, type: "key", key });
+    }
+  }
+  function releaseMods() {
+    Object.keys(modState).forEach((k) => { modState[k] = false; updateModBtn(k); });
+  }
+  body.querySelector(`#vnc-key-tab-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Tab"); img.focus(); });
+  body.querySelector(`#vnc-key-esc-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Escape"); img.focus(); });
+
+  // --- Zwischenablage synchronisieren ---
+  // Senden: lokale Zwischenablage lesen -> Agent setzt sie am Remote-PC.
+  body.querySelector(`#vnc-clip-send-${win.key}`).addEventListener("click", async () => {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch {}
+    if (!text) {
+      window.notify?.("Lokale Zwischenablage ist leer oder Zugriff verweigert (HTTPS nötig).", "warn");
+      return;
+    }
+    dashboardSocket.emit("screen-input", { clientId, type: "clipboard-set", text });
+    window.notify?.("Zwischenablage an Remote-PC gesendet", "success");
+  });
+  // Holen: Agent liest die Remote-Zwischenablage -> hier in die lokale schreiben.
+  body.querySelector(`#vnc-clip-get-${win.key}`).addEventListener("click", () => {
+    dashboardSocket.emit("screen-clipboard-get", { clientId });
+  });
+  async function onClipboard(data) {
+    if (data.id !== clientId) return;
+    if (data.error) { window.notify?.("Remote-Zwischenablage: " + data.error, "error"); return; }
+    const text = data.text || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      window.notify?.("Remote-Zwischenablage übernommen (" + text.length + " Zeichen)", "success");
+    } catch {
+      // Clipboard-API blockiert (z.B. HTTP): Text zum manuellen Kopieren zeigen.
+      prompt("Remote-Zwischenablage (Strg+C zum Kopieren):", text);
+    }
+  }
+  dashboardSocket.on("screen-clipboard", onClipboard);
 
   // Echte Bildschirmauflösung des Clients (kommt mit jedem Frame mit),
   // um Klick-Koordinaten korrekt umzurechnen.
@@ -102,6 +195,7 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-frame", onFrame);
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
+    dashboardSocket.off("screen-clipboard", onClipboard);
     window.removeEventListener("mouseup", onMouseUp);
 
     // Fenster leeren, Hinweis-Banner (inkl. Guacamole-Option) + Terminal einsetzen
@@ -141,11 +235,17 @@ export function renderVnc(body, win) {
     // Multi-Monitor: Button anzeigen/aktualisieren, wenn mehr als ein Bildschirm da ist.
     if (typeof data.monitor_count === "number") {
       monitorCount = data.monitor_count;
-      monitorIndex = data.monitor_index || 1;
-      const monBtn = body.querySelector(`#vnc-monitor-${win.key}`);
-      if (monBtn) {
-        monBtn.style.display = monitorCount > 1 ? "" : "none";
-        monBtn.textContent = `🖥️ Bildschirm ${monitorIndex}/${monitorCount}`;
+      monitorIndex = (typeof data.monitor_index === "number") ? data.monitor_index : 1;
+      if (monitorSel) {
+        monitorSel.style.display = monitorCount > 1 ? "" : "none";
+        // Optionen nur bei Änderung neu aufbauen (nicht bei jedem Frame).
+        // Index 0 = Gesamtfläche ALLER Bildschirme nebeneinander.
+        if (monitorSel.options.length !== monitorCount + 1) {
+          monitorSel.innerHTML = `<option value="0">🖥️ Alle Bildschirme</option>` +
+            Array.from({ length: monitorCount }, (_, i) =>
+              `<option value="${i + 1}">🖥️ Bildschirm ${i + 1}/${monitorCount}</option>`).join("");
+        }
+        if (parseInt(monitorSel.value, 10) !== monitorIndex) monitorSel.value = String(monitorIndex);
       }
     }
     framesReceived++;
@@ -337,6 +437,12 @@ export function renderVnc(body, win) {
       return;
     }
 
+    // Sticky-Modifier (Toolbar-Toggles) auf die Taste anwenden.
+    if (activeMods().length) {
+      sendKeyWithMods(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+      return;
+    }
+
     // Normales druckbares Zeichen -> als Text tippen
     if (e.key.length === 1) {
       dashboardSocket.emit("screen-input", { clientId, type: "text", text: e.key });
@@ -375,6 +481,7 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-frame", onFrame);
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
+    dashboardSocket.off("screen-clipboard", onClipboard);
     dashboardSocket.emit("screen-stop", { clientId });
     if (rdpActive) dashboardSocket.emit("rdp-stop", { clientId });
     window.removeEventListener("mouseup", onMouseUp);

@@ -153,7 +153,14 @@ export function renderAudit(body, win) {
         recId = guacMatch[1];
         detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
       }
-      // Terminal-Sitzung: mehrzeiliger Verlauf -> aufklappbarer <pre>-Block.
+      // Terminal-Sitzung (neu): kompakter Eintrag mit Replay-Verweis "rec:<id> ..."
+      const termRec = e.action === "terminal.session" && (e.details || "").match(/^rec:([A-Za-z0-9_-]+)\s*(.*)$/);
+      if (termRec) {
+        recId = termRec[1];
+        detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button> ` +
+          `<span style="font-size:11px">${esc(termRec[2] || "")}</span>`;
+      }
+      // Terminal-Sitzung (alt): mehrzeiliger Verlauf -> aufklappbarer <pre>-Block.
       if (e.action === "terminal.session" && (e.details || "").includes("Sitzungsverlauf")) {
         const full = e.details;
         detailsHtml = `<details><summary style="cursor:pointer">Sitzungsverlauf anzeigen</summary>` +

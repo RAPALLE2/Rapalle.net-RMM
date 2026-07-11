@@ -65,8 +65,21 @@ export class MiniTerm {
       const sel = window.getSelection?.().toString() || "";
       if (!sel) setTimeout(() => this.input.focus(), 0);
     });
-    // Rechtsklick soll das native Kontextmenü (Kopieren/Einfügen) zeigen.
-    this.screen.addEventListener("contextmenu", (e) => { /* native menu */ });
+    // Rechtsklick-Verhalten wie in klassischen Terminals (PuTTY-Stil):
+    //   - Text markiert  -> Rechtsklick KOPIERT die Auswahl (und hebt sie auf)
+    //   - nichts markiert -> Rechtsklick FÜGT die Zwischenablage EIN
+    // Das native Browser-Kontextmenü wird dafür unterdrückt.
+    this.screen.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const sel = window.getSelection?.().toString() || "";
+      if (sel) {
+        this._copy(sel);
+        try { window.getSelection().removeAllRanges(); } catch {}
+      } else {
+        this._paste();
+      }
+      setTimeout(() => this.input.focus(), 0);
+    });
 
     this.input.addEventListener("keydown", (e) => this._onKey(e));
     this.input.addEventListener("input", () => {

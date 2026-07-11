@@ -57,6 +57,7 @@ def _bootstrap_deps() -> None:
         "mss": "mss",
         "Pillow": "PIL",
         "pynput": "pynput",
+        "pyperclip": "pyperclip",
     }
     # Windows: pywinpty für das interaktive Terminal (ConPTY).
     if os.name == "nt":
@@ -1311,7 +1312,9 @@ def _screen_capture_loop(loop):
 
     def _select_monitor(idx):
         nonlocal monitor, screen_w, screen_h, cur_idx
-        idx = max(1, min(int(idx), mon_count))
+        # Index 0 = Gesamtfläche ALLER Monitore (mss.monitors[0]),
+        # 1..mon_count = einzelne Bildschirme.
+        idx = max(0, min(int(idx), mon_count))
         monitor = sct.monitors[idx]
         screen_w, screen_h = monitor["width"], monitor["height"]
         _screen_stream["mon_left"] = monitor.get("left", 0)
@@ -1325,7 +1328,7 @@ def _screen_capture_loop(loop):
     while _screen_stream["active"]:
         try:
             # Live-Wechsel: hat das Dashboard einen anderen Monitor gewählt?
-            want = max(1, min(int(_screen_stream.get("monitor", 1)), mon_count))
+            want = max(0, min(int(_screen_stream.get("monitor", 1)), mon_count))
             if want != cur_idx:
                 _select_monitor(want)
 
@@ -1468,7 +1471,8 @@ async def on_screen_set_monitor(data):
     übernimmt die Auswahl beim nächsten Frame automatisch."""
     if isinstance(data, dict) and data.get("monitor") is not None:
         try:
-            _screen_stream["monitor"] = max(1, int(data["monitor"]))
+            # 0 = "Alle Bildschirme" (mss.monitors[0] = Gesamtfläche aller Monitore)
+            _screen_stream["monitor"] = max(0, int(data["monitor"]))
             _print(f"[agent] Bildschirm gewechselt auf #{_screen_stream['monitor']}")
         except Exception:
             pass
@@ -1687,6 +1691,38 @@ def _run_dist_command(kind: str):
     return {"stage": "launched", "detail": ""}
 
 
+# --------------------------------------------------------------
+# Zwischenablage-Synchronisierung (Remote Screen)
+# --------------------------------------------------------------
+# Das Dashboard kann die lokale Zwischenablage an diesen PC senden
+# (screen-input type="clipboard-set") oder die hiesige Zwischenablage
+# abfragen (screen-clipboard-get -> Antwort-Event "screen-clipboard").
+# Genutzt wird pyperclip (wird per Bootstrap automatisch nachinstalliert);
+# schlaegt das fehl, wird ein klarer Fehler zurueckgemeldet.
+
+def _clipboard_get() -> str:
+    import pyperclip
+    return pyperclip.paste() or ""
+
+
+def _clipboard_set(text: str) -> None:
+    import pyperclip
+    pyperclip.copy(text or "")
+
+
+@sio.on("screen-clipboard-get", namespace="/agent")
+async def on_screen_clipboard_get(data):
+    """Liest die lokale Zwischenablage und schickt sie ans Dashboard zurueck."""
+    loop = asyncio.get_event_loop()
+    try:
+        text = await loop.run_in_executor(None, _clipboard_get)
+        await sio.emit("screen-clipboard", {"id": DEVICE_ID, "text": text},
+                       namespace="/agent")
+    except Exception as e:
+        await sio.emit("screen-clipboard", {"id": DEVICE_ID, "error": str(e)},
+                       namespace="/agent")
+
+
 @sio.on("screen-input", namespace="/agent")
 async def on_screen_input(data):
     """
@@ -1753,6 +1789,10 @@ def _apply_input(data):
             if key:
                 _keyboard.press(key)
                 _keyboard.release(key)
+
+        elif kind == "clipboard-set":
+            # Zwischenablage des Dashboards auf diesem PC setzen (Clipboard-Sync)
+            _clipboard_set(data.get("text", ""))
 
         elif kind == "combo":
             # Tastenkombination, z.B. Strg+C: data.keys = ["Control", "c"]

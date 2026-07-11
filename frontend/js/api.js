@@ -127,6 +127,12 @@ export const api = {
   getGuacProfile: (clientId) => request(`/api/guac/profile/${clientId}`),
   saveGuacProfile: (clientId, profile) =>
     request(`/api/guac/profile/${clientId}`, { method: "PUT", body: JSON.stringify(profile) }),
+  // Mehrere gespeicherte Logins pro Client (MIT Passwort)
+  listGuacProfiles: (clientId) => request(`/api/guac/profiles/${clientId}`),
+  addGuacProfile: (clientId, profile) =>
+    request(`/api/guac/profiles/${clientId}`, { method: "POST", body: JSON.stringify(profile) }),
+  deleteGuacProfile: (clientId, profileId) =>
+    request(`/api/guac/profiles/${clientId}/${profileId}`, { method: "DELETE" }),
 
   // --- Benutzerverwaltung ---
   getUsers: () => request("/api/users"),

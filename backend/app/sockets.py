@@ -464,18 +464,12 @@ _term_sessions: dict = {}
 
 @sio.on("term-output", namespace="/agent")
 async def on_term_output(sid, payload):
-    """Shell-Ausgabe an alle Dashboards weiterreichen + in den Sitzungspuffer
-    schreiben (für das Verlaufs-Log)."""
+    """Shell-Ausgabe an alle Dashboards weiterreichen + in die laufende
+    Terminal-Aufzeichnung schreiben (Replay statt Einzel-Befehls-Log)."""
+    from app import recording
     session = payload.get("session")
-    meta = _term_sessions.get(session)
-    if meta is not None:
-        data = payload.get("data", "")
-        meta["chunks"].append(data)
-        meta["bytes"] += len(data)
-        # Puffer begrenzen (nur die jüngste History behalten).
-        if meta["bytes"] > 400000:
-            meta["chunks"] = meta["chunks"][-2000:]
-            meta["bytes"] = sum(len(c) for c in meta["chunks"])
+    if session in _term_sessions:
+        recording.record_term_data(session, payload.get("data", ""))
     await sio.emit("term-output", payload, namespace="/dashboard")
 
 
@@ -609,6 +603,24 @@ async def dashboard_screen_input(sid, data):
         await send_to_agent(client_id, "screen-input", data)
 
 
+@sio.on("screen-clipboard-get", namespace="/dashboard")
+async def dashboard_screen_clipboard_get(sid, data):
+    """Dashboard möchte die Zwischenablage des Remote-PCs holen (Clipboard-Sync)."""
+    client_id = data.get("clientId")
+    if client_id:
+        ok = await send_to_agent(client_id, "screen-clipboard-get", {})
+        if not ok:
+            await sio.emit("screen-clipboard",
+                           {"id": client_id, "error": "Client ist offline."},
+                           namespace="/dashboard")
+
+
+@sio.on("screen-clipboard", namespace="/agent")
+async def on_screen_clipboard(sid, payload):
+    """Agent liefert den Inhalt der Remote-Zwischenablage -> ans Dashboard."""
+    await sio.emit("screen-clipboard", payload, namespace="/dashboard")
+
+
 @sio.on("screen-set-monitor", namespace="/dashboard")
 async def dashboard_screen_set_monitor(sid, data):
     """Bildschirm-Wechsel (Multi-Monitor) an den Agenten weiterreichen."""
@@ -711,16 +723,26 @@ async def dashboard_term_open(sid, data):
     await sio.emit("term-ack", {"session": session, "agent_online": bool(ok)},
                    namespace="/dashboard")
     if ok:
-        # Sitzung anlegen: Metadaten + leerer Verlaufspuffer. Geloggt wird EINE
-        # Sitzung mit gesamter History erst beim Schließen (term-close/exit).
+        # Sitzung anlegen + Aufzeichnung starten: Die gesamte Sitzung wird als
+        # Terminal-Replay mitgeschnitten (wie der Screen-Recorder), statt
+        # Befehle und Ausgaben einzeln zu loggen. Audit-Eintrag mit Replay-Link
+        # folgt beim Schließen (term-close/exit).
         import time as _t
+        from app import recording, db as _db
+        rec_id = None
+        if _db.get_setting("recording_enabled", "1") == "1":
+            client = _db.get_client(client_id)
+            rec_id = recording.start_term_recording(
+                session, client_id,
+                (client or {}).get("hostname") or client_id,
+                data.get("username", "unbekannt"),
+            )
         _term_sessions[session] = {
             "client_id": client_id,
             "username": data.get("username", "unbekannt"),
             "shell": shell,
             "started": _t.time(),
-            "chunks": [],   # Ausgabe-Schnipsel (gesamte sichtbare History)
-            "bytes": 0,
+            "rec_id": rec_id,
         }
     else:
         await sio.emit("term-output", {
@@ -755,24 +777,21 @@ async def dashboard_term_close(sid, data):
 
 
 def _finalize_term_session(session: str) -> None:
-    """Schreibt EINEN Audit-Eintrag mit dem gesamten Sitzungsverlauf und räumt auf."""
-    from app import db as _db
+    """Beendet die Terminal-Aufzeichnung (Replay) und schreibt EINEN kompakten
+    Audit-Eintrag mit Verweis auf das Replay - statt Befehle/Ausgaben einzeln
+    ins Log zu schreiben."""
+    from app import db as _db, recording
     meta = _term_sessions.pop(session, None)
     if not meta:
         return
-    # Gesamte sichtbare Historie zusammensetzen und ANSI-Steuerzeichen grob
-    # entfernen, damit das Log lesbar bleibt.
-    import re as _re, time as _t
-    transcript = "".join(meta["chunks"])
-    transcript = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", transcript)  # CSI-Sequenzen
-    transcript = _re.sub(r"\x1b\][^\x07]*\x07", "", transcript)      # OSC-Sequenzen
-    transcript = transcript.replace("\r\n", "\n").replace("\r", "\n")
-    transcript = transcript.strip()
-    if len(transcript) > 60000:
-        transcript = "…(gekürzt)…\n" + transcript[-60000:]
+    import time as _t
+    rec_id = recording.stop_term_recording(session)
     dur = int(_t.time() - meta["started"])
-    details = (f"shell:{meta['shell']} dauer:{dur}s\n"
-               f"----- Sitzungsverlauf -----\n{transcript}")
+    details = f"shell:{meta['shell']} dauer:{dur}s"
+    if rec_id:
+        # Gleiche Verknüpfung wie beim Screen-Recording: das Audit-Log kann
+        # daraus einen "Aufzeichnung ansehen"-Link machen.
+        details = f"rec:{rec_id} " + details
     _db.add_audit_entry(meta["username"], "terminal.session",
                         target=meta["client_id"], details=details)
 

@@ -116,6 +116,111 @@ async def save_guac_profile(client_id: str, body: GuacProfileBody, user: dict = 
 
 
 # ------------------------------------------------------------------
+# MEHRERE gespeicherte Guacamole-Logins PRO CLIENT - MIT Passwort.
+# ------------------------------------------------------------------
+# Neu gegenüber dem Alt-Profil oben: Es können BELIEBIG VIELE Logins je Client
+# gespeichert werden (z.B. getrennte Logins für RDP und SSH/Telnet) und das
+# Passwort wird MIT gespeichert, damit die Verbindung per Auswahl + Klick
+# funktioniert. Ablage als JSON-Liste im settings-Speicher unter dem Key
+# "guacprofiles:<client_id>". Das Passwort wird Base64-kodiert abgelegt
+# (Verschleierung gegen zufälliges Mitlesen, KEINE echte Verschlüsselung -
+# der Zugriff ist über die use_guacamole-Berechtigung geschützt).
+import base64 as _b64
+import uuid as _uuid
+
+
+class GuacProfileV2Body(_BaseModel):
+    name: str | None = None
+    protocol: str | None = None
+    host: str | None = None
+    port: str | None = None
+    username: str | None = None
+    password: str | None = None
+    domain: str | None = None
+    resolution: str | None = None
+    quality: str | None = None
+
+
+def _guac_profiles_key(client_id: str) -> str:
+    return f"guacprofiles:{client_id}"
+
+
+def _load_profiles(client_id: str) -> list[dict]:
+    raw = db.get_setting(_guac_profiles_key(client_id), "")
+    try:
+        lst = _json.loads(raw) if raw else []
+        return lst if isinstance(lst, list) else []
+    except Exception:
+        return []
+
+
+def _save_profiles(client_id: str, profiles: list[dict]) -> None:
+    db.set_setting(_guac_profiles_key(client_id), _json.dumps(profiles))
+
+
+def _with_password(p: dict) -> dict:
+    """Profil fürs Frontend aufbereiten: Passwort dekodieren."""
+    out = {k: v for k, v in p.items() if k != "password_b64"}
+    try:
+        out["password"] = _b64.b64decode(p.get("password_b64") or "").decode("utf-8")
+    except Exception:
+        out["password"] = ""
+    return out
+
+
+@router.get("/profiles/{client_id}")
+async def list_guac_profiles(client_id: str, user: dict = Depends(get_current_user)):
+    """Alle gespeicherten Guacamole-Logins eines Clients (inkl. Passwort)."""
+    if not can_access_client(user, client_id):
+        raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_guacamole", client_id)
+    return {"profiles": [_with_password(p) for p in _load_profiles(client_id)]}
+
+
+@router.post("/profiles/{client_id}")
+async def add_guac_profile(client_id: str, body: GuacProfileV2Body,
+                           user: dict = Depends(get_current_user)):
+    """Neues Guacamole-Login für einen Client speichern (MIT Passwort)."""
+    if not can_access_client(user, client_id):
+        raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_guacamole", client_id)
+    data = {k: v for k, v in body.model_dump().items() if v not in (None,)}
+    password = data.pop("password", "") or ""
+    profile = {
+        "id": _uuid.uuid4().hex[:12],
+        "name": (data.get("name") or "").strip() or
+                f"{data.get('protocol', '?')} {data.get('username', '')}@{data.get('host', '')}".strip(),
+        "protocol": data.get("protocol") or "",
+        "host": data.get("host") or "",
+        "port": data.get("port") or "",
+        "username": data.get("username") or "",
+        "domain": data.get("domain") or "",
+        "resolution": data.get("resolution") or "",
+        "quality": data.get("quality") or "",
+        "password_b64": _b64.b64encode(password.encode("utf-8")).decode("ascii"),
+    }
+    profiles = _load_profiles(client_id)
+    profiles.append(profile)
+    _save_profiles(client_id, profiles)
+    db.add_audit_entry(user["username"], "guac.profile_saved", target=client_id,
+                       details=f"{profile['protocol']} {profile['name']}")
+    return {"ok": True, "profile": _with_password(profile)}
+
+
+@router.delete("/profiles/{client_id}/{profile_id}")
+async def delete_guac_profile(client_id: str, profile_id: str,
+                              user: dict = Depends(get_current_user)):
+    """Ein gespeichertes Guacamole-Login löschen."""
+    if not can_access_client(user, client_id):
+        raise HTTPException(404, "Client nicht gefunden")
+    require_perm(user, "use_guacamole", client_id)
+    profiles = [p for p in _load_profiles(client_id) if p.get("id") != profile_id]
+    _save_profiles(client_id, profiles)
+    db.add_audit_entry(user["username"], "guac.profile_deleted", target=client_id)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------
 # WebSocket-Tunnel. Wird von main.py als /guac/tunnel registriert.
 # Authentifizierung läuft über das Einmal-Token (WS kann keine Header setzen).
 # ------------------------------------------------------------------

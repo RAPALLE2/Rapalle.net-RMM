@@ -802,14 +802,17 @@ def mark_enrollment_token_used(token: str) -> None:
 # SCREEN RECORDINGS (Aufzeichnung von Remote-Sessions)
 # ------------------------------------------------------------------
 
-def create_recording(client_id: str, client_hostname: str, username: str, file_path: str) -> str:
-    """Legt einen neuen Recording-Eintrag an und gibt dessen ID zurück."""
+def create_recording(client_id: str, client_hostname: str, username: str, file_path: str,
+                     fmt: str = "frames") -> str:
+    """Legt einen neuen Recording-Eintrag an und gibt dessen ID zurück.
+    fmt: 'frames' (JPEG-Frames, Standard) oder 'term' (Terminal-Sitzung als
+    Text-Replay - siehe recording.start_term_recording)."""
     rec_id = _new_id()
     _conn.execute(
         """INSERT INTO screen_recordings
-           (id, client_id, client_hostname, username, started_at, file_path)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (rec_id, client_id, client_hostname, username, _now_ms(), file_path),
+           (id, client_id, client_hostname, username, started_at, file_path, format)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (rec_id, client_id, client_hostname, username, _now_ms(), file_path, fmt),
     )
     _conn.commit()
     return rec_id
