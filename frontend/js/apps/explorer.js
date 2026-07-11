@@ -446,7 +446,12 @@ export function renderExplorer(body, win) {
         if (!isAdmin) { btn.disabled = true; btn.title = "Nur Administratoren"; }
         else btn.addEventListener("click", async () => {
           btn.disabled = true;
-          try { await api.toggleRelay(clientId); window.notify?.("Gespeichert", "success"); renderRelay(); }
+          try {
+            await api.toggleRelay(clientId);
+            window.notify?.("Gespeichert", "success");
+            window.dispatchEvent(new CustomEvent("relay-changed", { detail: { clientId } }));
+            renderRelay();
+          }
           catch (e) { window.notify?.("Fehler: " + e.message, "error"); btn.disabled = false; }
         });
       }
@@ -487,6 +492,18 @@ export function renderExplorer(body, win) {
     e.preventDefault(); dropZone.style.outline = "";
     if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
   });
+
+  // Wenn der Relay woanders (z.B. in der „Explorer-Relay"-App) umgeschaltet
+  // wird, den Relay-Tab hier aktualisieren. Listener räumt sich selbst auf,
+  // sobald das Fenster geschlossen ist.
+  function onRelayChanged() {
+    if (!document.body.contains(body)) {
+      window.removeEventListener("relay-changed", onRelayChanged);
+      return;
+    }
+    if (mode === "relay") renderRelay();
+  }
+  window.addEventListener("relay-changed", onRelayChanged);
 
   load("");
 }

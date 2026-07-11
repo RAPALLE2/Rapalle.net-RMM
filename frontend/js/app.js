@@ -42,6 +42,7 @@ import { renderBulk } from "./apps/bulk.js";
 import { renderTowerDefense } from "./apps/towerdefense.js";
 import { renderAutomation } from "./apps/automation.js";
 import { renderNotifications } from "./apps/notifications.js";
+import { renderRelayManager } from "./apps/relaymanager.js";
 import { renderNetwork } from "./apps/network.js";
 import { renderPortscan } from "./apps/portscan.js";
 import { renderGuacamole } from "./apps/guacamole.js";
@@ -68,6 +69,7 @@ const APP_RENDERERS = {
   towerdefense: renderTowerDefense,
   automation: renderAutomation,
   notifications: renderNotifications,
+  "relay-manager": renderRelayManager,
   network: renderNetwork,
   portscan: renderPortscan,
   guacamole: renderGuacamole,
@@ -107,7 +109,7 @@ async function reloadPerms() {
 }
 
 // Apps, die ausschließlich dem Super-Admin offenstehen (Backend: require_admin).
-const ADMIN_ONLY_APPS = new Set(["settings", "permissions", "automation", "manage"]);
+const ADMIN_ONLY_APPS = new Set(["settings", "permissions", "automation", "manage", "relay-manager"]);
 // App-Key -> benötigtes globales Recht (nur relevant, wenn nicht admin-only).
 const APP_REQUIRED_PERM = {
   audit: "see_audit",
@@ -395,6 +397,7 @@ function initMenusAndButtons() {
       else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
       else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
       else if (app === "notifications") openWindow({ key: "notifications", appId: "notifications", title: "Benachrichtigungen", w: 600, h: 560 });
+      else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
       else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
     })
   );
