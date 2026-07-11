@@ -11,7 +11,7 @@
 import { state } from "../state.js";
 import { esc } from "../utils.js";
 import { osLabel } from "../i18n.js";
-import { api } from "../api.js";
+import { favClientIds, favWebsiteList, favStarHtml, selectClientExternal } from "../sidebar.js";
 
 // Farbpalette für Kategorien (OS/Versionen). Online/Offline haben feste Farben.
 const PALETTE = [
@@ -159,32 +159,54 @@ export function renderDashboard(target) {
   `;
   const grid = target.querySelector("#dash-grid");
 
-  // Angeheftete Website-Favoriten (★ im Client-Bearbeiten-Dialog) als
-  // Quick-Access-Leiste über den Diagrammen. Ampel zeigt den Uptime-Status.
-  api.getFavoriteWebsites().then((favs) => {
-    if (!favs || !favs.length) return;
+  // Dashboard-Favoriten: Clients UND Websites, die (per Stern) für das Dashboard
+  // markiert sind. Reagiert live auf Änderungen am Favoriten-Zustand.
+  function renderDashFavorites() {
     const box = target.querySelector("#dash-favorites");
     if (!box) return;
+    const favClients = state.clients.filter((c) => favClientIds("d").includes(c.id));
+    const favSites = favWebsiteList("d");
+    if (!favClients.length && !favSites.length) { box.style.display = "none"; box.innerHTML = ""; return; }
     box.style.display = "";
-    box.innerHTML = `
-      <h3 style="margin:0 0 8px;font-size:14px;color:var(--subtext)">★ Angeheftete Websites</h3>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
-        ${favs.map((w) => {
-          const dotColor = !w.monitor_enabled ? "var(--subtext)"
-            : w.last_status === "up" ? "var(--online, #3ecf8e)"
-            : w.last_status === "down" ? "var(--danger, #ff4d6d)"
-            : "var(--subtext)";
-          return `
-          <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer" class="panel"
-             title="${esc(w.url)} (${esc(w.client_hostname || "")})"
-             style="display:flex;align-items:center;gap:8px;padding:8px 12px;text-decoration:none;color:var(--text)">
-            <span style="color:${dotColor}">●</span>
-            <span style="font-weight:600">${esc(w.name)}</span>
-            <span style="font-size:11px;color:var(--subtext)">${esc(w.client_hostname || "")}</span>
-          </a>`;
-        }).join("")}
+
+    const clientCards = favClients.map((c) => `
+      <div class="panel" data-dashfav-client="${esc(c.id)}"
+           style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer">
+        <span style="color:${c.online ? "var(--online, #3ecf8e)" : "var(--subtext)"}">●</span>
+        <span style="font-weight:600">${esc(c.hostname)}</span>
+        ${favStarHtml("clients", c.id)}
+      </div>`).join("");
+
+    const siteCards = favSites.map((w) => {
+      const meta = { name: w.name, url: w.url, clientId: w.clientId, clientHostname: w.clientHostname };
+      return `
+      <div class="panel" style="display:flex;align-items:center;gap:8px;padding:8px 12px">
+        <a href="${esc(w.url || "")}" target="_blank" rel="noopener noreferrer"
+           title="${esc(w.url || "")}" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)">
+          <span>🔗</span><span style="font-weight:600">${esc(w.name || w.url || "")}</span>
+          <span style="font-size:11px;color:var(--subtext)">${esc(w.clientHostname || "")}</span>
+        </a>
+        ${favStarHtml("websites", w.id, meta)}
       </div>`;
-  }).catch(() => { /* Favoriten sind optional */ });
+    }).join("");
+
+    box.innerHTML = `
+      <h3 style="margin:0 0 8px;font-size:14px;color:var(--subtext)">★ Angeheftet</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${clientCards}${siteCards}</div>`;
+
+    box.querySelectorAll("[data-dashfav-client]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest(".fav-star")) return;
+        const id = el.dataset.dashfavClient;
+        try { selectClientExternal(id); } catch { state.selection = { type: "client", id }; }
+      }));
+  }
+  renderDashFavorites();
+  // Bei Favoriten-Änderungen (Stern woanders geklickt) neu aufbauen.
+  if (!target._favListener) {
+    target._favListener = () => { if (document.body.contains(target)) renderDashFavorites(); };
+    window.addEventListener("favorites-changed", target._favListener);
+  }
 
   // 1) Online / Offline (inkl. Wartung)
   const statusSegs = groupBy(

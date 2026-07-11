@@ -18,6 +18,12 @@ export function setOnSelect(fn) {
   onSelectCallback = fn;
 }
 
+// Von anderen Apps (z.B. Dashboard-Favoriten) nutzbar: Client auswählen + im Baum zeigen.
+export function selectClientExternal(id) {
+  revealClient(id);
+  select("client", id);
+}
+
 // Merkt sich, welche Knoten aufgeklappt sind (damit ein Re-Render sie nicht zuklappt)
 const expanded = new Set();
 
@@ -27,21 +33,26 @@ const expanded = new Set();
 // Reloads überlebt. Format: { clients: [id,...], tenants: [id,...] }
 // -----------------------------------------------------------------
 let _favUser = "anon";
-const favorites = { clients: new Set(), tenants: new Set() };
+// Zwei Dimensionen pro Eintrag: s = Seitenleiste, d = Dashboard.
+// clients/tenants: {id:{s,d}} ; websites: {id:{s,d,meta:{name,url,clientId,clientHostname}}}
+const favorites = { clients: {}, tenants: {}, websites: {} };
 let favExpanded = true;   // Favoriten-Sektion aufgeklappt?
 
 function _favKey() { return `rapalle-favs:${_favUser}`; }
 
 export function initFavorites(username) {
   _favUser = username || "anon";
-  favorites.clients.clear();
-  favorites.tenants.clear();
+  favorites.clients = {}; favorites.tenants = {}; favorites.websites = {};
   try {
     const raw = localStorage.getItem(_favKey());
     if (raw) {
       const d = JSON.parse(raw);
-      (d.clients || []).forEach((id) => favorites.clients.add(id));
-      (d.tenants || []).forEach((id) => favorites.tenants.add(id));
+      // Migration vom alten Format (Arrays = nur Seitenleiste)
+      if (Array.isArray(d.clients)) d.clients.forEach((id) => favorites.clients[id] = { s: true, d: false });
+      else Object.assign(favorites.clients, d.clients || {});
+      if (Array.isArray(d.tenants)) d.tenants.forEach((id) => favorites.tenants[id] = { s: true, d: false });
+      else Object.assign(favorites.tenants, d.tenants || {});
+      Object.assign(favorites.websites, d.websites || {});
       if (typeof d.expanded === "boolean") favExpanded = d.expanded;
     }
   } catch {}
@@ -50,29 +61,80 @@ export function initFavorites(username) {
 function _saveFavorites() {
   try {
     localStorage.setItem(_favKey(), JSON.stringify({
-      clients: [...favorites.clients],
-      tenants: [...favorites.tenants],
-      expanded: favExpanded,
+      clients: favorites.clients, tenants: favorites.tenants,
+      websites: favorites.websites, expanded: favExpanded,
     }));
   } catch {}
 }
 
-function isFav(kind, id) { return favorites[kind]?.has(id); }
+// Aktueller Zustand: {s, d}
+export function favState(kind, id) {
+  const e = favorites[kind]?.[id];
+  return { s: !!e?.s, d: !!e?.d };
+}
 
-function toggleFav(kind, id) {
-  const set = favorites[kind];
-  if (!set) return;
-  if (set.has(id)) set.delete(id);
-  else set.add(id);
+// Durchschalten: keiner -> Seitenleiste -> Dashboard -> beide -> keiner
+export function cycleFav(kind, id, meta) {
+  const cur = favState(kind, id);
+  let next;
+  if (!cur.s && !cur.d) next = { s: true, d: false };
+  else if (cur.s && !cur.d) next = { s: false, d: true };
+  else if (!cur.s && cur.d) next = { s: true, d: true };
+  else next = { s: false, d: false };
+
+  if (!next.s && !next.d) {
+    delete favorites[kind][id];
+  } else if (kind === "websites") {
+    favorites[kind][id] = { ...next, meta: meta || favorites[kind][id]?.meta || {} };
+  } else {
+    favorites[kind][id] = next;
+  }
   _saveFavorites();
+  _refreshStars(kind, id);
   renderSidebar();
+  window.dispatchEvent(new CustomEvent("favorites-changed", { detail: { kind, id } }));
 }
 
-// Kleiner Stern-Button (gefüllt = Favorit). Bekommt eine Klick-Animation.
-function favStar(kind, id) {
-  const on = isFav(kind, id);
-  return `<span class="fav-star ${on ? "on" : ""}" data-fav="${kind}:${id}" title="Favorit">${on ? "★" : "☆"}</span>`;
+function _favClass(kind, id) {
+  const { s, d } = favState(kind, id);
+  if (s && d) return "both";
+  if (s) return "sb";
+  if (d) return "db";
+  return "";
 }
+
+function _escAttr(s) { return String(s).replace(/&/g, "&amp;").replace(/'/g, "&#39;").replace(/</g, "&lt;"); }
+
+// Stern-HTML. Für Websites die Anzeige-Infos als data-fav-meta mitgeben.
+export function favStarHtml(kind, id, meta) {
+  const cls = _favClass(kind, id);
+  const glyph = cls ? "★" : "☆";
+  const metaAttr = (kind === "websites" && meta)
+    ? ` data-fav-meta='${_escAttr(JSON.stringify(meta))}'` : "";
+  return `<span class="fav-star ${cls}" data-fav="${kind}:${id}"${metaAttr} title="Favorit durchschalten: ☆ → Seitenleiste → Dashboard → beide">${glyph}</span>`;
+}
+
+// Alle sichtbaren Sterne eines Eintrags nach dem Umschalten aktualisieren.
+function _refreshStars(kind, id) {
+  const cls = _favClass(kind, id);
+  const glyph = cls ? "★" : "☆";
+  document.querySelectorAll(`.fav-star[data-fav="${kind}:${id}"]`).forEach((el) => {
+    el.className = `fav-star ${cls}`;
+    el.textContent = glyph;
+  });
+}
+
+// Listen für Seitenleiste (dim="s") bzw. Dashboard (dim="d")
+export function favClientIds(dim) { return Object.keys(favorites.clients).filter((id) => favorites.clients[id][dim]); }
+export function favTenantIds(dim) { return Object.keys(favorites.tenants).filter((id) => favorites.tenants[id][dim]); }
+export function favWebsiteList(dim) {
+  return Object.entries(favorites.websites)
+    .filter(([, v]) => v[dim])
+    .map(([id, v]) => ({ id, ...(v.meta || {}) }));
+}
+
+// Rückwärtskompatibler Helfer für bestehende Aufrufe im Baum.
+function favStar(kind, id) { return favStarHtml(kind, id); }
 
 // Für die Persistenz (persist.js): aktuellen Aufklapp-Zustand lesen/setzen.
 export function getExpandedIds() { return [...expanded]; }
@@ -247,15 +309,8 @@ export function renderSidebar() {
     el.addEventListener("click", (e) => { e.stopPropagation(); select("client", el.dataset.selectClient); })
   );
 
-  // Stern-Klicks (Favorit an/aus) - mit kleiner Pop-Animation.
-  tree.querySelectorAll("[data-fav]").forEach((el) =>
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      el.classList.add("fav-pop");
-      const [kind, id] = el.dataset.fav.split(":");
-      setTimeout(() => toggleFav(kind, id), 120);  // Animation kurz sichtbar lassen
-    })
-  );
+  // Stern-Klicks werden global über einen delegierten Handler behandelt
+  // (siehe initSidebarNav -> _wireGlobalStars).
 
   // --- Drag & Drop: Client in anderen Tenant / Location / Ordner ziehen ---
   tree.querySelectorAll("[data-drag-client]").forEach((el) => {
@@ -354,11 +409,13 @@ function renderFavorites() {
   if (caret) caret.textContent = favExpanded ? "▾" : "▸";
   box.style.display = favExpanded ? "block" : "none";
 
-  const favTenants = state.hierarchy.tenants.filter((tn) => favorites.tenants.has(tn.id));
-  const favClients = state.clients.filter((c) => favorites.clients.has(c.id));
+  const favTenants = state.hierarchy.tenants.filter((tn) => favTenantIds("s").includes(tn.id));
+  const sClientIds = favClientIds("s");
+  const favClients = state.clients.filter((c) => sClientIds.includes(c.id));
+  const favSites = favWebsiteList("s");
 
-  if (!favTenants.length && !favClients.length) {
-    box.innerHTML = `<div class="fav-empty">Noch keine Favoriten – tippe auf ☆ neben einem Client oder Tenant.</div>`;
+  if (!favTenants.length && !favClients.length && !favSites.length) {
+    box.innerHTML = `<div class="fav-empty">Noch keine Favoriten – tippe auf ☆ neben einem Client, Tenant oder einer Website.</div>`;
   } else {
     let h = "";
     for (const tn of favTenants) {
@@ -366,14 +423,22 @@ function renderFavorites() {
         <div class="tree-row row-anim fav-row" data-fav-select="tenant:${tn.id}">
           <span class="dot" style="background:${esc(tn.color)}"></span>
           <span style="flex:1">${esc(tn.name)}</span>
-          <span class="fav-star on" data-fav="tenants:${tn.id}">★</span>
+          ${favStarHtml("tenants", tn.id)}
         </div>`;
     }
     for (const c of favClients) {
       h += `
         <div class="tree-row row-anim fav-row" data-fav-select="client:${c.id}">
           ${clientDot(c)} <span style="flex:1">${esc(c.hostname)}</span>
-          <span class="fav-star on" data-fav="clients:${c.id}">★</span>
+          ${favStarHtml("clients", c.id)}
+        </div>`;
+    }
+    for (const w of favSites) {
+      const meta = { name: w.name, url: w.url, clientId: w.clientId, clientHostname: w.clientHostname };
+      h += `
+        <div class="tree-row row-anim fav-row" data-fav-web="${esc(w.url || "")}" title="${esc(w.url || "")}">
+          <span>🔗</span> <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name || w.url || "")}</span>
+          ${favStarHtml("websites", w.id, meta)}
         </div>`;
     }
     box.innerHTML = h;
@@ -388,13 +453,12 @@ function renderFavorites() {
       select(type, id);
     })
   );
-  // Stern in der Favoritenliste entfernt den Favoriten (mit Animation).
-  box.querySelectorAll("[data-fav]").forEach((el) =>
+  // Website-Favorit anklicken -> im neuen Tab öffnen.
+  box.querySelectorAll("[data-fav-web]").forEach((el) =>
     el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      el.classList.add("fav-pop");
-      const [kind, id] = el.dataset.fav.split(":");
-      setTimeout(() => toggleFav(kind, id), 120);
+      if (e.target.closest("[data-fav]")) return;
+      const url = el.dataset.favWeb;
+      if (url) window.open(url, "_blank", "noopener");
     })
   );
 }
@@ -402,6 +466,22 @@ function renderFavorites() {
 // Favoriten-Header (Ein-/Ausklappen) + Dashboard-Tab verkabeln. Wird einmal
 // von app.js aufgerufen.
 export function initSidebarNav() {
+  // Globaler, delegierter Handler für ALLE Favoriten-Sterne (nur einmal binden).
+  if (!window.__favStarBound) {
+    window.__favStarBound = true;
+    document.addEventListener("click", (e) => {
+      const star = e.target.closest(".fav-star[data-fav]");
+      if (!star) return;
+      e.stopPropagation();
+      e.preventDefault();
+      star.classList.add("fav-pop");
+      const [kind, id] = star.dataset.fav.split(":");
+      let meta;
+      if (star.dataset.favMeta) { try { meta = JSON.parse(star.dataset.favMeta); } catch {} }
+      setTimeout(() => cycleFav(kind, id, meta), 120);
+    }, true);
+  }
+
   const header = document.getElementById("fav-header");
   if (header) header.addEventListener("click", () => {
     favExpanded = !favExpanded;

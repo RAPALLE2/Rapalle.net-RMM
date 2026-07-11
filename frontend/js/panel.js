@@ -20,6 +20,7 @@ import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricsh
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
 import { renderDashboard } from "./apps/dashboard.js";
+import { favStarHtml } from "./sidebar.js";
 
 // Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
 let _latestAgentVersion = null;
@@ -80,8 +81,9 @@ function renderClientView(el, clientId) {
 
   el.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <h2 style="margin:0">
+      <h2 style="margin:0;display:flex;align-items:center;gap:8px">
         <span class="status-dot-lg ${status.cls}"></span>${esc(client.hostname)}
+        ${favStarHtml("clients", client.id)}
       </h2>
       <span style="color:var(--subtext);font-size:13px">${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))} · ${esc(client.ip || "")}</span>
     </div>
@@ -157,12 +159,16 @@ function renderClientView(el, clientId) {
       const title = w.monitor_enabled
         ? (w.last_status === "down" && w.last_error ? `DOWN: ${esc(w.last_error)}` : (w.last_status || "noch nicht geprüft"))
         : "kein Monitoring";
+      const favMeta = { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname };
       return `
-        <a class="action-btn" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
-           style="display:flex;align-items:center;gap:8px;text-decoration:none" title="${title}">
-          <span style="color:${dotColor}">●</span>
-          <span>${w.favorite ? "★ " : ""}${esc(w.name)}</span>
-        </a>`;
+        <div class="action-btn" style="display:flex;align-items:center;gap:8px;padding-right:8px">
+          <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
+             style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit" title="${title}">
+            <span style="color:${dotColor}">●</span>
+            <span>${esc(w.name)}</span>
+          </a>
+          ${favStarHtml("websites", w.id, favMeta)}
+        </div>`;
     }).join("");
   }).catch(() => { /* Websites sind optional */ });
 

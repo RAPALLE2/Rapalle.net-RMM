@@ -8,6 +8,7 @@ import { state, findClient } from "../state.js";
 import { api } from "../api.js";
 import { esc } from "../utils.js";
 import { closeWindow } from "../windowmanager.js";
+import { favStarHtml } from "../sidebar.js";
 
 // Wird von app.js gesetzt, um nach Änderungen alles neu zu laden
 let onChanged = null;
@@ -127,7 +128,7 @@ export function renderEditClient(body, win) {
           <input type="text" id="ec-ws-url" placeholder="https://..." />
         </div>
         <div class="form-row">
-          <label><input type="checkbox" id="ec-ws-fav" /> ★ Als Favorit anheften (im Dashboard sichtbar)</label>
+          <label style="color:var(--subtext);font-size:12px">Favoriten setzt du nach dem Anlegen über den Stern in der Liste (☆ → Seitenleiste → Dashboard → beide).</label>
         </div>
         <div class="form-row">
           <label><input type="checkbox" id="ec-ws-monitor" /> Uptime-Monitoring aktivieren</label>
@@ -210,32 +211,33 @@ export function renderEditClient(body, win) {
             <div style="font-size:11px;color:var(--subtext);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.url)}</div>
             ${monitorInfo}
           </div>
-          <div style="display:flex;gap:6px;flex-shrink:0">
-            <button class="taskbar-btn" data-ws-fav="${w.id}" title="${w.favorite ? "Favorit entfernen" : "Als Favorit anheften"}">${w.favorite ? "★" : "☆"}</button>
+          <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
+            ${favStarHtml("websites", w.id, { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname })}
             <button class="taskbar-btn" data-ws-mon="${w.id}" title="Monitoring ${w.monitor_enabled ? "ausschalten" : "einschalten"}">${w.monitor_enabled ? "📡 an" : "📡 aus"}</button>
             <button class="taskbar-btn" data-ws-del="${w.id}">🗑</button>
           </div>
         </div>`;
       }).join("");
 
-      listEl.querySelectorAll("[data-ws-fav]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          const s = sites.find((x) => x.id === btn.dataset.wsFav);
-          await api.updateClientWebsite(client.id, s.id, { favorite: !s.favorite });
-          loadWebsites();
-        })
-      );
       listEl.querySelectorAll("[data-ws-mon]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          const s = sites.find((x) => x.id === btn.dataset.wsMon);
-          await api.updateClientWebsite(client.id, s.id, { monitor_enabled: !s.monitor_enabled });
+          try {
+            const s = sites.find((x) => x.id === btn.dataset.wsMon);
+            await api.updateClientWebsite(client.id, s.id, { monitor_enabled: !s.monitor_enabled });
+          } catch (e) {
+            window.notify?.("Ändern fehlgeschlagen: " + e.message, "error");
+          }
           loadWebsites();
         })
       );
       listEl.querySelectorAll("[data-ws-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
           if (!confirm("Website-Verknüpfung löschen?")) return;
-          await api.deleteClientWebsite(client.id, btn.dataset.wsDel);
+          try {
+            await api.deleteClientWebsite(client.id, btn.dataset.wsDel);
+          } catch (e) {
+            window.notify?.("Löschen fehlgeschlagen: " + e.message, "error");
+          }
           loadWebsites();
         })
       );
@@ -261,7 +263,6 @@ export function renderEditClient(body, win) {
     try {
       await api.createClientWebsite(client.id, {
         name, url,
-        favorite: body.querySelector("#ec-ws-fav").checked,
         monitor_enabled: wsMonitorCheck.checked,
         monitor_notify: body.querySelector("#ec-ws-notify").value,
         monitor_interval_seconds: parseInt(body.querySelector("#ec-ws-interval").value, 10),
