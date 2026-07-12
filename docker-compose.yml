@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  app:
+    image: python:3.12
+    container_name: RAPALLE.net-RMM
+
+    working_dir: /app/backend
+
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - ./agent:/app/agent
+
+    command: >
+      sh -c "
+      pip install --no-cache-dir
+      fastapi
+      uvicorn[standard]
+      python-socketio
+      python-dotenv
+      PyJWT
+      bcrypt
+      pydantic
+      psutil
+      cryptography
+      python-multipart
+      Pillow
+      ldap3
+      &&
+      python run.py
+      "
+
+    ports:
+      - "4000:4000"
+
+    restart: unless-stopped

@@ -30,7 +30,7 @@ from app.bootstrap_deps import ensure_dependencies
 # 1) Kern-Libs testweise importieren; bei Fehler sofort alles nachinstallieren.
 _CORE_LIBS = (
     "fastapi", "uvicorn", "socketio", "dotenv", "jwt",
-    "bcrypt", "pydantic", "psutil", "cryptography",
+    "bcrypt", "pydantic", "psutil", "cryptography", "python-multipart"
 )
 try:
     for _lib in _CORE_LIBS:
