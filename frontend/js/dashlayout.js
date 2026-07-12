@@ -1,21 +1,14 @@
 // dashlayout.js
 // -------------
-// Anpassbare Client-Detailansicht. Der Nutzer kann Bausteine ("Parts") wie
-// Status, Aktionen und Übersicht-Ordner frei anordnen, in Größe ändern, in
-// mehrere Ordner aufteilen und einzelne Sub-Ansichten (Metrics/Notes/Disk)
-// zwischen Ordnern verschieben - alles PRO BENUTZER gespeichert (persist.js).
+// Anpassbare Client-Detailansicht als FESTES RASTER (Grid). Standardraster ist
+// 5 Spalten × 4 Reihen; es wächst automatisch nach unten. Jedes Panel belegt
+// ganze Rasterzellen (gx,gy = Startzelle, gw,gh = Spanne). Beim Ziehen rastet
+// ein Panel an der nächsten Zelle ein, beim Resizen an der nächsten Rasterlinie.
+// Zieht man ein Panel auf einen belegten Bereich, werden die dort liegenden
+// Panels nach unten gestapelt. Leere Zellen kann man per Klick belegen.
 //
-// Layout-Modell (dashLayout):
-//   { cols: 12, panels: [ Panel, ... ] }
-//   Panel:
-//     { id, type:"status"|"actions"|"websites"|"folder", w: <1..12 Spalten>,
-//       title?, subs?: ["metrics","notes","disk", ...], activeSub? }
-//
-// Im Edit-Modus (Profil -> "Dashboard bearbeiten") lässt sich alles per
-// Drag&Drop umsortieren, die Breite ziehen, Ordner anlegen/umbenennen/leeren,
-// Sub-Ansichten zwischen Ordnern schieben und Parts als eigenes Fenster
-// herauslösen. Außerhalb des Edit-Modus kann man Parts trotzdem per Drag an
-// der Kopfzeile in ein eigenes Fenster ziehen (Client bleibt im Dashboard).
+// Panel-Modell: { id, type, gx, gy, gw, gh, ...typ-spezifisch }
+// Alles pro Benutzer gespeichert (persist.js).
 
 import { t } from "./i18n.js";
 import { esc } from "./utils.js";
@@ -24,118 +17,235 @@ import {
   renderOverviewSub, OVERVIEW_SUBS,
 } from "./panel.js";
 import { openWindow } from "./windowmanager.js";
+import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable } from "./clientmetrics.js";
 import {
   getDashLayout, setDashLayout, getDashEdit, setDashEdit, scheduleSave,
 } from "./persist.js";
 import { state } from "./state.js";
 
 let _uid = 0;
-const nid = (p) => `${p}-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
+const nid = () => `p-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-// Standard-Layout, falls der Nutzer noch keins angepasst hat: links Status +
-// Aktionen (schmal), rechts ein Übersicht-Ordner (breit) - wie bisher.
+// ---- Raster-Konstanten ----
+const COLS = 5;         // feste Spaltenzahl
+const BASE_ROWS = 4;    // Grundhöhe (Reihen), wächst nach unten
+const ROW_H = 150;      // Reihenhöhe in px
+const GAP = 14;         // Abstand zwischen Zellen in px
+
+const LEAF_LABEL = {
+  status: () => t("status"),
+  actions: () => t("actions"),
+  websites: () => "🔗 Websites",
+  metrics: () => (OVERVIEW_SUBS.metrics ? OVERVIEW_SUBS.metrics() : "Metrics"),
+  notes: () => (OVERVIEW_SUBS.notes ? OVERVIEW_SUBS.notes() : "Notes"),
+  disk: () => (OVERVIEW_SUBS.disk ? OVERVIEW_SUBS.disk() : "Disk"),
+  text: () => "Text",
+};
+
+// Standard-Größe (in Rasterzellen) je Panel-Typ.
+const DEFAULT_SIZE = {
+  status: [1, 3], actions: [1, 2], websites: [1, 2],
+  metrics: [3, 3], notes: [2, 2], disk: [2, 2],
+  text: [1, 1], folder: [2, 3], cmetric: [2, 2],
+};
+function defaultSizeFor(panel) {
+  if (panel.type === "cmetric") {
+    const k = panel.kind;
+    if (k === "number" || k === "gauge" || k === "donut") return [1, 2];
+    return [2, 2];
+  }
+  return DEFAULT_SIZE[panel.type] || [1, 2];
+}
+
+const ADDABLE = [
+  ["Übersicht", [
+    { type: "metrics", label: "Metrics (CPU/RAM/Netz)" },
+    { type: "notes", label: "Notizen" },
+    { type: "disk", label: "Datenträger" },
+  ]],
+  ["Client", [
+    { type: "status", label: "Status" },
+    { type: "actions", label: "Aktionen" },
+    { type: "websites", label: "Websites" },
+  ]],
+  ["Container", [
+    { type: "folder", label: "Ordner (Tabs)" },
+    { type: "text", label: "Text-Panel" },
+  ]],
+];
+
 function defaultLayout() {
   return {
-    cols: 12,
+    grid: true, cols: COLS,
     panels: [
-      { id: nid("p"), type: "status", w: 4 },
-      { id: nid("p"), type: "actions", w: 4 },
-      { id: nid("p"), type: "folder", title: t("overview"),
-        subs: ["metrics", "notes", "disk"], activeSub: "metrics", w: 8 },
+      { id: nid(), type: "status", gx: 0, gy: 0, gw: 1, gh: 3 },
+      { id: nid(), type: "actions", gx: 1, gy: 0, gw: 1, gh: 3 },
+      { id: nid(), type: "folder", title: t("overview"), gx: 2, gy: 0, gw: 3, gh: 3,
+        children: [
+          { id: nid(), type: "metrics" },
+          { id: nid(), type: "notes" },
+          { id: nid(), type: "disk" },
+        ], activeChild: null },
     ],
   };
 }
 
+function migrateFolder(f) {
+  if (!Array.isArray(f.children)) f.children = [];
+  if (Array.isArray(f.subs) && f.subs.length) {
+    for (const sub of f.subs) if (!f.children.some((c) => c.type === sub)) f.children.push({ id: nid(), type: sub });
+    delete f.subs; delete f.activeSub;
+  }
+  for (const c of f.children) if (!c.id) c.id = nid();
+  if (!f.activeChild && f.children.length) f.activeChild = f.children[0].id;
+}
+
+// Alte (Flow-)Layouts in Rasterkoordinaten überführen.
+function migrateToGrid(layout) {
+  if (layout.grid && layout.panels.every((p) => p.gx != null)) return;
+  layout.grid = true; layout.cols = COLS;
+  let x = 0, y = 0, rowH = 0;
+  for (const p of layout.panels) {
+    if (p.type === "folder") migrateFolder(p);
+    if (p.gx != null && p.gw != null) continue;
+    const [dw, dh] = defaultSizeFor(p);
+    const gw = clamp(p.gw || Math.round(((p.w || 4) / 12) * COLS) || dw, 1, COLS);
+    const gh = p.gh || dh;
+    if (x + gw > COLS) { x = 0; y += rowH; rowH = 0; }
+    p.gx = x; p.gy = y; p.gw = gw; p.gh = gh;
+    delete p.w; delete p.h;
+    x += gw; rowH = Math.max(rowH, gh);
+  }
+}
+
 function currentLayout() {
   let l = getDashLayout();
-  if (!l || !Array.isArray(l.panels) || !l.panels.length) {
-    l = defaultLayout();
-    setDashLayout(l);
-  }
-  // Sicherheit: IDs nachziehen (alte gespeicherte Layouts).
-  l.cols = l.cols || 12;
-  for (const p of l.panels) { if (!p.id) p.id = nid("p"); if (!p.w) p.w = 6; }
+  if (!l || !Array.isArray(l.panels) || !l.panels.length) { l = defaultLayout(); setDashLayout(l); }
+  for (const p of l.panels) { if (!p.id) p.id = nid(); if (p.type === "folder") migrateFolder(p); }
+  migrateToGrid(l);
   return l;
 }
 
 function saveLayout() { scheduleSave(state); }
 
-const PART_LABEL = {
-  status: () => t("status"),
-  actions: () => t("actions"),
-  websites: () => "🔗 Websites",
-};
-
-// Titel eines Panels (Ordner tragen einen frei wählbaren Namen).
 function panelTitle(p) {
   if (p.type === "folder") return p.title || t("overview");
-  return (PART_LABEL[p.type] || (() => p.type))();
+  if (p.type === "text") return p.title || "Text";
+  if (p.type === "cmetric") { const pr = clientPresetById(p.metric); return p.title || (pr ? pr.label : "Metrik"); }
+  return (LEAF_LABEL[p.type] || (() => p.type))();
+}
+
+// ---- Raster-Geometrie/Kollision ----
+function overlap(a, b) {
+  return a.gx < b.gx + b.gw && a.gx + a.gw > b.gx && a.gy < b.gy + b.gh && a.gy + a.gh > b.gy;
+}
+// Kollisionen auflösen: das aktive Panel bleibt fix, alle anderen werden in
+// y-Reihenfolge nach unten geschoben, bis nichts mehr überlappt (Stapeln).
+function compact(panels, active) {
+  const placed = active ? [active] : [];
+  const rest = panels.filter((p) => p !== active).sort((a, b) => a.gy - b.gy || a.gx - b.gx);
+  for (const p of rest) {
+    let guard = 0;
+    while (placed.some((q) => overlap(p, q)) && guard++ < 500) p.gy++;
+    placed.push(p);
+  }
+}
+function neededRows(panels) {
+  return Math.max(BASE_ROWS, ...panels.map((p) => p.gy + p.gh), 0);
+}
+// Erste freie Position für ein gw×gh-Panel (sonst unten anhängen).
+function findFreeSpot(panels, gw, gh) {
+  const rows = neededRows(panels) + gh;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x <= COLS - gw; x++) {
+      const cand = { gx: x, gy: y, gw, gh };
+      if (!panels.some((p) => overlap(cand, p))) return { gx: x, gy: y };
+    }
+  }
+  return { gx: 0, gy: neededRows(panels) };
 }
 
 // =================================================================
-// Haupt-Renderer (von panel.js aufgerufen)
+// Haupt-Renderer
 // =================================================================
 export function renderClientLayout(host, toolbarHost, client) {
   if (!host) return;
   const layout = currentLayout();
   const edit = getDashEdit();
 
-  // Toolbar: Edit-Umschalter + (im Edit) Aktionen zum Hinzufügen.
   if (toolbarHost) {
     toolbarHost.innerHTML = `
-      <button class="dash-edit-toggle ${edit ? "on" : ""}" title="Dashboard-Layout bearbeiten (an/aus)">
-        ${edit ? "✓ Bearbeiten" : "✎ Bearbeiten"}
-      </button>
-      ${edit ? `
-        <span class="dash-edit-tools">
-          <button data-add="folder" title="Neuen Ordner anlegen">+ Ordner</button>
-          <button data-add="status" title="Status hinzufügen">+ Status</button>
-          <button data-add="actions" title="Aktionen hinzufügen">+ Aktionen</button>
-          <button data-add="websites" title="Websites hinzufügen">+ Websites</button>
+      <button class="dash-edit-toggle ${edit ? "on" : ""}" title="Client-Ansicht bearbeiten (an/aus)">
+        ${edit ? "✓ Bearbeiten" : "✎ Bearbeiten"}</button>
+      ${edit ? `<span class="dash-edit-tools">
+          <button data-add-panel>+ Panel</button>
           <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
-        </span>` : ""}
-    `;
+        </span>` : ""}`;
     toolbarHost.querySelector(".dash-edit-toggle").addEventListener("click", () => {
       setDashEdit(!edit); saveLayout(); renderClientLayout(host, toolbarHost, client);
     });
-    toolbarHost.querySelectorAll("[data-add]").forEach((b) =>
-      b.addEventListener("click", () => addPanel(b.dataset.add, host, toolbarHost, client)));
+    toolbarHost.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddPicker(host, toolbarHost, client, null));
     toolbarHost.querySelector("[data-reset]")?.addEventListener("click", () => {
       if (!confirm("Layout auf Standard zurücksetzen?")) return;
       setDashLayout(defaultLayout()); saveLayout(); renderClientLayout(host, toolbarHost, client);
     });
   }
 
-  host.className = "dash-layout" + (edit ? " editing" : "");
-  host.style.setProperty("--dash-cols", layout.cols);
+  const rows = neededRows(layout.panels);
+  host.className = "dash-grid-layout" + (edit ? " editing" : "");
+  host.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+  host.style.gridAutoRows = `${ROW_H}px`;
+  host.style.gap = `${GAP}px`;
+  host.style.minHeight = `${rows * ROW_H + (rows - 1) * GAP}px`;
   host.innerHTML = "";
 
-  layout.panels.forEach((panel, idx) => {
-    const card = buildPanel(panel, client, { host, toolbarHost, edit, layout, idx });
-    host.appendChild(card);
-  });
+  const ctx = { host, toolbarHost, edit, layout, client };
 
-  // Auto-Ausblenden: Websites-Panel ohne verknüpfte Websites dezent markieren.
+  // Leere Zellen als belegbares Raster (nur im Edit).
+  if (edit) renderEmptyCells(host, layout, rows, ctx);
+
+  layout.panels.forEach((panel) => host.appendChild(buildPanel(panel, client, ctx)));
+
   const wsPanel = layout.panels.find((p) => p.type === "websites");
-  if (wsPanel) {
-    clientHasWebsites(client.id).then((has) => {
-      const c = host.querySelector(`[data-panel="${wsPanel.id}"]`);
-      if (c && !has && !edit) c.style.display = "none";
-    });
+  if (wsPanel) clientHasWebsites(client.id).then((has) => {
+    const c = host.querySelector(`[data-panel="${wsPanel.id}"]`);
+    if (c && !has && !edit) c.style.display = "none";
+  });
+}
+
+// Belegbare Leerzellen rendern (Klick öffnet den Picker an dieser Stelle).
+function renderEmptyCells(host, layout, rows, ctx) {
+  const occ = Array.from({ length: rows }, () => Array(COLS).fill(false));
+  for (const p of layout.panels)
+    for (let y = p.gy; y < p.gy + p.gh; y++)
+      for (let x = p.gx; x < p.gx + p.gw; x++)
+        if (occ[y]) occ[y][x] = true;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (occ[y][x]) continue;
+      const cell = document.createElement("button");
+      cell.className = "grid-empty-cell";
+      cell.style.gridColumn = `${x + 1} / span 1`;
+      cell.style.gridRow = `${y + 1} / span 1`;
+      cell.title = "Hier ein Panel einfügen";
+      cell.innerHTML = "<span>+</span>";
+      cell.addEventListener("click", () => openAddPicker(host, ctx.toolbarHost, ctx.client, { gx: x, gy: y }));
+      host.appendChild(cell);
+    }
   }
 }
 
 // =================================================================
-// Ein Panel (Karte) bauen
+// Panel-Karte
 // =================================================================
 function buildPanel(panel, client, ctx) {
-  const { host, toolbarHost, edit, layout, idx } = ctx;
+  const { host, toolbarHost, edit, layout } = ctx;
   const card = document.createElement("div");
   card.className = "panel dash-lp";
   card.dataset.panel = panel.id;
-  card.style.gridColumn = `span ${Math.max(1, Math.min(layout.cols, panel.w || 6))}`;
+  applyGridPos(card, panel);
 
-  // --- Kopfzeile ---
   const head = document.createElement("div");
   head.className = "dash-lp-head";
   const titleEl = document.createElement("span");
@@ -145,285 +255,455 @@ function buildPanel(panel, client, ctx) {
 
   const tools = document.createElement("span");
   tools.className = "dash-lp-tools";
-
-  // Ordner-Tabs (Sub-Ansichten)
-  if (panel.type === "folder") {
-    const tabbar = document.createElement("span");
-    tabbar.className = "tab-bar dash-folder-tabs";
-    (panel.subs || []).forEach((sub) => {
-      const b = document.createElement("button");
-      b.className = "tab-btn" + (panel.activeSub === sub ? " active" : "");
-      b.textContent = (OVERVIEW_SUBS[sub] ? OVERVIEW_SUBS[sub]() : sub);
-      b.draggable = edit;    // im Edit-Modus Sub zwischen Ordnern ziehen
-      b.dataset.sub = sub;
-      b.addEventListener("click", () => {
-        panel.activeSub = sub; saveLayout();
-        fillPanelBody(bodyEl, panel, client);
-        tabbar.querySelectorAll(".tab-btn").forEach((x) => x.classList.toggle("active", x.dataset.sub === sub));
-      });
-      if (edit) {
-        b.addEventListener("dragstart", (e) => {
-          e.stopPropagation();
-          e.dataTransfer.setData("text/x-dash-sub", JSON.stringify({ from: panel.id, sub }));
-          e.dataTransfer.effectAllowed = "move";
-        });
-      }
-      tabbar.appendChild(b);
-    });
-    tools.appendChild(tabbar);
-  }
-
-  // Pop-out-Button (immer verfügbar - auch ohne Edit-Modus)
   const popBtn = document.createElement("button");
-  popBtn.className = "dash-lp-btn";
-  popBtn.title = "Als eigenes Fenster herauslösen";
-  popBtn.textContent = "⧉";
+  popBtn.className = "dash-lp-btn"; popBtn.title = "Als eigenes Fenster herauslösen"; popBtn.textContent = "⧉";
   popBtn.addEventListener("click", (e) => { e.stopPropagation(); detachPanel(panel, client); });
   tools.appendChild(popBtn);
-
   if (edit) {
+    if (panel.type === "folder" || panel.type === "text") {
+      const ren = document.createElement("button");
+      ren.className = "dash-lp-btn"; ren.title = "Titel ändern"; ren.textContent = "✎";
+      ren.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const name = prompt("Titel:", panel.title || (panel.type === "folder" ? t("overview") : "Text"));
+        if (name !== null) { panel.title = name.trim() || null; saveLayout(); titleEl.textContent = panelTitle(panel); }
+      });
+      tools.appendChild(ren);
+    }
     const del = document.createElement("button");
-    del.className = "dash-lp-btn";
-    del.title = "Entfernen";
-    del.textContent = "✕";
+    del.className = "dash-lp-btn"; del.title = "Entfernen"; del.textContent = "✕";
     del.addEventListener("click", (e) => {
       e.stopPropagation();
       layout.panels = layout.panels.filter((p) => p.id !== panel.id);
       saveLayout(); renderClientLayout(host, toolbarHost, client);
     });
-    if (panel.type === "folder") {
-      const ren = document.createElement("button");
-      ren.className = "dash-lp-btn";
-      ren.title = "Ordner umbenennen";
-      ren.textContent = "✎";
-      ren.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const name = prompt("Ordnername:", panel.title || t("overview"));
-        if (name !== null) { panel.title = name.trim() || t("overview"); saveLayout(); titleEl.textContent = panelTitle(panel); }
-      });
-      tools.appendChild(ren);
-    }
     tools.appendChild(del);
   }
-
   head.appendChild(tools);
   card.appendChild(head);
 
-  // --- Körper ---
   const bodyEl = document.createElement("div");
   bodyEl.className = "dash-lp-body";
   card.appendChild(bodyEl);
-  fillPanelBody(bodyEl, panel, client);
+  fillPanelBody(bodyEl, panel, client, ctx);
 
-  // --- Interaktion: Herauslösen per Drag an der Kopfzeile (immer),
-  //     Umsortieren + Sub-Drop nur im Edit-Modus. ---
-  attachPanelInteractions(card, head, panel, client, ctx);
-
-  // --- Breiten-Resizer (nur Edit) ---
-  if (edit) {
-    const grip = document.createElement("div");
-    grip.className = "dash-lp-resizer";
-    attachWidthResize(grip, card, panel, client, ctx);
-    card.appendChild(grip);
-  }
-
+  attachGridDrag(card, head, panel, client, ctx);
+  if (edit) attachGridResize(card, panel, client, ctx);
   return card;
 }
 
-function fillPanelBody(bodyEl, panel, client) {
-  bodyEl.innerHTML = "";
+function applyGridPos(card, panel) {
+  card.style.gridColumn = `${panel.gx + 1} / span ${panel.gw}`;
+  card.style.gridRow = `${panel.gy + 1} / span ${panel.gh}`;
+}
+// Alle Karten (außer der aktiv gezogenen) neu positionieren.
+function applyAllPositions(host, layout, exceptId) {
+  for (const p of layout.panels) {
+    if (p.id === exceptId) continue;
+    const c = host.querySelector(`.dash-lp[data-panel="${p.id}"]`);
+    if (c) applyGridPos(c, p);
+  }
+}
+
+function fillPanelBody(bodyEl, panel, client, ctx) {
+  bodyEl.innerHTML = ""; bodyEl.className = "dash-lp-body";
   if (panel.type === "status") return renderStatusPart(bodyEl, client);
-  if (panel.type === "actions") { bodyEl.className = "dash-lp-body actions-panel"; return renderActionsPart(bodyEl, client); }
-  if (panel.type === "websites") { bodyEl.className = "dash-lp-body actions-panel"; return renderWebsitesPart(bodyEl, client); }
-  if (panel.type === "folder") {
-    bodyEl.className = "dash-lp-body overview-content";
-    const sub = panel.activeSub || (panel.subs && panel.subs[0]) || "metrics";
-    return renderOverviewSub(bodyEl, client, sub, () => fillPanelBody(bodyEl, panel, client));
+  if (panel.type === "actions") { bodyEl.classList.add("actions-panel"); return renderActionsPart(bodyEl, client); }
+  if (panel.type === "websites") { bodyEl.classList.add("actions-panel"); return renderWebsitesPart(bodyEl, client); }
+  if (panel.type === "metrics" || panel.type === "notes" || panel.type === "disk") {
+    bodyEl.classList.add("overview-content");
+    return renderOverviewSub(bodyEl, client, panel.type, () => fillPanelBody(bodyEl, panel, client, ctx));
+  }
+  if (panel.type === "text") return renderTextPanel(bodyEl, panel, client, ctx);
+  if (panel.type === "cmetric") return renderCMetric(bodyEl, panel, client, ctx);
+  if (panel.type === "folder") return renderFolder(bodyEl, panel, client, ctx);
+}
+
+// ---------------- TEXT ----------------
+function renderTextPanel(bodyEl, panel, client, ctx) {
+  const edit = !!(ctx && ctx.edit);
+  const div = document.createElement("div");
+  div.className = "widget-text";
+  div.innerHTML = panel.text ? esc(panel.text).replace(/\n/g, "<br>")
+    : `<span style="color:var(--subtext)">${edit ? "Doppelklick zum Bearbeiten." : "Leer."}</span>`;
+  bodyEl.appendChild(div);
+  if (edit) {
+    div.addEventListener("dblclick", () => {
+      const ta = document.createElement("textarea");
+      ta.className = "widget-text-edit"; ta.value = panel.text || "";
+      bodyEl.innerHTML = ""; bodyEl.appendChild(ta); ta.focus();
+      const finish = () => { panel.text = ta.value; saveLayout(); fillPanelBody(bodyEl, panel, client, ctx); };
+      ta.addEventListener("blur", finish);
+      ta.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ta.blur(); }
+        if (e.key === "Escape") { e.preventDefault(); fillPanelBody(bodyEl, panel, client, ctx); }
+      });
+    });
   }
 }
 
-// =================================================================
-// Panel hinzufügen
-// =================================================================
-function addPanel(type, host, toolbarHost, client) {
-  const layout = currentLayout();
-  if (type === "folder") {
-    const name = prompt("Ordnername:", "Neuer Ordner");
-    if (name === null) return;
-    layout.panels.push({ id: nid("p"), type: "folder", title: name.trim() || "Ordner",
-      subs: ["metrics"], activeSub: "metrics", w: 6 });
-  } else {
-    layout.panels.push({ id: nid("p"), type, w: 4 });
+// ---------------- cmetric ----------------
+function renderCMetric(bodyEl, panel, client, ctx) {
+  const edit = !!(ctx && ctx.edit);
+  const preset = clientPresetById(panel.metric);
+  bodyEl.className = "dash-lp-body cmetric-body";
+  if (preset && !presetAvailable(preset, client.device_type)) {
+    const card = bodyEl.closest(".dash-lp");
+    if (!edit) { if (card) card.style.display = "none"; return; }
+    bodyEl.innerHTML = `<div class="cmetric-na">Auf ${client.device_type === "lxc" ? "LXC-Containern" : "VMs"} nicht verfügbar.</div>`;
+    return;
   }
-  saveLayout();
-  renderClientLayout(host, toolbarHost, client);
+  if (edit && preset && preset.charts.length > 1) {
+    const bar = document.createElement("div"); bar.className = "cmetric-kinds";
+    const KIND_ICON = { number: "🔢", gauge: "🎯", donut: "🍩", line: "📈", bars: "📊", info: "🏷️" };
+    bar.innerHTML = preset.charts.map((k) =>
+      `<button class="cmetric-kind ${((panel.kind || preset.charts[0]) === k) ? "active" : ""}" data-kind="${k}" title="${k}">${KIND_ICON[k] || k}</button>`).join("");
+    bodyEl.appendChild(bar);
+    bar.querySelectorAll("[data-kind]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation(); panel.kind = b.dataset.kind; saveLayout(); renderCMetric(bodyEl, panel, client, ctx);
+    }));
+  }
+  const holder = document.createElement("div"); holder.className = "cmetric-holder";
+  bodyEl.appendChild(holder);
+  renderClientMetric(holder, client, panel);
 }
 
-// =================================================================
-// Panel als eigenes Fenster herauslösen (Client bleibt im Dashboard)
-// =================================================================
-export function detachPanel(panel, client) {
-  const props = {
-    clientId: client.id,
-    part: panel.type,
-    // Ordner-Konfiguration mitgeben, damit das Fenster dieselben Sub-Ansichten hat.
-    subs: panel.subs ? [...panel.subs] : null,
-    activeSub: panel.activeSub || null,
-    partTitle: panelTitle(panel),
-  };
-  const key = `panelpart-${client.id}-${panel.type}-${(panel.subs || []).join(".") || "x"}`;
-  openWindow({
-    key, appId: "panelpart",
-    title: `${panelTitle(panel)} — ${client.hostname}`,
-    props, clientColor: client.color,
-    w: panel.type === "folder" ? 720 : 380,
-    h: panel.type === "folder" ? 520 : 420,
+// ---------------- ORDNER (Tabs) ----------------
+function renderFolder(bodyEl, folder, client, ctx) {
+  migrateFolder(folder);
+  const edit = !!(ctx && ctx.edit);
+  bodyEl.classList.add("folder-panel");
+  const tabbar = document.createElement("div"); tabbar.className = "tab-bar dash-folder-tabs";
+  const activeBody = document.createElement("div"); activeBody.className = "folder-active overview-content";
+  if (!folder.children.length) {
+    tabbar.innerHTML = `<span style="color:var(--subtext);font-size:12px">leerer Ordner</span>`;
+    if (edit) activeBody.innerHTML = `<div class="folder-drop-hint">Panel per Drag hierher ziehen</div>`;
+  }
+  folder.children.forEach((child) => {
+    if (!folder.activeChild) folder.activeChild = child.id;
+    const tab = document.createElement("button");
+    tab.className = "tab-btn dash-folder-tab" + (folder.activeChild === child.id ? " active" : "");
+    tab.textContent = panelTitle(child); tab.dataset.child = child.id;
+    attachTabInteraction(tab, folder, child, client, ctx);
+    tabbar.appendChild(tab);
+  });
+  bodyEl.appendChild(tabbar); bodyEl.appendChild(activeBody);
+  renderActiveChild(activeBody, folder, client, ctx);
+}
+function renderActiveChild(activeBody, folder, client, ctx) {
+  activeBody.innerHTML = "";
+  const child = folder.children.find((c) => c.id === folder.activeChild) || folder.children[0];
+  if (!child) return;
+  folder.activeChild = child.id;
+  const inner = document.createElement("div"); activeBody.appendChild(inner);
+  fillPanelBody(inner, child, client, ctx);
+}
+
+function attachTabInteraction(tab, folder, child, client, ctx) {
+  const { host, toolbarHost, edit } = ctx;
+  tab.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    let dragging = false; const tabbar = tab.parentElement;
+    function move(ev) {
+      if (!dragging && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 5) {
+        if (!edit) return;
+        dragging = true; document.body.classList.add("dash-dragging"); tab.classList.add("tab-dragging");
+      }
+      if (!dragging) return;
+      const f = folderUnder(ev.clientX, ev.clientY, host, null, child);
+      host.querySelectorAll(".dash-lp.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
+      if (f && f.dataset.panel !== folder.id) f.classList.add("folder-hover");
+      else if (tabbar) {
+        const sibs = [...tabbar.querySelectorAll(".dash-folder-tab")].filter((x) => x !== tab);
+        let placed = false;
+        for (const s of sibs) { const r = s.getBoundingClientRect(); if (ev.clientX < r.left + r.width / 2) { tabbar.insertBefore(tab, s); placed = true; break; } }
+        if (!placed) tabbar.appendChild(tab);
+      }
+    }
+    function up(ev) {
+      document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+      document.body.classList.remove("dash-dragging");
+      host.querySelectorAll(".dash-lp.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
+      tab.classList.remove("tab-dragging");
+      if (!dragging) { folder.activeChild = child.id; saveLayout(); renderClientLayout(host, toolbarHost, client); return; }
+      const layout = currentLayout();
+      const targetCard = folderUnder(ev.clientX, ev.clientY, host, null, child);
+      if (targetCard && targetCard.dataset.panel !== folder.id) {
+        const tf = layout.panels.find((p) => p.id === targetCard.dataset.panel);
+        if (tf) {
+          folder.children = folder.children.filter((c) => c.id !== child.id);
+          if (folder.activeChild === child.id) folder.activeChild = folder.children[0]?.id || null;
+          (tf.children ||= []).push(child); tf.activeChild = child.id;
+          saveLayout(); renderClientLayout(host, toolbarHost, client); return;
+        }
+      }
+      if (targetCard && targetCard.dataset.panel === folder.id) {
+        const order = [...tabbar.querySelectorAll(".dash-folder-tab")].map((x) => x.dataset.child);
+        folder.children.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        folder.activeChild = child.id; saveLayout(); renderClientLayout(host, toolbarHost, client); return;
+      }
+      // Aus dem Ordner herausziehen -> eigenes Panel an der Rasterzelle.
+      folder.children = folder.children.filter((c) => c.id !== child.id);
+      if (folder.activeChild === child.id) folder.activeChild = folder.children[0]?.id || null;
+      const [dw, dh] = defaultSizeFor(child);
+      child.gw = dw; child.gh = dh;
+      const cell = cellFromPoint(host, ev.clientX, ev.clientY, dw);
+      child.gx = cell.gx; child.gy = cell.gy;
+      layout.panels.push(child);
+      compact(layout.panels, child);
+      saveLayout(); renderClientLayout(host, toolbarHost, client);
+    }
+    document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
   });
 }
 
 // =================================================================
-// Drag-Interaktionen
+// Picker
 // =================================================================
-function attachPanelInteractions(card, head, panel, client, ctx) {
-  const { host, toolbarHost, edit, layout } = ctx;
+function openAddPicker(host, toolbarHost, client, atCell) {
+  const back = document.createElement("div");
+  back.className = "widget-picker-back";
+  back.innerHTML = `
+    <div class="widget-picker">
+      <div class="wp-head"><strong>Panel hinzufügen${atCell ? ` (Zelle ${atCell.gx + 1},${atCell.gy + 1})` : ""}</strong><button class="dash-lp-btn" data-close>✕</button></div>
+      <div class="wp-body">
+        ${ADDABLE.map(([group, items]) => `
+          <div class="wp-group-title">${esc(group)}</div>
+          <div class="wp-grid">
+            ${items.map((it) => `<button class="wp-item" data-type="${esc(it.type)}"><span class="wp-item-label">${esc(it.label)}</span></button>`).join("")}
+          </div>`).join("")}
+        <div class="wp-group-title" style="margin-top:20px;color:var(--accent)">📡 Telemetrie-Metriken</div>
+        ${clientPresetsByGroup(client.device_type).map(([group, presets]) => `
+          <div class="wp-group-title">${esc(group)}</div>
+          <div class="wp-grid">
+            ${presets.map((pr) => `<button class="wp-item" data-metric="${esc(pr.id)}"><span class="wp-item-label">${esc(pr.label)}</span><span class="wp-item-kinds">${pr.charts.join(" · ")}</span></button>`).join("")}
+          </div>`).join("")}
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  const close = () => back.remove();
+  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  back.querySelector("[data-close]").addEventListener("click", close);
+  back.querySelectorAll(".wp-item").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.metric) addMetricPanel(b.dataset.metric, atCell);
+    else addPanelType(b.dataset.type, atCell);
+    close(); renderClientLayout(host, toolbarHost, client);
+  }));
+}
 
-  // Pointer-basiertes Ziehen an der Kopfzeile: kurzer Zug = umsortieren (Edit),
-  // weiter Zug nach außen = als Fenster herauslösen (immer möglich).
+function placeNew(panel, atCell) {
+  const layout = currentLayout();
+  const [dw, dh] = defaultSizeFor(panel);
+  panel.gw = clamp(dw, 1, COLS); panel.gh = dh;
+  if (atCell) {
+    panel.gx = clamp(atCell.gx, 0, COLS - panel.gw); panel.gy = Math.max(0, atCell.gy);
+  } else {
+    const spot = findFreeSpot(layout.panels, panel.gw, panel.gh);
+    panel.gx = spot.gx; panel.gy = spot.gy;
+  }
+  layout.panels.push(panel);
+  compact(layout.panels, panel);   // vorhandene ggf. nach unten stapeln
+  saveLayout();
+}
+function addPanelType(type, atCell) {
+  if (type === "folder") {
+    const name = prompt("Ordnername:", "Neuer Ordner"); if (name === null) return;
+    placeNew({ id: nid(), type: "folder", title: name.trim() || "Ordner", children: [], activeChild: null }, atCell);
+  } else if (type === "text") {
+    placeNew({ id: nid(), type: "text", title: "Text", text: "" }, atCell);
+  } else {
+    placeNew({ id: nid(), type }, atCell);
+  }
+}
+function addMetricPanel(metricId, atCell) {
+  const preset = clientPresetById(metricId); if (!preset) return;
+  placeNew({ id: nid(), type: "cmetric", metric: metricId, kind: preset.charts[0] }, atCell);
+}
+
+// =================================================================
+// Herauslösen
+// =================================================================
+export function detachPanel(panel, client) {
+  if (panel.type === "cmetric") {
+    openWindow({ key: `panelpart-${client.id}-cmetric-${panel.id}`, appId: "panelpart",
+      title: `${panelTitle(panel)} — ${client.hostname}`,
+      props: { clientId: client.id, part: "cmetric", metric: panel.metric, kind: panel.kind, partTitle: panelTitle(panel) },
+      clientColor: client.color, w: 420, h: 320 });
+    return;
+  }
+  const isFolder = panel.type === "folder";
+  openWindow({
+    key: `panelpart-${client.id}-${panel.type}-${panel.id}`, appId: "panelpart",
+    title: `${panelTitle(panel)} — ${client.hostname}`,
+    props: { clientId: client.id, part: isFolder ? "folder" : panel.type,
+      subs: isFolder ? panel.children.map((c) => c.type) : null,
+      activeSub: isFolder ? (panel.children.find((c) => c.id === panel.activeChild)?.type || null) : null,
+      partTitle: panelTitle(panel) },
+    clientColor: client.color, w: isFolder ? 720 : 380, h: isFolder ? 520 : 420,
+  });
+}
+
+// =================================================================
+// Raster-Drag (Verschieben mit Einrasten + Nach-unten-Stapeln)
+// =================================================================
+function cellSize(host) {
+  const rect = host.getBoundingClientRect();
+  const cw = (rect.width - GAP * (COLS - 1)) / COLS;
+  return { rect, cw, ch: ROW_H };
+}
+function cellFromPoint(host, cx, cy, gw = 1) {
+  const { rect, cw } = cellSize(host);
+  let gx = Math.floor((cx - rect.left) / (cw + GAP));
+  let gy = Math.floor((cy - rect.top) / (ROW_H + GAP));
+  gx = clamp(gx, 0, COLS - gw); gy = Math.max(0, gy);
+  return { gx, gy };
+}
+
+function attachGridDrag(card, head, panel, client, ctx) {
+  const { host, toolbarHost, edit, layout } = ctx;
   head.addEventListener("mousedown", (e) => {
-    if (e.target.closest("button") || e.target.closest(".tab-btn")) return;
+    if (e.target.closest("button")) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
     const startX = e.clientX, startY = e.clientY;
-    let mode = null;   // "reorder" | "detach"
-    let placeholder = null;
+    const rect0 = card.getBoundingClientRect();
+    const grabX = e.clientX - rect0.left, grabY = e.clientY - rect0.top;
+    // Ausgangspositionen ALLER Panels merken, damit beim Wegbewegen wieder
+    // alles an seinen Platz zurückspringt (nicht dauerhaft "runterfällt").
+    const snap = layout.panels.map((p) => ({ p, gx: p.gx, gy: p.gy }));
+    const restoreSnap = () => { for (const s of snap) { s.p.gx = s.gx; s.p.gy = s.gy; } };
+    let mode = null, preview = null, overFolder = null;
+
+    function begin() {
+      mode = "drag";
+      document.body.classList.add("dash-dragging");
+      card.classList.add("dragging");
+      card.style.position = "fixed"; card.style.margin = "0";
+      card.style.width = `${rect0.width}px`; card.style.height = `${rect0.height}px`;
+      card.style.zIndex = "9999"; card.style.pointerEvents = "none"; card.style.willChange = "transform";
+      preview = document.createElement("div"); preview.className = "grid-drop-preview"; host.appendChild(preview);
+      moveTo(e.clientX, e.clientY);
+    }
+    function moveTo(cx, cy) { card.style.transform = `translate(${cx - grabX}px, ${cy - grabY}px) scale(1.01)`; }
 
     function onMove(ev) {
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      const dist = Math.abs(dx) + Math.abs(dy);
-      if (!mode && dist > 6) {
-        // Verlässt der Zeiger die Karte deutlich? -> Herauslösen. Sonst
-        // (nur im Edit) umsortieren.
-        mode = "start";
-      }
-      if (mode === "start" && dist > 10) {
+      const dist = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY);
+      if (!mode && dist > 5) {
         const r = host.getBoundingClientRect();
-        const outside = ev.clientX < r.left - 20 || ev.clientX > r.right + 20 ||
-                        ev.clientY < r.top - 40 || ev.clientY > r.bottom + 60;
-        if (edit && !outside) {
-          mode = "reorder";
-          card.classList.add("dragging");
-          placeholder = document.createElement("div");
-          placeholder.className = "dash-lp-placeholder";
-          placeholder.style.gridColumn = card.style.gridColumn;
-          card.after(placeholder);
-          card.style.position = "fixed";
-          card.style.width = `${card.offsetWidth}px`;
-          card.style.zIndex = "9999";
-          card.style.pointerEvents = "none";
-        } else {
-          mode = "detach";
-          card.classList.add("detach-hint");
-        }
+        const outside = ev.clientX < r.left - 30 || ev.clientX > r.right + 30 || ev.clientY < r.top - 50 || ev.clientY > r.bottom + 120;
+        if (edit && !outside) begin(); else { mode = "detach"; card.classList.add("detach-hint"); }
       }
-      if (mode === "reorder") {
-        card.style.left = `${ev.clientX - 40}px`;
-        card.style.top = `${ev.clientY - 14}px`;
-        const over = elementFromPanel(ev.clientX, ev.clientY, host, card);
-        if (over && placeholder) {
-          const rect = over.getBoundingClientRect();
-          const after = ev.clientX > rect.left + rect.width / 2;
-          if (after) over.after(placeholder); else over.before(placeholder);
-        }
+      if (mode !== "drag") return;
+      moveTo(ev.clientX, ev.clientY);
+      const folderCard = folderUnder(ev.clientX, ev.clientY, host, card, panel);
+      host.querySelectorAll(".dash-lp.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
+      overFolder = folderCard || null;
+      if (folderCard) {
+        folderCard.classList.add("folder-hover");
+        if (preview) preview.style.display = "none";
+      } else {
+        if (preview) preview.style.display = "";
+        const cell = cellFromPoint(host, ev.clientX, ev.clientY, panel.gw);
+        restoreSnap();                 // erst alles zurück auf Start
+        panel.gx = cell.gx; panel.gy = cell.gy;
+        // Vorschau an Zielzelle + andere live nach unten stapeln.
+        if (preview) { preview.style.gridColumn = `${panel.gx + 1} / span ${panel.gw}`; preview.style.gridRow = `${panel.gy + 1} / span ${panel.gh}`; }
+        compact(layout.panels, panel);
+        applyAllPositions(host, layout, panel.id);
+        growHostIfNeeded(host, layout);
       }
     }
     function onUp(ev) {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      if (mode === "reorder") {
-        // Neue Reihenfolge aus DOM (Platzhalterposition) übernehmen.
-        card.style.cssText = card.style.cssText
-          .replace(/position:[^;]+;?/, "").replace(/left:[^;]+;?/, "")
-          .replace(/top:[^;]+;?/, "").replace(/z-index:[^;]+;?/, "")
-          .replace(/pointer-events:[^;]+;?/, "");
+      document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("dash-dragging");
+      if (preview) preview.remove();
+      host.querySelectorAll(".dash-lp.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
+      if (mode === "drag") {
+        for (const p of ["position", "margin", "width", "height", "left", "top", "zIndex", "pointerEvents", "willChange", "transform"]) card.style[p] = "";
         card.classList.remove("dragging");
-        card.style.gridColumn = `span ${panel.w}`;
-        if (placeholder) { placeholder.replaceWith(card); }
-        commitOrderFromDom(host, layout);
-        saveLayout();
+        if (overFolder && overFolder.dataset.panel !== panel.id) {
+          const folder = layout.panels.find((p) => p.id === overFolder.dataset.panel);
+          if (folder) {
+            layout.panels = layout.panels.filter((p) => p.id !== panel.id);
+            (folder.children ||= []).push(panel); folder.activeChild = panel.id;
+            saveLayout(); renderClientLayout(host, toolbarHost, client); return;
+          }
+        }
+        compact(layout.panels, panel);
+        saveLayout(); renderClientLayout(host, toolbarHost, client);
       } else if (mode === "detach") {
-        card.classList.remove("detach-hint");
-        detachPanel(panel, client);
+        card.classList.remove("detach-hint"); detachPanel(panel, client);
       }
     }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp);
   });
-
-  // Ordner nehmen im Edit-Modus per Drop Sub-Ansichten von anderen Ordnern auf.
-  if (edit && panel.type === "folder") {
-    card.addEventListener("dragover", (e) => {
-      if (e.dataTransfer.types.includes("text/x-dash-sub")) { e.preventDefault(); card.classList.add("drop-target"); }
-    });
-    card.addEventListener("dragleave", () => card.classList.remove("drop-target"));
-    card.addEventListener("drop", (e) => {
-      card.classList.remove("drop-target");
-      const raw = e.dataTransfer.getData("text/x-dash-sub");
-      if (!raw) return;
-      e.preventDefault();
-      const { from, sub } = JSON.parse(raw);
-      if (from === panel.id) return;
-      const src = layout.panels.find((p) => p.id === from);
-      if (src) src.subs = (src.subs || []).filter((x) => x !== sub);
-      if (!panel.subs.includes(sub)) panel.subs.push(sub);
-      panel.activeSub = sub;
-      // Leere Ordner behalten (Nutzer kann sie später wieder befüllen/entfernen).
-      if (src && src.activeSub === sub) src.activeSub = src.subs[0] || null;
-      saveLayout();
-      renderClientLayout(host, toolbarHost, client);
-    });
-  }
 }
 
-function elementFromPanel(x, y, host, exclude) {
+function growHostIfNeeded(host, layout) {
+  const rows = neededRows(layout.panels);
+  host.style.minHeight = `${rows * ROW_H + (rows - 1) * GAP}px`;
+}
+
+// =================================================================
+// Raster-Resize (Breite/Höhe in ganzen Zellen, mit Einrasten)
+// =================================================================
+function attachGridResize(card, panel, client, ctx) {
+  const { host, toolbarHost, layout } = ctx;
+  const gx = document.createElement("div"); gx.className = "tile-grip tile-grip-x";
+  const gy = document.createElement("div"); gy.className = "tile-grip tile-grip-y";
+  const gc = document.createElement("div"); gc.className = "tile-grip tile-grip-xy";
+  card.appendChild(gx); card.appendChild(gy); card.appendChild(gc);
+
+  function startResize(axis) {
+    return (e) => {
+      e.preventDefault(); e.stopPropagation();
+      document.body.classList.add("dash-dragging");
+      const { cw } = cellSize(host);
+      const rect0 = card.getBoundingClientRect();
+      const startGW = panel.gw, startGH = panel.gh;
+      const snap = layout.panels.map((p) => ({ p, gx: p.gx, gy: p.gy }));
+      const restoreSnap = () => { for (const s of snap) { s.p.gx = s.gx; s.p.gy = s.gy; } };
+      function move(ev) {
+        if (axis !== "y") {
+          const px = ev.clientX - rect0.left;
+          panel.gw = clamp(Math.round(px / (cw + GAP)) || 1, 1, COLS - panel.gx);
+        }
+        if (axis !== "x") {
+          const py = ev.clientY - rect0.top;
+          panel.gh = clamp(Math.round(py / (ROW_H + GAP)) || 1, 1, 20);
+        }
+        restoreSnap();
+        applyGridPos(card, panel);
+        compact(layout.panels, panel);
+        applyAllPositions(host, layout, panel.id);
+        growHostIfNeeded(host, layout);
+      }
+      function up() {
+        document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+        document.body.classList.remove("dash-dragging");
+        if (panel.gw !== startGW || panel.gh !== startGH) { compact(layout.panels, panel); saveLayout(); renderClientLayout(host, toolbarHost, client); }
+      }
+      document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+    };
+  }
+  gx.addEventListener("mousedown", startResize("x"));
+  gy.addEventListener("mousedown", startResize("y"));
+  gc.addEventListener("mousedown", startResize("xy"));
+}
+
+// =================================================================
+// Helfer
+// =================================================================
+function folderUnder(x, y, host, exclude, draggedPanel) {
+  if (draggedPanel && draggedPanel.type === "folder") return null;
   const cards = [...host.querySelectorAll(".dash-lp")].filter((c) => c !== exclude);
   for (const c of cards) {
+    const p = currentLayout().panels.find((pp) => pp.id === c.dataset.panel);
+    if (!p || p.type !== "folder") continue;
     const r = c.getBoundingClientRect();
     if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return c;
   }
-  // Fallback: nächstes Element in derselben Zeile
-  return cards.find((c) => {
-    const r = c.getBoundingClientRect();
-    return y >= r.top && y <= r.bottom;
-  }) || null;
-}
-
-function commitOrderFromDom(host, layout) {
-  const order = [...host.querySelectorAll(".dash-lp")].map((c) => c.dataset.panel);
-  layout.panels.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-}
-
-// =================================================================
-// Breite ziehen (Grid-Spalten)
-// =================================================================
-function attachWidthResize(grip, card, panel, client, ctx) {
-  const { host, layout } = ctx;
-  grip.addEventListener("mousedown", (e) => {
-    e.preventDefault(); e.stopPropagation();
-    document.body.style.userSelect = "none";
-    const hostRect = host.getBoundingClientRect();
-    const colW = hostRect.width / layout.cols;
-    const startX = e.clientX;
-    const startW = panel.w;
-    function onMove(ev) {
-      const deltaCols = Math.round((ev.clientX - startX) / colW);
-      panel.w = Math.max(2, Math.min(layout.cols, startW + deltaCols));
-      card.style.gridColumn = `span ${panel.w}`;
-    }
-    function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      saveLayout();
-    }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  });
+  return null;
 }

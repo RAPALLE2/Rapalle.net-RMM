@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
 import platform
@@ -73,13 +74,21 @@ def _bootstrap_deps() -> None:
         return
     print(f"[agent-bootstrap] Installiere fehlende Pakete: {', '.join(missing_specs)}")
     req = Path(__file__).resolve().parent / "requirements.txt"
+    # Auch hier kein Konsolenfenster aufblitzen lassen (Windows). _run ist an
+    # dieser frühen Stelle noch nicht definiert, daher die Flags inline.
+    _boot_kw = {}
+    if platform.system() == "Windows":
+        _si = subprocess.STARTUPINFO()
+        _si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        _si.wShowWindow = 0
+        _boot_kw = {"startupinfo": _si, "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
     try:
         if req.is_file():
             subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)],
-                           check=False, timeout=600)
+                           check=False, timeout=600, **_boot_kw)
         else:
             subprocess.run([sys.executable, "-m", "pip", "install", *missing_specs],
-                           check=False, timeout=600)
+                           check=False, timeout=600, **_boot_kw)
     except Exception as e:
         print(f"[agent-bootstrap] pip fehlgeschlagen: {e}")
 
@@ -139,6 +148,47 @@ ENROLLMENT_TOKEN = os.getenv("ENROLLMENT_TOKEN", "").strip() or None
 DEVICE_NAME = os.getenv("DEVICE_NAME") or socket.gethostname()
 
 IS_WINDOWS = platform.system() == "Windows"
+
+# --------------------------------------------------------------------------
+# Subprozesse IMMER ohne sichtbares Konsolenfenster starten. Unter Windows
+# öffnet subprocess.run() sonst bei jedem Aufruf kurz ein schwarzes CMD-/
+# PowerShell-Fenster - das darf beim 5-Sekunden-Heartbeat niemals passieren.
+# _run() kapselt die nötigen Flags (CREATE_NO_WINDOW + versteckte STARTUPINFO)
+# und wird ab hier ÜBERALL statt subprocess.run() verwendet.
+# --------------------------------------------------------------------------
+def _no_window_kwargs() -> dict:
+    if not IS_WINDOWS:
+        return {}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0  # SW_HIDE
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return {"startupinfo": si, "creationflags": flags}
+
+
+def _run(cmd, **kwargs):
+    """subprocess.run-Ersatz, der unter Windows kein Fenster aufblitzen lässt."""
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    for k, v in _no_window_kwargs().items():
+        kwargs.setdefault(k, v)
+    return subprocess.run(cmd, **kwargs)
+
+
+# TTL-Cache: teure Abfragen (nvidia-smi, WMI, Ping) NICHT bei jedem 5s-Heartbeat
+# ausführen, sondern höchstens alle `ttl` Sekunden. Zwischenzeitlich wird der
+# gemerkte Wert zurückgegeben.
+_ttl_cache: dict = {}
+
+
+def _ttl(key: str, ttl: float, fn):
+    now = time.time()
+    ent = _ttl_cache.get(key)
+    if ent and (now - ent[0]) < ttl:
+        return ent[1]
+    val = fn()
+    _ttl_cache[key] = (now, val)
+    return val
 
 
 def get_os_release() -> str:
@@ -303,13 +353,567 @@ async def connect_error(data):
 _last_net = {"ts": None, "bytes_sent": 0, "bytes_recv": 0}
 
 
+# ------------------------------------------------------------------
+# Erweiterte Hardware-/Telemetrie-Erfassung
+# ------------------------------------------------------------------
+# Alle Zusatzwerte sind BEST-EFFORT: Fehlt ein Sensor/Modul auf einer
+# Plattform, wird der Wert einfach weggelassen statt einen Fehler zu werfen.
+# Statische Infos (CPU-/RAM-/GPU-Modell) werden einmalig ermittelt und
+# zwischengespeichert, dynamische Werte (Temp, Takt, IO, Ping) je Zyklus.
+
+_static_hw_cache = None            # einmalig ermittelte, unveränderliche Infos
+_last_diskio = {"ts": None, "read": 0, "write": 0}
+_ping_targets = {"google": "8.8.8.8", "cloudflare": "1.1.1.1"}
+
+
+def _safe(fn, default=None):
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
+def _cpu_model() -> str:
+    # Plattformübergreifend den CPU-Namen ermitteln.
+    if IS_WINDOWS:
+        # platform.processor() liefert nur die Kennung ("AMD64 Family 25 ...").
+        # Der echte Marketing-Name steht in der Registry - ohne Subprozess/Fenster.
+        try:
+            import winreg
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                               r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            name = winreg.QueryValueEx(k, "ProcessorNameString")[0]
+            winreg.CloseKey(k)
+            if name and name.strip():
+                return name.strip()
+        except Exception:
+            pass
+        # Fallback: WMI-Name (hidden window über _run).
+        txt = _safe(lambda: _run(["powershell", "-NoProfile", "-Command",
+                                  "(Get-CimInstance Win32_Processor).Name"], timeout=6).stdout) or ""
+        for line in txt.splitlines():
+            if line.strip():
+                return line.strip()
+        return _safe(lambda: __import__("platform").processor()) or "unbekannt"
+    else:
+        info = _safe(lambda: open("/proc/cpuinfo").read()) or ""
+        for line in info.splitlines():
+            if "model name" in line:
+                return line.split(":", 1)[1].strip()
+    return _safe(lambda: __import__("platform").processor()) or "unbekannt"
+
+
+def _gpu_models() -> list:
+    # GPU-Namen best effort. Auf Linux via lspci, auf Windows via WMI/cim.
+    out = []
+    if IS_WINDOWS:
+        txt = _safe(lambda: _run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
+            capture_output=True, text=True, timeout=6).stdout) or ""
+        out = [l.strip() for l in txt.splitlines() if l.strip()]
+    else:
+        txt = _safe(lambda: _run(["lspci"], capture_output=True, text=True, timeout=6).stdout) or ""
+        for line in txt.splitlines():
+            low = line.lower()
+            if "vga compatible" in low or "3d controller" in low or " display " in low:
+                out.append(line.split(":", 2)[-1].strip())
+    return out[:4]
+
+
+def _ram_modules() -> list:
+    # RAM-Riegel (Hersteller/Größe/Takt) best effort.
+    mods = []
+    if IS_WINDOWS:
+        txt = _safe(lambda: _run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_PhysicalMemory | ForEach-Object { \"$($_.Manufacturer)|$($_.Capacity)|$($_.Speed)|$($_.PartNumber)\" }"],
+            capture_output=True, text=True, timeout=6).stdout) or ""
+        for line in txt.splitlines():
+            p = line.strip().split("|")
+            if len(p) >= 3 and p[1].isdigit():
+                vendor = (p[0] or "").strip()
+                part = (p[3].strip() if len(p) > 3 else "")
+                # Manufacturer ist bei vielen Riegeln "Unknown"/leer -> dann die
+                # Teilenummer als aussagekräftigeren Namen verwenden.
+                if not vendor or vendor.lower() in ("unknown", "n/a", "0"):
+                    vendor = part or vendor or "?"
+                mods.append({"vendor": vendor, "size": int(p[1]),
+                             "speed": _safe(lambda: int(p[2])) or 0,
+                             "part": part})
+    else:
+        # dmidecode braucht i.d.R. root; nur nutzen, wenn verfügbar.
+        txt = _safe(lambda: _run(["dmidecode", "-t", "memory"],
+                    capture_output=True, text=True, timeout=6).stdout) or ""
+        cur = {}
+        for line in txt.splitlines():
+            s = line.strip()
+            if s.startswith("Size:") and "No Module" not in s:
+                cur = {"raw_size": s.split(":", 1)[1].strip()}
+            elif s.startswith("Manufacturer:") and cur:
+                cur["vendor"] = s.split(":", 1)[1].strip()
+            elif s.startswith("Speed:") and cur:
+                cur["speed_str"] = s.split(":", 1)[1].strip()
+                mods.append({"vendor": cur.get("vendor", "?"),
+                             "size_str": cur.get("raw_size", "?"),
+                             "speed_str": cur.get("speed_str", "?")})
+                cur = {}
+    return mods[:8]
+
+
+def _static_hardware() -> dict:
+    global _static_hw_cache
+    if _static_hw_cache is not None:
+        return _static_hw_cache
+    plat = __import__("platform")
+    info = {
+        "cpuModel": _cpu_model(),
+        "arch": _safe(lambda: plat.machine()) or "",
+        "gpuModels": _gpu_models(),
+        "ramModules": _ram_modules(),
+        "cpuMaxFreq": _safe(lambda: round(psutil.cpu_freq().max)) if _safe(lambda: psutil.cpu_freq()) else None,
+    }
+    _static_hw_cache = info
+    return info
+
+
+def _cpu_temp() -> float | None:
+    temps = _safe(lambda: psutil.sensors_temperatures())
+    if temps:
+        # Bevorzugt CPU-nahe Sensoren, sonst den ersten verfügbaren.
+        for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz", "zenpower"):
+            if key in temps and temps[key]:
+                return round(temps[key][0].current, 1)
+        for arr in temps.values():
+            if arr:
+                return round(arr[0].current, 1)
+    if IS_WINDOWS:
+        # Windows: psutil kann keine Temperaturen -> WMI-Thermalzone (Zehntel-
+        # Kelvin). Teuer -> nur alle 30 s (TTL-Cache). Für echte CPU-Temperatur
+        # auf AMD/Intel-Desktops zusätzlich LibreHardwareMonitor (siehe _win_hw_sensors).
+        return _ttl("cputemp_win", 30, _cpu_temp_windows)
+    # Linux-Fallback: hwmon direkt (k10temp/coretemp liefern hier Tctl/Package).
+    hw_temps, _ = _read_hwmon()
+    for pref in ("tctl", "tdie", "package", "cpu"):
+        for name, v in hw_temps.items():
+            if pref in name.lower():
+                return v
+    return next(iter(hw_temps.values()), None)
+
+
+def _cpu_temp_windows() -> float | None:
+    txt = _safe(lambda: _run(
+        ["powershell", "-NoProfile", "-Command",
+         "(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature "
+         "-ErrorAction SilentlyContinue | Select-Object -ExpandProperty CurrentTemperature "
+         "| Measure-Object -Maximum).Maximum"],
+        capture_output=True, text=True, timeout=6).stdout) or ""
+    v = _safe(lambda: int(txt.strip()))
+    if v and v > 0:
+        return round(v / 10.0 - 273.15, 1)   # Zehntel-Kelvin -> °C
+    return None
+
+
+def _read_hwmon():
+    """Linux-Fallback: Temperaturen & Lüfter direkt aus /sys/class/hwmon lesen
+    (falls psutil.sensors_* nichts liefert, z.B. ohne lm-sensors-Konfig).
+    Gibt (temps{Name:°C}, fans{Name:U/min}) zurück."""
+    import glob as _glob
+    temps, fans = {}, {}
+    for hw in _glob.glob("/sys/class/hwmon/hwmon*"):
+        name = _safe(lambda hw=hw: open(hw + "/name").read().strip()) or os.path.basename(hw)
+        for tf in _glob.glob(hw + "/temp*_input"):
+            v = _safe(lambda tf=tf: int(open(tf).read().strip()))
+            if v is None:
+                continue
+            lp = tf.replace("_input", "_label")
+            lbl = _safe(lambda lp=lp: open(lp).read().strip()) or os.path.basename(tf).replace("_input", "")
+            temps[f"{name}: {lbl}"] = round(v / 1000.0, 1)
+        for ff in _glob.glob(hw + "/fan*_input"):
+            v = _safe(lambda ff=ff: int(open(ff).read().strip()))
+            if v is None:
+                continue
+            fans[f"{name}: {os.path.basename(ff).replace('_input', '')}"] = int(v)
+    return temps, fans
+
+
+def _all_temps() -> dict:
+    """Alle Temperatur-Sensoren als {Name: °C}. Erst psutil, dann hwmon-Fallback."""
+    out = {}
+    temps = _safe(lambda: psutil.sensors_temperatures()) or {}
+    for chip, arr in temps.items():
+        for i, s in enumerate(arr):
+            label = (s.label or f"{chip} {i}").strip()
+            name = f"{chip}: {label}" if label and label.lower() not in chip.lower() else chip
+            if s.current is not None:
+                out[name] = round(s.current, 1)
+    if not out and not IS_WINDOWS:
+        hw_temps, _ = _read_hwmon()
+        out.update(hw_temps)
+    return out
+
+
+def _all_fans() -> dict:
+    """Alle Lüfter als {Name: U/min}. Erst psutil, dann hwmon-Fallback."""
+    out = {}
+    fans = _safe(lambda: psutil.sensors_fans()) or {}
+    for chip, arr in fans.items():
+        for i, f in enumerate(arr):
+            label = (f.label or f"{chip} {i}").strip()
+            if f.current is not None:
+                out[label] = int(f.current)
+    if not out and not IS_WINDOWS:
+        _, hw_fans = _read_hwmon()
+        out.update(hw_fans)
+    return out
+
+
+def _fan_speed() -> int | None:
+    fans = _safe(lambda: psutil.sensors_fans())
+    if not fans:
+        # Linux-Fallback aus hwmon
+        if not IS_WINDOWS:
+            _, hw_fans = _read_hwmon()
+            if hw_fans:
+                return int(next(iter(hw_fans.values())))
+        return None
+    for arr in fans.values():
+        if arr:
+            return int(arr[0].current)
+    return None
+
+
+def _gpus() -> list:
+    """GPU-Telemetrie über nvidia-smi (falls vorhanden): Name, Auslastung %,
+    VRAM belegt/gesamt, Temperatur, Leistungsaufnahme. Funktioniert plattform-
+    übergreifend, wenn NVIDIA-Treiber installiert sind."""
+    txt = _safe(lambda: _run(
+        ["nvidia-smi",
+         "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
+         "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, timeout=4).stdout)
+    if not txt:
+        return []
+    gpus = []
+    for line in txt.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 6:
+            continue
+        def _f(x):
+            try: return float(x)
+            except Exception: return None
+        gpus.append({
+            "name": parts[0],
+            "load": _f(parts[1]),                                  # %
+            "memUsed": int(_f(parts[2]) * 1024 * 1024) if _f(parts[2]) is not None else None,  # MiB->Bytes
+            "memTotal": int(_f(parts[3]) * 1024 * 1024) if _f(parts[3]) is not None else None,
+            "temp": _f(parts[4]),                                  # °C
+            "power": _f(parts[5]),                                 # W
+        })
+    return gpus[:4]
+
+
+def _amd_gpus_sysfs() -> list:
+    """AMD-GPU-Telemetrie über sysfs (Linux, amdgpu-Treiber): Auslastung,
+    Temperatur, Leistungsaufnahme, VRAM. Keine externen Tools nötig."""
+    if IS_WINDOWS:
+        return []
+    import glob as _glob
+    gpus = []
+    for card in sorted(_glob.glob("/sys/class/drm/card[0-9]")):
+        dev = card + "/device"
+        busy = _safe(lambda dev=dev: int(open(dev + "/gpu_busy_percent").read().strip()))
+        if busy is None:
+            continue   # kein amdgpu-Sensor -> überspringen
+        temp = power = None
+        for hw in _glob.glob(dev + "/hwmon/hwmon*"):
+            t = _safe(lambda hw=hw: int(open(hw + "/temp1_input").read().strip()))
+            if t is not None:
+                temp = round(t / 1000.0, 1)
+            p = _safe(lambda hw=hw: int(open(hw + "/power1_average").read().strip()))
+            if p is not None:
+                power = round(p / 1_000_000.0, 1)
+        mem_total = _safe(lambda dev=dev: int(open(dev + "/mem_info_vram_total").read().strip()))
+        mem_used = _safe(lambda dev=dev: int(open(dev + "/mem_info_vram_used").read().strip()))
+        name = _safe(lambda dev=dev: open(dev + "/product_name").read().strip()) or "AMD GPU"
+        gpus.append({"name": name, "load": float(busy), "temp": temp, "power": power,
+                     "memUsed": mem_used, "memTotal": mem_total})
+    return gpus[:4]
+
+
+def _win_hw_sensors() -> dict:
+    """Windows: Sensoren (CPU-Temp, Lüfter, Package-Power, GPU von AMD/NVIDIA/
+    Intel) über LibreHardwareMonitor bzw. OpenHardwareMonitor auslesen - die
+    zuverlässigste Quelle für diese Werte unter Windows. Voraussetzung: eines
+    der Tools läuft. Ohne das kann Windows CPU-Temperatur, Lüfter und
+    Leistungsaufnahme technisch nicht bereitstellen (psutil unterstützt keine
+    Windows-Sensoren). Rückgabe (nur vorhandene Schlüssel): cpuTemp, temps{},
+    fans{}, powerWatts, gpus[]."""
+    if not IS_WINDOWS:
+        return {}
+    data = None
+    for ns in ("root/LibreHardwareMonitor", "root/OpenHardwareMonitor"):
+        txt = _safe(lambda ns=ns: _run(
+            ["powershell", "-NoProfile", "-Command",
+             f"Get-CimInstance -Namespace {ns} -ClassName Sensor -ErrorAction SilentlyContinue | "
+             "Select-Object Name,SensorType,Value,Identifier,Parent | ConvertTo-Json -Compress"],
+            timeout=8).stdout)
+        if txt and txt.strip():
+            try:
+                parsed = json.loads(txt)
+                data = parsed if isinstance(parsed, list) else [parsed]
+                if data:
+                    break
+            except Exception:
+                data = None
+    if not data:
+        return {}
+
+    temps, fans = {}, {}
+    gpu_acc = {}
+    cpu_temp_candidates = {}
+    pkg_power = None
+
+    for s in data:
+        st = (s.get("SensorType") or "").lower()
+        nm = (s.get("Name") or "").strip()
+        val = s.get("Value")
+        ident = (s.get("Identifier") or "").lower()
+        parent = (s.get("Parent") or ident).lower()
+        if val is None:
+            continue
+        try: val = round(float(val), 1)
+        except Exception: continue
+
+        is_gpu = "gpu" in ident or "gpu" in parent
+        if st == "temperature":
+            temps[nm] = val
+            if is_gpu:
+                gpu_acc.setdefault(parent, {})["temp"] = val
+            elif "cpu" in ident or "core" in nm.lower() or "tctl" in nm.lower() or "package" in nm.lower():
+                cpu_temp_candidates[nm] = val
+        elif st == "fan":
+            fans[nm] = int(val)
+        elif st == "power":
+            if is_gpu:
+                gpu_acc.setdefault(parent, {})["power"] = val
+            elif "package" in nm.lower() or "cpu" in nm.lower() or "total" in nm.lower():
+                pkg_power = max(pkg_power or 0, val)
+        elif st == "load":
+            if is_gpu and ("core" in nm.lower() or "gpu" in nm.lower()):
+                gpu_acc.setdefault(parent, {}).setdefault("load", val)
+        elif st in ("smalldata", "data"):
+            low = nm.lower()
+            if is_gpu and "memory" in low:
+                g = gpu_acc.setdefault(parent, {})
+                if "used" in low: g["memUsed"] = int(val * 1024 * 1024)
+                elif "total" in low: g["memTotal"] = int(val * 1024 * 1024)
+
+    out = {}
+    if temps: out["temps"] = temps
+    if fans: out["fans"] = fans
+    if pkg_power is not None: out["powerWatts"] = pkg_power
+    if cpu_temp_candidates:
+        pick = None
+        for key in ("tctl", "tdie", "cpu package", "core (tctl", "cpu total"):
+            for nm, v in cpu_temp_candidates.items():
+                if key in nm.lower(): pick = v; break
+            if pick is not None: break
+        if pick is None:
+            pick = round(sum(cpu_temp_candidates.values()) / len(cpu_temp_candidates), 1)
+        out["cpuTemp"] = pick
+    gpus = []
+    for parent, g in gpu_acc.items():
+        name = parent.split("/")[-2] if "/" in parent else "GPU"
+        gpus.append({"name": name.upper(), "load": g.get("load"), "temp": g.get("temp"),
+                     "power": g.get("power"), "memUsed": g.get("memUsed"), "memTotal": g.get("memTotal")})
+    if gpus: out["gpus"] = gpus
+    return out
+
+
+def _battery() -> dict | None:
+    b = _safe(lambda: psutil.sensors_battery())
+    if not b:
+        return None
+    return {"percent": round(b.percent, 1),
+            "plugged": bool(b.power_plugged),
+            "secsleft": (b.secsleft if b.secsleft not in (None, psutil.POWER_TIME_UNLIMITED, psutil.POWER_TIME_UNKNOWN) else None)}
+
+
+def _power_watts() -> float | None:
+    # Momentane Leistungsaufnahme (W), best effort. Zwei Quellen (Linux):
+    #  1) RAPL-Energiezähler ALLER Pakete (intel-rapl:0, :1, ...) -> dJ/dt.
+    #  2) hwmon power*_input (Mikrowatt, momentan) als Fallback.
+    if IS_WINDOWS:
+        return None
+    import glob as _glob
+    # (1) RAPL: nur die Paket-Zonen (intel-rapl:N), nicht die Sub-Domains :N:M.
+    pkgs = sorted(p for p in _glob.glob("/sys/class/powercap/intel-rapl:*/energy_uj")
+                  if p.count(":") == 1)
+    total_uj = 0
+    found = False
+    for path in pkgs:
+        uj = _safe(lambda p=path: int(open(p).read().strip()))
+        if uj is not None:
+            total_uj += uj
+            found = True
+    if found:
+        now = time.time()
+        prev = getattr(_power_watts, "_prev", None)
+        _power_watts._prev = (now, total_uj)
+        if prev:
+            dt = now - prev[0]
+            dj = (total_uj - prev[1]) / 1_000_000.0
+            if dt > 0 and dj >= 0:
+                return round(dj / dt, 1)
+        # beim ersten Aufruf noch kein dt -> auf hwmon ausweichen
+    # (2) hwmon momentane Leistung (Mikrowatt).
+    watts = 0.0
+    any_hw = False
+    for path in _glob.glob("/sys/class/hwmon/hwmon*/power*_input"):
+        uw = _safe(lambda p=path: int(open(p).read().strip()))
+        if uw:
+            watts += uw / 1_000_000.0
+            any_hw = True
+    if any_hw:
+        return round(watts, 1)
+    return None
+
+
+def _disk_io_speed() -> dict:
+    # Lese-/Schreibrate (Bytes/s) aus den Gesamt-Zählern ableiten.
+    io = _safe(lambda: psutil.disk_io_counters())
+    if not io:
+        return {}
+    now = time.time()
+    res = {}
+    if _last_diskio["ts"] is not None:
+        dt = now - _last_diskio["ts"]
+        if dt > 0:
+            res["diskRead"] = round((io.read_bytes - _last_diskio["read"]) / dt)
+            res["diskWrite"] = round((io.write_bytes - _last_diskio["write"]) / dt)
+    _last_diskio["ts"] = now
+    _last_diskio["read"] = io.read_bytes
+    _last_diskio["write"] = io.write_bytes
+    return res
+
+
+def _ping_ms(host: str) -> float | None:
+    # Ein einzelner Ping über das System-Tool. Parsing mehrsprachig
+    # (time=/Zeit=/tiempo=/temps=) mit Durchschnitts- und Zahl-Fallback.
+    param = "-n" if IS_WINDOWS else "-c"
+    timeout_param = "-w" if IS_WINDOWS else "-W"
+    tval = "1000" if IS_WINDOWS else "1"
+    try:
+        r = _run(["ping", param, "1", timeout_param, tval, host], timeout=4, errors="ignore")
+        out = (r.stdout or "").lower()
+        import re as _re
+        m = _re.search(r"(?:time|zeit|tiempo|temps|tempo|czas)[=<]\s*([\d.,]+)\s*ms", out)
+        if not m:
+            m = _re.search(r"(?:average|mittelwert|moyenne|promedio|media)\s*[=:]\s*([\d.,]+)\s*ms", out)
+        if not m:
+            m = _re.search(r"[=<]\s*([\d.,]+)\s*ms", out)   # letzter Ausweg
+        if m:
+            return round(float(m.group(1).replace(",", ".")), 1)
+    except Exception:
+        return None
+    return None
+
+
+def collect_extended_metrics() -> dict:
+    """Zusatz-Telemetrie (Hardware, Temperaturen, IO, Ping). Alles best effort;
+    fehlende Sensoren erscheinen einfach nicht im Ergebnis."""
+    ext = {}
+    ext.update(_static_hardware())          # cpuModel, gpuModels, ramModules, ...
+
+    freq = _safe(lambda: psutil.cpu_freq())
+    if freq:
+        ext["cpuFreq"] = round(freq.current)
+    # Takt je Kern. Windows liefert meist nur einen Wert -> auf alle Kerne
+    # spiegeln, damit das Panel Daten zeigt (Näherung).
+    per = _safe(lambda: psutil.cpu_freq(percpu=True))
+    if per and len(per) > 1:
+        ext["cpuFreqPerCore"] = [round(f.current) for f in per]
+    elif freq:
+        n = _safe(lambda: psutil.cpu_count(logical=True)) or 0
+        if n:
+            ext["cpuFreqPerCore"] = [round(freq.current)] * n
+
+    # Load Average: Linux nativ; Windows als eigener EWMA-Schätzer (psutil.get-
+    # loadavg ist dort nur emuliert und anfangs 0). Wird in collect_metrics
+    # gesetzt; hier nur für Nicht-Windows aus psutil.
+    if not IS_WINDOWS:
+        la = _safe(lambda: psutil.getloadavg())
+        if la:
+            ext["load1"], ext["load5"], ext["load15"] = [round(x, 2) for x in la]
+
+    ext["procCount"] = _safe(lambda: len(psutil.pids())) or 0
+
+    for name, fn in (("cpuTemp", _cpu_temp), ("fanSpeed", _fan_speed)):
+        v = fn()
+        if v is not None:
+            ext[name] = v
+    # Alle Temperatur-/Lüftersensoren (Linux via psutil).
+    temps = _all_temps()
+    if temps:
+        ext["temps"] = temps
+    fans = _all_fans()
+    if fans:
+        ext["fans"] = fans
+    # GPU-Telemetrie: nvidia-smi (teuer, alle 15 s) oder AMD-sysfs (Linux, günstig).
+    gpus = _ttl("gpus", 15, _gpus) or _amd_gpus_sysfs()
+    if gpus:
+        ext["gpus"] = gpus
+
+    # Windows-Sensoren via LibreHardwareMonitor/OpenHardwareMonitor (CPU-Temp,
+    # Lüfter, Package-Power, AMD-/NVIDIA-GPU). Alle 10 s (WMI-Aufruf). Ergänzt
+    # bzw. überschreibt die obigen Felder, wenn dort nichts kam.
+    if IS_WINDOWS:
+        hw = _ttl("winhw", 10, _win_hw_sensors)
+        if hw:
+            if hw.get("temps"): ext["temps"] = {**ext.get("temps", {}), **hw["temps"]}
+            if hw.get("fans"): ext["fans"] = {**ext.get("fans", {}), **hw["fans"]}
+            if "cpuTemp" not in ext and hw.get("cpuTemp") is not None: ext["cpuTemp"] = hw["cpuTemp"]
+            if "fanSpeed" not in ext and hw.get("fans"):
+                ext["fanSpeed"] = next(iter(hw["fans"].values()))
+            if "powerWatts" not in ext and hw.get("powerWatts") is not None: ext["powerWatts"] = hw["powerWatts"]
+            if not ext.get("gpus") and hw.get("gpus"): ext["gpus"] = hw["gpus"]
+
+    bat = _battery()
+    if bat:
+        ext["battery"] = bat
+    pw = _power_watts()
+    if pw is not None:
+        ext["powerWatts"] = pw
+
+    ext.update(_disk_io_speed())            # diskRead, diskWrite (Bytes/s)
+
+    # Ping-Ziele (Netzqualität) - startet je Ziel einen ping-Prozess, daher
+    # nur alle 15 s messen (dazwischen letzten Wert wiederverwenden).
+    def _measure_pings():
+        out = {}
+        for label, host in _ping_targets.items():
+            v = _ping_ms(host)
+            if v is not None:
+                out[label] = v
+        return out
+    pings = _ttl("pings", 15, _measure_pings)
+    if pings:
+        ext["ping"] = pings
+
+    return ext
+
+
 def collect_metrics() -> dict:
     """
     Sammelt die aktuellen System-Metriken. Läuft in einem Hintergrund-Thread
     (siehe heartbeat_loop), weil psutil.cpu_percent() kurz "blockiert"
     (es misst die Last über ein kleines Zeitfenster).
     """
-    cpu_percent = psutil.cpu_percent(interval=0.5)
+    # CPU-Last gesamt UND pro Kern in einem Rutsch messen (percpu teilt das
+    # 0,5s-Fenster auf alle Kerne auf; der Gesamtwert ist deren Mittel).
+    per_core = psutil.cpu_percent(interval=0.5, percpu=True) or []
+    cpu_percent = round(sum(per_core) / len(per_core)) if per_core else psutil.cpu_percent()
     memory = psutil.virtual_memory()
     # Swap / Auslagerungsspeicher (auf Linux die "swap partition/file", auf
     # Windows die Auslagerungsdatei). swap_memory() gibt es auf beiden Systemen.
@@ -353,13 +957,16 @@ def collect_metrics() -> dict:
         except (PermissionError, OSError):
             continue  # z.B. nicht bereite CD-Laufwerke überspringen
 
-    return {
+    base = {
         "cpuLoad": round(cpu_percent),
+        "cpuPerCore": [round(x) for x in per_core],           # Last je Kern (%)
         "cpuCores": psutil.cpu_count(logical=False) or 0,   # physische Kerne
         "cpuThreads": psutil.cpu_count(logical=True) or 0,  # logische Kerne (Threads)
         "memUsed": memory.total - memory.available,
         "memTotal": memory.total,
         "memAvailable": memory.available,   # freier/verfügbarer RAM
+        "memCached": int(getattr(memory, "cached", 0) or 0),     # Cache (Linux)
+        "memBuffers": int(getattr(memory, "buffers", 0) or 0),   # Puffer (Linux)
         "swapUsed": swap_used,               # belegter Auslagerungsspeicher (Bytes)
         "swapTotal": swap_total,             # gesamter Auslagerungsspeicher (Bytes)
         "diskUsed": disk.used,
@@ -369,6 +976,31 @@ def collect_metrics() -> dict:
         "netOut": round(net_out_per_s),    # Bytes pro Sekunde gesendet
         "uptime": int(time.time() - psutil.boot_time()),
     }
+    # Load Average unter Windows selbst schätzen (EWMA aus der CPU-Auslastung *
+    # Kernzahl), da es dort kein echtes Load-Average gibt.
+    if IS_WINDOWS:
+        try:
+            ncpu = psutil.cpu_count(logical=True) or 1
+            inst = (cpu_percent / 100.0) * ncpu
+            g = collect_metrics
+            prev = getattr(g, "_load", None) or {"1": inst, "5": inst, "15": inst}
+            import math as _math
+            a1, a5, a15 = _math.exp(-5/60), _math.exp(-5/300), _math.exp(-5/900)
+            nl = {"1": prev["1"]*a1 + inst*(1-a1),
+                  "5": prev["5"]*a5 + inst*(1-a5),
+                  "15": prev["15"]*a15 + inst*(1-a15)}
+            g._load = nl
+            base["load1"] = round(nl["1"], 2)
+            base["load5"] = round(nl["5"], 2)
+            base["load15"] = round(nl["15"], 2)
+        except Exception:
+            pass
+    # Erweiterte Telemetrie anhängen (best effort, darf den Heartbeat nie stören).
+    try:
+        base.update(collect_extended_metrics())
+    except Exception:
+        pass
+    return base
 
 
 async def heartbeat_loop():
@@ -481,7 +1113,7 @@ def _run_shell_command(command: str, session_id: str | None = None,
             )
             argv = ["/bin/sh", "-c", wrapper]
 
-        result = subprocess.run(
+        result = _run(
             argv,
             capture_output=True,
             text=True,
@@ -558,7 +1190,7 @@ def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> 
             f"-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
         )
         encoded = base64.b64encode(launch_script.encode("utf-16-le")).decode("ascii")
-        subprocess.run(
+        _run(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
              "-EncodedCommand", encoded],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
@@ -1571,7 +2203,7 @@ def _run_dist_command(kind: str):
             #     das Skript als SYSTEM aus. Voraussetzung: elevate.ps1 wurde einmal
             #     ausgeführt (bzw. der Installer hat die Tasks eingerichtet).
             try:
-                q = subprocess.run(["schtasks", "/query", "/tn", taskname],
+                q = _run(["schtasks", "/query", "/tn", taskname],
                                    capture_output=True, text=True)
                 task_exists = (q.returncode == 0)
             except Exception:
@@ -1582,7 +2214,7 @@ def _run_dist_command(kind: str):
                 # Primär: Write-EventLog -> Provider ist garantiert 'RapalleRMM'
                 # (matcht die Event-Subscription des SYSTEM-Tasks sicher).
                 try:
-                    w = subprocess.run(
+                    w = _run(
                         ["powershell", "-NoProfile", "-Command",
                          f"Write-EventLog -LogName Application -Source 'RapalleRMM' "
                          f"-EventId {event_id} -EntryType Information -Message 'rmm {kind}'"],
@@ -1596,7 +2228,7 @@ def _run_dist_command(kind: str):
                 # Fallback: eventcreate (falls Write-EventLog nicht verfügbar/fehlerhaft)
                 if not triggered:
                     try:
-                        ev = subprocess.run(
+                        ev = _run(
                             ["eventcreate", "/L", "Application", "/SO", "RapalleRMM",
                              "/T", "INFORMATION", "/ID", event_id, "/D", f"rmm {kind}"],
                             capture_output=True, text=True,
@@ -1617,13 +2249,13 @@ def _run_dist_command(kind: str):
             created = False
             schtasks_err = ""
             try:
-                r = subprocess.run(
+                r = _run(
                     ["schtasks", "/create", "/tn", taskname, "/ru", "SYSTEM",
                      "/rl", "HIGHEST", "/sc", "ONCE", "/st", "00:00", "/f", "/tr", tr],
                     capture_output=True, text=True,
                 )
                 if r.returncode == 0:
-                    subprocess.run(["schtasks", "/run", "/tn", taskname],
+                    _run(["schtasks", "/run", "/tn", taskname],
                                    capture_output=True, text=True)
                     created = True
                     _print(f"[agent] {kind}-Befehl als SYSTEM-Task '{taskname}' gestartet.")

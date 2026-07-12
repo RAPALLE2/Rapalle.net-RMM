@@ -51,6 +51,7 @@ import { renderPermissions } from "./apps/permissions.js";
 import { renderAudit } from "./apps/audit.js";
 import { renderProfile } from "./apps/profile.js";
 import { renderPanelPart } from "./apps/panelpart.js";
+import { renderFleetWidget } from "./apps/fleetwidget.js";
 
 // -----------------------------------------------------------------
 // Content-Router: welcher Renderer gehört zu welchem appId?
@@ -79,6 +80,7 @@ const APP_RENDERERS = {
   audit: renderAudit,
   profile: renderProfile,
   panelpart: renderPanelPart,
+  fleetwidget: renderFleetWidget,
 };
 
 function renderWindowContent(body, win) {
@@ -549,12 +551,17 @@ function initLiveUpdates() {
     }
     recordMetrics(id, metrics);
 
+    // Live-Refresh für Dashboard-Widgets (aggregierte Flotten-Werte).
+    try { window.dispatchEvent(new CustomEvent("metrics-updated", { detail: { id } })); } catch {}
+
     // Nur neu rendern, wenn gerade dieser Client (oder seine Gruppe) sichtbar ist
     const sel = state.selection;
     if (sel && (
       (sel.type === "client" && sel.id === id) ||
       sel.type === "tenant" || sel.type === "location"
     )) {
+      // Dashboard-Ansicht NICHT komplett neu bauen (würde Edit-Interaktion
+      // stören) - die Widgets aktualisieren sich über das Event oben selbst.
       renderMainContent();
     }
     renderSidebar();

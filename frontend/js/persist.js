@@ -27,10 +27,13 @@ let _setExpanded = () => {};
 // Wird komplett clientseitig gehalten (wie der übrige UI-Zustand).
 let _dashLayout = null;
 let _dashEdit = false;
+let _fleetWidgets = null;      // benutzerdefinierte Widgets im Flotten-Dashboard
 export function getDashLayout() { return _dashLayout; }
 export function setDashLayout(layout) { _dashLayout = layout; }
 export function getDashEdit() { return _dashEdit; }
 export function setDashEdit(on) { _dashEdit = !!on; }
+export function getFleetWidgets() { return _fleetWidgets; }
+export function setFleetWidgets(w) { _fleetWidgets = w; }
 
 export function configurePersistence({ username, getExpanded, setExpanded }) {
   _key = KEY_PREFIX + (username || "anon");
@@ -56,6 +59,7 @@ export function saveNow(state) {
       sidebar: state.sidebar || null,
       dashLayout: _dashLayout,
       dashEdit: _dashEdit,
+      fleetWidgets: _fleetWidgets,
       focusOrder: state.focusOrder || [],
       windows: (state.windows || []).map((w) => ({
         key: w.key,
@@ -95,6 +99,7 @@ export function applyExpanded(data) {
   if (data && Array.isArray(data.expanded)) _setExpanded(data.expanded);
   if (data && data.dashLayout) _dashLayout = data.dashLayout;
   if (data && typeof data.dashEdit === "boolean") _dashEdit = data.dashEdit;
+  if (data && data.fleetWidgets) _fleetWidgets = data.fleetWidgets;
 }
 
 export function clearPersisted() {

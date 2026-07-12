@@ -63,6 +63,10 @@ export function renderPanelPart(body, win) {
     if (part === "status") renderStatusPart(target, client);
     else if (part === "actions") renderActionsPart(target, client);
     else if (part === "websites") renderWebsitesPart(target, client);
+    else if (part === "cmetric") {
+      import("../clientmetrics.js").then(({ renderClientMetric }) =>
+        renderClientMetric(target, client, { id: win.key, metric: win.props.metric, kind: win.props.kind }));
+    }
     else if (part === "folder") {
       const rerenderFolder = () => renderOverviewSub(target, client, activeSub, rerenderFolder);
       rerenderFolder();
@@ -84,7 +88,7 @@ export function renderPanelPart(body, win) {
   function onMetrics(p) {
     if (!p || p.id !== clientId) return;
     // Nur bei Ansichten mit Live-Daten neu zeichnen.
-    if (part === "status" || part === "folder") draw();
+    if (part === "status" || part === "folder" || part === "cmetric") draw();
   }
   dashboardSocket.on("client:metrics", onMetrics);
 

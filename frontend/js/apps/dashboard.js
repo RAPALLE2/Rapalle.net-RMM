@@ -12,6 +12,7 @@ import { state } from "../state.js";
 import { esc } from "../utils.js";
 import { osLabel } from "../i18n.js";
 import { favClientIds, favWebsiteList, favStarHtml, selectClientExternal } from "../sidebar.js";
+import { renderFleetWidgets, refreshFleetWidgets } from "../fleetdash.js";
 
 // Farbpalette für Kategorien (OS/Versionen). Online/Offline haben feste Farben.
 const PALETTE = [
@@ -152,12 +153,28 @@ export function renderDashboard(target) {
       <div class="dash-head">
         <h2 style="margin:0">Dashboard</h2>
         <span style="color:var(--subtext);font-size:13px">${clients.length} verwaltete Clients</span>
+        <span style="flex:1"></span>
+        <span id="fleet-widgets-toolbar"></span>
       </div>
       <div id="dash-favorites" style="display:none;margin-bottom:14px"></div>
+      <div id="fleet-widgets" style="margin-bottom:18px"></div>
+      <h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;color:var(--subtext)">Flotten-Übersicht</h3>
       <div class="dash-grid" id="dash-grid"></div>
     </div>
   `;
   const grid = target.querySelector("#dash-grid");
+
+  // Benutzerdefinierte, modulare Widgets (editierbar, verschiebbar, herauslösbar).
+  const widgetHost = target.querySelector("#fleet-widgets");
+  renderFleetWidgets(widgetHost, target.querySelector("#fleet-widgets-toolbar"));
+
+  // Live-Refresh der Widget-Werte bei neuen Metriken.
+  if (!target._widgetListener) {
+    target._widgetListener = () => {
+      if (document.body.contains(target)) refreshFleetWidgets(target.querySelector("#fleet-widgets"));
+    };
+    window.addEventListener("metrics-updated", target._widgetListener);
+  }
 
   // Dashboard-Favoriten: Clients UND Websites, die (per Stern) für das Dashboard
   // markiert sind. Reagiert live auf Änderungen am Favoriten-Zustand.

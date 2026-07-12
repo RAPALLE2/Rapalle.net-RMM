@@ -455,11 +455,33 @@ function makeResizable(handle, windowEl, win, axis = "both") {
 //   Auswahl der übrigen Fenster - Klick snappt das Fenster dorthin.
 // =================================================================
 
-const splits = { v: 0.5, h: 0.5 };   // vertikale/horizontale Teilung (0..1)
+// Teilungen PRO SEGMENT (0..1): So kann z.B. bei 4 Fenstern die Grenze
+// zwischen den beiden UNTEREN unabhängig von den oberen verschoben werden.
+//   vt = vertikale Linie in der oberen Reihe    vb = in der unteren Reihe
+//   hl = horizontale Linie in der linken Spalte hr = in der rechten Spalte
+// Liegt ein Fenster über die volle Höhe/Breite an (left/right bzw. top/
+// bottom), werden die betroffenen Segmente automatisch gekoppelt.
+const splits = { vt: 0.5, vb: 0.5, hl: 0.5, hr: 0.5 };
 let _snapPreviewEl = null;
-let _dividerV = null;
-let _dividerH = null;
+let _dividerEls = [];
 let _assistEls = [];
+
+function _activeZones() {
+  return state.windows.filter((w) => w.snap && !w.minimized).map((w) => w.snap);
+}
+
+// Effektive Linien: Vollhöhen-/Vollbreiten-Fenster erzwingen EINE Linie.
+function _lines() {
+  const zones = _activeZones();
+  const fullH = zones.includes("left") || zones.includes("right");
+  const fullW = zones.includes("top") || zones.includes("bottom");
+  return {
+    vt: splits.vt,
+    vb: fullH ? splits.vt : splits.vb,
+    hl: splits.hl,
+    hr: fullW ? splits.hl : splits.hr,
+  };
+}
 
 // Zonen, die links/rechts bzw. oben/unten der Trennlinie liegen.
 const _LEFT_ZONES = ["left", "tl", "bl"];
@@ -472,17 +494,19 @@ function snapRect(zone) {
   const lay = layer();
   if (!lay) return null;
   const W = lay.clientWidth, H = lay.clientHeight;
-  const v = Math.round(W * splits.v), h = Math.round(H * splits.h);
+  const L = _lines();
+  const vt = Math.round(W * L.vt), vb = Math.round(W * L.vb);
+  const hl = Math.round(H * L.hl), hr = Math.round(H * L.hr);
   switch (zone) {
     case "max":    return { x: 0, y: 0, w: W, h: H };
-    case "left":   return { x: 0, y: 0, w: v, h: H };
-    case "right":  return { x: v, y: 0, w: W - v, h: H };
-    case "top":    return { x: 0, y: 0, w: W, h: h };
-    case "bottom": return { x: 0, y: h, w: W, h: H - h };
-    case "tl":     return { x: 0, y: 0, w: v, h: h };
-    case "tr":     return { x: v, y: 0, w: W - v, h: h };
-    case "bl":     return { x: 0, y: h, w: v, h: H - h };
-    case "br":     return { x: v, y: h, w: W - v, h: H - h };
+    case "left":   return { x: 0, y: 0, w: vt, h: H };
+    case "right":  return { x: vt, y: 0, w: W - vt, h: H };
+    case "top":    return { x: 0, y: 0, w: W, h: hl };
+    case "bottom": return { x: 0, y: hl, w: W, h: H - hl };
+    case "tl":     return { x: 0, y: 0, w: vt, h: hl };
+    case "tr":     return { x: vt, y: 0, w: W - vt, h: hr };
+    case "bl":     return { x: 0, y: hl, w: vb, h: H - hl };
+    case "br":     return { x: vb, y: hr, w: W - vb, h: H - hr };
   }
   return null;
 }
@@ -561,6 +585,10 @@ export function snapWindowTo(key, zone, { assist = true, animate = true } = {}) 
   win.maximized = false;
   win.snap = zone;
   win.minimized = false;
+  // Rastet ein Fenster über die volle Höhe/Breite ein, die getrennten
+  // Segmente wieder auf EINE Linie zusammenführen (sonst gäbe es Lücken).
+  if (zone === "left" || zone === "right") splits.vb = splits.vt;
+  if (zone === "top" || zone === "bottom") splits.hr = splits.hl;
   win._el.style.display = "flex";
   applySnapGeometry(win, rect, animate);
   focusWindow(key);
@@ -585,43 +613,82 @@ function relayoutSnapped(animate = false) {
 function updateSnapDividers() {
   const lay = layer();
   if (!lay) return;
-  const zones = state.windows.filter((w) => w.snap && !w.minimized).map((w) => w.snap);
-  const needV = zones.some((z) => _LEFT_ZONES.includes(z)) &&
-                zones.some((z) => _RIGHT_ZONES.includes(z));
-  const needH = zones.some((z) => _TOP_ZONES.includes(z)) &&
-                zones.some((z) => _BOTTOM_ZONES.includes(z));
+  // Alte Griffe entfernen und aus dem aktuellen Layout neu aufbauen.
+  _dividerEls.forEach((el) => { try { el.remove(); } catch {} });
+  _dividerEls = [];
 
-  if (needV) {
-    if (!_dividerV) {
-      _dividerV = document.createElement("div");
-      _dividerV.className = "snap-divider snap-divider-v";
-      _makeDividerDraggable(_dividerV, "v");
-      lay.appendChild(_dividerV);
-    }
-    _dividerV.style.left = `${Math.round(lay.clientWidth * splits.v) - 4}px`;
-    _dividerV.style.top = "0px";
-    _dividerV.style.width = "8px";
-    _dividerV.style.height = `${lay.clientHeight}px`;
-  } else if (_dividerV) { _dividerV.remove(); _dividerV = null; }
+  const zones = _activeZones();
+  const has = (z) => zones.includes(z);
+  const W = lay.clientWidth, H = lay.clientHeight;
+  const L = _lines();
+  const fullH = has("left") || has("right");   // Vollhöhen-Fenster vorhanden?
+  const fullW = has("top") || has("bottom");   // Vollbreiten-Fenster vorhanden?
 
-  if (needH) {
-    if (!_dividerH) {
-      _dividerH = document.createElement("div");
-      _dividerH.className = "snap-divider snap-divider-h";
-      _makeDividerDraggable(_dividerH, "h");
-      lay.appendChild(_dividerH);
+  // Wer grenzt wo an die vertikale Linie?
+  const leftTop = has("tl") || has("left"),  rightTop = has("tr") || has("right");
+  const leftBot = has("bl") || has("left"),  rightBot = has("br") || has("right");
+  // ... und an die horizontale Linie?
+  const topLeft = has("tl") || has("top"),   botLeft = has("bl") || has("bottom");
+  const topRight = has("tr") || has("top"),  botRight = has("br") || has("bottom");
+
+  const segs = [];
+  const hMid = H * ((L.hl + L.hr) / 2);   // Übergabepunkt zwischen oberem/unterem v-Segment
+  const vMid = W * ((L.vt + L.vb) / 2);   // ... zwischen linkem/rechtem h-Segment
+
+  // Vertikale Segmente. keys = welche Teilungen dieses Segment steuert:
+  // grenzt ein Vollhöhen-Fenster an, bewegt der Griff BEIDE (vt+vb) -> ganze
+  // Linie; sonst nur das eigene Segment (z.B. nur die Grenze der unteren zwei).
+  const vBoth = leftTop && rightTop && leftBot && rightBot;
+  if (leftTop && rightTop) {
+    segs.push({ axis: "v", keys: fullH ? ["vt", "vb"] : ["vt"],
+                x: W * L.vt, y0: 0, y1: vBoth ? hMid : H });
+  }
+  if (leftBot && rightBot) {
+    segs.push({ axis: "v", keys: fullH ? ["vt", "vb"] : ["vb"],
+                x: W * L.vb, y0: vBoth ? hMid : 0, y1: H });
+  }
+  // Horizontale Segmente (analog, gekoppelt bei Vollbreiten-Fenstern).
+  const hBoth = topLeft && botLeft && topRight && botRight;
+  if (topLeft && botLeft) {
+    segs.push({ axis: "h", keys: fullW ? ["hl", "hr"] : ["hl"],
+                y: H * L.hl, x0: 0, x1: hBoth ? vMid : W });
+  }
+  if (topRight && botRight) {
+    segs.push({ axis: "h", keys: fullW ? ["hl", "hr"] : ["hr"],
+                y: H * L.hr, x0: hBoth ? vMid : 0, x1: W });
+  }
+
+  for (const seg of segs) {
+    const el = document.createElement("div");
+    el.className = "snap-divider " + (seg.axis === "v" ? "snap-divider-v" : "snap-divider-h");
+    if (seg.axis === "v") {
+      el.style.left = `${Math.round(seg.x) - 4}px`;
+      el.style.top = `${Math.round(seg.y0)}px`;
+      el.style.width = "8px";
+      el.style.height = `${Math.round(seg.y1 - seg.y0)}px`;
+    } else {
+      el.style.top = `${Math.round(seg.y) - 4}px`;
+      el.style.left = `${Math.round(seg.x0)}px`;
+      el.style.height = "8px";
+      el.style.width = `${Math.round(seg.x1 - seg.x0)}px`;
     }
-    _dividerH.style.top = `${Math.round(lay.clientHeight * splits.h) - 4}px`;
-    _dividerH.style.left = "0px";
-    _dividerH.style.height = "8px";
-    _dividerH.style.width = `${lay.clientWidth}px`;
-  } else if (_dividerH) { _dividerH.remove(); _dividerH = null; }
+    _makeDividerDraggable(el, seg.axis, seg.keys);
+    lay.appendChild(el);
+    _dividerEls.push(el);
+  }
 }
 
-function _makeDividerDraggable(el, axis) {
+function _makeDividerDraggable(el, axis, keys) {
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
   el.addEventListener("mousedown", (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // LINKSKLICK: die ganze Trennlinie verschieben -> ALLE angrenzenden Fenster
+    //   werden gemeinsam angepasst (Windows-Standard).
+    // RECHTSKLICK: nur dieses Segment -> NUR die beiden Fenster an dieser Grenze.
+    const rightClick = e.button === 2;
+    const affected = rightClick ? keys
+      : (axis === "v" ? ["vt", "vb"] : ["hl", "hr"]);
     el.classList.add("dragging");
     document.body.style.userSelect = "none";
     document.body.style.cursor = axis === "v" ? "ew-resize" : "ns-resize";
@@ -630,13 +697,15 @@ function _makeDividerDraggable(el, axis) {
       const lay = layer();
       if (!lay) return;
       const r = lay.getBoundingClientRect();
-      if (axis === "v") {
-        splits.v = Math.min(0.85, Math.max(0.15, (ev.clientX - r.left) / r.width));
-      } else {
-        splits.h = Math.min(0.85, Math.max(0.15, (ev.clientY - r.top) / r.height));
-      }
+      const frac = axis === "v"
+        ? Math.min(0.85, Math.max(0.15, (ev.clientX - r.left) / r.width))
+        : Math.min(0.85, Math.max(0.15, (ev.clientY - r.top) / r.height));
+      for (const k of affected) splits[k] = frac;
       relayoutSnapped(false);   // live, ohne Animation (folgt dem Cursor)
-      updateSnapDividers();
+      // Griffe NICHT neu aufbauen (das würde diesen Drag abbrechen), nur
+      // den aktiven Griff mitführen.
+      if (axis === "v") el.style.left = `${Math.round(r.width * frac) - 4}px`;
+      else el.style.top = `${Math.round(r.height * frac) - 4}px`;
     }
     function onUp() {
       document.removeEventListener("mousemove", onMove);
@@ -644,6 +713,7 @@ function _makeDividerDraggable(el, axis) {
       el.classList.remove("dragging");
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
+      updateSnapDividers();   // Segmente/Längen jetzt sauber neu berechnen
       notifyChanged();
     }
     document.addEventListener("mousemove", onMove);

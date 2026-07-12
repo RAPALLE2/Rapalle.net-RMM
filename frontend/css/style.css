@@ -1035,3 +1035,265 @@ select:disabled {
 .panelpart-tabs { margin-bottom: 10px; }
 .panelpart-body { flex: 1; overflow: auto; }
 .panelpart-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* ================================================================ */
+/* Modulare Dashboard-Widgets (fleetdash.js / dashwidgets.js)       */
+/* ================================================================ */
+.dash-widgets {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.dash-w {
+  position: relative;
+  display: flex; flex-direction: column;
+  transition: box-shadow 0.18s ease, transform 0.12s ease, opacity 0.15s ease;
+}
+.dash-w-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: -14px -14px 12px; padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-w-title {
+  font-size: 12.5px; text-transform: uppercase; color: var(--subtext);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em;
+}
+.dash-w-tools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.dash-w-btn {
+  background: none; border: none; color: var(--subtext); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 3px 6px; border-radius: 5px;
+}
+.dash-w-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+.dash-w-kind {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 5px; font-size: 11px; padding: 2px 5px; cursor: pointer;
+}
+.dash-w-body {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  overflow: auto;
+}
+.dash-w { display: flex; flex-direction: column; overflow: visible; }
+.dash-w-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.dash-w-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.dash-w-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* Edit-Modus */
+.dash-widgets.editing .dash-w { outline: 1px dashed rgba(var(--accent-rgb), 0.4); outline-offset: 2px; }
+.dash-widgets.editing .dash-w-head { cursor: grab; }
+.dash-w.dragging { opacity: 0.95; box-shadow: 0 14px 44px rgba(0,0,0,0.55); cursor: grabbing; }
+.dash-w.detach-hint { outline: 2px solid var(--accent); }
+.dash-w-placeholder {
+  border: 2px dashed rgba(var(--accent-rgb), 0.5); border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.06); min-height: 120px;
+}
+.dash-w-resizer { position: absolute; top: 0; right: -7px; width: 12px; height: 100%; cursor: ew-resize; z-index: 3; }
+.dash-w-resizer::after {
+  content: ""; position: absolute; top: 50%; right: 5px; width: 3px; height: 34px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--border); transition: background 0.15s ease;
+}
+.dash-w-resizer:hover::after { background: var(--accent); }
+
+/* Einzelne Darstellungen */
+.widget-number { text-align: center; padding: 10px 6px; }
+.widget-number .wn-value { font-size: 34px; font-weight: 800; line-height: 1.05; color: var(--text); }
+.widget-number .wn-label { font-size: 12px; color: var(--subtext); margin-top: 6px; }
+
+.widget-text { font-size: 13.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; word-break: break-word; padding: 2px; }
+.widget-text-edit {
+  width: 100%; min-height: 90px; resize: vertical; box-sizing: border-box;
+  background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px;
+  color: var(--text); padding: 8px 10px; font-size: 13.5px; line-height: 1.5; font-family: inherit;
+}
+
+.widget-bars { display: flex; flex-direction: column; gap: 7px; width: 100%; }
+.wbar-row { display: grid; grid-template-columns: minmax(70px, 34%) 1fr auto; align-items: center; gap: 8px; font-size: 12px; }
+.wbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtext); }
+.wbar-track { height: 10px; border-radius: 6px; background: var(--panel-2); overflow: hidden; }
+.wbar-fill { display: block; height: 100%; border-radius: 6px; transition: width 0.4s ease; }
+.wbar-val { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+.widget-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.widget-table th {
+  text-align: left; font-weight: 600; color: var(--subtext); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.03em; padding: 4px 8px; border-bottom: 1px solid var(--border);
+}
+.widget-table td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.widget-table tbody tr:hover { background: var(--panel-2); }
+
+/* Herausgelöstes Widget-Fenster */
+.fleetwidget-wrap { height: 100%; padding: 14px; box-sizing: border-box; overflow: auto; }
+.fleetwidget-wrap .dash-w-body { height: 100%; }
+
+/* Widget-Auswahldialog */
+.widget-picker-back {
+  position: fixed; inset: 0; z-index: 8000; display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 8, 14, 0.62); backdrop-filter: blur(3px);
+}
+.widget-picker {
+  width: min(760px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.6); overflow: hidden;
+  animation: win-open 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.wp-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-size: 15px;
+}
+.wp-body { padding: 12px 18px 20px; overflow-y: auto; }
+.wp-group-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext);
+  margin: 16px 0 8px; font-weight: 700;
+}
+.wp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.wp-item {
+  display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--panel-2); color: var(--text); cursor: pointer; transition: border-color 0.12s, transform 0.12s;
+}
+.wp-item:hover { border-color: var(--accent); transform: translateY(-1px); }
+.wp-item-label { font-size: 13px; font-weight: 600; }
+.wp-item-kinds { font-size: 10.5px; color: var(--subtext); text-transform: uppercase; letter-spacing: 0.02em; }
+
+/* ================================================================ */
+/* Windows-artige Kachel-Resize-Griffe (paneltiling.js)             */
+/* ================================================================ */
+/* Griffe sind nur im Edit-Modus vorhanden (werden dann angehängt). */
+.tile-grip { position: absolute; z-index: 4; }
+.tile-grip-x { top: 0; right: -6px; width: 12px; height: 100%; cursor: ew-resize; }
+.tile-grip-y { left: 0; bottom: -6px; height: 12px; width: 100%; cursor: ns-resize; }
+.tile-grip-x::after {
+  content: ""; position: absolute; top: 50%; right: 5px; width: 3px; height: 36px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--border); transition: background 0.15s ease;
+}
+.tile-grip-y::after {
+  content: ""; position: absolute; left: 50%; bottom: 5px; height: 3px; width: 36px;
+  transform: translateX(-50%); border-radius: 3px; background: var(--border); transition: background 0.15s ease;
+}
+.tile-grip-x:hover::after, .tile-grip-y:hover::after { background: var(--accent); }
+.tile-resizing { box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.5) inset; }
+
+/* Ordner-Inhalt: eingeschobene Kind-Panels */
+.folder-children { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.folder-child {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); overflow: hidden;
+}
+.folder-child-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; font-size: 11.5px; text-transform: uppercase; color: var(--subtext);
+  border-bottom: 1px solid var(--border);
+}
+.folder-child-body { padding: 10px; }
+.folder-child-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+.folder-drop-hint {
+  border: 2px dashed rgba(var(--accent-rgb), 0.4); border-radius: 10px;
+  padding: 16px; text-align: center; color: var(--subtext); font-size: 12px; margin-top: 8px;
+}
+/* Ordner als Ziel beim Einschieben eines Panels hervorheben */
+.dash-lp.folder-hover {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.15);
+}
+
+/* ---- Client-Ansicht: Ordner-Tabs (dashlayout.js, wie Dashboard) ---- */
+.dash-folder-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.dash-folder-tab { user-select: none; }
+.dash-layout.editing .dash-folder-tab { cursor: grab; }
+.dash-folder-tab.tab-dragging {
+  opacity: 0.6; background: rgba(var(--accent-rgb), 0.25); cursor: grabbing;
+  outline: 1px dashed var(--accent);
+}
+.folder-active { min-height: 200px; }
+.dash-lp-body.folder-panel { display: flex; flex-direction: column; }
+
+/* ---- Telemetrie-Metrik-Panels in der Client-Ansicht (clientmetrics.js) ---- */
+.cmetric-body { display: flex; flex-direction: column; gap: 8px; }
+.cmetric-kinds { display: flex; gap: 4px; flex-wrap: wrap; }
+.cmetric-kind {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--subtext);
+  border-radius: 6px; font-size: 13px; padding: 2px 7px; cursor: pointer; line-height: 1.3;
+}
+.cmetric-kind:hover { color: var(--text); border-color: var(--accent); }
+.cmetric-kind.active { background: rgba(var(--accent-rgb), 0.18); color: var(--accent); border-color: var(--accent); }
+.cmetric-holder { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 90px; }
+.cmetric-holder .status-info { width: 100%; }
+
+/* Nicht verfügbare Metrik (VM/LXC) im Edit-Modus */
+.cmetric-na { color: var(--subtext); font-size: 12px; padding: 12px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 8px; }
+
+/* ---- Flüssigeres Panel-Dragging & bessere Handhabung (dashlayout) ---- */
+/* Während eines Drags nichts markieren (kein blauer Text mehr). */
+body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit-user-select: none !important; cursor: grabbing !important; }
+
+/* Karten in ihre neue Position gleiten lassen (weiches Umsortieren). */
+.dash-layout .dash-lp { transition: box-shadow .18s ease; }
+.dash-layout.editing .dash-lp:not(.dragging) { transition: transform .18s cubic-bezier(.22,1,.36,1), box-shadow .18s ease; }
+/* Die gezogene Karte folgt dem Cursor ohne Transition (sofort), leicht angehoben. */
+.dash-lp.dragging { transition: none !important; box-shadow: 0 18px 50px rgba(0,0,0,.55); opacity: .97; }
+/* Platzhalter weich mitwachsen/-schrumpfen. */
+.dash-lp-placeholder { transition: all .18s cubic-bezier(.22,1,.36,1); }
+
+/* Ordner als Drop-Ziel: bleibt an Ort und Stelle, pulsiert nur. */
+.dash-lp.folder-hover {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+  box-shadow: 0 0 0 5px rgba(var(--accent-rgb), .18);
+  transform: scale(1.012);
+}
+
+/* Panel-Körper scrollt, wenn der Inhalt größer als die (evtl. verkleinerte)
+   Karte ist - Kopfzeile bleibt sichtbar. Die Karte ist eine Flex-Spalte; ihr
+   overflow bleibt sichtbar, damit die Resize-Griffe am Rand greifbar bleiben. */
+.dash-lp { display: flex; flex-direction: column; overflow: visible; }
+.dash-lp-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
+.dash-lp-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.dash-lp-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.dash-lp-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* Resize-Griffe im Edit deutlicher sicht- und greifbar machen. */
+.dash-layout.editing .tile-grip-x::after,
+.dash-layout.editing .tile-grip-y::after { background: rgba(var(--accent-rgb), .55); }
+.dash-layout.editing .tile-grip-x:hover::after,
+.dash-layout.editing .tile-grip-y:hover::after { background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb), .6); }
+
+/* Ziehbare Ordner-Tabs: klar als verschiebbar erkennbar. */
+.dash-folder-tab.tab-dragging { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 2; }
+
+/* ================================================================ */
+/* Festes Raster-Layout der Client-Ansicht (dashlayout.js)          */
+/* ================================================================ */
+.dash-grid-layout { display: grid; position: relative; align-items: stretch; }
+.dash-grid-layout .dash-lp { display: flex; flex-direction: column; overflow: visible; min-height: 0; }
+.dash-grid-layout.editing .dash-lp { outline: 1px dashed rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
+.dash-grid-layout.editing .dash-lp-head { cursor: grab; }
+.dash-grid-layout .dash-lp:not(.dragging) { transition: box-shadow .18s ease; }
+
+/* Belegbare Leerzelle */
+.grid-empty-cell {
+  border: 1.5px dashed var(--border); border-radius: 10px; background: rgba(255,255,255,0.015);
+  color: var(--subtext); font-size: 22px; cursor: pointer; z-index: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.grid-empty-cell:hover { background: rgba(var(--accent-rgb),0.10); border-color: var(--accent); color: var(--accent); }
+.grid-empty-cell span { opacity: .6; }
+.grid-empty-cell:hover span { opacity: 1; }
+
+/* Ziel-Vorschau beim Ziehen (rastet an der Zelle ein) */
+.grid-drop-preview {
+  z-index: 1; pointer-events: none; border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.14); border: 2px solid rgba(var(--accent-rgb), 0.6);
+  box-shadow: inset 0 0 30px rgba(var(--accent-rgb), 0.10);
+  transition: grid-column .08s ease, grid-row .08s ease;
+}
+
+/* Eck-Griff (Breite + Höhe gleichzeitig) */
+.tile-grip-xy { position: absolute; right: -6px; bottom: -6px; width: 18px; height: 18px; cursor: nwse-resize; z-index: 5; }
+.tile-grip-xy::after {
+  content: ""; position: absolute; right: 4px; bottom: 4px; width: 9px; height: 9px;
+  border-right: 3px solid var(--border); border-bottom: 3px solid var(--border); border-radius: 2px;
+  transition: border-color .15s ease;
+}
+.dash-grid-layout.editing .tile-grip-x::after, .dash-grid-layout.editing .tile-grip-y::after { background: rgba(var(--accent-rgb), .55); }
+.tile-grip-xy:hover::after { border-color: var(--accent); }
