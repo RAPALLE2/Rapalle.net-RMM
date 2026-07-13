@@ -54,8 +54,8 @@ import uvicorn
 from app import loghub
 loghub.install()
 
-from app.config import PORT
+from app.config import PORT, HOST
 
 if __name__ == "__main__":
-    print(f"RAPALLE.net RMM Backend startet auf http://localhost:{PORT}")
-    uvicorn.run("app.main:socket_app", host="0.0.0.0", port=PORT)
+    print(f"RAPALLE.net RMM Backend startet auf http://{HOST}:{PORT}")
+    uvicorn.run("app.main:socket_app", host=HOST, port=PORT)

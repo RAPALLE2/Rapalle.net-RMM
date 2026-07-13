@@ -54,6 +54,21 @@ export function renderAddClient(body, win) {
   `;
 
   const tenantSel = body.querySelector("#ac-tenant");
+  // Live-Refresh: Wird irgendwo ein Tenant/Standort angelegt/gelöscht
+  // (Hierarchie ändert sich), die Auswahl-Listen SOFORT neu befüllen -
+  // die aktuelle Auswahl bleibt erhalten. Kein Fenster-Neuöffnen mehr nötig.
+  const onHierarchyChanged = () => {
+    if (!document.body.contains(body)) {
+      window.removeEventListener("rmm:hierarchy-changed", onHierarchyChanged);
+      return;
+    }
+    const cur = tenantSel.value;
+    tenantSel.innerHTML = `<option value="">— nicht zuordnen (&rarr; „Uncategorized")</option>` +
+      state.hierarchy.tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
+    if ([...tenantSel.options].some((o) => o.value === cur)) tenantSel.value = cur;
+    tenantSel.dispatchEvent(new Event("change"));   // Standort-Liste nachziehen
+  };
+  window.addEventListener("rmm:hierarchy-changed", onHierarchyChanged);
   const locationSel = body.querySelector("#ac-location");
 
   tenantSel.addEventListener("change", () => {

@@ -6,7 +6,7 @@
 
 import { state, findClient } from "../state.js";
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 import { closeWindow } from "../windowmanager.js";
 import { favStarHtml } from "../sidebar.js";
 
@@ -232,7 +232,7 @@ export function renderEditClient(body, win) {
       );
       listEl.querySelectorAll("[data-ws-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!confirm("Website-Verknüpfung löschen?")) return;
+          if (!(await uiConfirm("Website-Verknüpfung löschen?", { okText: "Löschen", danger: true }))) return;
           try {
             await api.deleteClientWebsite(client.id, btn.dataset.wsDel);
           } catch (e) {
@@ -279,9 +279,43 @@ export function renderEditClient(body, win) {
   loadWebsites();
 
   const tenantSel = body.querySelector("#ec-tenant");
+  // Live-Refresh der Tenant-Liste bei Hierarchie-Änderungen (Auswahl bleibt).
+  const onHierarchyChanged = () => {
+    if (!document.body.contains(body)) {
+      window.removeEventListener("rmm:hierarchy-changed", onHierarchyChanged);
+      return;
+    }
+    const cur = tenantSel.value;
+    tenantSel.innerHTML = `<option value="">— nicht zugeordnet —</option>` +
+      state.hierarchy.tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
+    if ([...tenantSel.options].some((o) => o.value === cur)) tenantSel.value = cur;
+    tenantSel.dispatchEvent(new Event("change"));
+  };
+  window.addEventListener("rmm:hierarchy-changed", onHierarchyChanged);
   const locationSel = body.querySelector("#ec-location");
   const folderSel = body.querySelector("#ec-folder");
   const devTypeSel = body.querySelector("#ec-devtype");
+  // Gerätetyp IMMER frisch: state.clients kann veraltet sein (z.B. wenn der
+  // Agent den Typ per Auto-Erkennung gerade erst gemeldet hat). Deshalb wird
+  // der Client beim Öffnen direkt vom Backend geholt und der Typ übernommen -
+  // solange der Nutzer die Auswahl noch nicht selbst angefasst hat. Damit
+  // steht bei einer VM/LXC nie mehr fälschlich "Physisches Gerät", auch nach
+  // Fenster-/Seiten-Reload.
+  let devTypeTouched = false;
+  devTypeSel.addEventListener("change", () => { devTypeTouched = true; });
+  (async () => {
+    try {
+      const fresh = await api.getClient(client.id);
+      if (!fresh || !document.body.contains(body)) return;
+      // Frische Felder in die state-Referenz übernehmen (gleiche Objekt-Ref).
+      Object.assign(client, fresh);
+      if (!devTypeTouched && fresh.device_type && devTypeSel.value !== fresh.device_type) {
+        devTypeSel.value = fresh.device_type;
+        devTypeSel.dispatchEvent(new Event("change"));   // Host-Zeile ein-/ausblenden
+        devTypeTouched = false;                          // programmatisch, nicht vom Nutzer
+      }
+    } catch { /* offline o.ä. - Auswahl aus state bleibt */ }
+  })();
   const hostRow = body.querySelector("#ec-host-row");
 
   // Ordner-Auswahl passend zur aktuell gewählten Location neu aufbauen.
@@ -336,7 +370,7 @@ export function renderEditClient(body, win) {
   });
 
   body.querySelector("#ec-delete").addEventListener("click", async () => {
-    if (!confirm(`Client "${client.hostname}" wirklich löschen?`)) return;
+    if (!(await uiConfirm(`Client "${client.hostname}" wirklich löschen?`, { okText: "Client löschen", danger: true }))) return;
     await api.deleteClient(client.id);
     state.selection = null;
     closeWindow(win.key);

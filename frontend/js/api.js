@@ -183,6 +183,23 @@ export const api = {
     request(`/api/source/db/table?name=${encodeURIComponent(name)}&limit=${limit}&offset=${offset}`),
   sourceDbQuery: (sql) =>
     request("/api/source/db/query", { method: "POST", body: JSON.stringify({ sql }) }),
+  // Explorer: Ordner/Datei anlegen, löschen, umbenennen
+  sourceMkdir: (path) => request("/api/source/mkdir", { method: "POST", body: JSON.stringify({ path }) }),
+  sourceNewFile: (path) => request("/api/source/newfile", { method: "POST", body: JSON.stringify({ path }) }),
+  sourceDelete: (path) => request("/api/source/delete", { method: "POST", body: JSON.stringify({ path }) }),
+  sourceRename: (src, dst) => request("/api/source/rename", { method: "POST", body: JSON.stringify({ src, dst }) }),
+  // Datenbank: Editieren / Löschen / Anlegen / Backup
+  sourceDbSetCell: (table, rowid, column, value) =>
+    request("/api/source/db/cell", { method: "PUT", body: JSON.stringify({ table, rowid, column, value }) }),
+  sourceDbDeleteRow: (table, rowid) =>
+    request("/api/source/db/delete-row", { method: "POST", body: JSON.stringify({ table, rowid }) }),
+  sourceDbInsertRow: (table, values = {}) =>
+    request("/api/source/db/insert-row", { method: "POST", body: JSON.stringify({ table, values }) }),
+  sourceDbDropTable: (table) =>
+    request("/api/source/db/drop-table", { method: "POST", body: JSON.stringify({ table }) }),
+  sourceDbCreateTable: (name, columns) =>
+    request("/api/source/db/create-table", { method: "POST", body: JSON.stringify({ name, columns }) }),
+  sourceDbBackup: () => request("/api/source/db/backup", { method: "POST" }),
   // ZIP hochladen + extrahieren (multipart; NICHT über request(), da FormData).
   sourceUploadZip: async (fileObj, path = "") => {
     const fd = new FormData();

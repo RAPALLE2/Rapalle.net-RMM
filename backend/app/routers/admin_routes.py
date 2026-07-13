@@ -640,6 +640,23 @@ async def get_automation_runs(auto_id: str, user: dict = Depends(get_current_use
 from pathlib import Path as _Path
 
 _IMAGES_DIR = _Path(__file__).resolve().parents[3] / "frontend" / "images"
+# Hochgeladene Branding-Dateien landen in einem SCHREIBBAREN Datenordner neben
+# der Datenbank (das gebündelte frontend/images ist in vielen Deployments
+# read-only, z.B. per Container-Image oder nginx). Beim Ausliefern wird zuerst
+# hier gesucht, dann im gebündelten Default.
+_BRANDING_STORE = _Path(__file__).resolve().parents[2] / "branding"
+
+
+def branding_path(name: str):
+    """Pfad zu einem Bild: bevorzugt der Upload-Store, sonst das gebündelte
+    Default aus frontend/images. Gibt None zurück, wenn nichts existiert."""
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None
+    up = _BRANDING_STORE / name
+    if up.is_file():
+        return up
+    d = _IMAGES_DIR / name
+    return d if d.is_file() else None
 
 # Whitelist: Slot-Name -> (Dateiname, erlaubte Magic-Bytes, Beschreibung)
 _PNG = (b"\x89PNG\r\n\x1a\n",)
@@ -661,13 +678,13 @@ async def list_branding(user: dict = Depends(get_current_user)):
     require_admin(user)
     slots = []
     for name, meta in BRANDING_SLOTS.items():
-        f = _IMAGES_DIR / name
+        f = branding_path(name)
         slots.append({
             "name": name,
             "label": meta["label"],
             "url": f"/images/{name}",
-            "exists": f.is_file(),
-            "mtime": int(f.stat().st_mtime) if f.is_file() else 0,
+            "exists": f is not None,
+            "mtime": int(f.stat().st_mtime) if f is not None else 0,
         })
     return {"slots": slots}
 
@@ -676,8 +693,9 @@ async def list_branding(user: dict = Depends(get_current_user)):
 async def upload_branding(name: str, request: Request, user: dict = Depends(get_current_user)):
     """
     Ersetzt eine Branding-Datei. Body = rohe Bilddaten (kein multipart).
-    Nur Whitelist-Dateinamen, Magic-Byte-Prüfung, Größenlimit, atomares
-    Ersetzen (tmp + os.replace) - die alte Datei bleibt bei Fehlern intakt.
+    Akzeptiert ALLE gängigen Bildformate und konvertiert serverseitig (Pillow)
+    ins Ziel-Format des Slots (PNG/JPEG/ICO). Nur Whitelist-Dateinamen,
+    Größenlimit, atomares Ersetzen - die alte Datei bleibt bei Fehlern intakt.
     """
     require_admin(user)
     slot = BRANDING_SLOTS.get(name)
@@ -689,14 +707,67 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
         raise HTTPException(400, "Leerer Upload")
     if len(data) > _MAX_BRANDING_BYTES:
         raise HTTPException(413, "Datei zu groß (max. 8 MB)")
-    if not any(data.startswith(m) for m in slot["magic"]):
-        expected = "PNG" if slot["magic"] == _PNG else ("JPEG" if slot["magic"] == _JPG else "ICO/PNG")
-        raise HTTPException(400, f"Falsches Dateiformat - erwartet: {expected}")
 
-    _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = _IMAGES_DIR / (name + ".tmp-upload")
-    tmp.write_bytes(data)
-    os.replace(tmp, _IMAGES_DIR / name)  # atomar - nie halb geschriebene Logos
+    # ALLE Bildformate akzeptieren (PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, ...)
+    # und serverseitig ins Ziel-Format des Slots konvertieren. Die frühere
+    # Magic-Byte-Prüfung lehnte Dateien teils fälschlich ab - jetzt entscheidet
+    # Pillow, ob es ein lesbares Bild ist, und die Konvertierung garantiert
+    # das korrekte Format auf der Platte.
+    try:
+        from PIL import Image
+    except ImportError:
+        raise HTTPException(500, "Pillow ist nicht installiert - bitte Backend-"
+                                 "Abhängigkeiten aktualisieren (requirements.txt).")
+    import io as _io
+    try:
+        img = Image.open(_io.BytesIO(data))
+        img.load()
+    except Exception as e:
+        raise HTTPException(400, f"Die Datei ist kein lesbares Bild "
+                                 f"({e.__class__.__name__}: {e}).")
 
-    db.add_audit_entry(user["username"], "branding.updated", target=name, details=f"{len(data)} bytes")
-    return {"ok": True, "name": name, "mtime": int((_IMAGES_DIR / name).stat().st_mtime)}
+    target_ext = name.rsplit(".", 1)[-1].lower()
+    out = _io.BytesIO()
+    try:
+        if target_ext == "png":
+            img.convert("RGBA").save(out, format="PNG", optimize=True)
+        elif target_ext in ("jpg", "jpeg"):
+            # JPEG kann kein Alpha: transparente Bereiche auf Weiß legen.
+            if "A" in img.getbands():
+                rgba = img.convert("RGBA")
+                base = Image.new("RGB", rgba.size, (255, 255, 255))
+                base.paste(rgba, mask=rgba.split()[-1])
+                base.save(out, format="JPEG", quality=90)
+            else:
+                img.convert("RGB").save(out, format="JPEG", quality=90)
+        elif target_ext == "ico":
+            ic = img.convert("RGBA")
+            sizes = [(s, s) for s in (16, 32, 48, 64) if s <= max(ic.size)] or [(16, 16)]
+            ic.save(out, format="ICO", sizes=sizes)
+        else:
+            # Unbekannter Slot-Typ: Original unverändert speichern.
+            out.write(data)
+    except Exception as e:
+        raise HTTPException(400, f"Konvertierung nach {target_ext.upper()} "
+                                 f"fehlgeschlagen ({e.__class__.__name__}: {e}).")
+    data = out.getvalue()
+    src_fmt = (img.format or "unbekannt")
+
+    try:
+        _BRANDING_STORE.mkdir(parents=True, exist_ok=True)
+        tmp = _BRANDING_STORE / (name + ".tmp-upload")
+        tmp.write_bytes(data)
+        os.replace(tmp, _BRANDING_STORE / name)  # atomar - nie halb geschriebene Logos
+    except OSError as e:
+        # Klartext-Fehler statt generischem 500 - z.B. wenn backend/ read-only
+        # gemountet ist oder der Dienst-Benutzer keine Schreibrechte hat.
+        print(f"[branding] Upload von '{name}' fehlgeschlagen: {e}")
+        raise HTTPException(500, f"Speichern fehlgeschlagen ({e.__class__.__name__}: {e}). "
+                                 f"Hat der Backend-Prozess Schreibrechte auf {_BRANDING_STORE}?")
+    print(f"[branding] '{name}' ersetzt ({src_fmt} -> {name.rsplit('.', 1)[-1].upper()}, "
+          f"{len(data)} bytes) -> {_BRANDING_STORE / name}")
+
+    db.add_audit_entry(user["username"], "branding.updated", target=name,
+                       details=f"{src_fmt} -> {name.rsplit('.', 1)[-1].upper()}, {len(data)} bytes")
+    return {"ok": True, "name": name, "size": len(data),
+            "mtime": int((_BRANDING_STORE / name).stat().st_mtime)}

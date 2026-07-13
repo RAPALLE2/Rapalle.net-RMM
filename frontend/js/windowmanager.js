@@ -57,12 +57,32 @@ window.addEventListener("resize", () => {
 // -----------------------------------------------------------------
 
 export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
-                            x = null, y = null, minimized = false, maximized = false, focus = true }) {
+                            x = null, y = null, minimized = false, maximized = false, focus = true,
+                            singleton = false }) {
   const existing = state.windows.find((win) => win.key === key);
-  if (existing) {
-    // Fenster existiert schon -> wiederherstellen und nach vorne holen
+  if (existing && !singleton) {
+    // Mehrfach-Instanzen erlaubt: für die neue Instanz einen eindeutigen
+    // Schlüssel ableiten (key#2, key#3, ...) und ein FRISCHES Fenster bauen.
+    // Zustandsgebundene Fenster (Einstellungen, Profil, Bearbeiten, ...)
+    // übergeben singleton:true und behalten das alte Fokus-Verhalten.
+    let n = 2;
+    while (state.windows.some((win) => win.key === `${key}#${n}`)) n++;
+    key = `${key}#${n}`;
+  } else if (existing) {
+    // Fenster existiert schon -> Inhalt/Props aktualisieren (wichtig, wenn
+    // dasselbe "Slot" mit anderem Inhalt herausgelöst wird), wiederherstellen
+    // und nach vorne holen.
+    existing.props = props;
+    existing.title = title;
+    existing.clientColor = clientColor;
     existing.minimized = false;
-    if (existing._el) existing._el.style.display = "flex";
+    if (existing._el) {
+      existing._el.style.display = "flex";
+      const titleEl = existing._el.querySelector(".rmm-window-title-text, .rmm-window-title");
+      if (titleEl) titleEl.textContent = title;
+      const body = existing._el.querySelector(".rmm-window-body");
+      if (body && contentRenderer) { body.innerHTML = ""; contentRenderer(body, existing); }
+    }
     focusWindow(key);
     return;
   }
@@ -244,6 +264,7 @@ function createWindowElement(win) {
   titlebar.className = "rmm-window-titlebar";
 
   const titleSpan = document.createElement("span");
+  titleSpan.className = "rmm-window-title";
   titleSpan.textContent = win.title;
 
   const controls = document.createElement("span");

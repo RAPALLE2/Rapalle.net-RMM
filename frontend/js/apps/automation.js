@@ -5,7 +5,7 @@
 
 import { state } from "../state.js";
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 
 export function renderAutomation(body, win) {
   async function draw() {
@@ -123,7 +123,7 @@ export function renderAutomation(body, win) {
       );
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!confirm("Automation löschen?")) return;
+          if (!(await uiConfirm("Automation löschen?", { okText: "Löschen", danger: true }))) return;
           await api.deleteAutomation(btn.dataset.del); loadList();
         })
       );

@@ -14,7 +14,7 @@ import { dashboardSocket } from "../socket.js";
 import { registerCleanup } from "../windowmanager.js";
 import { state } from "../state.js";
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, mapKeyboardText, uiPrompt } from "../utils.js";
 import { renderTerminal } from "./terminal.js";
 
 export function renderVnc(body, win) {
@@ -156,7 +156,9 @@ export function renderVnc(body, win) {
       window.notify?.("Remote-Zwischenablage übernommen (" + text.length + " Zeichen)", "success");
     } catch {
       // Clipboard-API blockiert (z.B. HTTP): Text zum manuellen Kopieren zeigen.
-      prompt("Remote-Zwischenablage (Strg+C zum Kopieren):", text);
+      uiPrompt("Remote-Zwischenablage", {
+        description: "Text markieren und mit Strg+C kopieren:",
+        value: text, okText: "Schließen" });
     }
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
@@ -462,11 +464,11 @@ export function renderVnc(body, win) {
     const text = textInput.value;
     if (!text) return;
     const layout = layoutSel.value;
-    // Bei "raw"/1:1 wird der Text exakt so getippt wie eingegeben (empfohlen).
-    // Die Layout-Auswahl ist für Fälle, in denen der Ziel-PC ein bestimmtes
-    // Layout erwartet; der Agent tippt die Zeichen per pynput, das i.d.R.
-    // die Zeichen unabhängig vom Layout korrekt einsetzt.
-    dashboardSocket.emit("screen-input", { clientId, type: "text", text, layout });
+    // Layout-Kompensation (andersrum, auf Nutzerwunsch): bei Auswahl "us"
+    // werden die Zeichen vor dem Senden ueber die Positions-Tabelle ersetzt
+    // (Reverse-Effekt); "de"/"raw" = 1:1 senden.
+    const mapped = mapKeyboardText(text, layout);
+    dashboardSocket.emit("screen-input", { clientId, type: "text", text: mapped, layout });
     textInput.value = "";
     textInput.focus();
   }

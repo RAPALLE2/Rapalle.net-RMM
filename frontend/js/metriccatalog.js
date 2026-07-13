@@ -14,6 +14,8 @@
 // Darstellungsarten (kind), die ein Preset unterstützt, stehen in .charts.
 
 import { formatBytes } from "./utils.js";
+import { groupBy } from "./fleetcharts.js";
+import { getFleetIncludeVirtual } from "./persist.js";
 
 const fmtPct = (v) => `${Math.round(v)}%`;
 const fmtW = (v) => `${Math.round(v)} W`;
@@ -23,7 +25,15 @@ const fmtC = (v) => `${v} °C`;
 const fmtBps = (v) => `${formatBytes(v)}/s`;
 
 // Aktive (nicht-Kind-)Clients.
-function hosts(state) { return (state.clients || []).filter((c) => !c.parent_client_id); }
+// Persönliche Einstellung (Profil): VMs/LXCs vollwertig in alle Flotten-
+// Diagramme/Widgets aufnehmen (Standard) - oder nur physische Geräte zählen.
+function hosts(state) {
+  let list = (state.clients || []).filter((c) => !c.parent_client_id);
+  if (!getFleetIncludeVirtual()) {
+    list = list.filter((c) => (c.device_type || "physical") === "physical");
+  }
+  return list;
+}
 function onlineHosts(state) { return hosts(state).filter((c) => c.online && c.metrics); }
 
 // Summe/ Mittel-Helfer über online Clients.
@@ -128,6 +138,53 @@ export const PRESETS = [
     id: "fleet.archDist", scope: "fleet", group: "Verteilung", label: "Architektur (Verteilung)",
     charts: ["pie", "donut", "table"],
     rows: (s) => distribution(hosts(s), (c) => c.metrics?.arch || c.arch || "?"),
+  },
+  {
+    id: "fleet.agentDist", scope: "fleet", group: "Verteilung", label: "Agent-Versionen (Verteilung)",
+    charts: ["pie", "table"],
+    rows: (s) => distribution(hosts(s), (c) => c.agent_version || "unbekannt"),
+  },
+  // ---------- FLOTTEN-ÜBERSICHT (interaktive Donuts wie im Dashboard) ----------
+  // Diese drei Presets sind die frühere feste "Flotten-Übersicht" - jetzt als
+  // normale Widgets: frei verschiebbar, editierbar, löschbar, neu einfügbar.
+  // segments(state) liefert Gruppen INKLUSIVE der betroffenen Client-Namen
+  // (für den Hover-Tooltip); rows() erlaubt zusätzlich pie/bar/table.
+  {
+    id: "fleet.statusDonut", scope: "fleet", group: "Flotten-Übersicht",
+    label: "Agenten: Online / Offline", charts: ["fleetdonut", "pie", "bar", "table"],
+    segments: (s) => groupBy(hosts(s),
+      (c) => (c.status_override === "maintenance" ? "Wartung" : (c.online ? "Online" : "Offline")),
+      (label) => label === "Online" ? "#3ecf8e" : (label === "Wartung" ? "#f5a524" : "#64748b")),
+    rows: (s) => groupBy(hosts(s),
+      (c) => (c.status_override === "maintenance" ? "Wartung" : (c.online ? "Online" : "Offline")),
+      (label) => label === "Online" ? "#3ecf8e" : (label === "Wartung" ? "#f5a524" : "#64748b"))
+      .map((g) => ({ label: g.label, value: g.count, color: g.color })),
+  },
+  {
+    id: "fleet.osDonut", scope: "fleet", group: "Flotten-Übersicht",
+    label: "Betriebssysteme", charts: ["fleetdonut", "pie", "bar", "table"],
+    segments: (s) => groupBy(hosts(s), (c) => osKey(c)),
+    rows: (s) => groupBy(hosts(s), (c) => osKey(c)).map((g) => ({ label: g.label, value: g.count, color: g.color })),
+  },
+  {
+    id: "fleet.versionDonut", scope: "fleet", group: "Flotten-Übersicht",
+    label: "Agent-Versionen", charts: ["fleetdonut", "pie", "bar", "table"],
+    segments: (s) => groupBy(hosts(s), (c) => c.agent_version || "unbekannt"),
+    rows: (s) => groupBy(hosts(s), (c) => c.agent_version || "unbekannt").map((g) => ({ label: g.label, value: g.count, color: g.color })),
+  },
+  {
+    // Kompakte "Flotten-Übersicht" als EIN Widget: Online/Offline, Betriebs-
+    // systeme und Agent-Versionen als drei kleine Kreisdiagramme.
+    id: "fleet.overview", scope: "fleet", group: "Flotte", label: "Flotten-Übersicht",
+    charts: ["overview"],
+    sections: (s) => [
+      { title: "Online / Offline", rows: [
+        { label: "Online", value: hosts(s).filter((c) => c.online).length, color: "#3ecf8e" },
+        { label: "Offline", value: hosts(s).filter((c) => !c.online).length, color: "#64748b" },
+      ] },
+      { title: "Betriebssysteme", rows: distribution(hosts(s), (c) => osKey(c)) },
+      { title: "Agent-Versionen", rows: distribution(hosts(s), (c) => c.agent_version || "unbekannt") },
+    ],
   },
 
   // ---------- PER-HOST (Tabellen / Pie / Bar) ----------

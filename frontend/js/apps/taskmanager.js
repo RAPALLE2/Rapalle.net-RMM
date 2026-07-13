@@ -7,7 +7,7 @@
 
 import { api } from "../api.js";
 import { registerCleanup } from "../windowmanager.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 
 export function renderTaskManager(body, win) {
   const { clientId, clientName } = win.props;
@@ -98,7 +98,7 @@ export function renderTaskManager(body, win) {
 
     tbody.querySelectorAll("[data-kill]").forEach((btn) =>
       btn.addEventListener("click", async () => {
-        if (!confirm(`Prozess "${btn.dataset.name}" (PID ${btn.dataset.kill}) beenden?`)) return;
+        if (!(await uiConfirm(`Prozess "${btn.dataset.name}" (PID ${btn.dataset.kill}) beenden?`, { okText: "Beenden", danger: true }))) return;
         try {
           await api.killProcess(clientId, parseInt(btn.dataset.kill));
           load();

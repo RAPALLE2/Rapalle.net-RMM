@@ -9,32 +9,78 @@
 // ist derselbe globale Schalter wie bei der Client-Ansicht (Profil).
 
 import { state } from "./state.js";
-import { esc } from "./utils.js";
+import { esc, uiConfirm, uiPrompt } from "./utils.js";
 import {
-  getFleetWidgets, setFleetWidgets, getDashEdit, setDashEdit, scheduleSave,
+  getFleetWidgets, setFleetWidgets, getDashEdit, scheduleSave,
 } from "./persist.js";
 import { presetsByGroup, presetById } from "./metriccatalog.js";
-import { renderWidgetBody, widgetTitle, pushWidgetHistory } from "./dashwidgets.js";
+import { renderWidgetBody, widgetTitle, pushWidgetHistory, availableKinds } from "./dashwidgets.js";
 import { openWindow } from "./windowmanager.js";
 import { attachEdgeResizers } from "./paneltiling.js";
 
 let _uid = 0;
 const nid = () => `w-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
 
+// GLEICHES Raster wie die Client-Ansicht (dashlayout.js): 5 Spalten,
+// Höheneinheit 150px, 14px Abstand. Höhen rasten auf Vielfache der
+// Höheneinheit ein (150, 314, 478, ... = n*164 - 14).
+const COLS = 5;
+const ROW_H = 150;
+const GAP = 14;
+const snapH = (px) => Math.max(ROW_H, Math.round((px + GAP) / (ROW_H + GAP)) * (ROW_H + GAP) - GAP);
+
 function defaults() {
+  // Breiten in RASTER-SPALTEN (1..5), Höhen in px auf Höheneinheiten gerastet.
+  // Die drei Flotten-Übersicht-Donuts passen jeweils in EINE Höheneinheit.
   return [
-    { id: nid(), preset: "fleet.online", kind: "donut", w: 4 },
-    { id: nid(), preset: "fleet.cpuLoadAvg", kind: "gauge", w: 4 },
-    { id: nid(), preset: "fleet.power", kind: "number", w: 4 },
-    { id: nid(), preset: "host.cpuLoad", kind: "bar", w: 6 },
-    { id: nid(), preset: "fleet.osDist", kind: "pie", w: 6 },
+    { id: nid(), preset: "fleet.statusDonut", kind: "fleetdonut", w: 2, h: ROW_H },
+    { id: nid(), preset: "fleet.osDonut", kind: "fleetdonut", w: 2, h: ROW_H },
+    { id: nid(), preset: "fleet.versionDonut", kind: "fleetdonut", w: 1, h: ROW_H },
+    { id: nid(), preset: "fleet.online", kind: "donut", w: 2, h: ROW_H * 2 + GAP },
+    { id: nid(), preset: "fleet.cpuLoadAvg", kind: "gauge", w: 2, h: ROW_H * 2 + GAP },
+    { id: nid(), preset: "fleet.power", kind: "number", w: 1, h: ROW_H },
+    { id: nid(), preset: "host.cpuLoad", kind: "bar", w: 3, h: ROW_H * 2 + GAP },
+    { id: nid(), preset: "fleet.osDist", kind: "pie", w: 2, h: ROW_H * 2 + GAP },
   ];
 }
+
+// Einmalige Migration: die frühere FESTE "Flotten-Übersicht" (drei Donuts
+// unten im Dashboard) wird als normale Widgets angehängt - danach sind sie
+// frei verschiebbar, editierbar, löschbar und über "+ Widget" neu einfügbar.
+const _OVERVIEW_MIGRATION_KEY = "rmm_fleet_overview_widgets_v1";
 
 function widgets() {
   let w = getFleetWidgets();
   if (!Array.isArray(w)) { w = defaults(); setFleetWidgets(w); }
-  for (const x of w) { if (!x.id) x.id = nid(); if (!x.w) x.w = 4; }
+  let migrated = false;
+  try { migrated = !!localStorage.getItem(_OVERVIEW_MIGRATION_KEY); } catch {}
+  if (!migrated) {
+    try { localStorage.setItem(_OVERVIEW_MIGRATION_KEY, "1"); } catch {}
+    if (!w.some((x) => x.preset === "fleet.statusDonut")) {
+      w.push(
+        { id: nid(), preset: "fleet.statusDonut", kind: "fleetdonut", w: 4 },
+        { id: nid(), preset: "fleet.osDonut", kind: "fleetdonut", w: 4 },
+        { id: nid(), preset: "fleet.versionDonut", kind: "fleetdonut", w: 4 },
+      );
+      setFleetWidgets(w);
+      save();
+    }
+  }
+  // Einmalige Migration aufs Panel-Raster: alte 12-Spalten-Breiten -> 5
+  // Spalten, Höhen auf Höheneinheiten einrasten (Flotten-Donuts = 1 Einheit).
+  let grid5 = false;
+  try { grid5 = !!localStorage.getItem("rmm_fleet_grid5_v1"); } catch {}
+  if (!grid5) {
+    try { localStorage.setItem("rmm_fleet_grid5_v1", "1"); } catch {}
+    for (const x of w) {
+      if (x.w > COLS) x.w = Math.max(1, Math.min(COLS, Math.round(x.w * COLS / 12)));
+      if (x.kind === "fleetdonut") x.h = ROW_H;
+      else if (x.h) x.h = snapH(x.h);
+      else x.h = (x.kind === "number" || x.kind === "text" || x.kind === "spark" || x.kind === "stat" || x.kind === "progress" || x.kind === "ring") ? ROW_H : ROW_H * 2 + GAP;
+    }
+    setFleetWidgets(w); save();
+  }
+  for (const x of w) { if (!x.id) x.id = nid(); if (!x.w) x.w = 2; x.w = Math.max(1, Math.min(COLS, x.w)); }
   return w;
 }
 function save() { scheduleSave(state); }
@@ -45,26 +91,20 @@ export function renderFleetWidgets(host, toolbar) {
   const edit = getDashEdit();
 
   if (toolbar) {
-    toolbar.innerHTML = `
-      <button class="dash-edit-toggle ${edit ? "on" : ""}" title="Dashboard bearbeiten (an/aus)">
-        ${edit ? "✓ Bearbeiten" : "✎ Bearbeiten"}
-      </button>
-      ${edit ? `
+    toolbar.innerHTML = edit ? `
         <span class="dash-edit-tools">
           <button data-add-widget>+ Widget</button>
           <button data-add-text>+ Text</button>
           <button data-reset-widgets>↺ Standard</button>
-        </span>` : ""}`;
-    toolbar.querySelector(".dash-edit-toggle").addEventListener("click", () => {
-      setDashEdit(!edit); save(); renderFleetWidgets(host, toolbar);
-    });
+        </span>` : "";
     toolbar.querySelector("[data-add-widget]")?.addEventListener("click", () => openAddDialog(host, toolbar));
     toolbar.querySelector("[data-add-text]")?.addEventListener("click", () => {
       list.push({ id: nid(), kind: "text", text: "Neuer Text – im Bearbeiten-Modus anklicken zum Ändern.", w: 4 });
       save(); renderFleetWidgets(host, toolbar);
     });
-    toolbar.querySelector("[data-reset-widgets]")?.addEventListener("click", () => {
-      if (!confirm("Widgets auf Standard zurücksetzen?")) return;
+    toolbar.querySelector("[data-reset-widgets]")?.addEventListener("click", async () => {
+      const ok = await uiConfirm("Widgets auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true });
+      if (!ok) return;
       setFleetWidgets(defaults()); save(); renderFleetWidgets(host, toolbar);
     });
   }
@@ -79,9 +119,12 @@ export function renderFleetWidgets(host, toolbar) {
 export function refreshFleetWidgets(host) {
   if (!host) return;
   for (const wdg of widgets()) {
-    if (wdg.kind === "line") pushWidgetHistory(wdg);
+    if (["line", "area", "spark", "stat"].includes(wdg.kind)) pushWidgetHistory(wdg);
     const card = host.querySelector(`[data-widget="${wdg.id}"] .dash-w-body`);
-    if (card && !card._editingText) renderWidgetBody(card, wdg);
+    // Karten unter dem Cursor überspringen: Neu-Rendern beim Hover erzeugte
+    // das schnelle Groß/Klein-Flackern (Element wird ersetzt -> mouseleave/
+    // mouseenter-Schleife). Die Live-Werte zeigt der Tooltip trotzdem aktuell.
+    if (card && !card._editingText && !card.matches(":hover")) renderWidgetBody(card, wdg);
   }
 }
 
@@ -92,8 +135,8 @@ function buildWidget(wdg, ctx) {
   card.dataset.widget = wdg.id;
   card.dataset.tile = wdg.id;         // für die Resize-Engine (Nachbarschaft)
   card._panel = wdg;                  // Datensatz {w,h} für die Engine
-  card.style.gridColumn = `span ${Math.max(2, Math.min(12, wdg.w))}`;
-  if (wdg.h) card.style.height = `${wdg.h}px`;
+  card.style.gridColumn = `span ${Math.max(1, Math.min(COLS, wdg.w))}`;
+  card.style.height = `${wdg.h || ROW_H}px`;
 
   // Kopf
   const head = document.createElement("div");
@@ -107,7 +150,7 @@ function buildWidget(wdg, ctx) {
     const p = presetById(wdg.preset);
     const sel = document.createElement("select");
     sel.className = "dash-w-kind";
-    sel.innerHTML = (p.charts || ["number"]).map((k) => `<option value="${k}" ${k === wdg.kind ? "selected" : ""}>${k}</option>`).join("");
+    sel.innerHTML = availableKinds(p).map((k) => `<option value="${k}" ${k === wdg.kind ? "selected" : ""}>${k}</option>`).join("");
     sel.addEventListener("change", () => { wdg.kind = sel.value; save(); renderWidgetBody(body, wdg); });
     tools.appendChild(sel);
   }
@@ -120,9 +163,10 @@ function buildWidget(wdg, ctx) {
   if (edit) {
     const ren = document.createElement("button");
     ren.className = "dash-w-btn"; ren.title = "Titel ändern"; ren.textContent = "✎";
-    ren.addEventListener("click", (e) => {
+    ren.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const name = prompt("Titel (leer = Standard):", wdg.title || "");
+      const name = await uiPrompt("Widget-Titel ändern", {
+        description: "Leer lassen = Standard-Titel des Presets.", value: wdg.title || "" });
       if (name !== null) { wdg.title = name.trim() || null; save(); head.querySelector(".dash-w-title").textContent = widgetTitle(wdg); }
     });
     tools.appendChild(ren);
@@ -156,9 +200,18 @@ function buildWidget(wdg, ctx) {
   if (edit) {
     // Windows-artige Rand-Griffe: Links = alle angrenzenden, Rechts = nur die
     // beiden an der Grenze; zusätzlich Höhe frei ziehbar.
-    attachEdgeResizers(card, host, { cols: 12, minW: 2,
+    attachEdgeResizers(card, host, { cols: COLS, minW: 1,
       panelOf: (c) => c._panel,
-      commit: () => save() });
+      commit: () => {
+        // Höhen aufs Panel-Raster einrasten (gleiche Höheneinheiten wie die
+        // Client-Ansicht), dann speichern.
+        for (const other of widgets()) {
+          if (typeof other.h === "number") other.h = snapH(other.h);
+          const el = host.querySelector(`[data-widget="${other.id}"]`);
+          if (el) el.style.height = `${other.h}px`;
+        }
+        save();
+      } });
   }
   return card;
 }
@@ -187,6 +240,7 @@ function startTextEdit(body, wdg) {
 // -------------------- Widget herauslösen --------------------
 export function detachWidget(wdg) {
   openWindow({
+    singleton: true,
     key: `fleetwidget-${wdg.id}`, appId: "fleetwidget",
     title: widgetTitle(wdg),
     props: { widget: JSON.parse(JSON.stringify(wdg)) },

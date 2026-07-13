@@ -9,7 +9,8 @@
 // Programme laufen, Verlauf per Pfeiltasten, Farben. Windows: cmd/powershell
 // wählbar (Agent spawnt die jeweilige .exe direkt).
 
-import { esc } from "../utils.js";
+import { esc, mapKeyboardText } from "../utils.js";
+import { exportLogText } from "./source.js";
 import { state } from "../state.js";
 import { dashboardSocket } from "../socket.js";
 import { registerCleanup } from "../windowmanager.js";
@@ -40,6 +41,11 @@ export function renderTerminal(body, win) {
           <option value="">📜 Skript…</option>
         </select>
         <button class="taskbar-btn" id="term-script-run-${win.key}" title="Gewähltes Skript ausführen">▶</button>
+        <button class="taskbar-btn" id="term-agentcon-${win.key}" title="Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten">🤖 Agent-Konsole</button>
+        <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
+          <option value="json">JSON</option><option value="xml">XML</option><option value="txt">TXT</option>
+        </select>
+        <button class="taskbar-btn" id="term-export-${win.key}" title="Kompletten Terminal-Log herunterladen">⬇ Export</button>
         <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet cls/clear)">🧹 Clear</button>
         <button class="taskbar-btn" id="term-restart-${win.key}">↻ Neustart</button>
       </div>` : `
@@ -51,6 +57,11 @@ export function renderTerminal(body, win) {
           <option value="">📜 Skript…</option>
         </select>
         <button class="taskbar-btn" id="term-script-run-${win.key}" title="Gewähltes Skript ausführen">▶</button>
+        <button class="taskbar-btn" id="term-agentcon-${win.key}" title="Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten">🤖 Agent-Konsole</button>
+        <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
+          <option value="json">JSON</option><option value="xml">XML</option><option value="txt">TXT</option>
+        </select>
+        <button class="taskbar-btn" id="term-export-${win.key}" title="Kompletten Terminal-Log herunterladen">⬇ Export</button>
         <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet clear)">🧹 Clear</button>
         <button class="taskbar-btn" id="term-restart-${win.key}">↻ Neustart</button>
       </div>`;
@@ -59,6 +70,7 @@ export function renderTerminal(body, win) {
     <div style="display:flex;flex-direction:column;height:100%;background:#0b0f14">
       ${shellBar}
       <div id="term-host-${win.key}" style="flex:1 1 0;min-height:0;overflow:hidden;position:relative"></div>
+      <div id="term-agenthost-${win.key}" style="flex:1 1 0;min-height:0;overflow:hidden;position:relative;display:none"></div>
       <div id="term-status-${win.key}" style="flex:none;font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">Verbinde…</div>
       <div style="flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border)">
         <span style="color:var(--subtext)">Text senden:</span>
@@ -87,9 +99,11 @@ export function renderTerminal(body, win) {
   let gotOutput = false;
   let gotAck = false;
   let agentOnline = false;
+  let termLogBuffer = "";   // kompletter Roh-Log dieser Session (fuer den Export)
   function onOutput(p) {
     if (p.session !== sessionId || !term) return;
     gotOutput = true;
+    termLogBuffer += p.data || "";
     term.write(p.data || "");
   }
   function onExit(p) {
@@ -151,8 +165,70 @@ export function renderTerminal(body, win) {
   openSession();
   setTimeout(() => term.focus(), 50);
 
+  // --- Agent-Konsole: Log des Agenten (Historie + live) statt der Shell ---
+  const agentHost = body.querySelector(`#term-agenthost-${win.key}`);
+  const agentBtn = body.querySelector(`#term-agentcon-${win.key}`);
+  let agentTerm = null;          // eigener (read-only) MiniTerm fuer den Agent-Log
+  let agentView = false;         // gerade Agent-Konsole sichtbar?
+  let agentConLogBuffer = "";    // Puffer fuer den Export
+
+  function onAgentConsoleHistory(p) {
+    if (!p || p.id !== clientId || !agentTerm) return;
+    agentConLogBuffer = p.data || "";
+    agentTerm.write("\x1b[2J\x1b[H");   // Ansicht leeren, dann Historie schreiben
+    agentTerm.write(p.data || "");
+  }
+  function onAgentConsoleLine(p) {
+    if (!p || p.id !== clientId || !agentTerm) return;
+    agentConLogBuffer += p.data || "";
+    agentTerm.write(p.data || "");
+  }
+  function onAgentConsoleAck(p) {
+    if (!p || p.id !== clientId || !agentTerm) return;
+    if (!p.agent_online) {
+      agentTerm.write("\r\n\x1b[31m[Client ist offline - Agent-Konsole nicht verfuegbar]\x1b[0m\r\n");
+    }
+  }
+  dashboardSocket.on("agent-console-history", onAgentConsoleHistory);
+  dashboardSocket.on("agent-console", onAgentConsoleLine);
+  dashboardSocket.on("agent-console-ack", onAgentConsoleAck);
+
+  function setAgentView(on) {
+    agentView = on;
+    host.style.display = on ? "none" : "";
+    agentHost.style.display = on ? "" : "none";
+    if (agentBtn) {
+      agentBtn.textContent = on ? "⌨ Shell" : "🤖 Agent-Konsole";
+      agentBtn.title = on ? "Zurueck zur interaktiven Shell" : "Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten";
+    }
+    if (on) {
+      if (!agentTerm) {
+        // Nur Anzeige - Eingaben werden ignoriert (der Agent-Log ist read-only).
+        agentTerm = new MiniTerm(agentHost, { onData: () => {}, onResize: () => {} });
+      }
+      statusEl.textContent = "Agent-Konsole (read-only) - Log des Agenten auf diesem Client.";
+      dashboardSocket.emit("agent-console-open", { clientId, username: state.user?.username || "unbekannt" });
+      setTimeout(() => { try { agentTerm.fit(); } catch {} }, 30);
+    } else {
+      dashboardSocket.emit("agent-console-close", { clientId });
+      statusEl.textContent = "Shell aktiv. Klicke ins Terminal und tippe.";
+      setTimeout(() => { try { term.fit(); term.focus(); } catch {} }, 30);
+    }
+  }
+  agentBtn?.addEventListener("click", () => setAgentView(!agentView));
+  // Groessenaenderungen auch fuer die Agent-Konsole einpassen
+  const roAgent = new ResizeObserver(() => { try { agentTerm?.fit(); } catch {} });
+  roAgent.observe(agentHost);
+
   // --- Clear-Button: sendet den passenden Befehl an die Shell ---
   // Windows-Shells (cmd/powershell) kennen 'cls', Unix-Shells 'clear'.
+  // --- Export des kompletten Terminal-Logs (JSON / XML / TXT) ---
+  body.querySelector(`#term-export-${win.key}`)?.addEventListener("click", () => {
+    const fmt = body.querySelector(`#term-fmt-${win.key}`)?.value || "json";
+    const base = agentView ? `agent-console-${(clientName || clientId || "client")}` : `terminal-${(clientName || clientId || "client")}`;
+    exportLogText(agentView ? agentConLogBuffer : termLogBuffer, base, fmt);
+  });
+
   body.querySelector(`#term-clear-${win.key}`)?.addEventListener("click", () => {
     const cmd = isWindows ? "cls" : "clear";
     dashboardSocket.emit("term-input", { clientId, session: sessionId, data: cmd + "\r" });
@@ -182,7 +258,8 @@ export function renderTerminal(body, win) {
     term.focus();
   }
   body.querySelector(`#term-script-run-${win.key}`)?.addEventListener("click", runSelectedScript);
-  scriptSel?.addEventListener("change", runSelectedScript);
+  // Bewusst KEIN Ausführen beim Auswählen im Dropdown - erst der ▶-Button
+  // sendet das Skript an die Shell.
 
   // --- Text-Sendebox (wie beim Remote Screen): kompletten Text auf einmal
   //     an die Shell schicken. Der Text geht 1:1 als Zeichen in das PTY -
@@ -191,12 +268,17 @@ export function renderTerminal(body, win) {
   const termTextInput = body.querySelector(`#term-text-${win.key}`);
   const termSendBtn = body.querySelector(`#term-send-${win.key}`);
   const termEnterChk = body.querySelector(`#term-enter-${win.key}`);
+  const termLayoutSel = body.querySelector(`#term-layout-${win.key}`);
   function sendTermText() {
     const text = termTextInput.value;
     if (!text) return;
+    // Layout-Kompensation (andersrum, auf Nutzerwunsch): "us" gewählt ->
+    // Zeichen werden vor dem Senden über die Positions-Tabelle ersetzt
+    // (Reverse-Effekt); "de"/"raw" = 1:1 senden.
+    const mapped = mapKeyboardText(text, termLayoutSel?.value || "raw");
     dashboardSocket.emit("term-input", {
       clientId, session: sessionId,
-      data: text + (termEnterChk?.checked ? "\r" : ""),
+      data: mapped + (termEnterChk?.checked ? "\r" : ""),
     });
     termTextInput.value = "";
     termTextInput.focus();
@@ -219,6 +301,12 @@ export function renderTerminal(body, win) {
     dashboardSocket.off("term-output", onOutput);
     dashboardSocket.off("term-exit", onExit);
     dashboardSocket.off("term-ack", onAck);
+    dashboardSocket.off("agent-console-history", onAgentConsoleHistory);
+    dashboardSocket.off("agent-console", onAgentConsoleLine);
+    dashboardSocket.off("agent-console-ack", onAgentConsoleAck);
+    if (agentView) dashboardSocket.emit("agent-console-close", { clientId });
+    try { roAgent.disconnect(); } catch {}
+    try { agentTerm?.dispose(); } catch {}
     dashboardSocket.emit("term-close", { clientId, session: sessionId });
     try { win._termRo?.disconnect(); } catch {}
     try { term?.dispose(); } catch {}

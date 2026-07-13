@@ -299,8 +299,17 @@ body {
 .mini-chart svg { width: 100%; height: auto; overflow: visible; }
 
 .notes-textarea {
-  width: 100%; min-height: 240px; height: 100%; background: var(--panel-2); border: 1px solid var(--border);
+  /* Kleiner Innenabstand zum Container: Der Fokus-Glow (box-shadow) wurde
+     sonst vom scrollenden .dash-lp-body oben/seitlich abgeschnitten und war
+     nur unten und an den Ecken sichtbar. */
+  box-sizing: border-box;
+  width: calc(100% - 8px); min-height: 232px; height: calc(100% - 8px); margin: 4px;
+  background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 8px; color: var(--text); padding: 10px; resize: vertical;
+}
+.notes-textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
 }
 
 .actions-panel { display: flex; flex-direction: column; gap: 8px; }
@@ -661,7 +670,10 @@ label:has(input[type="checkbox"]) {
   transition: background 0.16s ease, color 0.16s ease,
               box-shadow 0.16s ease, transform 0.12s ease;
 }
-.tree-row:hover { transform: translateX(2px); }
+/* KEIN translateX beim Hover mehr: In Kombination mit dem Sidebar-Rerender
+   bei jedem Metrik-Tick sprangen die Client-Zeilen ständig 2px hin und her
+   ("mega rumbuggen"). Hervorhebung nur noch über Hintergrund/Akzentstreifen. */
+.tree-row:hover { box-shadow: inset 2px 0 0 var(--accent); }
 /* TODO: .row-anim { animation: row-in 0.18s ease; } */
 @keyframes row-in {
   from { opacity: 0; transform: translateX(-6px); }
@@ -704,7 +716,7 @@ label:has(input[type="checkbox"]) {
   cursor: pointer; color: var(--text); font-size: 13px;
   transition: background 0.16s ease, transform 0.12s ease;
 }
-.sidebar-nav-item:hover { background: rgba(var(--accent-rgb), 0.12); transform: translateX(2px); }
+.sidebar-nav-item:hover { background: rgba(var(--accent-rgb), 0.12); }
 .sidebar-nav-item .nav-ico { color: var(--accent); }
 .sidebar-nav-item .nav-soon {
   margin-left: auto; font-size: 10px; color: var(--subtext);
@@ -1041,10 +1053,13 @@ select:disabled {
 /* ================================================================ */
 .dash-widgets {
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
+  /* GLEICHES Raster wie die Client-Ansicht (dashlayout): 5 Spalten, 14px Gap.
+     Höhen der Widgets rasten auf 150px-Höheneinheiten ein (fleetdash.js). */
+  grid-template-columns: repeat(5, 1fr);
   gap: 14px;
   align-items: start;
 }
+.dash-w .dash-w-body { overflow: hidden; }
 .dash-w {
   position: relative;
   display: flex; flex-direction: column;
@@ -1297,3 +1312,29 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
 }
 .dash-grid-layout.editing .tile-grip-x::after, .dash-grid-layout.editing .tile-grip-y::after { background: rgba(var(--accent-rgb), .55); }
 .tile-grip-xy:hover::after { border-color: var(--accent); }
+
+/* Status-Panel im Raster kompakter, damit es in 2 Rasterreihen passt */
+.dash-grid-layout .dash-lp .status-label { font-size: 14px; }
+.dash-grid-layout .dash-lp .status-info { margin-top: 8px; gap: 3px; }
+.dash-grid-layout .dash-lp .status-info > div { font-size: 12px; }
+.dash-grid-layout .dash-lp .quick-actions { margin-top: 10px; gap: 6px; }
+.dash-grid-layout .dash-lp .quick-actions button { padding: 6px 9px; font-size: 12px; }
+
+
+/* --- Widget-Bedienelemente IMMER über den Diagrammen -------------------- */
+/* SVGs/Charts (teils overflow:visible) lagen über den Ansicht-Umschaltern - */
+/* dadurch waren die Buttons nicht klickbar. Die Bedienleisten bekommen eine */
+/* eigene Stapel-Ebene über allen Chart-Inhalten.                            */
+.cmetric-kinds {            /* Ansicht-Umschalter der Client-Widgets */
+  position: relative;
+  z-index: 30;
+}
+.cmetric-kinds .cmetric-kind { position: relative; z-index: 31; }
+.dash-lp-head, .dash-lp-tools,      /* Kopf/Werkzeuge der Client-Panels */
+.dash-w-head, .dash-w-tools {       /* Kopf/Werkzeuge der Dashboard-Widgets */
+  position: relative;
+  z-index: 30;
+}
+.dash-w-kind { position: relative; z-index: 31; }   /* Ansicht-Select im Dashboard */
+.tile-grip { z-index: 32; }                          /* Resize-Griffe darüber */
+.cmetric-holder svg, .dash-w-body svg { z-index: 0; }

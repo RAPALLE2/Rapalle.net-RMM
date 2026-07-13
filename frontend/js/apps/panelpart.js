@@ -21,6 +21,13 @@ export function renderPanelPart(body, win) {
   const { clientId, part } = win.props;
   let activeSub = win.props.activeSub || (win.props.subs && win.props.subs[0]) || "metrics";
   const subs = win.props.subs || null;
+  // NEU: komplette Panel-Definitionen der Ordner-Kinder (inkl. metric/kind bei
+  // selbst hinzugefügten Metrik-Widgets). Behebt den Bug, dass herausgelöste
+  // Ordner-Widgets immer generisch als "cmetric" gerendert wurden. "subs"
+  // bleibt als Fallback für alte, bereits persistierte Fenster erhalten.
+  const panels = Array.isArray(win.props.panels) && win.props.panels.length ? win.props.panels : null;
+  let activePanelId = win.props.activePanelId
+    || (panels && panels[0] ? panels[0].id : null);
 
   function draw() {
     const client = findClient(clientId);
@@ -51,7 +58,11 @@ export function renderPanelPart(body, win) {
 
     body.innerHTML = `
       <div class="panelpart-wrap">
-        ${part === "folder" && subs ? `
+        ${part === "folder" && panels ? `
+          <div class="tab-bar panelpart-tabs">
+            ${panels.map((p) => `<button class="tab-btn ${p.id === activePanelId ? "active" : ""}" data-panelid="${esc(p.id)}">${esc(p._label || (OVERVIEW_SUBS[p.type] ? OVERVIEW_SUBS[p.type]() : p.type))}</button>`).join("")}
+          </div>` : ""}
+        ${part === "folder" && !panels && subs ? `
           <div class="tab-bar panelpart-tabs">
             ${subs.map((s) => `<button class="tab-btn ${s === activeSub ? "active" : ""}" data-sub="${esc(s)}">${OVERVIEW_SUBS[s] ? OVERVIEW_SUBS[s]() : esc(s)}</button>`).join("")}
           </div>` : ""}
@@ -68,10 +79,31 @@ export function renderPanelPart(body, win) {
         renderClientMetric(target, client, { id: win.key, metric: win.props.metric, kind: win.props.kind }));
     }
     else if (part === "folder") {
-      const rerenderFolder = () => renderOverviewSub(target, client, activeSub, rerenderFolder);
-      rerenderFolder();
+      if (panels) {
+        // Aktives Kind anhand seiner KOMPLETTEN Definition rendern.
+        const p = panels.find((x) => x.id === activePanelId) || panels[0];
+        if (p && p.type === "cmetric") {
+          // Selbst hinzugefügtes Metrik-Widget: exakt mit metric + kind rendern.
+          import("../clientmetrics.js").then(({ renderClientMetric }) =>
+            renderClientMetric(target, client, { id: `${win.key}-${p.id}`, metric: p.metric, kind: p.kind }));
+        } else if (p) {
+          const rerenderFolder = () => renderOverviewSub(target, client, p.type, rerenderFolder);
+          rerenderFolder();
+        }
+      } else {
+        // Fallback: altes Fenster ohne panels-Prop (nur Typen bekannt).
+        const rerenderFolder = () => renderOverviewSub(target, client, activeSub, rerenderFolder);
+        rerenderFolder();
+      }
     }
 
+    body.querySelectorAll("[data-panelid]").forEach((b) =>
+      b.addEventListener("click", () => {
+        activePanelId = b.dataset.panelid;
+        win.props.activePanelId = activePanelId;   // in die Fenster-Persistenz übernehmen
+        draw();
+      })
+    );
     body.querySelectorAll("[data-sub]").forEach((b) =>
       b.addEventListener("click", () => {
         activeSub = b.dataset.sub;
@@ -87,8 +119,39 @@ export function renderPanelPart(body, win) {
   // (Status-/Übersicht-Fenster sollen mitlaufen wie das Dashboard).
   function onMetrics(p) {
     if (!p || p.id !== clientId) return;
-    // Nur bei Ansichten mit Live-Daten neu zeichnen.
-    if (part === "status" || part === "folder" || part === "cmetric") draw();
+    // Nur die Werte/SVGs im bestehenden Fenster ersetzen - NICHT das ganze
+    // Fenster neu aufbauen (Tabs/Scroll/Hover bleiben erhalten).
+    if (part !== "status" && part !== "folder" && part !== "cmetric") return;
+    const client = findClient(clientId);
+    const target = body.querySelector(".panelpart-body");
+    if (!client || !target) { draw(); return; }
+    if (part === "status") { target.innerHTML = ""; renderStatusPart(target, client); return; }
+    if (part === "cmetric") {
+      import("../clientmetrics.js").then(({ renderClientMetric }) =>
+        renderClientMetric(target, client, { id: win.key, metric: win.props.metric, kind: win.props.kind }));
+      return;
+    }
+    // folder: nur den aktiven Inhalt ersetzen (Tab-Leiste bleibt stehen).
+    // Notes/Text-Tabs und Bereiche mit Eingabe-Fokus werden NICHT angefasst.
+    const liveTypes = new Set(["cmetric", "status", "metrics", "disk"]);
+    const focused = target.contains(document.activeElement) &&
+      /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName);
+    if (focused) return;
+    if (panels) {
+      const p2 = panels.find((x) => x.id === activePanelId) || panels[0];
+      if (p2 && !liveTypes.has(p2.type)) return;
+      if (p2 && p2.type === "cmetric") {
+        import("../clientmetrics.js").then(({ renderClientMetric }) =>
+          renderClientMetric(target, client, { id: `${win.key}-${p2.id}`, metric: p2.metric, kind: p2.kind }));
+      } else if (p2) {
+        const rr = () => renderOverviewSub(target, client, p2.type, rr);
+        rr();
+      }
+    } else {
+      if (!liveTypes.has(activeSub)) return;
+      const rr = () => renderOverviewSub(target, client, activeSub, rr);
+      rr();
+    }
   }
   dashboardSocket.on("client:metrics", onMetrics);
 

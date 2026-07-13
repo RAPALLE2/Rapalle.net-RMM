@@ -39,6 +39,17 @@ export function notify(message, level = "info", durationMs = 5000, opts = {}) {
   const cfg = LEVELS[level] || LEVELS.info;
   const root = ensureContainer();
 
+  // In der Benachrichtigungs-Zentrale aufzeichnen (dynamischer Import, um
+  // Zyklen zu vermeiden). Die zurueckgegebene id wird zum "als gelesen
+  // markieren" genutzt, sobald der Nutzer mit dem Toast interagiert.
+  let recordId = null;
+  let markReadFn = null;
+  import("./notifycenter.js").then((nc) => {
+    markReadFn = nc.markRead;
+    recordId = nc.recordNotification(message, level, opts.source || "app");
+  }).catch(() => {});
+  const markAsRead = () => { if (recordId && markReadFn) { try { markReadFn(recordId); } catch {} } };
+
   // Gibt es schon eine Meldung mit demselben Tag? -> sofort entfernen (die neue
   // "aktualisiert die Situation", z.B. Erfolg ersetzt die laufende Fortschritts-Box).
   const tag = opts && opts.tag;
@@ -130,10 +141,13 @@ export function notify(message, level = "info", durationMs = 5000, opts = {}) {
     setTimeout(() => box.remove(), 350);
   }
 
-  // Hover pausiert den Countdown
-  box.addEventListener("mouseenter", pauseCountdown);
+  // Hover pausiert den Countdown - und gilt als "gelesen" (Interaktion).
+  box.addEventListener("mouseenter", () => { pauseCountdown(); markAsRead(); });
   box.addEventListener("mouseleave", resumeCountdown);
-  box.querySelector(".notify-close").addEventListener("click", close);
+  // WegXen gilt ebenfalls als gelesen.
+  box.querySelector(".notify-close").addEventListener("click", () => { markAsRead(); close(); });
+  // Jede sonstige Interaktion (Klick auf die Box) -> gelesen.
+  box.addEventListener("mousedown", markAsRead);
 
   if (durationMs > 0) startCountdown();
   if (tag) _tagged.set(tag, close);

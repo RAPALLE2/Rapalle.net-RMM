@@ -273,6 +273,13 @@ async def on_register(sid, payload):
         payload.get("ip"),
     )
 
+    # Automatisch erkannter Gerätetyp (VM/LXC): übernehmen, solange noch der
+    # Default "physical" gesetzt ist. Manuelle Auswahl bleibt unangetastet.
+    # Damit zeigt der Bearbeiten-Dialog bei VMs/CTs nicht mehr fälschlich
+    # "Physisches Gerät" an.
+    if db.apply_detected_device_type(client_id, payload.get("device_type")):
+        await sio.emit("clients:changed", namespace="/dashboard")
+
     # Nach dem Speichern den aktuellen Stand aus der DB holen
     client = db.get_client(client_id)
 
@@ -477,6 +484,39 @@ async def on_term_output(sid, payload):
 async def on_term_exit(sid, payload):
     await sio.emit("term-exit", payload, namespace="/dashboard")
     _finalize_term_session(payload.get("session"))
+
+
+# --- Agent-Konsole: Dashboard liest den Log des Agenten mit ---
+# Dashboard -> Agent: Stream öffnen/schließen; Agent -> Dashboard: Historie
+# und Live-Zeilen weiterreichen (gefiltert wird im Frontend über payload.id).
+
+@sio.on("agent-console-open", namespace="/dashboard")
+async def dashboard_agent_console_open(sid, data):
+    client_id = data.get("clientId")
+    if not _ws_user_may(data.get("username"), "use_terminal", client_id):
+        await sio.emit("agent-console", {
+            "id": client_id,
+            "data": "\r\n\x1b[31mKeine Berechtigung für die Agent-Konsole dieses Clients.\x1b[0m\r\n",
+        }, namespace="/dashboard")
+        return
+    ok = await send_to_agent(client_id, "agent-console-open", {})
+    await sio.emit("agent-console-ack", {"id": client_id, "agent_online": bool(ok)},
+                   namespace="/dashboard")
+
+
+@sio.on("agent-console-close", namespace="/dashboard")
+async def dashboard_agent_console_close(sid, data):
+    await send_to_agent(data.get("clientId"), "agent-console-close", {})
+
+
+@sio.on("agent-console", namespace="/agent")
+async def on_agent_console(sid, payload):
+    await sio.emit("agent-console", payload, namespace="/dashboard")
+
+
+@sio.on("agent-console-history", namespace="/agent")
+async def on_agent_console_history(sid, payload):
+    await sio.emit("agent-console-history", payload, namespace="/dashboard")
 
 
 @sio.event(namespace="/agent")

@@ -7,7 +7,7 @@
 
 import { api } from "../api.js";
 import { registerCleanup } from "../windowmanager.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 import { MiniTerm } from "./miniterm.js";
 
 function formatDuration(ms) {
@@ -171,7 +171,10 @@ export function renderRecordings(body, win) {
         currentIdx = 0;
         showFrame(0);
       } catch (e) {
-        playerEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+        const gone = /nicht gefunden|fehlt|404/i.test(e.message || "");
+        playerEl.innerHTML = `<div style="color:${gone ? "var(--danger)" : "var(--subtext)"};padding:20px;text-align:center">
+          ${gone ? "Replay gibt's nicht mehr – die Datei wurde gelöscht." : esc(e.message)}</div>`;
+        if (gone) loadList();   // Liste auffrischen (Eintrag wird serverseitig entfernt)
       }
       return;
     }
@@ -184,7 +187,9 @@ export function renderRecordings(body, win) {
         videoUrl = URL.createObjectURL(blob);
         playerEl.innerHTML = `<video controls autoplay style="max-width:100%;max-height:100%;background:#000" src="${videoUrl}"></video>`;
       } catch (e) {
-        playerEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+        const gone = /nicht gefunden|fehlt|404/i.test(e.message || "");
+        playerEl.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${gone ? "Replay gibt's nicht mehr – die Datei wurde gelöscht." : esc(e.message)}</div>`;
+        if (gone) loadList();
       }
       return;
     }
@@ -204,7 +209,9 @@ export function renderRecordings(body, win) {
       currentIdx = 0;
       showFrame(0);
     } catch (e) {
-      playerEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+      const gone = /nicht gefunden|fehlt|404/i.test(e.message || "");
+      playerEl.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${gone ? "Replay gibt's nicht mehr – die Datei wurde gelöscht." : esc(e.message)}</div>`;
+      if (gone) loadList();
     }
   }
 
@@ -216,18 +223,22 @@ export function renderRecordings(body, win) {
         listEl.innerHTML = `<tr><td style="color:var(--subtext)">Noch keine Aufzeichnungen.</td></tr>`;
         return;
       }
-      listEl.innerHTML = recordings.map((r) => `
-        <tr data-rec="${r.id}" style="cursor:pointer">
+      listEl.innerHTML = recordings.map((r) => {
+        const missing = r.file_exists === false;
+        return `
+        <tr ${missing ? "" : `data-rec="${r.id}"`} style="cursor:${missing ? "default" : "pointer"};${missing ? "opacity:0.6" : ""}">
           <td>
             <div style="font-weight:500">${esc(r.client_hostname || "?")}</div>
             <div style="font-size:11px;color:var(--subtext)">
               ${new Date(r.started_at).toLocaleString("de-DE")}<br>
-              ${formatDuration(r.duration_ms)} · ${r.format === "video" ? "🎬 Video" : r.format === "term" ? "⌨️ Terminal" : `${r.frame_count} Frames`} · ${esc(r.username || "")}
+              ${missing
+                ? `<span style="color:var(--danger)">Replay gibt's nicht mehr (Datei wurde gelöscht)</span>`
+                : `${formatDuration(r.duration_ms)} · ${r.format === "video" ? "🎬 Video" : r.format === "term" ? "⌨️ Terminal" : `${r.frame_count} Frames`} · ${esc(r.username || "")}`}
             </div>
           </td>
           <td style="width:30px"><button class="taskbar-btn" data-del="${r.id}" title="Löschen">✕</button></td>
-        </tr>
-      `).join("");
+        </tr>`;
+      }).join("");
 
       listEl.querySelectorAll("[data-rec]").forEach((tr) =>
         tr.addEventListener("click", (e) => {
@@ -240,9 +251,9 @@ export function renderRecordings(body, win) {
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async (e) => {
           e.stopPropagation();
-          if (!confirm("Aufzeichnung löschen?")) return;
+          if (!(await uiConfirm("Aufzeichnung löschen?", { okText: "Löschen", danger: true }))) return;
           try { await api.deleteRecording(btn.dataset.del); loadList(); }
-          catch (err) { alert(err.message); }
+          catch (err) { window.notify?.(err.message, "error"); }
         })
       );
 

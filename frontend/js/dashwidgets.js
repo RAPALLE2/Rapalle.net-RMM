@@ -13,6 +13,7 @@
 import { state } from "./state.js";
 import { esc } from "./utils.js";
 import { presetById } from "./metriccatalog.js";
+import { buildFleetDonut, showFleetTip, hideFleetTip, attachHoverTip } from "./fleetcharts.js";
 
 const PIE_COLORS = [
   "#4da6ff", "#3ecf8e", "#f5a524", "#ff4d6d", "#a78bfa",
@@ -42,6 +43,20 @@ export function formatValue(preset, v) {
 }
 
 // Haupt-Renderer: füllt ein Ziel-Element mit dem Widget-Inhalt.
+// Zusätzliche Ansichten, die automatisch für JEDES passende Preset verfügbar
+// sind (ohne jedes Preset einzeln anzufassen):
+//   Wert-Presets (value):  area, spark, progress, ring, stat
+//   Zeilen-Presets (rows): column, list
+export const VALUE_EXTRA_KINDS = ["area", "spark", "progress", "ring", "stat"];
+export const ROWS_EXTRA_KINDS = ["column", "list"];
+export function availableKinds(preset) {
+  if (!preset) return ["number"];
+  const kinds = [...(preset.charts || [])];
+  if (preset.value) for (const k of VALUE_EXTRA_KINDS) if (!kinds.includes(k)) kinds.push(k);
+  if (preset.rows) for (const k of ROWS_EXTRA_KINDS) if (!kinds.includes(k)) kinds.push(k);
+  return kinds;
+}
+
 export function renderWidgetBody(target, widget) {
   target.innerHTML = "";
   if (widget.kind === "text") return renderText(target, widget);
@@ -50,15 +65,39 @@ export function renderWidgetBody(target, widget) {
   if (!preset) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Unbekannte Metrik.</div>`; return; }
 
   switch (widget.kind) {
-    case "number": return renderNumber(target, widget, preset);
-    case "donut": return renderDonut(target, widget, preset);
-    case "gauge": return renderGauge(target, widget, preset);
-    case "line": return renderLine(target, widget, preset);
+    case "number": renderNumber(target, widget, preset); break;
+    case "donut": renderDonut(target, widget, preset); break;
+    case "gauge": renderGauge(target, widget, preset); break;
+    case "line": renderLine(target, widget, preset); break;
     case "pie": return renderPie(target, widget, preset);
     case "bar": return renderBar(target, widget, preset);
     case "table": return renderTable(target, widget, preset);
-    default: target.innerHTML = `<div style="color:var(--subtext)">${esc(widget.kind)}?</div>`;
+    case "area": renderArea(target, widget, preset); break;
+    case "spark": renderSpark(target, widget, preset); break;
+    case "progress": renderProgress(target, widget, preset); break;
+    case "ring": renderRing(target, widget, preset); break;
+    case "stat": renderStat(target, widget, preset); break;
+    case "column": return renderColumn(target, widget, preset);
+    case "list": return renderList(target, widget, preset);
+    case "overview": return renderOverview(target, widget, preset);
+    case "fleetdonut": return renderFleetDonut(target, widget, preset);
+    default: target.innerHTML = `<div style="color:var(--subtext)">${esc(widget.kind)}?</div>`; return;
   }
+  // Hover wie in der Flotten-Übersicht: Tooltip mit exaktem Wert (live) für
+  // die einfachen Wert-Widgets. Pie/Bar/FleetDonut haben eigene, feinere
+  // Hover-Effekte pro Segment/Zeile (siehe unten). Guard: renderWidgetBody
+  // läuft bei jedem Metrik-Tick - Listener nur EINMAL pro Element anhängen.
+  if (!target._hoverTipAttached) {
+    target._hoverTipAttached = true;
+    attachHoverTip(target, () => {
+      const p = presetById(target._hoverPreset || widget.preset) || preset;
+      const v = p.value ? p.value(state) : null;
+      const val = v === null || v === undefined ? "—" : formatValue(p, v);
+      const max = typeof p.max === "number" ? ` <span style="color:var(--subtext)">/ ${esc(formatValue(p, p.max))}</span>` : "";
+      return `<b>${esc(widget.title || p.label)}</b><br>${esc(val)}${max}`;
+    });
+  }
+  target._hoverPreset = widget.preset;
 }
 
 // Titel eines Widgets (frei überschreibbar).
@@ -70,6 +109,175 @@ export function widgetTitle(widget) {
 }
 
 // -------------------- Darstellungen --------------------
+
+// ---- Verlaufspunkte fuer area/spark/stat (gleiche Quelle wie "line") ----
+function widgetSeries(widget, preset) {
+  if (!_history.get(widget.id) || !_history.get(widget.id).v.length) pushWidgetHistory(widget);
+  const cur = preset.value ? preset.value(state) : 0;
+  return (_history.get(widget.id) || { v: [cur ?? 0] }).v;
+}
+function polyPoints(data, w, hgt, pad, max, min) {
+  const span = (max - min) || 1;
+  return data.map((val, i) => {
+    const x = pad + (data.length <= 1 ? 0 : (i / (data.length - 1)) * (w - 2 * pad));
+    const y = hgt - pad - ((val - min) / span) * (hgt - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+// Fläche (gefüllter Verlauf)
+function renderArea(target, widget, preset) {
+  const data = widgetSeries(widget, preset);
+  const cur = preset.value ? preset.value(state) : 0;
+  const w = 320, hgt = 110, pad = 6;
+  const max = Math.max(1, ...data, preset.max || 0);
+  const min = Math.min(...data, 0);
+  const pts = polyPoints(data, w, hgt, pad, max, min);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+      <span style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</span>
+      <span style="font-size:16px;font-weight:700">${esc(formatValue(preset, cur))}</span>
+    </div>
+    <svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" preserveAspectRatio="none">
+      <polygon points="${pad},${hgt - pad} ${pts} ${w - pad},${hgt - pad}" fill="var(--accent)" opacity="0.22"/>
+      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>`;
+  target.appendChild(wrap);
+}
+
+// Sparkline (minimal, ohne Achsen)
+function renderSpark(target, widget, preset) {
+  const data = widgetSeries(widget, preset);
+  const cur = preset.value ? preset.value(state) : 0;
+  const w = 320, hgt = 56, pad = 4;
+  const max = Math.max(1, ...data), min = Math.min(...data, 0);
+  const pts = polyPoints(data, w, hgt, pad, max, min);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div style="font-size:22px;font-weight:700;line-height:1.2">${esc(formatValue(preset, cur))}</div>
+    <div style="font-size:11px;color:var(--subtext);margin-bottom:2px">${esc(preset.label)}</div>
+    <svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" preserveAspectRatio="none">
+      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>`;
+  target.appendChild(wrap);
+}
+
+// Fortschrittsbalken (Wert / Maximum)
+function renderProgress(target, widget, preset) {
+  const v = preset.value ? preset.value(state) : 0;
+  const max = typeof preset.max === "number" ? preset.max : 100;
+  const pct = Math.max(0, Math.min(100, ((v || 0) / (max || 1)) * 100));
+  const color = pct > 85 ? "#ff4d6d" : pct > 65 ? "#f5a524" : "var(--accent)";
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+      <span style="font-size:12px;color:var(--subtext)">${esc(preset.label)}</span>
+      <span style="font-size:18px;font-weight:700">${esc(formatValue(preset, v))}</span>
+    </div>
+    <div style="height:14px;border-radius:7px;background:var(--panel-2);overflow:hidden">
+      <div style="height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:7px;transition:width .3s"></div>
+    </div>
+    <div style="font-size:10px;color:var(--subtext);margin-top:4px;text-align:right">${Math.round(pct)}% von ${esc(formatValue(preset, max))}</div>`;
+  target.appendChild(wrap);
+}
+
+// Ring (dünner Donut)
+function renderRing(target, widget, preset) {
+  const v = preset.value ? preset.value(state) : 0;
+  const max = typeof preset.max === "number" ? preset.max : 100;
+  const pct = Math.max(0, Math.min(100, ((v || 0) / (max || 1)) * 100));
+  const size = 110, stroke = 9, r = (size - stroke) / 2 - 2, cx = size / 2, cy = size / 2;
+  const C = 2 * Math.PI * r, len = (pct / 100) * C;
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "display:flex;justify-content:center;padding:2px";
+  wrap.innerHTML = `
+    <div style="position:relative;width:${size}px;height:${size}px">
+      <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}"/>
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}"
+          stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
+      </svg>
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+        <div style="font-size:17px;font-weight:700;line-height:1">${esc(formatValue(preset, v))}</div>
+        <div style="font-size:9px;color:var(--subtext);margin-top:2px">${Math.round(pct)}%</div>
+      </div>
+    </div>`;
+  target.appendChild(wrap);
+}
+
+// Stat: großer Wert + Trendpfeil (Vergleich mit Verlaufsanfang) + Mini-Spark
+function renderStat(target, widget, preset) {
+  const data = widgetSeries(widget, preset);
+  const cur = preset.value ? preset.value(state) : 0;
+  const ref = data.length > 1 ? data[0] : cur;
+  const diff = (cur || 0) - (ref || 0);
+  const up = diff > 0, flat = Math.abs(diff) < 1e-9;
+  const trendColor = flat ? "var(--subtext)" : (up ? "#f5a524" : "#3ecf8e");
+  const w = 140, hgt = 34, pad = 3;
+  const max = Math.max(1, ...data), min = Math.min(...data, 0);
+  const pts = polyPoints(data, w, hgt, pad, max, min);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:26px;font-weight:700;line-height:1.1">${esc(formatValue(preset, cur))}</div>
+        <div style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</div>
+      </div>
+      <div style="text-align:right;flex:1;min-width:90px">
+        <div style="font-size:13px;font-weight:600;color:${trendColor}">${flat ? "→" : (up ? "▲" : "▼")} ${esc(formatValue(preset, Math.abs(diff)))}</div>
+        <svg viewBox="0 0 ${w} ${hgt}" width="${w}" height="${hgt}" preserveAspectRatio="none">
+          <polyline points="${pts}" fill="none" stroke="${trendColor}" stroke-width="2"/>
+        </svg>
+      </div>
+    </div>`;
+  target.appendChild(wrap);
+}
+
+// Säulen (vertikale Balken je Zeile)
+function renderColumn(target, widget, preset) {
+  const rows = (preset.rows ? preset.rows(state) : []).slice(0, 12);
+  const max = Math.max(1, ...rows.map((r) => r.value || 0));
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "display:flex;gap:6px;align-items:flex-end;height:110px;padding:2px 2px 0";
+  wrap.innerHTML = rows.map((row, i) => {
+    const pct = ((row.value || 0) / max) * 100;
+    const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
+    return `<div class="wcol" data-i="${i}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0;cursor:pointer">
+      <div style="width:100%;height:${Math.max(3, pct * 0.86).toFixed(1)}%;background:${color};border-radius:4px 4px 0 0;transition:opacity .12s"></div>
+      <span style="font-size:9px;color:var(--subtext);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
+    </div>`;
+  }).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+  target.appendChild(wrap);
+  wrap.querySelectorAll(".wcol").forEach((el) => {
+    const row = rows[+el.dataset.i];
+    const tip = () => `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(row.value))}`;
+    el.addEventListener("mouseenter", (e) => showFleetTip(tip(), e.clientX, e.clientY));
+    el.addEventListener("mousemove", (e) => showFleetTip(tip(), e.clientX, e.clientY));
+    el.addEventListener("mouseleave", () => hideFleetTip());
+  });
+}
+
+// Liste (Top-Zeilen als Text)
+function renderList(target, widget, preset) {
+  const rows = (preset.rows ? preset.rows(state) : []).slice(0, 10);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = rows.map((row, i) => `
+    <div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 4px;border-radius:6px">
+      <span style="color:var(--subtext);width:16px;text-align:right;font-variant-numeric:tabular-nums">${i + 1}.</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
+      <span style="font-weight:600;font-variant-numeric:tabular-nums">${esc(row.raw != null ? row.raw : String(row.value))}</span>
+    </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+  target.appendChild(wrap);
+}
+
+// Interaktiver Flotten-Donut (Hover-Highlight + Tooltip mit Client-Liste) -
+// dieselbe Darstellung wie die frühere feste Flotten-Übersicht im Dashboard.
+function renderFleetDonut(target, widget, preset) {
+  const segments = preset.segments ? preset.segments(state) : [];
+  // Kompakt (size 92): passt inkl. Legende in EINE Raster-Höheneinheit (150px).
+  target.appendChild(buildFleetDonut(segments, { card: false, size: 92 }));
+}
 
 function renderText(target, widget) {
   const div = document.createElement("div");
@@ -190,16 +398,16 @@ function renderPie(target, widget, preset) {
     const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
     const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
     if (rows.length === 1) {
-      paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>`;
+      paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" class="wpie-seg" data-seg="${i}" style="cursor:pointer;transition:opacity .12s"/>`;
     } else {
-      paths += `<path d="M ${cx} ${cy} L ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} Z" fill="${color}"/>`;
+      paths += `<path d="M ${cx} ${cy} L ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} Z" fill="${color}" class="wpie-seg" data-seg="${i}" style="cursor:pointer;transition:opacity .12s"/>`;
     }
     a0 = a1;
   });
   const legend = rows.map((row, i) => {
     const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
     const pct = total ? Math.round((row.value / total) * 100) : 0;
-    return `<div style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0">
+    return `<div class="wpie-row" data-seg="${i}" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;border-radius:6px;cursor:pointer">
       <span style="width:10px;height:10px;border-radius:3px;background:${color};flex:none"></span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
       <span style="color:var(--subtext);font-variant-numeric:tabular-nums">${row.value} · ${pct}%</span>
@@ -210,6 +418,77 @@ function renderPie(target, widget, preset) {
   wrap.innerHTML = `
     <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="flex:none">${paths || `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--border)"/>`}</svg>
     <div style="flex:1;min-width:140px">${legend || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`}</div>`;
+  target.appendChild(wrap);
+
+  // Hover wie in der Flotten-Übersicht: Segment/Legende hervorheben, Rest
+  // abdunkeln, Tooltip mit Wert + Prozent (und Client-Liste, falls vorhanden).
+  const segEls = wrap.querySelectorAll(".wpie-seg");
+  const rowEls = wrap.querySelectorAll(".wpie-row");
+  const tipFor = (row) => {
+    const pctT = total ? Math.round(((row.value || 0) / total) * 100) : 0;
+    const items = row.items ? `<br><span style="color:var(--subtext)">${row.items.slice(0, 12).map((h) => `• ${esc(h)}`).join("<br>")}${row.items.length > 12 ? `<br>… und ${row.items.length - 12} weitere` : ""}</span>` : "";
+    return `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(row.value))} (${pctT}%)${items}`;
+  };
+  const highlight = (i, on) => {
+    segEls.forEach((s) => s.setAttribute("opacity", on && +s.dataset.seg !== i ? "0.45" : ""));
+    const lr = wrap.querySelector(`.wpie-row[data-seg="${i}"]`);
+    if (lr) lr.style.background = on ? "var(--panel-2, #1b2740)" : "";
+  };
+  const bindHover = (el) => {
+    const i = +el.dataset.seg;
+    const row = rows[i];
+    if (!row) return;
+    el.addEventListener("mouseenter", (e) => { highlight(i, true); showFleetTip(tipFor(row), e.clientX, e.clientY); });
+    el.addEventListener("mousemove", (e) => showFleetTip(tipFor(row), e.clientX, e.clientY));
+    el.addEventListener("mouseleave", () => { highlight(i, false); hideFleetTip(); });
+  };
+  segEls.forEach(bindHover);
+  rowEls.forEach(bindHover);
+}
+
+// Ein einzelnes Kreisdiagramm mit Legende (wiederverwendet für Pie & Overview).
+function pieSection(rows, title) {
+  rows = (rows || []).filter((r) => (r.value || 0) > 0);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  const size = 120, r = size / 2 - 2, cx = size / 2, cy = size / 2;
+  let a0 = -Math.PI / 2, paths = "";
+  rows.forEach((row, i) => {
+    const frac = total ? row.value / total : 0;
+    const a1 = a0 + frac * 2 * Math.PI;
+    const large = frac > 0.5 ? 1 : 0;
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
+    paths += rows.length === 1
+      ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>`
+      : `<path d="M ${cx} ${cy} L ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} Z" fill="${color}"/>`;
+    a0 = a1;
+  });
+  const legend = rows.map((row, i) => {
+    const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
+    const pct = total ? Math.round((row.value / total) * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;padding:1px 0">
+      <span style="width:9px;height:9px;border-radius:3px;background:${color};flex:none"></span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
+      <span style="color:var(--subtext);font-variant-numeric:tabular-nums">${row.value} \u00b7 ${pct}%</span>
+    </div>`;
+  }).join("");
+  const el = document.createElement("div");
+  el.style.cssText = "display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px";
+  el.innerHTML = `
+    ${title ? `<div style="width:100%;font-size:11px;text-transform:uppercase;color:var(--subtext);letter-spacing:.03em">${esc(title)}</div>` : ""}
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="flex:none">${paths || `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--border)"/>`}</svg>
+    <div style="flex:1;min-width:130px">${legend || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`}</div>`;
+  return el;
+}
+
+// Zusammengesetzte "Flotten-Übersicht": mehrere Kreisdiagramme untereinander.
+function renderOverview(target, widget, preset) {
+  const sections = preset.sections ? preset.sections(state) : [];
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:10px;width:100%";
+  if (!sections.length) wrap.innerHTML = `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+  for (const sec of sections) wrap.appendChild(pieSection(sec.rows, sec.title));
   target.appendChild(wrap);
 }
 
@@ -228,6 +507,18 @@ function renderBar(target, widget, preset) {
     </div>`;
   }).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
   target.appendChild(wrap);
+
+  // Hover wie in der Flotten-Übersicht: Zeile hervorheben + Tooltip mit
+  // exaktem Wert (und Anteil am Maximum).
+  wrap.querySelectorAll(".wbar-row").forEach((rowEl, i) => {
+    const row = rows[i];
+    if (!row) return;
+    const tip = () => `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(row.value))} <span style="color:var(--subtext)">(${Math.round(((row.value || 0) / max) * 100)}% vom Maximum)</span>`;
+    rowEl.style.borderRadius = "6px";
+    rowEl.addEventListener("mouseenter", (e) => { rowEl.style.background = "var(--panel-2, #1b2740)"; showFleetTip(tip(), e.clientX, e.clientY); });
+    rowEl.addEventListener("mousemove", (e) => showFleetTip(tip(), e.clientX, e.clientY));
+    rowEl.addEventListener("mouseleave", () => { rowEl.style.background = ""; hideFleetTip(); });
+  });
 }
 
 function renderTable(target, widget, preset) {

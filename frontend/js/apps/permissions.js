@@ -18,7 +18,7 @@
 
 import { api } from "../api.js";
 import { state } from "../state.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 
 export function renderPermissions(body, win) {
   // ---- lokaler Zustand des Fensters ----
@@ -198,7 +198,7 @@ export function renderPermissions(body, win) {
   }
 
   async function selectSubject(type, id, name) {
-    if (dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+    if (dirty && !(await uiConfirm("Ungespeicherte Änderungen verwerfen?", { okText: "Verwerfen", danger: true }))) return;
     selected = { type, id, name };
     grants = new Map();
     dirty = false;

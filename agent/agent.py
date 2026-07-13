@@ -119,6 +119,44 @@ def _print(msg):
     log.info(msg)
 
 
+# --- Agent-Konsole für das Dashboard -------------------------------------
+# Rollierender Puffer ALLER Log-Zeilen dieses Agenten. Das Dashboard kann per
+# "agent-console-open" die Historie abrufen und danach live mitlesen
+# (Client-Terminal -> Schalter "Agent-Konsole"). Der Handler hängt am
+# Root-Logger, erfasst also alles, was über log/_print läuft.
+import collections as _collections
+
+_CONSOLE_BUFFER = _collections.deque(maxlen=2000)
+_console_stream = {"on": False}
+
+
+class _ConsoleBufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            line = self.format(record)
+        except Exception:
+            return
+        _CONSOLE_BUFFER.append(line)
+        if not _console_stream["on"]:
+            return
+        # Live an das Backend weiterreichen (best effort; sio/Loop existieren
+        # erst nach dem Startup - vorher wird nur gepuffert).
+        try:
+            if "sio" in globals() and sio.connected and "_AGENT_LOOP" in globals():
+                asyncio.run_coroutine_threadsafe(
+                    sio.emit("agent-console", {"id": DEVICE_ID, "data": line + "\r\n"},
+                             namespace="/agent"),
+                    _AGENT_LOOP,
+                )
+        except Exception:
+            pass
+
+
+_console_handler = _ConsoleBufferHandler()
+_console_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+logging.getLogger().addHandler(_console_handler)
+
+
 # Optionale Bibliotheken für Remote Screen. Der Agent funktioniert auch ohne sie
 # (dann ist nur die Fernsteuerung deaktiviert, alles andere läuft normal weiter).
 # Wir fangen bewusst JEDEN Fehler ab (nicht nur ImportError), weil z.B. pynput
@@ -314,6 +352,72 @@ def get_local_ip() -> str | None:
 # Verbindungsaufbau & Registrierung
 # --------------------------------------------------------------
 
+def _detect_device_type():
+    """
+    Best-effort-Erkennung, ob dieser Rechner eine VM, ein LXC-Container oder
+    physische Hardware ist. Ergebnis: "vm" | "lxc" | "physical" | None
+    (None = unbekannt, dann wird am Backend NICHTS geändert).
+    Damit ist im Bearbeiten-Dialog automatisch der richtige Gerätetyp
+    vorausgewählt, statt fälschlich "Physisches Gerät".
+    """
+    try:
+        sysname = platform.system().lower()
+        if sysname == "linux":
+            # 1) systemd-detect-virt ist die zuverlässigste Quelle.
+            try:
+                out = subprocess.run(["systemd-detect-virt"], capture_output=True,
+                                     text=True, timeout=5).stdout.strip().lower()
+                if out and out != "none":
+                    if out in ("lxc", "lxc-libvirt", "openvz", "systemd-nspawn", "docker", "podman"):
+                        return "lxc"
+                    return "vm"
+                if out == "none":
+                    return "physical"
+            except Exception:
+                pass
+            # 2) Container-Marker (PID 1-Umgebung / /run-Dateien)
+            try:
+                env = Path("/proc/1/environ").read_bytes()
+                if b"container=lxc" in env or Path("/run/systemd/container").exists():
+                    return "lxc"
+            except Exception:
+                pass
+            # 3) Hypervisor-Flag der CPU + DMI-Produktname
+            try:
+                if "hypervisor" in Path("/proc/cpuinfo").read_text(errors="ignore"):
+                    return "vm"
+            except Exception:
+                pass
+            try:
+                prod = Path("/sys/class/dmi/id/product_name").read_text(errors="ignore").lower()
+                if any(k in prod for k in ("kvm", "qemu", "vmware", "virtualbox", "virtual machine", "hyper-v")):
+                    return "vm"
+                if prod.strip():
+                    return "physical"
+            except Exception:
+                pass
+            return None
+        if sysname == "windows":
+            # Hersteller/Modell abfragen - typische VM-Signaturen matchen.
+            try:
+                out = subprocess.run(
+                    ["wmic", "computersystem", "get", "manufacturer,model"],
+                    capture_output=True, text=True, timeout=10).stdout.lower()
+                if any(k in out for k in ("vmware", "virtualbox", "qemu", "kvm", "virtual machine", "xen", "parallels")):
+                    return "vm"
+                if out.strip():
+                    return "physical"
+            except Exception:
+                pass
+            return None
+    except Exception:
+        pass
+    return None
+
+
+DETECTED_DEVICE_TYPE = _detect_device_type()
+
+
 @sio.event(namespace="/agent")
 async def connect():
     """Wird automatisch aufgerufen, sobald die Verbindung zum Backend steht."""
@@ -331,6 +435,7 @@ async def connect():
             "enrollment_token": ENROLLMENT_TOKEN,  # nur beim ersten Mal relevant
             "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
             "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
+            "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (Auto-Erkennung)
         },
         namespace="/agent",
     )
@@ -1488,6 +1593,26 @@ async def on_term_close(data):
     term = _terminals.pop(data.get("session"), None)
     if term:
         term.close()
+
+
+# --------------------------------------------------------------
+# Agent-Konsole: Dashboard liest den Log dieses Agenten mit
+# (Historie aus dem rollierenden Puffer + Live-Zeilen).
+# --------------------------------------------------------------
+
+@sio.on("agent-console-open", namespace="/agent")
+async def on_agent_console_open(data=None):
+    _console_stream["on"] = True
+    history = "\r\n".join(_CONSOLE_BUFFER)
+    if history:
+        history += "\r\n"
+    await sio.emit("agent-console-history",
+                   {"id": DEVICE_ID, "data": history}, namespace="/agent")
+
+
+@sio.on("agent-console-close", namespace="/agent")
+async def on_agent_console_close(data=None):
+    _console_stream["on"] = False
 
 
 # --------------------------------------------------------------

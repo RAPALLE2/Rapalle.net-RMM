@@ -17,6 +17,41 @@ load_dotenv()
 # Port, auf dem der Server läuft
 PORT: int = int(os.getenv("PORT", "4000"))
 
+
+def _detect_local_ip() -> str:
+    """
+    Ermittelt die lokale LAN-IP dieses Rechners (die IP, über die andere Geräte
+    das Backend erreichen). Kein Paket wird wirklich gesendet - der UDP-connect
+    dient nur dazu, das Routing zu befragen. Fallbacks: Hostname-Auflösung,
+    zuletzt 0.0.0.0 (alle Interfaces), falls gar nichts klappt.
+    """
+    import socket as _socket
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    try:
+        ip = _socket.gethostbyname(_socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "0.0.0.0"
+
+
+# Adresse, an die das Backend gebunden wird. Beim frischen Install (keine
+# HOST-Variable in der .env) wird automatisch die lokale IP des Rechners
+# verwendet - statt 0.0.0.0 / localhost / 127.0.0.1. In der .env kann HOST
+# jederzeit fest gesetzt werden (z.B. HOST=0.0.0.0 für alle Interfaces).
+HOST: str = (os.getenv("HOST", "") or "").strip() or _detect_local_ip()
+
 # Token, das jeder Agent beim Verbinden mitschicken muss
 AGENT_TOKEN: str = os.getenv("AGENT_TOKEN", "change-me-super-secret")
 

@@ -190,12 +190,24 @@ async def server_address(request: _Request):
         return {"base_url": base, "source": "settings", "backend_port": backend_port}
 
     # 3) Fallback: Host-Header der Anfrage (funktioniert für den aufrufenden
-    #    Browser; kann 'localhost' sein, wenn lokal geöffnet).
+    #    Browser). Ist das 'localhost'/'127.0.0.1' (Dashboard lokal geöffnet),
+    #    wird stattdessen die automatisch erkannte LAN-IP des Backends
+    #    eingesetzt (config.HOST) - so ist die Adresse IMMER dynamisch aus
+    #    einer Variablen befüllt und für ENTFERNTE Rechner gültig, nie ein
+    #    hartes 'localhost'.
     host_header = request.headers.get("host") or request.url.netloc
+    host_only = host_header.split(":")[0]
+    is_localhost = host_only in ("localhost", "127.0.0.1", "::1")
+    if is_localhost:
+        from app.config import HOST as _detected_host
+        if _detected_host and _detected_host != "0.0.0.0":
+            port = host_header.split(":")[1] if ":" in host_header else backend_port
+            host_header = f"{_detected_host}:{port}"
+            is_localhost = False
     base = f"{scheme}://{host_header}"
     return {"base_url": base.rstrip("/"), "source": "request",
             "backend_port": backend_port,
-            "is_localhost": host_header.split(":")[0] in ("localhost", "127.0.0.1")}
+            "is_localhost": is_localhost}
 
 
 # ------------------------------------------------------------------
@@ -374,6 +386,28 @@ async def _start_background_tasks():
 #    Wichtig: das muss NACH den API-Routen passieren, sonst würden die
 #    statischen Dateien alle Anfragen "wegschnappen" bevor die API sie sieht.
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+
+# Bilder (inkl. hochgeladenes Branding) VOR dem Catch-all-Mount ausliefern:
+# zuerst aus dem schreibbaren Upload-Store, sonst aus dem gebündelten
+# frontend/images. So sind ersetzte Logos sofort sichtbar, auch wenn der
+# frontend-Ordner read-only ist.
+from fastapi.responses import FileResponse as _FileResponse
+from fastapi import HTTPException as _HTTPException
+from app.routers.admin_routes import branding_path as _branding_path
+
+
+@api.get("/images/{name}")
+async def _serve_image(name: str):
+    p = _branding_path(name)
+    if p is None:
+        raise _HTTPException(status_code=404, detail="Bild nicht gefunden")
+    # no-cache: Browser MUSS revalidieren (Last-Modified/ETag kommen von
+    # FileResponse). Ohne diesen Header cachen Browser Bilder heuristisch
+    # stundenlang - ersetzte Branding-Logos erschienen dann nicht ("Bild
+    # lädt nicht"), obwohl der Upload längst gespeichert war.
+    return _FileResponse(str(p), headers={"Cache-Control": "no-cache"})
+
+
 api.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 

@@ -11,7 +11,7 @@
 //   3. Guacamole.Client mit WebSocketTunnel verbinden, Anzeige + Maus/Tastatur.
 
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, mapKeyboardText, uiConfirm, uiPrompt } from "../utils.js";
 
 const DEFAULT_PORTS = { rdp: "3389", vnc: "5900", ssh: "22", telnet: "23" };
 
@@ -233,7 +233,12 @@ export function renderGuacamole(body, win) {
     if (!client || !guacTextInput) return;
     const text = guacTextInput.value;
     if (!text) return;
-    for (const ch of text) guacTapKey(keysymFromChar(ch));
+    // Layout-Kompensation (andersrum, auf Nutzerwunsch): bei Auswahl "us"
+    // werden die Zeichen vor dem Senden ueber die Positions-Tabelle ersetzt
+    // (Reverse-Effekt); "de"/"raw" = 1:1 (Keysyms unveraendert).
+    const layoutSel = body.querySelector(`#guac-layout-${win.key}`);
+    const mapped = mapKeyboardText(text, layoutSel?.value || "raw");
+    for (const ch of mapped) guacTapKey(keysymFromChar(ch));
     if (guacEnterChk?.checked) guacTapKey(KEYSYM.Enter);
     guacTextInput.value = "";
     guacTextInput.focus();
@@ -277,7 +282,10 @@ export function renderGuacamole(body, win) {
       await navigator.clipboard.writeText(remoteClipboard);
       window.notify?.("Remote-Zwischenablage übernommen (" + remoteClipboard.length + " Zeichen)", "success");
     } catch {
-      prompt("Remote-Zwischenablage (Strg+C zum Kopieren):", remoteClipboard);
+      // Kein natives prompt(): eigener Dialog mit Inputfeld zum Kopieren.
+      uiPrompt("Remote-Zwischenablage", {
+        description: "Text markieren und mit Strg+C kopieren:",
+        value: remoteClipboard, okText: "Schließen" });
     }
   });
 
@@ -823,7 +831,7 @@ export function renderGuacamole(body, win) {
     const id = profileSel?.value;
     if (!id) { window.notify?.("Kein Login ausgewählt.", "warn"); return; }
     const prof = savedProfiles.find((pr) => pr.id === id);
-    if (!confirm(`Login „${prof?.name || id}" wirklich löschen?`)) return;
+    if (!(await uiConfirm(`Login „${prof?.name || id}" wirklich löschen?`, { okText: "Löschen", danger: true }))) return;
     try {
       await api.deleteGuacProfile(clientId, id);
       window.notify?.("Login gelöscht", "success");
@@ -839,7 +847,7 @@ export function renderGuacamole(body, win) {
     saveBtn.addEventListener("click", async () => {
       const proto = protoSel.value;
       const defName = `${proto.toUpperCase()} ${userInput.value ? userInput.value + "@" : ""}${hostInput.value.trim()}`;
-      const name = prompt("Name für dieses Login:", defName);
+      const name = await uiPrompt("Login speichern", { description: "Name für dieses Login:", value: defName });
       if (name === null) return;
       const profile = {
         name: (name || defName).trim(),

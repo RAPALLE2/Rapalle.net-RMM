@@ -12,7 +12,7 @@
 //   - "Relay"-Tab: Anleitung + fertige URL zum Netzlaufwerk-Verbinden
 
 import { api } from "../api.js";
-import { formatBytes, esc } from "../utils.js";
+import { formatBytes, esc, uiConfirm, uiPrompt } from "../utils.js";
 import { BACKEND_URL } from "../config.js";
 import { isAdmin as userIsAdmin, state } from "../state.js";
 
@@ -189,21 +189,21 @@ export function renderExplorer(body, win) {
 
   async function doMkdir() {
     if (!currentPath) { window.notify?.("Bitte zuerst einen Ordner öffnen.", "warn"); return; }
-    const name = prompt("Name des neuen Ordners:");
+    const name = await uiPrompt("Neuen Ordner anlegen", { description: "Name des neuen Ordners:" });
     if (!name) return;
     try { await fs.mkdir(joinPath(currentPath, name)); load(currentPath); }
     catch (e) { window.notify?.("Anlegen fehlgeschlagen: " + e.message, "error"); }
   }
 
   async function doRename(entry) {
-    const name = prompt("Neuer Name:", entry.name);
+    const name = await uiPrompt("Umbenennen", { description: "Neuer Name:", value: entry.name });
     if (!name || name === entry.name) return;
     try { await fs.rename(entry.path, joinPath(parentOf(entry.path), name)); load(currentPath); }
     catch (e) { window.notify?.("Umbenennen fehlgeschlagen: " + e.message, "error"); }
   }
 
   async function doDelete(entry) {
-    if (!confirm(`"${entry.name}" wirklich löschen?`)) return;
+    if (!(await uiConfirm(`"${entry.name}" wirklich löschen?`, { okText: "Löschen", danger: true }))) return;
     try { await fs.del(entry.path); load(currentPath); }
     catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
   }

@@ -5,7 +5,7 @@
 // Test (und später bei Ereignissen) eine Nachricht an die URL.
 
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 
 export function renderNotifications(body, win) {
   function draw() {
@@ -94,7 +94,7 @@ export function renderNotifications(body, win) {
       );
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!confirm("Webhook löschen?")) return;
+          if (!(await uiConfirm("Webhook löschen?", { okText: "Löschen", danger: true }))) return;
           await api.deleteWebhook(btn.dataset.del); loadList();
         })
       );

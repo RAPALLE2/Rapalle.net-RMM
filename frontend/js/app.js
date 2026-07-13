@@ -50,6 +50,8 @@ import { renderSettings } from "./apps/settings.js";
 import { renderPermissions } from "./apps/permissions.js";
 import { renderAudit } from "./apps/audit.js";
 import { renderProfile } from "./apps/profile.js";
+import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
+import { updateClientLayouts } from "./dashlayout.js";
 import { renderPanelPart } from "./apps/panelpart.js";
 import { renderFleetWidget } from "./apps/fleetwidget.js";
 
@@ -79,6 +81,7 @@ const APP_RENDERERS = {
   permissions: renderPermissions,
   audit: renderAudit,
   profile: renderProfile,
+  notifycenter: renderNotifyCenter,
   panelpart: renderPanelPart,
   fleetwidget: renderFleetWidget,
 };
@@ -95,6 +98,9 @@ function renderWindowContent(body, win) {
 
 async function reloadHierarchy() {
   state.hierarchy = await api.getHierarchy();
+  // Offene Fenster (Add/Edit Client, ...) informieren, damit sie ihre
+  // Tenant-/Standort-Auswahlen SOFORT neu befüllen - ohne Fenster-Neuöffnen.
+  try { window.dispatchEvent(new CustomEvent("rmm:hierarchy-changed")); } catch {}
 }
 
 async function reloadClients() {
@@ -240,6 +246,7 @@ function restoreWindows(saved) {
   for (const w of wins) {
     try {
       openWindow({
+        singleton: true,   // Restore: exakt diesen Key wiederherstellen
         key: w.key, appId: w.appId, title: w.title, props: w.props || {},
         clientColor: w.clientColor, w: w.w, h: w.h, x: w.x, y: w.y,
         minimized: w.minimized, maximized: w.maximized,
@@ -362,11 +369,19 @@ function initMenusAndButtons() {
   });
   document.getElementById("btn-open-profile").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ key: "profile", appId: "profile", title: "Profil", w: 460, h: 560 });
+    openWindow({ singleton: true, key: "profile", appId: "profile", title: "Profil", w: 460, h: 560 });
   });
+  document.getElementById("btn-open-notifications").addEventListener("click", () => {
+    userMenu.classList.add("hidden");
+    openWindow({ singleton: true, key: "notifycenter", appId: "notifycenter", title: "Benachrichtigungen", w: 520, h: 600 });
+  });
+  // Punkt am Benutzermenü-Button + am Menüeintrag, solange ungelesene
+  // Benachrichtigungen vorhanden sind (Farbe = schwerste ungelesene Stufe).
+  attachUnreadDot(userMenuBtn);
+  attachUnreadDot(document.getElementById("btn-open-notifications"));
   document.getElementById("btn-open-settings").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
+    openWindow({ singleton: true, key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
   });
 
   // Startmenü (unten links)
@@ -392,9 +407,9 @@ function initMenusAndButtons() {
       if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
       else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
       else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
-      else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
-      else if (app === "settings") openWindow({ key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
-      else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
+      else if (app === "manage") openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+      else if (app === "settings") openWindow({ singleton: true, key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
+      else if (app === "permissions") openWindow({ singleton: true, key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
       else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
       else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
       else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
@@ -412,12 +427,12 @@ function initMenusAndButtons() {
 
   // Tenants/Standorte verwalten (Zahnrad in der Sidebar-Kopfzeile)
   document.getElementById("btn-manage-hierarchy").addEventListener("click", () => {
-    openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+    openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
   });
 
   // "Client hinzufügen"
   document.getElementById("btn-add-client").addEventListener("click", () => {
-    openWindow({ key: "add-client", appId: "add-client", title: "Client hinzufügen", w: 560, h: 600 });
+    openWindow({ singleton: true, key: "add-client", appId: "add-client", title: "Client hinzufügen", w: 560, h: 600 });
   });
 }
 
@@ -545,6 +560,7 @@ function initLiveUpdates() {
   // Neue Metriken für einen Client
   dashboardSocket.on("client:metrics", ({ id, metrics }) => {
     const client = state.clients.find((c) => c.id === id);
+    const wasOnline = client ? !!client.online : true;
     if (client) {
       client.metrics = metrics;
       client.online = true;
@@ -554,17 +570,24 @@ function initLiveUpdates() {
     // Live-Refresh für Dashboard-Widgets (aggregierte Flotten-Werte).
     try { window.dispatchEvent(new CustomEvent("metrics-updated", { detail: { id } })); } catch {}
 
-    // Nur neu rendern, wenn gerade dieser Client (oder seine Gruppe) sichtbar ist
+    // Gezieltes Update: nur die Werte/SVGs der sichtbaren Panels dieses
+    // Clients überschreiben - das Client-Panel wird NICHT neu eingefügt.
+    let touched = 0;
+    try {
+      touched = updateClientLayouts(id);
+    } catch { touched = 0; }
+    // Fallback nur für Ansichten, die (noch) kein Layout-Host-Update können.
     const sel = state.selection;
-    if (sel && (
+    if (!touched && sel && (
       (sel.type === "client" && sel.id === id) ||
       sel.type === "tenant" || sel.type === "location"
     )) {
-      // Dashboard-Ansicht NICHT komplett neu bauen (würde Edit-Interaktion
-      // stören) - die Widgets aktualisieren sich über das Event oben selbst.
       renderMainContent();
     }
-    renderSidebar();
+    // Sidebar NICHT bei jedem Metrik-Tick neu bauen (verursachte Hover-
+    // Flackern/Springen der Client-Zeilen) - nur wenn sich der Online-Status
+    // sichtbar geändert hat (offline -> online).
+    if (!wasOnline) renderSidebar();
   });
 
   dashboardSocket.on("client:offline", ({ id }) => {
@@ -604,6 +627,7 @@ function initDesktopDrop() {
     if (!client) return;
     const r = (layer || dropZone).getBoundingClientRect();
     openWindow({
+      singleton: true,
       key: `panelpart-${clientId}-client-x`, appId: "panelpart",
       title: client.hostname,
       props: { clientId, part: "client" },

@@ -9,7 +9,7 @@
 
 import { state } from "../state.js";
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 
 // Wird von app.js gesetzt, um nach Änderungen Hierarchie + Sidebar neu zu laden
 let onChanged = null;
@@ -117,7 +117,7 @@ export function renderManage(body, win) {
             if (onChanged) await onChanged();
             draw();
           } catch (e) {
-            alert("Fehler: " + e.message);
+            window.notify?.("Fehler: " + e.message, "error");
           }
         })
       );
@@ -133,7 +133,7 @@ export function renderManage(body, win) {
             await api.createFolder(locId, name, null);
             if (onChanged) await onChanged();
             draw();
-          } catch (e) { alert("Fehler: " + e.message); }
+          } catch (e) { window.notify?.("Fehler: " + e.message, "error"); }
         })
       );
 
@@ -148,7 +148,7 @@ export function renderManage(body, win) {
             await api.createFolder(btn.dataset.loc, name, parentId);
             if (onChanged) await onChanged();
             draw();
-          } catch (e) { alert("Fehler: " + e.message); }
+          } catch (e) { window.notify?.("Fehler: " + e.message, "error"); }
         })
       );
 
@@ -165,12 +165,12 @@ export function renderManage(body, win) {
       // ---- Ordner löschen ----
       listEl.querySelectorAll("[data-del-folder]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!confirm(`Ordner "${btn.dataset.folderName}" löschen?\n\nUnterordner werden mitentfernt. Clients bleiben in ihrer Location (verlieren nur die Ordner-Zuordnung).`)) return;
+          if (!(await uiConfirm(`Ordner "${btn.dataset.folderName}" löschen?`, { description: "Unterordner werden mitentfernt. Clients bleiben in ihrer Location (verlieren nur die Ordner-Zuordnung).", okText: "Löschen", danger: true }))) return;
           try {
             await api.deleteFolder(btn.dataset.delFolder);
             if (onChanged) await onChanged();
             draw();
-          } catch (e) { alert("Fehler: " + e.message); }
+          } catch (e) { window.notify?.("Fehler: " + e.message, "error"); }
         })
       );
 
@@ -178,14 +178,14 @@ export function renderManage(body, win) {
       listEl.querySelectorAll("[data-del-tenant]").forEach((btn) =>
         btn.addEventListener("click", async () => {
           const name = btn.dataset.tenantName;
-          if (!confirm(`Tenant "${name}" wirklich löschen?\n\nAlle Standorte und Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`)) return;
+          if (!(await uiConfirm(`Tenant "${name}" wirklich löschen?`, { description: `Alle Standorte und Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`, okText: "Löschen", danger: true }))) return;
           try {
             const res = await api.deleteTenant(btn.dataset.delTenant);
             window.notify?.(`Tenant gelöscht — ${res.moved_clients} Client(s) nach Uncategorized/Default verschoben`, "success");
             if (onChanged) await onChanged();
             draw();
           } catch (e) {
-            alert("Fehler: " + e.message);
+            window.notify?.("Fehler: " + e.message, "error");
           }
         })
       );
@@ -194,14 +194,14 @@ export function renderManage(body, win) {
       listEl.querySelectorAll("[data-del-loc]").forEach((btn) =>
         btn.addEventListener("click", async () => {
           const name = btn.dataset.locName;
-          if (!confirm(`Standort "${name}" wirklich löschen?\n\nAlle Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`)) return;
+          if (!(await uiConfirm(`Standort "${name}" wirklich löschen?`, { description: `Alle Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`, okText: "Löschen", danger: true }))) return;
           try {
             const res = await api.deleteLocation(btn.dataset.delLoc);
             window.notify?.(`Standort gelöscht — ${res.moved_clients} Client(s) nach Uncategorized/Default verschoben`, "success");
             if (onChanged) await onChanged();
             draw();
           } catch (e) {
-            alert("Fehler: " + e.message);
+            window.notify?.("Fehler: " + e.message, "error");
           }
         })
       );

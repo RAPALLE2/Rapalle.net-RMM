@@ -272,3 +272,123 @@ export function esc(text) {
   div.textContent = text == null ? "" : String(text);
   return div.innerHTML;
 }
+
+// ------------------------------------------------------------------
+// Eigene Dialoge (Ersatz für native alert/confirm/prompt - die sind
+// im gesamten Frontend NICHT erwünscht).
+//   await uiConfirm("Wirklich löschen?")             -> true/false
+//   await uiConfirm("...", { danger: true })         -> roter Bestätigen-Button
+//   await uiPrompt("Neuer Name", { value, placeholder, description }) -> string|null
+// ------------------------------------------------------------------
+
+function _uiDialog({ title, description = "", input = null, okText = "OK",
+                     cancelText = "Abbrechen", danger = false }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:fixed;inset:0;z-index:6000;background:rgba(0,0,0,0.5);
+      display:flex;align-items:center;justify-content:center;`;
+    const okColor = danger ? "var(--danger, #ff4d6d)" : "var(--accent, #4da6ff)";
+    overlay.innerHTML = `
+      <div style="background:var(--panel,#131c2b);color:var(--text,#e8eef7);border:1px solid var(--border,#2a3648);
+        border-radius:12px;min-width:340px;max-width:480px;padding:18px;box-shadow:0 16px 48px rgba(0,0,0,0.5)">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">${title}</div>
+        ${description ? `<div style="font-size:12px;color:var(--subtext,#8fa3bd);margin-bottom:10px;white-space:pre-wrap">${description}</div>` : ""}
+        ${input ? `<input class="uid-input" type="text" value="${esc(input.value || "")}"
+            placeholder="${esc(input.placeholder || "")}"
+            style="width:100%;box-sizing:border-box;padding:7px 10px;border-radius:6px;border:1px solid var(--border,#2a3648);
+            background:var(--panel-2,#0e1520);color:var(--text,#e8eef7);font-size:13px;margin-bottom:12px" />` : ""}
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="uid-cancel taskbar-btn">${esc(cancelText)}</button>
+          <button class="uid-ok" style="border:1px solid ${okColor};background:${okColor}22;color:${okColor};
+            border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px">${esc(okText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const inputEl = overlay.querySelector(".uid-input");
+    const done = (val) => { overlay.remove(); document.removeEventListener("keydown", onKey); resolve(val); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); }
+      if (e.key === "Enter" && (inputEl ? document.activeElement === inputEl : true)) {
+        e.preventDefault(); done(input ? inputEl.value : true);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) done(input ? null : false); });
+    overlay.querySelector(".uid-cancel").addEventListener("click", () => done(input ? null : false));
+    overlay.querySelector(".uid-ok").addEventListener("click", () => done(input ? inputEl.value : true));
+    setTimeout(() => (inputEl || overlay.querySelector(".uid-ok")).focus(), 30);
+  });
+}
+
+export function uiConfirm(title, opts = {}) {
+  return _uiDialog({ title, description: opts.description || "",
+    okText: opts.okText || "Bestätigen", cancelText: opts.cancelText || "Abbrechen",
+    danger: !!opts.danger });
+}
+
+export function uiPrompt(title, opts = {}) {
+  return _uiDialog({ title, description: opts.description || "",
+    input: { value: opts.value || "", placeholder: opts.placeholder || "" },
+    okText: opts.okText || "Übernehmen", cancelText: opts.cancelText || "Abbrechen" });
+}
+
+// Doppelte Nachfrage für gefährliche Aktionen (z.B. Tabelle löschen).
+export async function uiConfirmTwice(title, opts = {}) {
+  if (!(await uiConfirm(title, { ...opts, danger: true }))) return false;
+  return uiConfirm(opts.secondTitle || "Wirklich sicher?", {
+    description: opts.secondDescription || "Diese Aktion kann NICHT rückgängig gemacht werden.",
+    okText: opts.secondOkText || "Ja, endgültig ausführen", danger: true,
+  });
+}
+
+// Download-Helfer: beliebigen Text als Datei speichern.
+export function downloadText(filename, text, mime = "text/plain") {
+  const blob = new Blob([text], { type: mime + ";charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ------------------------------------------------------------------
+// Tastatur-Layout-Kompensation für Text-Sendeboxen (Terminal, Remote
+// Screen, Guacamole).
+//
+// Hintergrund: Der Sende-Pfad verhält sich neutral wie ein EN/US-Layout.
+// Steht der CLIENT aber auf DE, interpretiert er die Tasten-Positionen
+// nach deutschem Layout - z.B. wird ein gesendetes "y" dort zu "z".
+// Diese Funktion "reversed" das: Man wählt in der Textbox das Layout des
+// Clients; bei "de" wird jedes Zeichen VOR dem Senden so ersetzt, dass es
+// auf dem DE-Client exakt wie eingetippt ankommt. Bei "en" (bzw. 1:1)
+// wird nichts verändert.
+//
+// Auswahl-Logik (andersrum als die erste Version, auf Nutzerwunsch):
+//   "de" / "raw"  -> 1:1 senden (Standard, Client-Tastatur = Deutsch)
+//   "us" / "en"   -> kompensieren: Zeichen werden vor dem Senden über die
+//                    Positions-Tabelle ersetzt (z.B. getippt "-.,zy" -> gesendet
+//                    "/.,yz"), damit der Reverse-Effekt des US-Layouts greift.
+//
+// Tabelle: gewünschtes Zeichen (DE-Tastenbeschriftung) -> Zeichen, das die
+// gleiche PHYSISCHE Taste unter EN/US-Layout erzeugt.
+const _DE_KEY_TO_EN = {
+  "z": "y", "y": "z", "Z": "Y", "Y": "Z",
+  "ä": "'", "Ä": "\"",
+  "ö": ";", "Ö": ":",
+  "ü": "[", "Ü": "{",
+  "ß": "-", "?": "_",
+  "-": "/", "_": "?",
+  "+": "]", "*": "}",
+  "#": "\\", "'": "|",
+  "´": "=", "`": "+",
+  "^": "`", "°": "~",
+};
+
+// text:         der eingetippte Text (so wie er beim Client erscheinen soll)
+// clientLayout: "us"/"en" -> kompensieren; alles andere ("de"/"raw") -> 1:1
+export function mapKeyboardText(text, clientLayout) {
+  if (!text || (clientLayout !== "us" && clientLayout !== "en")) return text;
+  let out = "";
+  for (const ch of text) out += (_DE_KEY_TO_EN[ch] !== undefined ? _DE_KEY_TO_EN[ch] : ch);
+  return out;
+}

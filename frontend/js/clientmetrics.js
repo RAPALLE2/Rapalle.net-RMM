@@ -15,6 +15,7 @@
 //   text?(client)    -> String (für info, einzeilig)
 
 import { esc, formatBytes, formatUptime } from "./utils.js";
+import { attachHoverTip } from "./fleetcharts.js";
 
 const m = (c) => (c && c.metrics) || {};
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
@@ -244,6 +245,18 @@ export const CLIENT_PRESETS = [
 
 export function clientPresetById(id) { return CLIENT_PRESETS.find((p) => p.id === id) || null; }
 
+// Zusätzliche Ansichten, die automatisch für JEDES passende Client-Preset
+// verfügbar sind: Wert-Presets bekommen area/spark/progress/ring/stat,
+// Zeilen-Presets zusätzlich columns.
+export const CLIENT_VALUE_EXTRA_KINDS = ["area", "spark", "progress", "ring", "stat"];
+export function availableClientKinds(preset) {
+  if (!preset) return ["number"];
+  const kinds = [...(preset.charts || [])];
+  if (preset.value) for (const k of CLIENT_VALUE_EXTRA_KINDS) if (!kinds.includes(k)) kinds.push(k);
+  if (preset.rows && !kinds.includes("columns")) kinds.push("columns");
+  return kinds;
+}
+
 // -----------------------------------------------------------------
 // Verfügbarkeit nach Gerätetyp: VMs und vor allem LXC-Container haben keinen
 // direkten Hardwarezugriff - Sensoren (Temperatur/Lüfter/Strom), physische
@@ -321,8 +334,22 @@ export function renderClientMetric(target, client, panel) {
   target.innerHTML = "";
   const preset = clientPresetById(panel.metric);
   if (!preset) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Unbekannte Metrik.</div>`; return; }
-  const kind = panel.kind && preset.charts.includes(panel.kind) ? panel.kind : preset.charts[0];
+  const kind = panel.kind && availableClientKinds(preset).includes(panel.kind) ? panel.kind : preset.charts[0];
   const v = preset.value ? preset.value(client) : null;
+
+  // Hover wie in der Flotten-Übersicht: Tooltip (folgt der Maus) mit dem
+  // exakten, live formatierten Wert - auf ALLEN Client-Metrik-Widgets.
+  if (!target._hoverTipAttached) {
+    target._hoverTipAttached = true;
+    attachHoverTip(target, () => {
+      const val = preset.value ? preset.value(client) : null;
+      const txt = val === null || val === undefined ? "—" : formatClientValue(preset, val);
+      const mx = resolveMax(preset, client);
+      const maxTxt = (kind === "gauge" || kind === "donut") && mx
+        ? ` <span style="color:var(--subtext)">/ ${esc(formatClientValue(preset, mx))}</span>` : "";
+      return `<b>${esc(panel.title || preset.label)}</b><br>${esc(txt)}${maxTxt}`;
+    });
+  }
 
   if (kind === "number") {
     target.innerHTML = `<div class="widget-number">
@@ -389,6 +416,111 @@ export function renderClientMetric(target, client, panel) {
       <svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" preserveAspectRatio="none" style="overflow:visible">
         <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
       </svg>`;
+    return;
+  }
+
+  if (kind === "area" || kind === "spark") {
+    // Verlauf (gleiche Quelle wie "line"); area = gefüllt, spark = minimal.
+    const h = pushHistory(`${client.id}:${panel.id}`, v);
+    const data = h.v.length ? h.v : [v ?? 0];
+    const spark = kind === "spark";
+    const w = 320, hgt = spark ? 56 : 110, pad = spark ? 4 : 6;
+    const max = Math.max(1, ...data, typeof preset.max === "number" ? preset.max : 0);
+    const min = Math.min(...data, 0);
+    const span = max - min || 1;
+    const pts = data.map((val, i) => {
+      const x = pad + (data.length <= 1 ? 0 : (i / (data.length - 1)) * (w - 2 * pad));
+      const y = hgt - pad - ((val - min) / span) * (hgt - 2 * pad);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    target.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+        <span style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</span>
+        <span style="font-size:16px;font-weight:700">${esc(formatClientValue(preset, v))}</span>
+      </div>
+      <svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" preserveAspectRatio="none">
+        ${spark ? "" : `<polygon points="${pad},${hgt - pad} ${pts} ${w - pad},${hgt - pad}" fill="var(--accent)" opacity="0.22"/>`}
+        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>`;
+    return;
+  }
+
+  if (kind === "progress") {
+    const max = resolveMax(preset, client) || 100;
+    const pct = Math.max(0, Math.min(100, ((v || 0) / max) * 100));
+    const color = pct > 85 ? "#ff4d6d" : pct > 65 ? "#f5a524" : "var(--accent)";
+    target.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-size:12px;color:var(--subtext)">${esc(preset.label)}</span>
+        <span style="font-size:18px;font-weight:700">${esc(formatClientValue(preset, v))}</span>
+      </div>
+      <div style="height:14px;border-radius:7px;background:var(--panel-2);overflow:hidden">
+        <div style="height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:7px;transition:width .3s"></div>
+      </div>
+      <div style="font-size:10px;color:var(--subtext);margin-top:4px;text-align:right">${Math.round(pct)}% von ${esc(formatClientValue(preset, max))}</div>`;
+    return;
+  }
+
+  if (kind === "ring") {
+    const max = resolveMax(preset, client) || 100;
+    const pct = Math.max(0, Math.min(100, ((v || 0) / max) * 100));
+    const size = 104, stroke = 9, r = (size - stroke) / 2 - 2, cx = size / 2, cy = size / 2;
+    const C = 2 * Math.PI * r, len = (pct / 100) * C;
+    target.innerHTML = `
+      <div style="display:flex;justify-content:center;padding:2px">
+        <div style="position:relative;width:${size}px;height:${size}px">
+          <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}"/>
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}"
+              stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
+          </svg>
+          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div style="font-size:16px;font-weight:700;line-height:1">${esc(formatClientValue(preset, v))}</div>
+            <div style="font-size:9px;color:var(--subtext);margin-top:2px">${Math.round(pct)}%</div>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (kind === "stat") {
+    const h = pushHistory(`${client.id}:${panel.id}`, v);
+    const data = h.v.length ? h.v : [v ?? 0];
+    const ref = data.length > 1 ? data[0] : (v || 0);
+    const diff = (v || 0) - (ref || 0);
+    const up = diff > 0, flat = Math.abs(diff) < 1e-9;
+    const trendColor = flat ? "var(--subtext)" : (up ? "#f5a524" : "#3ecf8e");
+    const w = 140, hgt = 34, pad = 3;
+    const max = Math.max(1, ...data), min = Math.min(...data, 0), span = (max - min) || 1;
+    const pts = data.map((val, i) => {
+      const x = pad + (data.length <= 1 ? 0 : (i / (data.length - 1)) * (w - 2 * pad));
+      const y = hgt - pad - ((val - min) / span) * (hgt - 2 * pad);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    target.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:24px;font-weight:700;line-height:1.1">${esc(formatClientValue(preset, v))}</div>
+          <div style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</div>
+        </div>
+        <div style="text-align:right;flex:1;min-width:90px">
+          <div style="font-size:13px;font-weight:600;color:${trendColor}">${flat ? "→" : (up ? "▲" : "▼")} ${esc(formatClientValue(preset, Math.abs(diff)))}</div>
+          <svg viewBox="0 0 ${w} ${hgt}" width="${w}" height="${hgt}" preserveAspectRatio="none">
+            <polyline points="${pts}" fill="none" stroke="${trendColor}" stroke-width="2"/>
+          </svg>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (kind === "columns") {
+    const rows = (preset.rows ? preset.rows(client) : []).slice(0, 12);
+    const max = Math.max(1, ...rows.map((r) => r.value || 0));
+    target.innerHTML = `<div style="display:flex;gap:6px;align-items:flex-end;height:110px;padding:2px 2px 0">${rows.map((r) => `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${esc(r.label)}${r.raw ? ": " + esc(r.raw) : ""}">
+        <div style="width:100%;height:${Math.max(3, ((r.value || 0) / max) * 86).toFixed(1)}%;background:var(--accent);border-radius:4px 4px 0 0"></div>
+        <span style="font-size:9px;color:var(--subtext);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.label)}</span>
+      </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`}</div>`;
     return;
   }
 

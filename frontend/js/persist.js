@@ -34,6 +34,10 @@ export function getDashEdit() { return _dashEdit; }
 export function setDashEdit(on) { _dashEdit = !!on; }
 export function getFleetWidgets() { return _fleetWidgets; }
 export function setFleetWidgets(w) { _fleetWidgets = w; }
+// Persönliche Einstellung: VMs/LXCs vollwertig in Flotten-Diagrammen mitzählen?
+let _fleetIncludeVirtual = true;
+export function getFleetIncludeVirtual() { return _fleetIncludeVirtual; }
+export function setFleetIncludeVirtual(on) { _fleetIncludeVirtual = !!on; }
 
 export function configurePersistence({ username, getExpanded, setExpanded }) {
   _key = KEY_PREFIX + (username || "anon");
@@ -60,6 +64,7 @@ export function saveNow(state) {
       dashLayout: _dashLayout,
       dashEdit: _dashEdit,
       fleetWidgets: _fleetWidgets,
+      fleetIncludeVirtual: _fleetIncludeVirtual,
       focusOrder: state.focusOrder || [],
       windows: (state.windows || []).map((w) => ({
         key: w.key,
@@ -100,6 +105,7 @@ export function applyExpanded(data) {
   if (data && data.dashLayout) _dashLayout = data.dashLayout;
   if (data && typeof data.dashEdit === "boolean") _dashEdit = data.dashEdit;
   if (data && data.fleetWidgets) _fleetWidgets = data.fleetWidgets;
+  if (data && typeof data.fleetIncludeVirtual === "boolean") _fleetIncludeVirtual = data.fleetIncludeVirtual;
 }
 
 export function clearPersisted() {

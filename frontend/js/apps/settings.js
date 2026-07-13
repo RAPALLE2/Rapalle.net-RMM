@@ -10,7 +10,7 @@
 // Rechte über ihre Gruppen (z.B. Gruppe "Auditor" mit Recht "audit").
 
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 import { t } from "../i18n.js";
 import { isAdmin } from "../state.js";
 import { renderSource } from "./source.js";
@@ -95,7 +95,7 @@ export function renderSettings(body, win) {
           <div style="color:var(--subtext);font-size:12px">${esc(s.name)}</div>
         </div>
         <input type="file" data-file="${esc(s.name)}" style="display:none"
-          accept="${s.name.endsWith(".jpg") ? "image/jpeg" : s.name.endsWith(".ico") ? ".ico,image/x-icon,image/png" : "image/png"}" />
+          accept="image/*,.ico" />
         <button class="action-btn" data-pick="${esc(s.name)}">Datei wählen &amp; ersetzen…</button>
       </div>
     `).join("");
@@ -110,18 +110,26 @@ export function renderSettings(body, win) {
         msgEl.innerHTML = `<span style="color:var(--subtext)">Lade "${esc(name)}" hoch…</span>`;
         try {
           const res = await api.uploadBranding(name, file);
-          msgEl.innerHTML = `<span style="color:var(--accent)">✓ ${esc(name)} ersetzt.</span>`;
-          // Vorschau + Topbar-Logo sofort aktualisieren (Cache-Busting via mtime)
+          msgEl.innerHTML = `<span style="color:var(--accent)">✓ ${esc(name)} ersetzt (${Math.round((res.size || file.size) / 1024)} KB gespeichert).</span>`;
+          window.notify?.(`Branding: "${name}" hochgeladen und gespeichert.`, "success");
+          // ALLE Stellen sofort aktualisieren (Cache-Busting via mtime):
           const bust = `?v=${res.mtime || Date.now()}`;
           const prev = slotsEl.querySelector(`[data-preview="${name}"]`);
           if (prev) prev.src = `/images/${name}${bust}`;
           if (name === "logo_r.png") {
             document.querySelectorAll(".topbar-logo").forEach((img) => { img.src = `/images/logo_r.png${bust}`; img.style.display = ""; });
-            document.querySelectorAll('link[rel="icon"]').forEach((l) => { l.href = `images/logo_r.png${bust}`; });
+            document.querySelectorAll('link[rel="icon"]').forEach((l) => { l.href = `/images/logo_r.png${bust}`; });
+          }
+          if (name === "login-bg.jpg") {
+            // Der Login-Hintergrund kommt aus CSS (url("/images/login-bg.jpg"))
+            // und wuerde sonst erst nach Strg+F5 erscheinen -> Inline-Override.
+            const loginEl = document.querySelector(".login-screen, #login-screen");
+            if (loginEl) loginEl.style.backgroundImage = `url("/images/login-bg.jpg${bust}")`;
           }
           if (!prev) renderBrandingTab(root); // Slot existierte vorher nicht -> neu zeichnen
         } catch (e) {
-          msgEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+          msgEl.innerHTML = `<span style="color:var(--danger)">✗ ${esc(e.message)}</span>`;
+          window.notify?.(`Branding-Upload "${name}" fehlgeschlagen: ${e.message}`, "error", 10000);
         } finally {
           fileInput.value = "";
         }
@@ -368,7 +376,7 @@ export function renderSettings(body, win) {
         }
         list.querySelectorAll("[data-del]").forEach((btn) =>
           btn.addEventListener("click", async () => {
-            if (!confirm("Benutzer wirklich löschen?")) return;
+            if (!(await uiConfirm("Benutzer wirklich löschen?", { okText: "Löschen", danger: true }))) return;
             try { await api.deleteUser(btn.dataset.del); loadUsers(); }
             catch (e) { window.notify?.(e.message, "error"); }
           })
@@ -384,9 +392,14 @@ export function renderSettings(body, win) {
     async function editUserGroups(userId, groups) {
       if (!groups.length) { window.notify?.("Erst Gruppen im Tab 'Gruppen & Rollen' anlegen.", "warn"); return; }
       const current = await api.getUserGroups(userId).then((r) => r.group_ids).catch(() => []);
-      const chosen = groups.filter((g) =>
-        confirm(`Gruppe "${g.name}" zuweisen?\n(OK = zuweisen, Abbrechen = nicht)\n\nAktuell zugewiesen: ${current.includes(g.id) ? "ja" : "nein"}`)
-      ).map((g) => g.id);
+      // Nacheinander pro Gruppe fragen (eigener Dialog statt confirm()).
+      const chosen = [];
+      for (const g of groups) {
+        const yes = await uiConfirm(`Gruppe "${g.name}" zuweisen?`, {
+          description: `Aktuell zugewiesen: ${current.includes(g.id) ? "ja" : "nein"}`,
+          okText: "Zuweisen", cancelText: "Nicht zuweisen" });
+        if (yes) chosen.push(g.id);
+      }
       await api.setUserGroups(userId, chosen);
       window.notify?.("Gruppen aktualisiert", "success");
     }
@@ -588,7 +601,7 @@ export function renderSettings(body, win) {
       );
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!confirm(t("sso_delete_confirm"))) return;
+          if (!(await uiConfirm(t("sso_delete_confirm"), { okText: "Löschen", danger: true }))) return;
           await api.deleteRealm(btn.dataset.del); if (editingId === btn.dataset.del) editingId = null; draw();
         })
       );

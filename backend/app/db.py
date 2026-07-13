@@ -702,6 +702,26 @@ def touch_client(client_id: str) -> None:
     _conn.commit()
 
 
+def apply_detected_device_type(client_id: str, detected: str | None) -> bool:
+    """
+    Übernimmt den vom Agenten automatisch erkannten Gerätetyp ("vm"/"lxc"),
+    aber NUR wenn aktuell noch der Default "physical" (oder nichts) gesetzt
+    ist - eine manuelle Auswahl im Bearbeiten-Dialog wird nie überschrieben.
+    Gibt True zurück, wenn etwas geändert wurde.
+    """
+    if detected not in ("vm", "lxc"):
+        return False
+    row = _conn.execute("SELECT device_type FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
+        return False
+    current = (row["device_type"] or "physical")
+    if current != "physical":
+        return False
+    _conn.execute("UPDATE clients SET device_type = ? WHERE id = ?", (detected, client_id))
+    _conn.commit()
+    return True
+
+
 def list_clients() -> list[dict]:
     return [dict(r) for r in _conn.execute("SELECT * FROM clients ORDER BY hostname").fetchall()]
 
@@ -860,6 +880,32 @@ def delete_recording(rec_id: str) -> dict | None:
         _conn.execute("DELETE FROM screen_recordings WHERE id = ?", (rec_id,))
         _conn.commit()
     return rec
+
+
+def prune_missing_recordings() -> int:
+    """
+    Entfernt Replay-Einträge, deren Datei auf der Platte nicht mehr existiert
+    (z.B. manuell gelöscht oder Volume gewechselt). WICHTIG: Es wird NUR der
+    screen_recordings-Eintrag entfernt - das Audit-Log bleibt vollständig
+    erhalten. Gibt die Anzahl der entfernten Einträge zurück.
+    """
+    from pathlib import Path as _P
+    removed = 0
+    rows = _conn.execute("SELECT id, file_path FROM screen_recordings").fetchall()
+    for r in rows:
+        fp = r["file_path"]
+        if not fp:
+            continue
+        try:
+            if not _P(fp).exists():
+                _conn.execute("DELETE FROM screen_recordings WHERE id = ?", (r["id"],))
+                removed += 1
+        except OSError:
+            # Pfad nicht prüfbar (z.B. Netzlaufwerk offline) -> Eintrag behalten.
+            continue
+    if removed:
+        _conn.commit()
+    return removed
 
 
 def list_old_recordings(max_age_days: int) -> list[dict]:

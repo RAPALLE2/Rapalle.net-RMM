@@ -73,9 +73,20 @@ async def get_recording_video(rec_id: str, user: dict = Depends(get_current_user
 async def list_recordings(user: dict = Depends(get_current_user)):
     """Alle Aufzeichnungen als Liste (neueste zuerst)."""
     require_perm(user, "see_replay")
+    # Aufräumen: Replays, deren Datei nicht mehr existiert (gelöscht wurde),
+    # aus der Datenbank entfernen. Das Audit-Log bleibt unberührt.
+    pruned = db.prune_missing_recordings()
+    if pruned:
+        print(f"[recordings] {pruned} Replay-Eintrag/-Einträge ohne Datei aus der DB entfernt.")
     recordings = db.list_recordings()
-    # Dauer berechnen für die Anzeige
+    # Dauer berechnen für die Anzeige + prüfen, ob die Datei (noch) existiert.
+    # (Nach dem Prune oben normalerweise immer true - der Flag schützt gegen
+    # Dateien, die WÄHREND der Sitzung verschwinden.)
     for r in recordings:
+        try:
+            r["file_exists"] = bool(r.get("file_path")) and pathlib.Path(r["file_path"]).exists()
+        except OSError:
+            r["file_exists"] = True   # nicht prüfbar -> nicht fälschlich sperren
         if r["ended_at"]:
             r["duration_ms"] = r["ended_at"] - r["started_at"]
         else:

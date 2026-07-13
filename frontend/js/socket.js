@@ -23,7 +23,10 @@ let _knownBootId = null;
 // Das Backend kann jederzeit eine "normale" In-App-Notification an alle
 // Dashboards schicken. Wird als Toast über notify.js angezeigt.
 dashboardSocket.on("notify", ({ message, level }) => {
-  if (window.notify && message) window.notify(message, level || "info", 8000);
+  // source "webhook": diese Meldungen kommen vom Server (Uptime-Monitor,
+  // Webhook-Ereignisse) und werden in der Benachrichtigungs-Zentrale
+  // entsprechend gekennzeichnet.
+  if (window.notify && message) window.notify(message, level || "info", 8000, { source: "webhook" });
 });
 
 dashboardSocket.on("boot:id", ({ boot_id }) => {

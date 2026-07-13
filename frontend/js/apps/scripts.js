@@ -6,7 +6,7 @@
 
 import { state } from "../state.js";
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiConfirm } from "../utils.js";
 
 export function renderScripts(body, win) {
   function draw() {
@@ -105,7 +105,7 @@ export function renderScripts(body, win) {
       // Löschen
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!confirm("Skript löschen?")) return;
+          if (!(await uiConfirm("Skript löschen?", { okText: "Löschen", danger: true }))) return;
           await api.deleteScript(btn.dataset.del);
           loadList();
         })

@@ -11,15 +11,15 @@
 // Alles pro Benutzer gespeichert (persist.js).
 
 import { t } from "./i18n.js";
-import { esc } from "./utils.js";
+import { esc, uiPrompt, uiConfirm } from "./utils.js";
 import {
   renderStatusPart, renderActionsPart, renderWebsitesPart, clientHasWebsites,
   renderOverviewSub, OVERVIEW_SUBS,
 } from "./panel.js";
 import { openWindow } from "./windowmanager.js";
-import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable } from "./clientmetrics.js";
+import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable, availableClientKinds } from "./clientmetrics.js";
 import {
-  getDashLayout, setDashLayout, getDashEdit, setDashEdit, scheduleSave,
+  getDashLayout, setDashLayout, getDashEdit, scheduleSave,
 } from "./persist.js";
 import { state } from "./state.js";
 
@@ -45,7 +45,7 @@ const LEAF_LABEL = {
 
 // Standard-Größe (in Rasterzellen) je Panel-Typ.
 const DEFAULT_SIZE = {
-  status: [1, 3], actions: [1, 2], websites: [1, 2],
+  status: [1, 2], actions: [1, 2], websites: [1, 2],
   metrics: [3, 3], notes: [2, 2], disk: [2, 2],
   text: [1, 1], folder: [2, 3], cmetric: [2, 2],
 };
@@ -79,8 +79,8 @@ function defaultLayout() {
   return {
     grid: true, cols: COLS,
     panels: [
-      { id: nid(), type: "status", gx: 0, gy: 0, gw: 1, gh: 3 },
-      { id: nid(), type: "actions", gx: 1, gy: 0, gw: 1, gh: 3 },
+      { id: nid(), type: "status", gx: 0, gy: 0, gw: 1, gh: 2 },
+      { id: nid(), type: "actions", gx: 1, gy: 0, gw: 1, gh: 2 },
       { id: nid(), type: "folder", title: t("overview"), gx: 2, gy: 0, gw: 3, gh: 3,
         children: [
           { id: nid(), type: "metrics" },
@@ -124,6 +124,14 @@ function currentLayout() {
   if (!l || !Array.isArray(l.panels) || !l.panels.length) { l = defaultLayout(); setDashLayout(l); }
   for (const p of l.panels) { if (!p.id) p.id = nid(); if (p.type === "folder") migrateFolder(p); }
   migrateToGrid(l);
+  // Einmalige Anpassung: bestehende Status-Panels auf 2 Rasterreihen bringen
+  // (danach kann der Nutzer sie wieder frei vergrößern).
+  if (!l._statusFix2) {
+    let changed = false;
+    for (const p of l.panels) if (p.type === "status" && p.gh > 2) { p.gh = 2; changed = true; }
+    l._statusFix2 = true;
+    if (changed) compact(l.panels, null);
+  }
   return l;
 }
 
@@ -140,11 +148,13 @@ function panelTitle(p) {
 function overlap(a, b) {
   return a.gx < b.gx + b.gw && a.gx + a.gw > b.gx && a.gy < b.gy + b.gh && a.gy + a.gh > b.gy;
 }
-// Kollisionen auflösen: das aktive Panel bleibt fix, alle anderen werden in
-// y-Reihenfolge nach unten geschoben, bis nichts mehr überlappt (Stapeln).
+// Kollisionen auflösen: das aktive Panel UND alle Ordner bleiben fix, die
+// übrigen Panels werden in y-Reihenfolge nach unten geschoben (Stapeln).
+// Ordner "fliehen" dadurch nie, wenn man etwas auf sie zieht.
 function compact(panels, active) {
-  const placed = active ? [active] : [];
-  const rest = panels.filter((p) => p !== active).sort((a, b) => a.gy - b.gy || a.gx - b.gx);
+  const fixed = panels.filter((p) => p === active || p.type === "folder");
+  const placed = [...fixed];
+  const rest = panels.filter((p) => !fixed.includes(p)).sort((a, b) => a.gy - b.gy || a.gx - b.gx);
   for (const p of rest) {
     let guard = 0;
     while (placed.some((q) => overlap(p, q)) && guard++ < 500) p.gy++;
@@ -175,25 +185,23 @@ export function renderClientLayout(host, toolbarHost, client) {
   const edit = getDashEdit();
 
   if (toolbarHost) {
-    toolbarHost.innerHTML = `
-      <button class="dash-edit-toggle ${edit ? "on" : ""}" title="Client-Ansicht bearbeiten (an/aus)">
-        ${edit ? "✓ Bearbeiten" : "✎ Bearbeiten"}</button>
-      ${edit ? `<span class="dash-edit-tools">
+    toolbarHost.innerHTML = edit ? `<span class="dash-edit-tools">
           <button data-add-panel>+ Panel</button>
           <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
-        </span>` : ""}`;
-    toolbarHost.querySelector(".dash-edit-toggle").addEventListener("click", () => {
-      setDashEdit(!edit); saveLayout(); renderClientLayout(host, toolbarHost, client);
-    });
+        </span>` : "";
     toolbarHost.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddPicker(host, toolbarHost, client, null));
-    toolbarHost.querySelector("[data-reset]")?.addEventListener("click", () => {
-      if (!confirm("Layout auf Standard zurücksetzen?")) return;
+    toolbarHost.querySelector("[data-reset]")?.addEventListener("click", async () => {
+      if (!(await uiConfirm("Layout auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true }))) return;
       setDashLayout(defaultLayout()); saveLayout(); renderClientLayout(host, toolbarHost, client);
     });
   }
 
   const rows = neededRows(layout.panels);
   host.className = "dash-grid-layout" + (edit ? " editing" : "");
+  // Für gezielte Live-Updates (updateClientLayouts): Host markieren und den
+  // Render-Kontext merken - so können bei neuen Agent-Metriken NUR die
+  // Werte/SVGs überschrieben werden, statt das ganze Panel neu einzufügen.
+  host.dataset.clientId = client.id;
   host.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
   host.style.gridAutoRows = `${ROW_H}px`;
   host.style.gap = `${GAP}px`;
@@ -201,6 +209,7 @@ export function renderClientLayout(host, toolbarHost, client) {
   host.innerHTML = "";
 
   const ctx = { host, toolbarHost, edit, layout, client };
+  host._rmmCtx = ctx;
 
   // Leere Zellen als belegbares Raster (nur im Edit).
   if (edit) renderEmptyCells(host, layout, rows, ctx);
@@ -212,6 +221,56 @@ export function renderClientLayout(host, toolbarHost, client) {
     const c = host.querySelector(`[data-panel="${wsPanel.id}"]`);
     if (c && !has && !edit) c.style.display = "none";
   });
+}
+
+// ------------------------------------------------------------------
+// Gezieltes Live-Update: Wenn der Agent neue Metriken schickt, werden NUR
+// die Werte/SVGs der betroffenen Panels überschrieben - das Client-Panel
+// (Grid, Karten, Tabs, Buttons) bleibt im DOM stehen. Kein Flackern, keine
+// verlorenen Hover-/Edit-Zustände, keine Scroll-Sprünge.
+// Rückgabe: Anzahl der aktualisierten Layout-Hosts (0 = Ansicht nutzt
+// dieses Layout nicht -> Aufrufer kann klassisch neu rendern).
+// ------------------------------------------------------------------
+export function updateClientLayouts(clientId) {
+  let touched = 0;
+  document.querySelectorAll(`.dash-grid-layout[data-client-id="${CSS.escape(String(clientId))}"]`).forEach((host) => {
+    const ctx = host._rmmCtx;
+    if (!ctx || !document.body.contains(host)) return;
+    touched++;
+    // ctx.client ist DIESELBE Objekt-Referenz wie in state.clients -
+    // client.metrics wurde vom Socket-Handler bereits aktualisiert.
+    // Panel-Typen mit Live-Metriken. notes/text/actions/websites werden NIE
+    // neu gerendert (Notizen-Textarea würde sonst beim Tippen zerstört, wenn
+    // der Agent neue Metriken schickt).
+    const LIVE_TYPES = new Set(["cmetric", "status", "metrics", "disk"]);
+    // Enthält ein Bereich gerade den Eingabe-Fokus (Textarea/Input), wird er
+    // in diesem Tick übersprungen - nichts unter den Fingern wegrendern.
+    const hasFocusIn = (el) => el && el.contains(document.activeElement) &&
+      /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName);
+    host.querySelectorAll(":scope > .dash-lp").forEach((card) => {
+      const panel = ctx.layout.panels.find((p) => String(p.id) === String(card.dataset.panel));
+      if (!panel) return;
+      const body = card.querySelector(":scope > .dash-lp-body");
+      // Fokus ODER Hover: nichts unter Fingern/Cursor ersetzen (Hover-Flackern).
+      if (!body || hasFocusIn(body) || body.matches(":hover")) return;
+      if (panel.type === "cmetric") {
+        // Nur den Diagramm-Inhalt ersetzen (Kind-Umschalter bleibt stehen).
+        const holder = body.querySelector(".cmetric-holder");
+        if (holder) renderClientMetric(holder, ctx.client, panel);
+      } else if (panel.type === "folder") {
+        // Nur den Inhalt des aktiven Tabs ersetzen (Tab-Leiste bleibt stehen)
+        // - und NUR wenn der aktive Tab überhaupt Live-Daten zeigt.
+        const child = panel.children.find((c) => c.id === panel.activeChild) || panel.children[0];
+        if (!child || !LIVE_TYPES.has(child.type)) return;
+        const activeBody = body.querySelector(":scope > .folder-active");
+        if (activeBody && !hasFocusIn(activeBody)) renderActiveChild(activeBody, panel, ctx.client, ctx);
+      } else if (LIVE_TYPES.has(panel.type)) {
+        // Status/Metrics/Disk: nur den Body dieser einen Karte neu füllen.
+        fillPanelBody(body, panel, ctx.client, ctx);
+      }
+    });
+  });
+  return touched;
 }
 
 // Belegbare Leerzellen rendern (Klick öffnet den Picker an dieser Stelle).
@@ -260,12 +319,15 @@ function buildPanel(panel, client, ctx) {
   popBtn.addEventListener("click", (e) => { e.stopPropagation(); detachPanel(panel, client); });
   tools.appendChild(popBtn);
   if (edit) {
-    if (panel.type === "folder" || panel.type === "text") {
+    {
+      // Eigener Name für JEDES Client-Widget (nicht nur Ordner/Text) - wie
+      // bei den Flotten-Widgets im Dashboard. Leer = Standard-Titel.
       const ren = document.createElement("button");
-      ren.className = "dash-lp-btn"; ren.title = "Titel ändern"; ren.textContent = "✎";
-      ren.addEventListener("click", (e) => {
+      ren.className = "dash-lp-btn"; ren.title = "Eigenen Namen geben"; ren.textContent = "✎";
+      ren.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const name = prompt("Titel:", panel.title || (panel.type === "folder" ? t("overview") : "Text"));
+        const name = await uiPrompt("Widget-Namen ändern", {
+          description: "Leer lassen = Standard-Titel.", value: panel.title || "" });
         if (name !== null) { panel.title = name.trim() || null; saveLayout(); titleEl.textContent = panelTitle(panel); }
       });
       tools.appendChild(ren);
@@ -347,16 +409,23 @@ function renderCMetric(bodyEl, panel, client, ctx) {
   const edit = !!(ctx && ctx.edit);
   const preset = clientPresetById(panel.metric);
   bodyEl.className = "dash-lp-body cmetric-body";
+  // WICHTIG: Body immer erst leeren. Vorher wurde beim Umschalten der
+  // Diagrammart der neue Inhalt nur ANGEHÄNGT - das Widget "buggte rum",
+  // bis der Agent das nächste Mal Metriken schickte und alles frisch
+  // aufgebaut wurde. Jetzt schaltet die Ansicht sofort sauber um.
+  bodyEl.innerHTML = "";
   if (preset && !presetAvailable(preset, client.device_type)) {
     const card = bodyEl.closest(".dash-lp");
     if (!edit) { if (card) card.style.display = "none"; return; }
     bodyEl.innerHTML = `<div class="cmetric-na">Auf ${client.device_type === "lxc" ? "LXC-Containern" : "VMs"} nicht verfügbar.</div>`;
     return;
   }
-  if (edit && preset && preset.charts.length > 1) {
+  const kindsAvail = preset ? availableClientKinds(preset) : [];
+  if (edit && preset && kindsAvail.length > 1) {
     const bar = document.createElement("div"); bar.className = "cmetric-kinds";
-    const KIND_ICON = { number: "🔢", gauge: "🎯", donut: "🍩", line: "📈", bars: "📊", info: "🏷️" };
-    bar.innerHTML = preset.charts.map((k) =>
+    const KIND_ICON = { number: "🔢", gauge: "🎯", donut: "🍩", line: "📈", bars: "📊", info: "🏷️",
+      area: "⛰️", spark: "〰️", progress: "▶️", ring: "⭕", stat: "🔺", columns: "📶" };
+    bar.innerHTML = kindsAvail.map((k) =>
       `<button class="cmetric-kind ${((panel.kind || preset.charts[0]) === k) ? "active" : ""}" data-kind="${k}" title="${k}">${KIND_ICON[k] || k}</button>`).join("");
     bodyEl.appendChild(bar);
     bar.querySelectorAll("[data-kind]").forEach((b) => b.addEventListener("click", (e) => {
@@ -486,9 +555,9 @@ function openAddPicker(host, toolbarHost, client, atCell) {
   const close = () => back.remove();
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
   back.querySelector("[data-close]").addEventListener("click", close);
-  back.querySelectorAll(".wp-item").forEach((b) => b.addEventListener("click", () => {
+  back.querySelectorAll(".wp-item").forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.metric) addMetricPanel(b.dataset.metric, atCell);
-    else addPanelType(b.dataset.type, atCell);
+    else await addPanelType(b.dataset.type, atCell);   // wartet ggf. auf den Ordnername-Dialog
     close(); renderClientLayout(host, toolbarHost, client);
   }));
 }
@@ -507,9 +576,10 @@ function placeNew(panel, atCell) {
   compact(layout.panels, panel);   // vorhandene ggf. nach unten stapeln
   saveLayout();
 }
-function addPanelType(type, atCell) {
+async function addPanelType(type, atCell) {
   if (type === "folder") {
-    const name = prompt("Ordnername:", "Neuer Ordner"); if (name === null) return;
+    const name = await uiPrompt("Neuen Ordner anlegen", { description: "Name des Ordners:", value: "Neuer Ordner" });
+    if (name === null) return;
     placeNew({ id: nid(), type: "folder", title: name.trim() || "Ordner", children: [], activeChild: null }, atCell);
   } else if (type === "text") {
     placeNew({ id: nid(), type: "text", title: "Text", text: "" }, atCell);
@@ -527,17 +597,33 @@ function addMetricPanel(metricId, atCell) {
 // =================================================================
 export function detachPanel(panel, client) {
   if (panel.type === "cmetric") {
-    openWindow({ key: `panelpart-${client.id}-cmetric-${panel.id}`, appId: "panelpart",
+    openWindow({ singleton: true, key: `panelpart-${client.id}-cmetric-${panel.id}`, appId: "panelpart",
       title: `${panelTitle(panel)} — ${client.hostname}`,
       props: { clientId: client.id, part: "cmetric", metric: panel.metric, kind: panel.kind, partTitle: panelTitle(panel) },
       clientColor: client.color, w: 420, h: 320 });
     return;
   }
   const isFolder = panel.type === "folder";
+  // BUGFIX "immer cmetrics statt das eigentliche": Früher wurden für Ordner
+  // nur die TYPEN der Kinder übergeben (children.map(c => c.type)). Selbst
+  // hinzugefügte Metrik-Widgets (type "cmetric") verloren dadurch metric/kind
+  // und wurden im herausgelösten Fenster generisch/falsch gerendert. Jetzt
+  // werden die KOMPLETTEN Panel-Definitionen (inkl. metric, kind, title)
+  // mitgegeben; "subs" bleibt für alte persistierte Fenster erhalten.
+  const childClones = isFolder
+    ? panel.children.map((c) => {
+        const clone = JSON.parse(JSON.stringify(c));
+        clone._label = panelTitle(c);
+        return clone;
+      })
+    : null;
   openWindow({
+    singleton: true,
     key: `panelpart-${client.id}-${panel.type}-${panel.id}`, appId: "panelpart",
     title: `${panelTitle(panel)} — ${client.hostname}`,
     props: { clientId: client.id, part: isFolder ? "folder" : panel.type,
+      panels: childClones,
+      activePanelId: isFolder ? (panel.activeChild || null) : null,
       subs: isFolder ? panel.children.map((c) => c.type) : null,
       activeSub: isFolder ? (panel.children.find((c) => c.id === panel.activeChild)?.type || null) : null,
       partTitle: panelTitle(panel) },
@@ -597,18 +683,22 @@ function attachGridDrag(card, head, panel, client, ctx) {
       }
       if (mode !== "drag") return;
       moveTo(ev.clientX, ev.clientY);
-      const folderCard = folderUnder(ev.clientX, ev.clientY, host, card, panel);
+      restoreSnap();                             // immer von stabilen Positionen aus
+      const cell = cellFromPoint(host, ev.clientX, ev.clientY, panel.gw);
+      const cand = { gx: cell.gx, gy: cell.gy, gw: panel.gw, gh: panel.gh };
+      // Überlappt die Zielzelle einen Ordner? -> in den Ordner ablegen, NICHT
+      // umsortieren (der Ordner bleibt exakt stehen).
+      const fp = layout.panels.find((p) => p !== panel && p.type === "folder" && overlap(cand, p));
       host.querySelectorAll(".dash-lp.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
-      overFolder = folderCard || null;
-      if (folderCard) {
-        folderCard.classList.add("folder-hover");
+      if (fp) {
+        overFolder = host.querySelector(`.dash-lp[data-panel="${fp.id}"]`);
+        if (overFolder) overFolder.classList.add("folder-hover");
         if (preview) preview.style.display = "none";
+        applyAllPositions(host, layout, panel.id);   // alles auf Snapshot lassen
       } else {
+        overFolder = null;
         if (preview) preview.style.display = "";
-        const cell = cellFromPoint(host, ev.clientX, ev.clientY, panel.gw);
-        restoreSnap();                 // erst alles zurück auf Start
         panel.gx = cell.gx; panel.gy = cell.gy;
-        // Vorschau an Zielzelle + andere live nach unten stapeln.
         if (preview) { preview.style.gridColumn = `${panel.gx + 1} / span ${panel.gw}`; preview.style.gridRow = `${panel.gy + 1} / span ${panel.gh}`; }
         compact(layout.panels, panel);
         applyAllPositions(host, layout, panel.id);

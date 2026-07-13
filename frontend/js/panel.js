@@ -11,17 +11,14 @@
 
 import { state, findClient } from "./state.js";
 import { hasClientPerm, hasGlobalPerm } from "./state.js";
-import {
-  formatBytes, formatUptime, esc,
-  gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT,
-  interactiveChart,
-} from "./utils.js";
+import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
 import { renderDashboard } from "./apps/dashboard.js";
 import { favStarHtml } from "./sidebar.js";
 import { renderClientLayout } from "./dashlayout.js";
+import { hideFleetTip } from "./fleetcharts.js";
 
 // Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
 let _latestAgentVersion = null;
@@ -49,6 +46,9 @@ let timeRangeIndex = 0;           // Index in TIME_RANGES (Standard: 5 Min)
 const content = () => document.getElementById("main-content");
 
 export function renderMainContent() {
+  // Ansicht wird gewechselt/neu gebaut: alle schwebenden Hover-Tooltips
+  // entfernen (sonst konnten sie über den Client-Wechsel hinaus stehenbleiben).
+  try { hideFleetTip(); } catch {}
   const el = content();
   if (!state.selection || state.selection.type === "dashboard") {
     renderDashboard(el);
@@ -300,12 +300,12 @@ export const OVERVIEW_SUBS = {
 
 export async function handleQuickAction(action, client) {
   if (action === "edit") {
-    openWindow({ key: `edit-${client.id}`, appId: "edit-client", title: `${t("edit")} — ${client.hostname}`, props: { clientId: client.id }, w: 480, h: 520 });
+    openWindow({ singleton: true, key: `edit-${client.id}`, appId: "edit-client", title: `${t("edit")} — ${client.hostname}`, props: { clientId: client.id }, w: 480, h: 520 });
     return;
   }
   if (action === "reboot" || action === "shutdown") {
     const label = action === "reboot" ? t("reboot") : t("shutdown");
-    if (!confirm(`${client.hostname}: ${label}?`)) return;
+    if (!(await uiConfirm(`${client.hostname}: ${label}?`, { okText: label, danger: true }))) return;
     const isWin = (client.platform || "").toLowerCase().includes("windows");
     let cmd;
     if (action === "reboot") cmd = isWin ? "shutdown /r /t 0" : "sudo reboot";
@@ -315,7 +315,7 @@ export async function handleQuickAction(action, client) {
     return;
   }
   if (action === "update") {
-    if (!confirm(`${client.hostname}: Agent auf die neueste Version aktualisieren?\n\nDer Agent lädt die neue Version, ersetzt sich selbst und startet neu.\nDas kann bis zu 60 Sekunden dauern (Bestätigung wird abgewartet).`)) return;
+    if (!(await uiConfirm(`${client.hostname}: Agent aktualisieren?`, { description: "Der Agent lädt die neue Version, ersetzt sich selbst und startet neu.\nDas kann bis zu 60 Sekunden dauern (Bestätigung wird abgewartet).", okText: "Aktualisieren" }))) return;
     window.notify?.(`Aktualisiere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-update:" + client.id });
     try {
       const res = await api.updateAgent(client.id);
@@ -330,10 +330,11 @@ export async function handleQuickAction(action, client) {
     return;
   }
   if (action === "uninstall") {
-    if (!confirm(`${client.hostname}: Agent WIRKLICH deinstallieren?\n\n` +
-      `Es wird: 1) der Agent gestoppt, 2) alle Agent-Daten auf dem Client gelöscht,\n` +
-      `3) der Client aus dem Dashboard entfernt – aber nur, wenn er wirklich offline geht.\n\n` +
-      `Das kann bis zu 60 Sekunden dauern. Bitte warten.`)) return;
+    if (!(await uiConfirm(`${client.hostname}: Agent WIRKLICH deinstallieren?`, {
+      description: "Es wird: 1) der Agent gestoppt, 2) alle Agent-Daten auf dem Client gelöscht,\n" +
+        "3) der Client aus dem Dashboard entfernt – aber nur, wenn er wirklich offline geht.\n\n" +
+        "Das kann bis zu 60 Sekunden dauern. Bitte warten.",
+      okText: "Deinstallieren", danger: true }))) return;
     window.notify?.(`Deinstalliere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-uninstall:" + client.id });
     try {
       const res = await api.uninstallAgent(client.id);
