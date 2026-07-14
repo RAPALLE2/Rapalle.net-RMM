@@ -186,6 +186,10 @@ class UpdateClientBody(BaseModel):
     notes: str | None = None
     status_override: str | None = None   # z.B. "maintenance" oder null zum Zurücksetzen
     active: bool | None = None
+    # WICHTIG: fehlte bisher! Pydantic verwirft unbekannte Felder - dadurch
+    # wurde eine im Edit-Dialog gewählte VM/LXC-Einstufung NIE gespeichert und
+    # der Dialog zeigte nach jedem Neuladen wieder "Physisches Gerät".
+    device_type: str | None = None       # physical | vm | lxc
 
 
 def _with_live_state(c: dict) -> dict:
@@ -222,6 +226,8 @@ async def update_client(client_id: str, body: UpdateClientBody, user: dict = Dep
     fields = body.model_dump(exclude_unset=True)
     if "active" in fields:
         fields["active"] = int(fields["active"])  # SQLite kennt kein echtes Bool
+    if "device_type" in fields and fields["device_type"] not in ("physical", "vm", "lxc", None):
+        raise HTTPException(400, "Ungültiger Gerätetyp (physical|vm|lxc)")
 
     updated = db.update_client(client_id, fields)
     db.add_audit_entry(user["username"], "client.updated", target=client_id, details=str(fields))

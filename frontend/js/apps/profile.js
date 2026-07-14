@@ -10,7 +10,7 @@ import { applyTheme, applyAccent, ACCENT_PALETTES } from "../theme.js";
 import { setLanguage, applyStaticTranslations } from "../i18n_apply.js";
 import { renderSidebar } from "../sidebar.js";
 import { renderMainContent } from "../panel.js";
-import { getDashEdit, setDashEdit, getFleetIncludeVirtual, setFleetIncludeVirtual, scheduleSave } from "../persist.js";
+import { getDashEdit, setDashEdit, scheduleSave } from "../persist.js";
 
 export function renderProfile(body, win) {
   const u = state.user;
@@ -64,20 +64,6 @@ export function renderProfile(body, win) {
         die Arbeitsfläche ziehen.
       </p>
 
-      <div class="form-row" style="align-items:center;margin-top:10px">
-        <label>VMs & LXCs in Diagrammen</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
-          <input type="checkbox" id="pr-fleetvirtual" ${getFleetIncludeVirtual() ? "checked" : ""} />
-          VMs und LXC-Container als vollwertige Geräte mitzählen
-        </label>
-      </div>
-      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
-        An (Standard): virtuelle Maschinen und Container fließen überall in die
-        Flotten-Diagramme und Widgets ein (Online/Offline, Betriebssysteme,
-        CPU-Last, Top-Listen, ...). Aus: es zählen nur physische Geräte.
-        Wirkt sofort auf alle Dashboard-Widgets.
-      </p>
-
       <h3 style="margin-top:26px">Passwort ändern</h3>
       ${u.auth_realm ? `
       <p style="color:var(--subtext);font-size:13px;max-width:520px">
@@ -106,17 +92,6 @@ export function renderProfile(body, win) {
     renderMainContent();   // Client-Ansicht mit/ohne Edit-Werkzeuge neu zeichnen
     // Offene Dashboard-Fenster über den Umschalter informieren.
     try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
-  });
-
-  body.querySelector("#pr-fleetvirtual")?.addEventListener("change", (e) => {
-    setFleetIncludeVirtual(e.target.checked);
-    scheduleSave(state);
-    // Alle Flotten-Widgets/Diagramme sofort mit dem neuen Filter neu rechnen.
-    try { window.dispatchEvent(new CustomEvent("metrics-updated", { detail: {} })); } catch {}
-    renderMainContent();
-    window.notify?.(e.target.checked
-      ? "VMs & LXCs werden jetzt überall mitgezählt."
-      : "Diagramme zählen jetzt nur noch physische Geräte.", "info", 4000);
   });
 
   // Live-Vorschau: Theme sofort umschalten, wenn im Dropdown geändert

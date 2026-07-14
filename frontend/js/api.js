@@ -150,6 +150,12 @@ export const api = {
 
   // --- Session-Aufzeichnungen ---
   getRecordings: () => request("/api/recordings"),
+  // Organisationsweite Standard-Layouts (Dashboard-Widgets & Client-Panels)
+  getDefaultLayouts: () => request("/api/admin/default-layouts"),
+  setDefaultLayout: (kind, layout) =>
+    request("/api/admin/default-layouts", { method: "POST", body: JSON.stringify({ kind, layout }) }),
+  clearDefaultLayout: (kind) =>
+    request(`/api/admin/default-layouts/${kind}`, { method: "DELETE" }),
   getRecordingFrames: (id) => request(`/api/recordings/${id}/frames`),
   deleteRecording: (id) => request(`/api/recordings/${id}`, { method: "DELETE" }),
 

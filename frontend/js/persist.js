@@ -39,6 +39,18 @@ let _fleetIncludeVirtual = true;
 export function getFleetIncludeVirtual() { return _fleetIncludeVirtual; }
 export function setFleetIncludeVirtual(on) { _fleetIncludeVirtual = !!on; }
 
+// Organisationsweite Standard-Layouts (vom Admin gesetzt). Werden beim Start
+// vom Backend geladen; genutzt als Basis für neue Nutzer und beim "Auf
+// Standard zurücksetzen". null = kein org-Standard gesetzt.
+let _orgDefaultDash = null;
+let _orgDefaultFleet = null;
+export function getOrgDefaultDash() { return _orgDefaultDash; }
+export function getOrgDefaultFleet() { return _orgDefaultFleet; }
+export function setOrgDefaults({ dash, fleet }) {
+  if (dash !== undefined) _orgDefaultDash = dash;
+  if (fleet !== undefined) _orgDefaultFleet = fleet;
+}
+
 export function configurePersistence({ username, getExpanded, setExpanded }) {
   _key = KEY_PREFIX + (username || "anon");
   if (getExpanded) _getExpanded = getExpanded;

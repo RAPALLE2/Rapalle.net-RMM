@@ -1052,14 +1052,16 @@ select:disabled {
 /* Modulare Dashboard-Widgets (fleetdash.js / dashwidgets.js)       */
 /* ================================================================ */
 .dash-widgets {
+  /* Grid-Parameter (Spalten/AutoRows/Gap) werden in fleetdash.js gesetzt -
+     EXAKT wie die Client-Ansicht (dashlayout), inkl. gridAutoRows=150px und
+     Reihen-Span pro Widget. Hier nur der Fallback. */
   display: grid;
-  /* GLEICHES Raster wie die Client-Ansicht (dashlayout): 5 Spalten, 14px Gap.
-     Höhen der Widgets rasten auf 150px-Höheneinheiten ein (fleetdash.js). */
   grid-template-columns: repeat(5, 1fr);
+  grid-auto-rows: 150px;
   gap: 14px;
   align-items: start;
 }
-.dash-w .dash-w-body { overflow: hidden; }
+.dash-w .dash-w-body { overflow: visible; }
 .dash-w {
   position: relative;
   display: flex; flex-direction: column;
@@ -1262,6 +1264,10 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
    overflow bleibt sichtbar, damit die Resize-Griffe am Rand greifbar bleiben. */
 .dash-lp { display: flex; flex-direction: column; overflow: visible; }
 .dash-lp-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
+/* Diagramm-Holder: sichtbarer Überlauf, damit der beim Hover verdickte
+   Donut-/Segment-Ring oben und unten nicht abgeschnitten wird. */
+.cmetric-holder { overflow: visible; }
+.cmetric-holder svg, .dash-w-body svg { overflow: visible; }
 .dash-lp-body::-webkit-scrollbar { width: 8px; height: 8px; }
 .dash-lp-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .dash-lp-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
@@ -1280,8 +1286,10 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
 /* ================================================================ */
 .dash-grid-layout { display: grid; position: relative; align-items: stretch; }
 .dash-grid-layout .dash-lp { display: flex; flex-direction: column; overflow: visible; min-height: 0; }
-.dash-grid-layout.editing .dash-lp { outline: 1px dashed rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
-.dash-grid-layout.editing .dash-lp-head { cursor: grab; }
+.dash-grid-layout.editing .dash-lp,
+.dash-grid-layout.editing .dash-w { outline: 1px dashed rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
+.dash-grid-layout.editing .dash-lp-head,
+.dash-grid-layout.editing .dash-w-head { cursor: grab; }
 .dash-grid-layout .dash-lp:not(.dragging) { transition: box-shadow .18s ease; }
 
 /* Belegbare Leerzelle */
@@ -1338,3 +1346,19 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
 .dash-w-kind { position: relative; z-index: 31; }   /* Ansicht-Select im Dashboard */
 .tile-grip { z-index: 32; }                          /* Resize-Griffe darüber */
 .cmetric-holder svg, .dash-w-body svg { z-index: 0; }
+
+
+/* Dashboard-Eintrag in der Seitenleiste: ausgewählt EXAKT wie ein Client
+   (gleicher Verlauf, Akzentfarbe und Akzentstreifen wie .tree-row.selected). */
+.sidebar-nav-item.selected {
+  background: linear-gradient(90deg, rgba(var(--accent-2-rgb), 0.22), rgba(var(--accent-2-rgb), 0.08));
+  color: var(--accent-2);
+  box-shadow: inset 3px 0 0 var(--accent-2);
+}
+.sidebar-nav-item.selected .nav-ico { color: var(--accent-2); }
+
+
+/* Fleet-Widgets teilen sich jetzt das Client-Raster (.dash-grid-layout):
+   volle Zellhöhe, gleiche Kartenoptik. */
+.dash-grid-layout .dash-w { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.dash-grid-layout .dash-w .dash-w-body { flex: 1; min-height: 0; overflow: visible; }

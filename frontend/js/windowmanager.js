@@ -59,15 +59,21 @@ window.addEventListener("resize", () => {
 export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
                             x = null, y = null, minimized = false, maximized = false, focus = true,
                             singleton = false }) {
+  // Alte, noch mit '#' persistierte Keys reparieren (CSS-Selektor-sicher).
+  key = String(key).replace(/#/g, "--");
   const existing = state.windows.find((win) => win.key === key);
   if (existing && !singleton) {
     // Mehrfach-Instanzen erlaubt: für die neue Instanz einen eindeutigen
     // Schlüssel ableiten (key#2, key#3, ...) und ein FRISCHES Fenster bauen.
     // Zustandsgebundene Fenster (Einstellungen, Profil, Bearbeiten, ...)
     // übergeben singleton:true und behalten das alte Fokus-Verhalten.
+    // WICHTIG: KEIN '#' im Suffix! Die Apps bauen Element-IDs aus win.key
+    // (z.B. querySelector(`#term-text-${win.key}`)) - ein '#' im Key machte
+    // diese Selektoren ungültig, wodurch jede 2./3. Instanz "unfunktionell"
+    // war (v.a. mehrere Terminals desselben Clients). Suffix jetzt "--n".
     let n = 2;
-    while (state.windows.some((win) => win.key === `${key}#${n}`)) n++;
-    key = `${key}#${n}`;
+    while (state.windows.some((win) => win.key === `${key}--${n}`)) n++;
+    key = `${key}--${n}`;
   } else if (existing) {
     // Fenster existiert schon -> Inhalt/Props aktualisieren (wichtig, wenn
     // dasselbe "Slot" mit anderem Inhalt herausgelöst wird), wiederherstellen

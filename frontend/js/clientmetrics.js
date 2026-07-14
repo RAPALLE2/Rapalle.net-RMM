@@ -15,7 +15,7 @@
 //   text?(client)    -> String (für info, einzeilig)
 
 import { esc, formatBytes, formatUptime } from "./utils.js";
-import { attachHoverTip } from "./fleetcharts.js";
+import { attachHoverTip, fitToContainer, buildFleetDonut, showFleetTip, hideFleetTip } from "./fleetcharts.js";
 
 const m = (c) => (c && c.metrics) || {};
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
@@ -241,6 +241,38 @@ export const CLIENT_PRESETS = [
   { id: "c.uptime", group: "System", label: "Uptime",
     charts: ["number"], format: (v) => formatUptime(v),
     value: (c) => num(m(c).uptime) },
+
+  // =============== Netzwerk-Identität (statisch) ===============
+  { id: "c.ipAddr", group: "Identität", label: "IP-Adresse",
+    charts: ["info"], text: (c) => c.ip || m(c).ip || "—" },
+  { id: "c.macAddr", group: "Identität", label: "MAC-Adresse",
+    charts: ["info"], text: (c) => m(c).mac || "—" },
+  { id: "c.hostnameId", group: "Identität", label: "Hostname",
+    charts: ["info"], text: (c) => m(c).hostname || c.hostname || "—" },
+  { id: "c.osFull", group: "Identität", label: "Betriebssystem",
+    charts: ["info"], text: (c) => `${c.platform || "?"} ${c.release || ""}`.trim() || "—" },
+  { id: "c.agentVer", group: "Identität", label: "Agent-Version",
+    charts: ["info"], text: (c) => c.agent_version || "—" },
+  { id: "c.deviceType", group: "Identität", label: "Gerätetyp",
+    charts: ["info"], text: (c) => ({ vm: "Virtuelle Maschine", lxc: "LXC-Container", physical: "Physisches Gerät" }[c.device_type || "physical"]) },
+  { id: "c.interfaces", group: "Identität", label: "Netzwerk-Interfaces",
+    charts: ["info"],
+    rows: (c) => {
+      const ifs = m(c).interfaces || [];
+      return ifs.length
+        ? ifs.map((n) => ({ label: n.name, raw: [n.ipv4, n.mac].filter(Boolean).join("  ·  ") || "—" }))
+        : [{ label: "Interfaces", raw: "—" }];
+    } },
+  { id: "c.netIdentity", group: "Identität", label: "Netzwerk-Übersicht",
+    charts: ["info"],
+    rows: (c) => [
+      { label: "Hostname", raw: m(c).hostname || c.hostname || "—" },
+      { label: "IP-Adresse", raw: c.ip || m(c).ip || "—" },
+      { label: "MAC-Adresse", raw: m(c).mac || "—" },
+      { label: "Interfaces", raw: String((m(c).interfaces || []).length || "—") },
+      { label: "OS", raw: `${c.platform || "?"} ${c.release || ""}`.trim() || "—" },
+      { label: "Gerätetyp", raw: ({ vm: "VM", lxc: "LXC", physical: "Physisch" }[c.device_type || "physical"]) },
+    ] },
 ];
 
 export function clientPresetById(id) { return CLIENT_PRESETS.find((p) => p.id === id) || null; }
@@ -252,8 +284,14 @@ export const CLIENT_VALUE_EXTRA_KINDS = ["area", "spark", "progress", "ring", "s
 export function availableClientKinds(preset) {
   if (!preset) return ["number"];
   const kinds = [...(preset.charts || [])];
-  if (preset.value) for (const k of CLIENT_VALUE_EXTRA_KINDS) if (!kinds.includes(k)) kinds.push(k);
-  if (preset.rows && !kinds.includes("columns")) kinds.push("columns");
+  const add = (k) => { if (!kinds.includes(k)) kinds.push(k); };
+  if (preset.value) for (const k of CLIENT_VALUE_EXTRA_KINDS) add(k);
+  if (preset.rows) add("columns");
+  // Kreis-Darstellungen gegenseitig anbieten (wie im Dashboard):
+  if (kinds.includes("pie") || (preset.rows && kinds.includes("donut"))) { add("pie"); add("donut"); }
+  if (preset.value && (kinds.includes("gauge") || kinds.includes("donut") || kinds.includes("ring"))) {
+    add("gauge"); add("donut"); add("ring");
+  }
   return kinds;
 }
 
@@ -337,11 +375,22 @@ export function renderClientMetric(target, client, panel) {
   const kind = panel.kind && availableClientKinds(preset).includes(panel.kind) ? panel.kind : preset.charts[0];
   const v = preset.value ? preset.value(client) : null;
 
+  // Fit-Holder: skaliert den Diagramminhalt proportional herunter, wenn das
+  // Widget kleiner ist als der natürliche Inhalt (z.B. 2x1 -> 1x1). Der
+  // Hover-Tooltip hängt weiterhin an `target` (bleibt außerhalb).
+  const holder = document.createElement("div");
+  holder.className = "cmetric-fit-holder";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
+  target.appendChild(holder);
+  const _t = target;            // Original für Hover-Bindung
+  target = holder;              // Diagramme rendern in den Holder
+  const fit = () => fitToContainer(holder);
+
   // Hover wie in der Flotten-Übersicht: Tooltip (folgt der Maus) mit dem
   // exakten, live formatierten Wert - auf ALLEN Client-Metrik-Widgets.
-  if (!target._hoverTipAttached) {
-    target._hoverTipAttached = true;
-    attachHoverTip(target, () => {
+  if (!_t._hoverTipAttached) {
+    _t._hoverTipAttached = true;
+    attachHoverTip(_t, () => {
       const val = preset.value ? preset.value(client) : null;
       const txt = val === null || val === undefined ? "—" : formatClientValue(preset, val);
       const mx = resolveMax(preset, client);
@@ -372,7 +421,15 @@ export function renderClientMetric(target, client, panel) {
       </svg>
       <div style="font-size:22px;font-weight:700;margin-top:-10px">${esc(formatClientValue(preset, v))}</div>
       <div style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</div></div>`;
-    return;
+    fit(); return;
+  }
+
+  // Kategorische Verteilung (rows) als Pie oder mehrsegmentiger Donut.
+  if ((kind === "pie" || kind === "donut") && preset.rows && !preset.value) {
+    const segs = (preset.rows(client) || []).filter((r) => (r.value || 0) > 0)
+      .map((r, i) => ({ label: r.label, count: r.value, color: r.color, items: r.items }));
+    target.appendChild(buildFleetDonut(segs, { card: false, size: 150 }));
+    fit(); return;
   }
 
   if (kind === "donut") {
@@ -393,7 +450,7 @@ export function renderClientMetric(target, client, panel) {
           <div style="font-size:10px;color:var(--subtext);margin-top:3px">${esc(preset.label)}</div>
         </div>
       </div></div>`;
-    return;
+    fit(); return;
   }
 
   if (kind === "line") {
@@ -480,7 +537,7 @@ export function renderClientMetric(target, client, panel) {
           </div>
         </div>
       </div>`;
-    return;
+    fit(); return;
   }
 
   if (kind === "stat") {
@@ -515,13 +572,35 @@ export function renderClientMetric(target, client, panel) {
 
   if (kind === "columns") {
     const rows = (preset.rows ? preset.rows(client) : []).slice(0, 12);
-    const max = Math.max(1, ...rows.map((r) => r.value || 0));
-    target.innerHTML = `<div style="display:flex;gap:6px;align-items:flex-end;height:110px;padding:2px 2px 0">${rows.map((r) => `
-      <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${esc(r.label)}${r.raw ? ": " + esc(r.raw) : ""}">
-        <div style="width:100%;height:${Math.max(3, ((r.value || 0) / max) * 86).toFixed(1)}%;background:var(--accent);border-radius:4px 4px 0 0"></div>
-        <span style="font-size:9px;color:var(--subtext);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.label)}</span>
-      </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`}</div>`;
-    return;
+    // Echtes Säulendiagramm mit Grundlinie, y-Gitter, Wert- und Kategorie-Labels.
+    const W = 40 + rows.length * 46, H = 190;
+    const padL = 34, padR = 10, padT = 18, padB = 34;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const rawMax = Math.max(1, ...rows.map((r) => r.value || 0));
+    const exp = Math.floor(Math.log10(rawMax)), base = Math.pow(10, exp), f = rawMax / base;
+    const niceMax = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * base;
+    const bw = rows.length ? Math.min(40, plotW / rows.length - 10) : 20;
+    const shortV = (v) => { try { return preset.format ? preset.format(Math.round(v)) : (v >= 1e3 ? (v / 1e3).toFixed(1) + "k" : String(Math.round(v))); } catch { return String(Math.round(v)); } };
+    const grid = [0, 0.25, 0.5, 0.75, 1].map((fr) => {
+      const y = padT + plotH - fr * plotH;
+      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" opacity="0.5"/>
+        <text x="${padL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--subtext)">${shortV(niceMax * fr)}</text>`;
+    }).join("");
+    const bars = rows.map((r, i) => {
+      const x = padL + i * (plotW / rows.length) + (plotW / rows.length - bw) / 2;
+      const h = ((r.value || 0) / niceMax) * plotH, y = padT + plotH - h;
+      const label = String(r.label).length > 8 ? String(r.label).slice(0, 7) + "…" : r.label;
+      return `<g title="${esc(r.label)}">
+        <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" rx="3" fill="var(--accent)"/>
+        <text x="${(x + bw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text)">${esc(String(r.raw != null ? r.raw : Math.round(r.value || 0)))}</text>
+        <text x="${(x + bw / 2).toFixed(1)}" y="${(padT + plotH + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--subtext)">${esc(label)}</text>
+      </g>`;
+    }).join("");
+    target.innerHTML = rows.length
+      ? `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%">${grid}
+          <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="var(--subtext)" stroke-width="1.5"/>${bars}</svg>`
+      : `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+    fit(); return;
   }
 
   if (kind === "bars") {
@@ -533,7 +612,7 @@ export function renderClientMetric(target, client, panel) {
         <span class="wbar-track"><span class="wbar-fill" style="width:${(((r.value || 0) / max) * 100).toFixed(1)}%;background:var(--accent)"></span></span>
         <span class="wbar-val">${esc(r.raw != null ? r.raw : String(Math.round(r.value || 0)))}</span>
       </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`}</div>`;
-    return;
+    fit(); return;
   }
 
   // info (Standard-Fallback): Zeilenliste oder einzeiliger Text.

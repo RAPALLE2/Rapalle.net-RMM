@@ -15,7 +15,7 @@
 
 import { formatBytes } from "./utils.js";
 import { groupBy } from "./fleetcharts.js";
-import { getFleetIncludeVirtual } from "./persist.js";
+// (getFleetIncludeVirtual entfernt - Zählweise ist jetzt pro Widget einstellbar)
 
 const fmtPct = (v) => `${Math.round(v)}%`;
 const fmtW = (v) => `${Math.round(v)} W`;
@@ -25,11 +25,16 @@ const fmtC = (v) => `${v} °C`;
 const fmtBps = (v) => `${formatBytes(v)}/s`;
 
 // Aktive (nicht-Kind-)Clients.
-// Persönliche Einstellung (Profil): VMs/LXCs vollwertig in alle Flotten-
-// Diagramme/Widgets aufnehmen (Standard) - oder nur physische Geräte zählen.
+// Pro-Widget-Einstellung: Zählt dieses Widget ALLE Geräte oder nur physische?
+// Wird von dashwidgets/clientmetrics vor dem Rendern gesetzt (setHostScope)
+// und danach zurückgesetzt. Default null = alle Geräte (VMs/LXCs zählen mit).
+let _hostScope = null;   // null | "all" | "physical"
+export function setHostScope(scope) { _hostScope = scope; }
+export function clearHostScope() { _hostScope = null; }
+
 function hosts(state) {
   let list = (state.clients || []).filter((c) => !c.parent_client_id);
-  if (!getFleetIncludeVirtual()) {
+  if (_hostScope === "physical") {
     list = list.filter((c) => (c.device_type || "physical") === "physical");
   }
   return list;
@@ -192,6 +197,112 @@ export const PRESETS = [
     id: "host.cpuLoad", scope: "perhost", group: "CPU", label: "CPU-Auslastung je Client",
     charts: ["table", "bar"], unit: "%",
     rows: (s) => onlineHosts(s).map((c) => ({ label: c.hostname, value: c.metrics.cpuLoad, raw: fmtPct(c.metrics.cpuLoad) })).sort((a, b) => b.value - a.value),
+  },
+  // ---------- RAM je Client ----------
+  {
+    id: "host.ramPct", scope: "perhost", group: "RAM", label: "RAM-Auslastung je Client",
+    charts: ["bar", "table", "pie"], unit: "%", format: fmtPct,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.memTotal).map((c) => {
+      const p = Math.round((c.metrics.memUsed / c.metrics.memTotal) * 100);
+      return { label: c.hostname, value: p, raw: `${p}% (${formatBytes(c.metrics.memUsed)} / ${formatBytes(c.metrics.memTotal)})` };
+    }).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.ramUsed", scope: "perhost", group: "RAM", label: "RAM belegt je Client",
+    charts: ["bar", "table"], format: formatBytes,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.memUsed != null).map((c) => ({ label: c.hostname, value: c.metrics.memUsed, raw: formatBytes(c.metrics.memUsed) })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.ramTotal", scope: "perhost", group: "RAM", label: "RAM-Kapazität je Client",
+    charts: ["bar", "table"], format: formatBytes,
+    rows: (s) => hosts(s).filter((c) => c.metrics?.memTotal).map((c) => ({ label: c.hostname, value: c.metrics.memTotal, raw: formatBytes(c.metrics.memTotal) })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.swap", scope: "perhost", group: "RAM", label: "Swap-Auslastung je Client",
+    charts: ["bar", "table"], unit: "%", format: fmtPct,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.swapTotal).map((c) => {
+      const p = Math.round((c.metrics.swapUsed / c.metrics.swapTotal) * 100);
+      return { label: c.hostname, value: p, raw: `${p}%` };
+    }).sort((a, b) => b.value - a.value),
+  },
+  // ---------- GPU je Client ----------
+  {
+    id: "host.gpuLoad", scope: "perhost", group: "GPU", label: "GPU-Auslastung je Client",
+    charts: ["bar", "table", "pie"], unit: "%", format: fmtPct,
+    rows: (s) => onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]?.load != null).map((c) => ({ label: c.hostname, value: c.metrics.gpus[0].load, raw: fmtPct(c.metrics.gpus[0].load) })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.gpuTemp", scope: "perhost", group: "GPU", label: "GPU-Temperatur je Client",
+    charts: ["bar", "table"], format: fmtC,
+    rows: (s) => onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]?.temp != null).map((c) => ({ label: c.hostname, value: c.metrics.gpus[0].temp, raw: fmtC(c.metrics.gpus[0].temp) })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.gpuMem", scope: "perhost", group: "GPU", label: "GPU-Speicher belegt je Client",
+    charts: ["bar", "table"], format: formatBytes,
+    rows: (s) => onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]?.memUsed != null).map((c) => ({ label: c.hostname, value: c.metrics.gpus[0].memUsed, raw: `${formatBytes(c.metrics.gpus[0].memUsed)}${c.metrics.gpus[0].memTotal ? " / " + formatBytes(c.metrics.gpus[0].memTotal) : ""}` })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.gpuPower", scope: "perhost", group: "GPU", label: "GPU-Leistung je Client",
+    charts: ["bar", "table"], format: fmtW,
+    rows: (s) => onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]?.power != null).map((c) => ({ label: c.hostname, value: c.metrics.gpus[0].power, raw: fmtW(c.metrics.gpus[0].power) })).sort((a, b) => b.value - a.value),
+  },
+  // ---------- Disk & Netzwerk je Client ----------
+  {
+    id: "host.diskPct", scope: "perhost", group: "Disk", label: "Disk-Auslastung je Client",
+    charts: ["bar", "table", "pie"], unit: "%", format: fmtPct,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.diskTotal).map((c) => {
+      const p = Math.round((c.metrics.diskUsed / c.metrics.diskTotal) * 100);
+      return { label: c.hostname, value: p, raw: `${p}% (${formatBytes(c.metrics.diskUsed)} / ${formatBytes(c.metrics.diskTotal)})` };
+    }).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.netIn", scope: "perhost", group: "Netzwerk", label: "Netzwerk ↓ je Client",
+    charts: ["bar", "table"], format: fmtBps,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.netIn != null).map((c) => ({ label: c.hostname, value: c.metrics.netIn, raw: fmtBps(c.metrics.netIn) })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.netOut", scope: "perhost", group: "Netzwerk", label: "Netzwerk ↑ je Client",
+    charts: ["bar", "table"], format: fmtBps,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.netOut != null).map((c) => ({ label: c.hostname, value: c.metrics.netOut, raw: fmtBps(c.metrics.netOut) })).sort((a, b) => b.value - a.value),
+  },
+  {
+    id: "host.ipList", scope: "perhost", group: "Identität", label: "IP-Adresse je Client",
+    charts: ["table"],
+    rows: (s) => hosts(s).map((c) => ({ label: c.hostname, raw: c.ip || c.metrics?.ip || "—" })),
+  },
+  {
+    id: "host.macList", scope: "perhost", group: "Identität", label: "MAC-Adresse je Client",
+    charts: ["table"],
+    rows: (s) => hosts(s).map((c) => ({ label: c.hostname, raw: c.metrics?.mac || "—" })),
+  },
+  {
+    id: "host.deviceTypeList", scope: "perhost", group: "Identität", label: "Gerätetyp je Client",
+    charts: ["table"],
+    rows: (s) => hosts(s).map((c) => ({ label: c.hostname, raw: ({ vm: "VM", lxc: "LXC", physical: "Physisch" }[c.device_type || "physical"]) })),
+  },
+  // ---------- RAM/GPU/Disk-Aggregate über die Flotte ----------
+  {
+    id: "fleet.ramLoadAvg", scope: "fleet", group: "RAM", label: "Ø RAM-Auslastung (Flotte)",
+    charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
+    value: (s) => Math.round(avg(onlineHosts(s).filter((c) => c.metrics.memTotal), (c) => (c.metrics.memUsed / c.metrics.memTotal) * 100)),
+    donut: (s) => ({ value: Math.round(avg(onlineHosts(s).filter((c) => c.metrics.memTotal), (c) => (c.metrics.memUsed / c.metrics.memTotal) * 100)), max: 100, label: "RAM Ø", sub: `${onlineHosts(s).length} online` }),
+  },
+  {
+    id: "fleet.gpuLoadAvg", scope: "fleet", group: "GPU", label: "Ø GPU-Auslastung (Flotte)",
+    charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
+    value: (s) => Math.round(avg(onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]), (c) => c.metrics.gpus[0].load || 0)),
+    donut: (s) => ({ value: Math.round(avg(onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]), (c) => c.metrics.gpus[0].load || 0)), max: 100, label: "GPU Ø", sub: `${onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]).length} mit GPU` }),
+  },
+  {
+    id: "fleet.gpuPowerTotal", scope: "fleet", group: "GPU", label: "GPU-Leistung gesamt (Flotte)",
+    charts: ["number", "line"], format: fmtW,
+    value: (s) => Math.round(sum(onlineHosts(s), (c) => (c.metrics.gpus || [])[0]?.power || 0)),
+  },
+  {
+    id: "fleet.diskLoadAvg", scope: "fleet", group: "Disk", label: "Ø Disk-Auslastung (Flotte)",
+    charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
+    value: (s) => Math.round(avg(onlineHosts(s).filter((c) => c.metrics.diskTotal), (c) => (c.metrics.diskUsed / c.metrics.diskTotal) * 100)),
+    donut: (s) => ({ value: Math.round(avg(onlineHosts(s).filter((c) => c.metrics.diskTotal), (c) => (c.metrics.diskUsed / c.metrics.diskTotal) * 100)), max: 100, label: "Disk Ø", sub: `${onlineHosts(s).length} online` }),
   },
   {
     id: "host.cpuModel", scope: "perhost", group: "Hardware", label: "CPU-Modell je Client",

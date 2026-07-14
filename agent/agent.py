@@ -566,17 +566,59 @@ def _ram_modules() -> list:
     return mods[:8]
 
 
+def _mac_and_interfaces() -> dict:
+    """
+    Ermittelt die primäre MAC-Adresse und eine Liste der Netzwerk-Interfaces
+    (Name, MAC, IPv4). Rein informativ für die Client-Panels.
+    """
+    result = {"mac": None, "interfaces": []}
+    try:
+        import uuid as _uuid
+        node = _uuid.getnode()
+        # getnode() liefert bei zufälligem Fallback ein Bit gesetzt -> dann unklar.
+        mac = ":".join(f"{(node >> ele) & 0xff:02x}" for ele in range(40, -8, -8))
+        result["mac"] = mac
+    except Exception:
+        pass
+    try:
+        addrs = psutil.net_if_addrs()
+        for name, entries in addrs.items():
+            nic = {"name": name, "mac": None, "ipv4": None}
+            for e in entries:
+                fam = getattr(e, "family", None)
+                famname = getattr(fam, "name", str(fam))
+                if famname in ("AF_LINK", "AF_PACKET") or (hasattr(__import__("socket"), "AF_LINK") and fam == __import__("socket").AF_LINK):
+                    nic["mac"] = e.address
+                elif fam == __import__("socket").AF_INET:
+                    nic["ipv4"] = e.address
+            if nic["ipv4"] or nic["mac"]:
+                result["interfaces"].append(nic)
+        # Primäre MAC bevorzugt vom Interface mit der Standard-IP nehmen.
+        primary_ip = get_local_ip()
+        for nic in result["interfaces"]:
+            if nic["ipv4"] == primary_ip and nic["mac"]:
+                result["mac"] = nic["mac"]
+                break
+    except Exception:
+        pass
+    return result
+
+
 def _static_hardware() -> dict:
     global _static_hw_cache
     if _static_hw_cache is not None:
         return _static_hw_cache
     plat = __import__("platform")
+    net = _mac_and_interfaces()
     info = {
         "cpuModel": _cpu_model(),
         "arch": _safe(lambda: plat.machine()) or "",
         "gpuModels": _gpu_models(),
         "ramModules": _ram_modules(),
         "cpuMaxFreq": _safe(lambda: round(psutil.cpu_freq().max)) if _safe(lambda: psutil.cpu_freq()) else None,
+        "mac": net.get("mac"),
+        "interfaces": net.get("interfaces", []),
+        "hostname": DEVICE_NAME,
     }
     _static_hw_cache = info
     return info

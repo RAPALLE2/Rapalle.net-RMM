@@ -13,7 +13,8 @@
 import { state } from "./state.js";
 import { esc } from "./utils.js";
 import { presetById } from "./metriccatalog.js";
-import { buildFleetDonut, showFleetTip, hideFleetTip, attachHoverTip } from "./fleetcharts.js";
+import { setHostScope, clearHostScope } from "./metriccatalog.js";
+import { buildFleetDonut, showFleetTip, hideFleetTip, attachHoverTip, fitToContainer } from "./fleetcharts.js";
 
 const PIE_COLORS = [
   "#4da6ff", "#3ecf8e", "#f5a524", "#ff4d6d", "#a78bfa",
@@ -52,8 +53,16 @@ export const ROWS_EXTRA_KINDS = ["column", "list"];
 export function availableKinds(preset) {
   if (!preset) return ["number"];
   const kinds = [...(preset.charts || [])];
-  if (preset.value) for (const k of VALUE_EXTRA_KINDS) if (!kinds.includes(k)) kinds.push(k);
-  if (preset.rows) for (const k of ROWS_EXTRA_KINDS) if (!kinds.includes(k)) kinds.push(k);
+  const add = (k) => { if (!kinds.includes(k)) kinds.push(k); };
+  if (preset.value) for (const k of VALUE_EXTRA_KINDS) add(k);
+  if (preset.rows) for (const k of ROWS_EXTRA_KINDS) add(k);
+  // Kreis-Darstellungen gegenseitig anbieten:
+  // - kategorische Verteilung (rows): pie <-> donut
+  // - Einzelwert (value): gauge <-> donut <-> ring
+  if (kinds.includes("pie") || (preset.rows && kinds.includes("donut"))) { add("pie"); add("donut"); }
+  if (preset.value && (kinds.includes("gauge") || kinds.includes("donut") || kinds.includes("ring"))) {
+    add("gauge"); add("donut"); add("ring");
+  }
   return kinds;
 }
 
@@ -64,25 +73,48 @@ export function renderWidgetBody(target, widget) {
   const preset = presetById(widget.preset);
   if (!preset) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Unbekannte Metrik.</div>`; return; }
 
-  switch (widget.kind) {
-    case "number": renderNumber(target, widget, preset); break;
-    case "donut": renderDonut(target, widget, preset); break;
-    case "gauge": renderGauge(target, widget, preset); break;
-    case "line": renderLine(target, widget, preset); break;
-    case "pie": return renderPie(target, widget, preset);
-    case "bar": return renderBar(target, widget, preset);
-    case "table": return renderTable(target, widget, preset);
-    case "area": renderArea(target, widget, preset); break;
-    case "spark": renderSpark(target, widget, preset); break;
-    case "progress": renderProgress(target, widget, preset); break;
-    case "ring": renderRing(target, widget, preset); break;
-    case "stat": renderStat(target, widget, preset); break;
-    case "column": return renderColumn(target, widget, preset);
-    case "list": return renderList(target, widget, preset);
-    case "overview": return renderOverview(target, widget, preset);
-    case "fleetdonut": return renderFleetDonut(target, widget, preset);
-    default: target.innerHTML = `<div style="color:var(--subtext)">${esc(widget.kind)}?</div>`; return;
+  // Pro-Widget-Zählweise: "physical" = nur physische Geräte, sonst alle
+  // (VMs/LXCs zählen mit). Gilt für die gesamte Datenberechnung dieses Widgets.
+  setHostScope(widget.scope === "physical" ? "physical" : "all");
+  try {
+    renderWidgetInner(target, widget, preset);
+  } finally {
+    clearHostScope();
   }
+}
+
+function renderWidgetInner(target, widget, preset) {
+  // Alle Diagramme in einen Fit-Holder rendern, der den (fixe-Größe-)Inhalt
+  // proportional schrumpft, wenn das Widget kleiner ist als der natürliche
+  // Diagramminhalt (z.B. 2x1 -> 1x1). Vergrößert wird nie.
+  const holder = document.createElement("div");
+  holder.className = "widget-fit-holder";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
+  target.appendChild(holder);
+  const out = holder;
+
+  switch (widget.kind) {
+    case "number": renderNumber(out, widget, preset); break;
+    case "donut": renderDonut(out, widget, preset); break;
+    case "gauge": renderGauge(out, widget, preset); break;
+    case "line": renderLine(out, widget, preset); break;
+    case "pie": renderPie(out, widget, preset); fitToContainer(holder); break;
+    case "bar": renderBar(out, widget, preset); fitToContainer(holder); break;
+    case "table": renderTable(out, widget, preset); fitToContainer(holder); break;
+    case "area": renderArea(out, widget, preset); break;
+    case "spark": renderSpark(out, widget, preset); break;
+    case "progress": renderProgress(out, widget, preset); break;
+    case "ring": renderRing(out, widget, preset); break;
+    case "stat": renderStat(out, widget, preset); break;
+    case "column": renderColumn(out, widget, preset); fitToContainer(holder); break;
+    case "list": renderList(out, widget, preset); fitToContainer(holder); break;
+    case "overview": renderOverview(out, widget, preset); break;
+    case "fleetdonut": renderFleetDonut(out, widget, preset); fitToContainer(holder); break;
+    default: out.innerHTML = `<div style="color:var(--subtext)">${esc(widget.kind)}?</div>`; return;
+  }
+  // Wert-/Kreisdiagramme ebenfalls einpassen (Donut/Gauge/Ring haben feste
+  // SVG-Größen und würden sonst in 1x1-Zellen überlaufen).
+  if (["donut", "gauge", "ring", "fleetdonut", "number", "stat"].includes(widget.kind)) fitToContainer(holder);
   // Hover wie in der Flotten-Übersicht: Tooltip mit exaktem Wert (live) für
   // die einfachen Wert-Widgets. Pie/Bar/FleetDonut haben eigene, feinere
   // Hover-Effekte pro Segment/Zeile (siehe unten). Guard: renderWidgetBody
@@ -91,13 +123,18 @@ export function renderWidgetBody(target, widget) {
     target._hoverTipAttached = true;
     attachHoverTip(target, () => {
       const p = presetById(target._hoverPreset || widget.preset) || preset;
-      const v = p.value ? p.value(state) : null;
+      setHostScope(target._hoverScope === "physical" ? "physical" : "all");
+      let v, max;
+      try {
+        v = p.value ? p.value(state) : null;
+        max = typeof p.max === "number" ? ` <span style="color:var(--subtext)">/ ${esc(formatValue(p, p.max))}</span>` : "";
+      } finally { clearHostScope(); }
       const val = v === null || v === undefined ? "—" : formatValue(p, v);
-      const max = typeof p.max === "number" ? ` <span style="color:var(--subtext)">/ ${esc(formatValue(p, p.max))}</span>` : "";
       return `<b>${esc(widget.title || p.label)}</b><br>${esc(val)}${max}`;
     });
   }
   target._hoverPreset = widget.preset;
+  target._hoverScope = widget.scope || "all";
 }
 
 // Titel eines Widgets (frei überschreibbar).
@@ -237,25 +274,67 @@ function renderStat(target, widget, preset) {
 // Säulen (vertikale Balken je Zeile)
 function renderColumn(target, widget, preset) {
   const rows = (preset.rows ? preset.rows(state) : []).slice(0, 12);
+  // Echtes Säulendiagramm: SVG mit Grundlinie, y-Gitterlinien, Wertbeschriftung
+  // über jeder Säule und Kategorie-Label darunter.
+  const W = 40 + rows.length * 46, H = 190;
+  const padL = 34, padR = 10, padT = 18, padB = 34;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
   const max = Math.max(1, ...rows.map((r) => r.value || 0));
-  const wrap = document.createElement("div");
-  wrap.style.cssText = "display:flex;gap:6px;align-items:flex-end;height:110px;padding:2px 2px 0";
-  wrap.innerHTML = rows.map((row, i) => {
-    const pct = ((row.value || 0) / max) * 100;
+  const bw = rows.length ? Math.min(40, plotW / rows.length - 10) : 20;
+  const niceMax = niceCeil(max);
+  const gridY = [0, 0.25, 0.5, 0.75, 1].map((f) => {
+    const y = padT + plotH - f * plotH;
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" opacity="0.5"/>
+      <text x="${padL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--subtext)">${fmtShort(niceMax * f, preset)}</text>`;
+  }).join("");
+  const bars = rows.map((row, i) => {
+    const x = padL + i * (plotW / rows.length) + (plotW / rows.length - bw) / 2;
+    const h = ((row.value || 0) / niceMax) * plotH;
+    const y = padT + plotH - h;
     const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
-    return `<div class="wcol" data-i="${i}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0;cursor:pointer">
-      <div style="width:100%;height:${Math.max(3, pct * 0.86).toFixed(1)}%;background:${color};border-radius:4px 4px 0 0;transition:opacity .12s"></div>
-      <span style="font-size:9px;color:var(--subtext);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
-    </div>`;
-  }).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+    const label = String(row.label).length > 8 ? String(row.label).slice(0, 7) + "…" : row.label;
+    return `<g class="wcol" data-i="${i}" style="cursor:pointer">
+      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}"
+        rx="3" fill="${color}" style="transition:opacity .12s"/>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text)">${esc(String(row.raw != null ? row.raw : Math.round(row.value || 0)))}</text>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${(padT + plotH + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--subtext)">${esc(label)}</text>
+    </g>`;
+  }).join("");
+  const wrap = document.createElement("div");
+  wrap.innerHTML = rows.length
+    ? `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%">
+        ${gridY}
+        <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="var(--subtext)" stroke-width="1.5"/>
+        ${bars}
+      </svg>`
+    : `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
   target.appendChild(wrap);
   wrap.querySelectorAll(".wcol").forEach((el) => {
     const row = rows[+el.dataset.i];
+    const rect = el.querySelector("rect");
     const tip = () => `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(row.value))}`;
-    el.addEventListener("mouseenter", (e) => showFleetTip(tip(), e.clientX, e.clientY));
+    el.addEventListener("mouseenter", (e) => { rect.setAttribute("opacity", "0.8"); showFleetTip(tip(), e.clientX, e.clientY); });
     el.addEventListener("mousemove", (e) => showFleetTip(tip(), e.clientX, e.clientY));
-    el.addEventListener("mouseleave", () => hideFleetTip());
+    el.addEventListener("mouseleave", () => { rect.setAttribute("opacity", "1"); hideFleetTip(); });
   });
+}
+
+// Rundet auf einen "schönen" oberen Achsenwert (1/2/5 * 10^n).
+function niceCeil(v) {
+  if (v <= 0) return 1;
+  const exp = Math.floor(Math.log10(v));
+  const base = Math.pow(10, exp);
+  const f = v / base;
+  const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return nice * base;
+}
+// Kurzformat für Achsenbeschriftung (nutzt preset.format wenn vorhanden).
+function fmtShort(v, preset) {
+  if (preset && preset.format) { try { return preset.format(Math.round(v)); } catch {} }
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + "G";
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + "k";
+  return String(Math.round(v));
 }
 
 // Liste (Top-Zeilen als Text)
@@ -322,10 +401,12 @@ function renderDonut(target, widget, preset) {
     valueText = d.pctText ? `${Math.round(pct)}%` : (preset.format ? preset.format(d.value) : `${Math.round(pct)}%`);
     sub = d.sub;
   } else if (preset.rows) {
-    // Verteilung -> Donut aus den zwei/mehr größten Segmenten (erste Kategorie).
-    const rows = preset.rows(state);
-    const total = rows.reduce((s, r) => s + (r.value || 0), 0);
-    return renderPie(target, widget, preset);  // Pie ist hier die bessere Darstellung
+    // Kategorische Verteilung als ECHTER mehrsegmentiger Donut (Ring mit
+    // Legende + Hover), nicht als Pie-Fallback.
+    const segs = (preset.rows(state) || []).filter((r) => (r.value || 0) > 0)
+      .map((r, i) => ({ label: r.label, count: r.value, color: r.color || PIE_COLORS[i % PIE_COLORS.length], items: r.items }));
+    target.appendChild(buildFleetDonut(segs, { card: false, size: 150 }));
+    return;
   } else {
     const v = preset.value(state);
     pct = preset.max ? (v / preset.max) * 100 : v;

@@ -11,6 +11,8 @@ import { t } from "../i18n.js";
 
 // Aktionen menschenlesbar machen (mit Emoji für schnelle Orientierung)
 const ACTION_LABELS = {
+  "settings.default_layout_set": "🗂️ Standard-Layout gesetzt",
+  "settings.default_layout_cleared": "🗂️ Standard-Layout entfernt",
   "login.success": "🔓 Login erfolgreich",
   "login.failed": "⛔ Login fehlgeschlagen",
   "password.changed": "🔑 Passwort geändert",
@@ -90,9 +92,18 @@ export function renderAudit(body, win) {
   let sortKey = "ts";
   let sortDir = -1;           // -1 = neueste zuerst
 
+  let existingRecIds = null;   // Set der Replay-IDs, deren Datei noch existiert
+
   async function load() {
     try {
       allEntries = await api.getAuditLog();
+      // Welche Replays existieren noch? getRecordings() räumt fehlende Dateien
+      // serverseitig auf und liefert file_exists. Fehlt die Datei, wird im
+      // Audit-Log der "Replay ansehen"-Button durch einen Hinweis ersetzt.
+      try {
+        const recs = await api.getRecordings();
+        existingRecIds = new Set(recs.filter((r) => r.file_exists !== false).map((r) => r.id));
+      } catch { existingRecIds = null; }   // Fehler -> nicht fälschlich sperren
       // User-Filter-Dropdown mit den vorkommenden Benutzern füllen.
       const users = [...new Set(allEntries.map((e) => e.username).filter(Boolean))].sort();
       const cur = userSel.value;
@@ -146,18 +157,24 @@ export function renderAudit(body, win) {
       let recId = null;
       if (e.action === "screen.session_started" && (e.details || "").startsWith("rec:")) {
         recId = e.details.slice(4);
-        detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">${t("view_recording")}</button>`;
+        detailsHtml = (existingRecIds && !existingRecIds.has(recId))
+          ? `<span style="color:var(--danger);font-size:12px">Replay gibt's nicht mehr</span>`
+          : `<button class="taskbar-btn" data-rec="${esc(recId)}">${t("view_recording")}</button>`;
       }
       const guacMatch = (e.details || "").match(/\/api\/recordings\/([A-Za-z0-9_-]+)/);
       if (e.action === "guac.recording" && guacMatch) {
         recId = guacMatch[1];
-        detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
+        detailsHtml = (existingRecIds && !existingRecIds.has(recId))
+          ? `<span style="color:var(--danger);font-size:12px">Replay gibt's nicht mehr</span>`
+          : `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
       }
       // Terminal-Sitzung (neu): kompakter Eintrag mit Replay-Verweis "rec:<id> ..."
       const termRec = e.action === "terminal.session" && (e.details || "").match(/^rec:([A-Za-z0-9_-]+)\s*(.*)$/);
       if (termRec) {
         recId = termRec[1];
-        detailsHtml = `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button> ` +
+        detailsHtml = ((existingRecIds && !existingRecIds.has(recId))
+          ? `<span style="color:var(--danger);font-size:12px">Replay gibt's nicht mehr</span> `
+          : `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button> `) +
           `<span style="font-size:11px">${esc(termRec[2] || "")}</span>`;
       }
       // Terminal-Sitzung (alt): mehrzeiliger Verlauf -> aufklappbarer <pre>-Block.

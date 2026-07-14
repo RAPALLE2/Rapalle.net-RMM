@@ -234,6 +234,11 @@ function renderClientNode(client) {
 }
 
 export function renderSidebar() {
+  // Dashboard-Eintrag wie einen ausgewählten Client markieren, wenn das
+  // Dashboard die aktive Ansicht ist (selection leer = ebenfalls Dashboard).
+  const dashNav = document.getElementById("sidebar-dashboard");
+  if (dashNav) dashNav.classList.toggle("selected",
+    !state.selection || state.selection.type === "dashboard");
   const tree = document.getElementById("sidebar-tree");
   if (!tree) return;
 

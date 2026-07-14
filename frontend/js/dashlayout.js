@@ -19,9 +19,11 @@ import {
 import { openWindow } from "./windowmanager.js";
 import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable, availableClientKinds } from "./clientmetrics.js";
 import {
-  getDashLayout, setDashLayout, getDashEdit, scheduleSave,
+  getDashLayout, setDashLayout, getDashEdit, setDashEdit, scheduleSave,
+  getOrgDefaultDash,
 } from "./persist.js";
-import { state } from "./state.js";
+import { state, isAdmin } from "./state.js";
+import { api } from "./api.js";
 
 let _uid = 0;
 const nid = () => `p-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
@@ -75,7 +77,17 @@ const ADDABLE = [
   ]],
 ];
 
-function defaultLayout() {
+function orgOrBuiltinDefault() {
+  // Admin-Standard bevorzugen (falls gesetzt), sonst eingebauter Standard.
+  const org = getOrgDefaultDash();
+  if (org && Array.isArray(org.panels) && org.panels.length) {
+    const clone = JSON.parse(JSON.stringify(org));
+    for (const p of clone.panels) p.id = nid();   // frische IDs pro Nutzer
+    return clone;
+  }
+  return builtinDefaultLayout();
+}
+function builtinDefaultLayout() {
   return {
     grid: true, cols: COLS,
     panels: [
@@ -121,7 +133,7 @@ function migrateToGrid(layout) {
 
 function currentLayout() {
   let l = getDashLayout();
-  if (!l || !Array.isArray(l.panels) || !l.panels.length) { l = defaultLayout(); setDashLayout(l); }
+  if (!l || !Array.isArray(l.panels) || !l.panels.length) { l = orgOrBuiltinDefault(); setDashLayout(l); }
   for (const p of l.panels) { if (!p.id) p.id = nid(); if (p.type === "folder") migrateFolder(p); }
   migrateToGrid(l);
   // Einmalige Anpassung: bestehende Status-Panels auf 2 Rasterreihen bringen
@@ -188,11 +200,29 @@ export function renderClientLayout(host, toolbarHost, client) {
     toolbarHost.innerHTML = edit ? `<span class="dash-edit-tools">
           <button data-add-panel>+ Panel</button>
           <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
+          ${isAdmin() ? `<button data-set-default title="Aktuelles Layout als Standard für ALLE Nutzer speichern">💾 Als Standard für alle</button>` : ""}
+          <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="Bearbeiten-Modus verlassen">✓ Bearbeiten beenden</button>
         </span>` : "";
     toolbarHost.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddPicker(host, toolbarHost, client, null));
     toolbarHost.querySelector("[data-reset]")?.addEventListener("click", async () => {
       if (!(await uiConfirm("Layout auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true }))) return;
-      setDashLayout(defaultLayout()); saveLayout(); renderClientLayout(host, toolbarHost, client);
+      setDashLayout(orgOrBuiltinDefault()); saveLayout(); renderClientLayout(host, toolbarHost, client);
+    });
+    toolbarHost.querySelector("[data-end-edit]")?.addEventListener("click", () => {
+      setDashEdit(false);
+      scheduleSave(state);
+      // app.js hört auf dieses Event und rendert die Ansicht neu (kein direkter
+      // panel.js-Import hier -> vermeidet einen Import-Zyklus).
+      try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
+    });
+    toolbarHost.querySelector("[data-set-default]")?.addEventListener("click", async () => {
+      if (!(await uiConfirm("Aktuelles Client-Panel-Layout als Standard für ALLE Nutzer setzen?", {
+        description: "Neue Nutzer und alle, die auf \"Standard\" zurücksetzen, bekommen dieses Layout. Bestehende eigene Layouts bleiben unangetastet.",
+        okText: "Als Standard speichern" }))) return;
+      try {
+        await api.setDefaultLayout("dash", currentLayout());
+        window.notify?.("Als organisationsweiter Standard gespeichert.", "success");
+      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
     });
   }
 
@@ -237,8 +267,11 @@ export function updateClientLayouts(clientId) {
     const ctx = host._rmmCtx;
     if (!ctx || !document.body.contains(host)) return;
     touched++;
-    // ctx.client ist DIESELBE Objekt-Referenz wie in state.clients -
-    // client.metrics wurde vom Socket-Handler bereits aktualisiert.
+    // WICHTIG: Client IMMER frisch aus dem State holen. Nach clients:changed
+    // (refreshAll) wird state.clients durch NEUE Objekte ersetzt - die alte
+    // ctx.client-Referenz bekam dann keine Metriken mehr und die Panels
+    // wirkten "eingefroren". ctx.client dient nur noch als Fallback.
+    ctx.client = (state.clients || []).find((c) => c.id === ctx.client?.id) || ctx.client;
     // Panel-Typen mit Live-Metriken. notes/text/actions/websites werden NIE
     // neu gerendert (Notizen-Textarea würde sonst beim Tippen zerstört, wenn
     // der Agent neue Metriken schickt).

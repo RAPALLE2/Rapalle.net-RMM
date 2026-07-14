@@ -188,3 +188,30 @@ export function attachHoverTip(el, htmlFn) {
   el.addEventListener("mousemove", (e) => showFleetTip(htmlFn(), e.clientX, e.clientY));
   el.addEventListener("mouseleave", () => hideFleetTip());
 }
+
+// ------------------------------------------------------------------
+// Responsive-Scale: skaliert einen (fixe-Größe-)Diagramminhalt so, dass er
+// immer vollständig in seinen Container passt - z.B. wenn ein 2x1-Widget auf
+// 1x1 verkleinert wird. Der innere Inhalt behält sein Seitenverhältnis und
+// wird per CSS-transform proportional geschrumpft (nie vergrößert).
+// Aufruf NACH dem Einfügen des Inhalts in `holder`.
+// ------------------------------------------------------------------
+export function fitToContainer(holder) {
+  if (!holder || !holder.firstElementChild) return;
+  const inner = holder.firstElementChild;
+  const apply = () => {
+    if (!holder.isConnected) { ro.disconnect(); return; }
+    // Transform zurücksetzen, um die natürliche Größe zu messen.
+    inner.style.transform = "";
+    inner.style.transformOrigin = "center center";
+    const availW = holder.clientWidth, availH = holder.clientHeight;
+    const needW = inner.scrollWidth, needH = inner.scrollHeight;
+    if (!availW || !availH || !needW || !needH) return;
+    const scale = Math.min(1, availW / needW, availH / needH);
+    if (scale < 0.999) inner.style.transform = `scale(${scale.toFixed(3)})`;
+  };
+  const ro = new ResizeObserver(apply);
+  ro.observe(holder);
+  // Initial nach dem Layout messen.
+  requestAnimationFrame(apply);
+}

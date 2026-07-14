@@ -21,7 +21,7 @@ import { renderTaskbar, initTaskbar } from "./taskbar.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
-import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded } from "./persist.js";
+import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults } from "./persist.js";
 
 // notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
 // die schönen Slide-Down-Meldungen nutzen können.
@@ -216,6 +216,15 @@ async function startSession(user) {
     if (saved.selection) state.selection = saved.selection;
     if (saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
   }
+
+  // Organisationsweite Standard-Layouts laden (vom Admin gesetzt). Werden als
+  // Basis für Nutzer OHNE eigenes Layout und beim "Auf Standard zurücksetzen"
+  // verwendet. Fehler hier sind unkritisch (dann greift der eingebaute
+  // Standard).
+  try {
+    const defs = await api.getDefaultLayouts();
+    setOrgDefaults({ dash: defs.dash || null, fleet: defs.fleet || null });
+  } catch { /* kein org-Standard erreichbar -> eingebauter Standard */ }
 
   await refreshAll();
 
@@ -645,6 +654,9 @@ async function main() {
   // (setOnWindowsChanged wird in startSession gesetzt - inkl. Zustand-Speichern)
   // Sidebar-Auswahl -> Haupt-Panel aktualisieren
   setOnSelect(renderMainContent);
+  // Bearbeiten-Modus wurde umgeschaltet (z.B. "Bearbeiten beenden"-Button in
+  // der Client-/Dashboard-Toolbar) -> Ansicht mit/ohne Werkzeuge neu zeichnen.
+  window.addEventListener("dashedit-changed", () => renderMainContent());
   // Edit-Client-Änderungen -> alles neu laden
   setEditOnChanged(refreshAll);
   setManageOnChanged(refreshAll);

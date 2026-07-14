@@ -771,3 +771,67 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
                        details=f"{src_fmt} -> {name.rsplit('.', 1)[-1].upper()}, {len(data)} bytes")
     return {"ok": True, "name": name, "size": len(data),
             "mtime": int((_BRANDING_STORE / name).stat().st_mtime)}
+
+
+# ------------------------------------------------------------------
+# Standard-Layouts (Dashboard-Widgets & Client-Panels) für ALLE Nutzer
+# ------------------------------------------------------------------
+# Ein Admin kann sein aktuelles Layout als organisationsweiten Standard
+# speichern. Jeder Nutzer bekommt diesen Standard, sobald er noch kein eigenes
+# Layout hat ODER wenn er in der Oberfläche bewusst "auf Standard zurücksetzen"
+# klickt. Bestehende eigene Layouts bleiben unangetastet - man kann also
+# weiterarbeiten. Gespeichert wird als JSON im settings-KV-Store.
+
+class DefaultLayoutBody(BaseModel):
+    kind: str            # "dash" (Client-Panels) | "fleet" (Dashboard-Widgets)
+    layout: dict | list  # das komplette Layout-Objekt bzw. die Widget-Liste
+
+
+_LAYOUT_SETTING_KEYS = {
+    "dash": "default_layout_dash",
+    "fleet": "default_layout_fleet",
+}
+
+
+@router.get("/default-layouts")
+async def get_default_layouts(user: dict = Depends(get_current_user)):
+    """
+    Liefert die organisationsweiten Standard-Layouts (oder null, falls keiner
+    gesetzt ist). Für JEDEN eingeloggten Nutzer lesbar - das Frontend braucht
+    sie beim ersten Start und beim Zurücksetzen.
+    """
+    out = {}
+    for kind, key in _LAYOUT_SETTING_KEYS.items():
+        raw = db.get_setting(key)
+        if raw:
+            try:
+                out[kind] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                out[kind] = None
+        else:
+            out[kind] = None
+    return out
+
+
+@router.post("/default-layouts")
+async def set_default_layout(body: DefaultLayoutBody, user: dict = Depends(get_current_user)):
+    """Speichert ein Layout als neuen organisationsweiten Standard (nur Admin)."""
+    require_admin(user)
+    key = _LAYOUT_SETTING_KEYS.get(body.kind)
+    if not key:
+        raise HTTPException(400, "Ungültige Layout-Art (dash|fleet)")
+    db.set_setting(key, json.dumps(body.layout))
+    db.add_audit_entry(user["username"], "settings.default_layout_set", target=body.kind)
+    return {"ok": True, "kind": body.kind}
+
+
+@router.delete("/default-layouts/{kind}")
+async def clear_default_layout(kind: str, user: dict = Depends(get_current_user)):
+    """Entfernt den organisationsweiten Standard wieder (nur Admin)."""
+    require_admin(user)
+    key = _LAYOUT_SETTING_KEYS.get(kind)
+    if not key:
+        raise HTTPException(400, "Ungültige Layout-Art (dash|fleet)")
+    db.set_setting(key, "")
+    db.add_audit_entry(user["username"], "settings.default_layout_cleared", target=kind)
+    return {"ok": True, "kind": kind}
