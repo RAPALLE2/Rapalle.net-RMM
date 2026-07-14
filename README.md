@@ -22,6 +22,8 @@ By using RAPALLE.net RMM, you acknowledge that:
 
 This project is best suited for learning, experimentation, homelabs, and personal infrastructure environments where users are comfortable managing and accepting the risks associated with self-hosted software.
 
+Please keep in mind that parts of this project were vibe-coded.
+
 
 
 
