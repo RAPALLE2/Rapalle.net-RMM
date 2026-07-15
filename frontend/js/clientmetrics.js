@@ -15,7 +15,10 @@
 //   text?(client)    -> String (für info, einzeilig)
 
 import { esc, formatBytes, formatUptime } from "./utils.js";
-import { attachHoverTip, fitToContainer, buildFleetDonut, showFleetTip, hideFleetTip } from "./fleetcharts.js";
+import {
+  attachHoverTip, scaleToContainer, buildFleetDonut, showFleetTip, hideFleetTip,
+  timeSeriesChart,
+} from "./fleetcharts.js";
 
 const m = (c) => (c && c.metrics) || {};
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
@@ -367,7 +370,47 @@ function resolveMax(preset, client) {
 // -----------------------------------------------------------------
 // Renderer: füllt ein Ziel-Element mit der gewählten Darstellung.
 //   panel = { id, metric:<preset id>, kind }
+//
+// DESIGN-PRINZIP (identisch zum Dashboard/dashwidgets.js):
+//   Jede Darstellung ist auf eine 1x1-Rasterzelle optimiert (feste natürliche
+//   Größe, gut lesbare Schriften) und wird per scaleToContainer proportional
+//   auf die tatsächliche Panelgröße skaliert - 2x2 = gleicher Inhalt, gleiche
+//   Proportionen, ~doppelt so groß.
+//
+// HOVER-PRINZIP:
+//   - Einzelwerte: Widget-Tooltip mit Titel + exaktem Live-Wert.
+//   - Zeilen (info/bars/columns, z.B. "Systeminfo (kompakt)"): Hover PRO
+//     ZEILE - die Zeile wird hervorgehoben und der Tooltip zeigt Label +
+//     vollständigen Wert GENAU DIESER Zeile (z.B. "CPU" + CPU-Modellname).
+//   - Verläufe (line/area/spark): getimestampter Hover wie das Netzwerk-
+//     Diagramm im Metrics-Panel (Hover-Linie, Punkt, Uhrzeit + Wert).
 // -----------------------------------------------------------------
+
+// Natürliche Inhaltsgröße einer 1x1-Zelle (Body ~240x104). Alle
+// Darstellungen sind auf GENAU diese Box designt und füllen sie aus.
+const NAT_W = 240;
+const NAT_H = 104;
+
+// Zeilen-Hover: Zeile hervorheben + Tooltip mit dem Wert dieser Zeile.
+function bindRowHover(rowEl, tipFn) {
+  rowEl.style.borderRadius = rowEl.style.borderRadius || "6px";
+  rowEl.style.cursor = "default";
+  rowEl.addEventListener("mouseenter", (e) => { rowEl.style.background = "var(--panel-2, #1b2740)"; showFleetTip(tipFn(), e.clientX, e.clientY); });
+  rowEl.addEventListener("mousemove", (e) => showFleetTip(tipFn(), e.clientX, e.clientY));
+  rowEl.addEventListener("mouseleave", () => { rowEl.style.background = ""; hideFleetTip(); });
+}
+
+// "+N weitere"-Hinweiszeile für gekürzte Listen (Tooltip zeigt den Rest).
+function moreNote(hidden) {
+  if (!hidden.length) return null;
+  const el = document.createElement("div");
+  el.style.cssText = "font-size:10px;color:var(--subtext);padding:2px 4px;cursor:default";
+  el.textContent = `+ ${hidden.length} weitere`;
+  attachHoverTip(el, () => hidden.slice(0, 15).map((r) => `${esc(r.label)}: <b>${esc(r.raw != null ? r.raw : String(r.value ?? "—"))}</b>`).join("<br>")
+    + (hidden.length > 15 ? `<br><span style="color:var(--subtext)">…</span>` : ""));
+  return el;
+}
+
 export function renderClientMetric(target, client, panel) {
   target.innerHTML = "";
   const preset = clientPresetById(panel.metric);
@@ -375,252 +418,308 @@ export function renderClientMetric(target, client, panel) {
   const kind = panel.kind && availableClientKinds(preset).includes(panel.kind) ? panel.kind : preset.charts[0];
   const v = preset.value ? preset.value(client) : null;
 
-  // Fit-Holder: skaliert den Diagramminhalt proportional herunter, wenn das
-  // Widget kleiner ist als der natürliche Inhalt (z.B. 2x1 -> 1x1). Der
-  // Hover-Tooltip hängt weiterhin an `target` (bleibt außerhalb).
+  // Skalier-Holder: 1x1-optimierter Inhalt wächst proportional mit der Zelle.
   const holder = document.createElement("div");
   holder.className = "cmetric-fit-holder";
   holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
   target.appendChild(holder);
   const _t = target;            // Original für Hover-Bindung
   target = holder;              // Diagramme rendern in den Holder
-  const fit = () => fitToContainer(holder);
 
-  // Hover wie in der Flotten-Übersicht: Tooltip (folgt der Maus) mit dem
-  // exakten, live formatierten Wert - auf ALLEN Client-Metrik-Widgets.
+  // Widget-weiter Wert-Tooltip NUR für Einzelwert-Darstellungen; Zeilen-,
+  // Segment- und Verlaufs-Darstellungen haben feinere Per-Element-Hover
+  // (sonst überdeckte der Widget-Tooltip - z.B. "Systeminfo (kompakt)" -
+  // den Wert des gehoverten Elements). Listener nur EINMAL anhängen, die
+  // Tooltip-Funktion (_tipFn) wird pro Render neu gesetzt (null = aus).
   if (!_t._hoverTipAttached) {
     _t._hoverTipAttached = true;
-    attachHoverTip(_t, () => {
+    attachHoverTip(_t, () => (typeof _t._tipFn === "function" ? _t._tipFn() : null));
+  }
+  const valueTipKinds = ["number", "gauge", "ring", "progress", "stat"];
+  const isValueDonut = kind === "donut" && !(preset.rows && !preset.value);
+  const isSingleText = !preset.rows && !preset.value && (kind === "info" || preset.charts[0] === "info");
+  if (valueTipKinds.includes(kind) || isValueDonut) {
+    _t._tipFn = () => {
       const val = preset.value ? preset.value(client) : null;
       const txt = val === null || val === undefined ? "—" : formatClientValue(preset, val);
       const mx = resolveMax(preset, client);
       const maxTxt = (kind === "gauge" || kind === "donut") && mx
         ? ` <span style="color:var(--subtext)">/ ${esc(formatClientValue(preset, mx))}</span>` : "";
       return `<b>${esc(panel.title || preset.label)}</b><br>${esc(txt)}${maxTxt}`;
-    });
+    };
+  } else if (isSingleText) {
+    // Einzeiliger Text (z.B. CPU-Modell): Tooltip mit dem VOLLEN Wert
+    // (falls die Anzeige abgeschnitten ist).
+    _t._tipFn = () => `<b>${esc(panel.title || preset.label)}</b><br>${esc(preset.text ? preset.text(client) : formatClientValue(preset, v))}`;
+  } else {
+    _t._tipFn = null;
   }
 
   if (kind === "number") {
-    target.innerHTML = `<div class="widget-number">
-      <div class="wn-value">${esc(formatClientValue(preset, v))}</div>
-      <div class="wn-label">${esc(preset.label)}</div></div>`;
-    return;
+    const txt = formatClientValue(preset, v);
+    const fs = txt.length > 12 ? 22 : txt.length > 8 ? 28 : 38;
+    target.innerHTML = `<div style="width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+      <div style="font-size:${fs}px;font-weight:800;line-height:1.05">${esc(txt)}</div>
+      <div style="font-size:12px;color:var(--subtext);margin-top:5px;max-width:${NAT_W - 10}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div></div>`;
+    scaleToContainer(holder); return;
   }
 
   if (kind === "gauge") {
+    // Halbkreis-Gauge: nutzt die volle 1x1-Box, Wert + Label IM Bogen.
     const max = resolveMax(preset, client);
     const p = v === null ? 0 : Math.max(0, Math.min(100, (v / max) * 100));
-    const w = 200, h = 116, cx = w / 2, cy = h - 8, r = 88, stroke = 16;
+    const w = NAT_W, h = NAT_H, cx = w / 2, cy = h - 4, r = 86, stroke = 17;
     const ang = Math.PI * (p / 100);
     const ex = cx - r * Math.cos(ang), ey = cy - r * Math.sin(ang);
     const color = p > 85 ? "#ff4d6d" : p > 65 ? "#f5a524" : "#3ecf8e";
-    target.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;padding:4px">
-      <svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">
+    target.innerHTML = `<div style="position:relative;width:${w}px;height:${h}px">
+      <svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="overflow:visible">
         <path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}" fill="none" stroke="var(--border)" stroke-width="${stroke}" stroke-linecap="round"/>
         ${v === null ? "" : `<path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${ex.toFixed(2)} ${ey.toFixed(2)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"/>`}
       </svg>
-      <div style="font-size:22px;font-weight:700;margin-top:-10px">${esc(formatClientValue(preset, v))}</div>
-      <div style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</div></div>`;
-    fit(); return;
+      <div style="position:absolute;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;pointer-events:none">
+        <div style="font-size:25px;font-weight:800;line-height:1.05">${esc(formatClientValue(preset, v))}</div>
+        <div style="font-size:11px;color:var(--subtext);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div>
+      </div></div>`;
+    scaleToContainer(holder); return;
   }
 
-  // Kategorische Verteilung (rows) als Pie oder mehrsegmentiger Donut.
+  // Kategorische Verteilung (rows) als Pie oder mehrsegmentiger Donut -
+  // buildFleetDonut bringt Per-Segment-Hover (Highlight + Tooltip) mit.
   if ((kind === "pie" || kind === "donut") && preset.rows && !preset.value) {
     const segs = (preset.rows(client) || []).filter((r) => (r.value || 0) > 0)
       .map((r, i) => ({ label: r.label, count: r.value, color: r.color, items: r.items }));
-    target.appendChild(buildFleetDonut(segs, { card: false, size: 150 }));
-    fit(); return;
+    const box = document.createElement("div");
+    box.style.cssText = `width:${NAT_W}px`;
+    box.appendChild(buildFleetDonut(segs, { card: false, size: 100 }));
+    target.appendChild(box);
+    scaleToContainer(holder); return;
   }
 
   if (kind === "donut") {
+    // Donut SEITLICH (links), rechts großer Wert + Label - volle 1x1-Box.
     const max = resolveMax(preset, client);
     const frac = v === null ? 0 : Math.max(0, Math.min(1, v / max));
-    const size = 150, sw = 20, r = (size - sw) / 2 - 2, cx = size / 2, cy = size / 2;
+    const size = 96, sw = 14, r = (size - sw) / 2 - 1, cx = size / 2, cy = size / 2;
     const C = 2 * Math.PI * r, len = frac * C;
-    target.innerHTML = `<div style="display:flex;justify-content:center;padding:6px">
-      <div style="position:relative;width:${size}px;height:${size}px">
+    const valTxt = formatClientValue(preset, v);
+    target.innerHTML = `<div style="width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:14px">
+      <div style="position:relative;width:${size}px;height:${size}px;flex:none">
         <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
           <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${sw}"/>
           <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${sw}"
             stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-linecap="round"
             transform="rotate(-90 ${cx} ${cy})"/>
         </svg>
-        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
-          <div style="font-size:22px;font-weight:700;line-height:1">${esc(formatClientValue(preset, v))}</div>
-          <div style="font-size:10px;color:var(--subtext);margin-top:3px">${esc(preset.label)}</div>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+          <div style="font-size:17px;font-weight:700">${Math.round(frac * 100)}%</div>
         </div>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:${valTxt.length > 9 ? 18 : 23}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valTxt)}</div>
+        <div style="font-size:12px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(preset.label)}</div>
+        <div style="font-size:10.5px;color:var(--subtext);margin-top:3px">von ${esc(formatClientValue(preset, max))}</div>
       </div></div>`;
-    fit(); return;
+    scaleToContainer(holder); return;
   }
 
-  if (kind === "line") {
+  if (kind === "line" || kind === "area" || kind === "spark") {
+    // Getimestampter Verlauf (wie das Netzwerk-Diagramm im Metrics-Panel),
+    // füllt die komplette 1x1-Box: Kopfzeile oben, Chart nutzt den Rest.
     const h = pushHistory(`${client.id}:${panel.id}`, v);
     const data = h.v.length ? h.v : [v ?? 0];
-    const w = 320, hgt = 130, pad = 6;
-    const max = Math.max(1, ...data, typeof preset.max === "number" ? preset.max : 0);
-    const min = Math.min(...data, 0);
-    const span = max - min || 1;
-    const pts = data.map((val, i) => {
-      const x = pad + (data.length <= 1 ? 0 : (i / (data.length - 1)) * (w - 2 * pad));
-      const y = hgt - pad - ((val - min) / span) * (hgt - 2 * pad);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
-    target.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
-        <span style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</span>
-        <span style="font-size:16px;font-weight:700">${esc(formatClientValue(preset, v))}</span>
-      </div>
-      <svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" preserveAspectRatio="none" style="overflow:visible">
-        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-      </svg>`;
-    return;
-  }
-
-  if (kind === "area" || kind === "spark") {
-    // Verlauf (gleiche Quelle wie "line"); area = gefüllt, spark = minimal.
-    const h = pushHistory(`${client.id}:${panel.id}`, v);
-    const data = h.v.length ? h.v : [v ?? 0];
+    const ts = h.ts.length ? h.ts : [Date.now()];
     const spark = kind === "spark";
-    const w = 320, hgt = spark ? 56 : 110, pad = spark ? 4 : 6;
-    const max = Math.max(1, ...data, typeof preset.max === "number" ? preset.max : 0);
-    const min = Math.min(...data, 0);
-    const span = max - min || 1;
-    const pts = data.map((val, i) => {
-      const x = pad + (data.length <= 1 ? 0 : (i / (data.length - 1)) * (w - 2 * pad));
-      const y = hgt - pad - ((val - min) / span) * (hgt - 2 * pad);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
-    target.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
-        <span style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</span>
-        <span style="font-size:16px;font-weight:700">${esc(formatClientValue(preset, v))}</span>
-      </div>
-      <svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" preserveAspectRatio="none">
-        ${spark ? "" : `<polygon points="${pad},${hgt - pad} ${pts} ${w - pad},${hgt - pad}" fill="var(--accent)" opacity="0.22"/>`}
-        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-      </svg>`;
-    return;
+    const wrap = document.createElement("div");
+    wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;justify-content:space-between`;
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:baseline;gap:8px";
+    head.innerHTML = spark
+      ? `<span style="font-size:24px;font-weight:800;line-height:1.1">${esc(formatClientValue(preset, v))}</span>
+         <span style="font-size:11px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>`
+      : `<span style="font-size:12px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>
+         <span style="font-size:17px;font-weight:800">${esc(formatClientValue(preset, v))}</span>`;
+    wrap.appendChild(head);
+    wrap.appendChild(timeSeriesChart(
+      [{ label: panel.title || preset.label, color: "var(--accent)", values: data, timestamps: ts }],
+      { width: NAT_W, height: spark ? 66 : 80, mode: kind,
+        yMax: typeof preset.max === "number" ? Math.max(preset.max, ...data) : null,
+        formatValue: (x) => formatClientValue(preset, x) },
+    ));
+    target.appendChild(wrap);
+    scaleToContainer(holder); return;
   }
 
   if (kind === "progress") {
     const max = resolveMax(preset, client) || 100;
     const pct = Math.max(0, Math.min(100, ((v || 0) / max) * 100));
     const color = pct > 85 ? "#ff4d6d" : pct > 65 ? "#f5a524" : "var(--accent)";
-    target.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-        <span style="font-size:12px;color:var(--subtext)">${esc(preset.label)}</span>
-        <span style="font-size:18px;font-weight:700">${esc(formatClientValue(preset, v))}</span>
+    target.innerHTML = `<div style="width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;justify-content:center">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:8px">
+        <span style="font-size:13px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>
+        <span style="font-size:22px;font-weight:800">${esc(formatClientValue(preset, v))}</span>
       </div>
-      <div style="height:14px;border-radius:7px;background:var(--panel-2);overflow:hidden">
-        <div style="height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:7px;transition:width .3s"></div>
+      <div style="height:18px;border-radius:9px;background:var(--panel-2);overflow:hidden">
+        <div style="height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:9px;transition:width .3s"></div>
       </div>
-      <div style="font-size:10px;color:var(--subtext);margin-top:4px;text-align:right">${Math.round(pct)}% von ${esc(formatClientValue(preset, max))}</div>`;
-    return;
+      <div style="font-size:11px;color:var(--subtext);margin-top:6px;text-align:right">${Math.round(pct)}% von ${esc(formatClientValue(preset, max))}</div></div>`;
+    scaleToContainer(holder); return;
   }
 
   if (kind === "ring") {
+    // Ring SEITLICH (links), rechts großer Wert + Label - volle 1x1-Box.
     const max = resolveMax(preset, client) || 100;
     const pct = Math.max(0, Math.min(100, ((v || 0) / max) * 100));
-    const size = 104, stroke = 9, r = (size - stroke) / 2 - 2, cx = size / 2, cy = size / 2;
+    const size = 92, stroke = 10, r = (size - stroke) / 2 - 1, cx = size / 2, cy = size / 2;
     const C = 2 * Math.PI * r, len = (pct / 100) * C;
-    target.innerHTML = `
-      <div style="display:flex;justify-content:center;padding:2px">
-        <div style="position:relative;width:${size}px;height:${size}px">
-          <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
-            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}"/>
-            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}"
-              stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
-          </svg>
-          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
-            <div style="font-size:16px;font-weight:700;line-height:1">${esc(formatClientValue(preset, v))}</div>
-            <div style="font-size:9px;color:var(--subtext);margin-top:2px">${Math.round(pct)}%</div>
-          </div>
+    const valTxt = formatClientValue(preset, v);
+    target.innerHTML = `<div style="width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:14px">
+      <div style="position:relative;width:${size}px;height:${size}px;flex:none">
+        <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${stroke}"/>
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="${stroke}"
+            stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
+        </svg>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+          <div style="font-size:16px;font-weight:700">${Math.round(pct)}%</div>
         </div>
-      </div>`;
-    fit(); return;
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:${valTxt.length > 9 ? 18 : 23}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valTxt)}</div>
+        <div style="font-size:12px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(preset.label)}</div>
+      </div></div>`;
+    scaleToContainer(holder); return;
   }
 
   if (kind === "stat") {
     const h = pushHistory(`${client.id}:${panel.id}`, v);
     const data = h.v.length ? h.v : [v ?? 0];
+    const ts = h.ts.length ? h.ts : [Date.now()];
     const ref = data.length > 1 ? data[0] : (v || 0);
     const diff = (v || 0) - (ref || 0);
     const up = diff > 0, flat = Math.abs(diff) < 1e-9;
     const trendColor = flat ? "var(--subtext)" : (up ? "#f5a524" : "#3ecf8e");
-    const w = 140, hgt = 34, pad = 3;
-    const max = Math.max(1, ...data), min = Math.min(...data, 0), span = (max - min) || 1;
-    const pts = data.map((val, i) => {
-      const x = pad + (data.length <= 1 ? 0 : (i / (data.length - 1)) * (w - 2 * pad));
-      const y = hgt - pad - ((val - min) / span) * (hgt - 2 * pad);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
-    target.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div>
-          <div style="font-size:24px;font-weight:700;line-height:1.1">${esc(formatClientValue(preset, v))}</div>
-          <div style="font-size:11px;color:var(--subtext)">${esc(preset.label)}</div>
-        </div>
-        <div style="text-align:right;flex:1;min-width:90px">
-          <div style="font-size:13px;font-weight:600;color:${trendColor}">${flat ? "→" : (up ? "▲" : "▼")} ${esc(formatClientValue(preset, Math.abs(diff)))}</div>
-          <svg viewBox="0 0 ${w} ${hgt}" width="${w}" height="${hgt}" preserveAspectRatio="none">
-            <polyline points="${pts}" fill="none" stroke="${trendColor}" stroke-width="2"/>
-          </svg>
-        </div>
+    const wrap = document.createElement("div");
+    wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:12px`;
+    wrap.innerHTML = `
+      <div style="flex:none;max-width:118px">
+        <div style="font-size:27px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatClientValue(preset, v))}</div>
+        <div style="font-size:11px;color:var(--subtext);margin-top:2px">${esc(preset.label)}</div>
+      </div>
+      <div style="text-align:right;flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;color:${trendColor};margin-bottom:2px">${flat ? "→" : (up ? "▲" : "▼")} ${esc(formatClientValue(preset, Math.abs(diff)))}</div>
+        <div class="stat-spark"></div>
       </div>`;
-    return;
+    wrap.querySelector(".stat-spark").appendChild(timeSeriesChart(
+      [{ label: panel.title || preset.label, color: trendColor, values: data, timestamps: ts }],
+      { width: 112, height: 52, mode: "spark", formatValue: (x) => formatClientValue(preset, x) },
+    ));
+    target.appendChild(wrap);
+    scaleToContainer(holder); return;
   }
 
   if (kind === "columns") {
-    const rows = (preset.rows ? preset.rows(client) : []).slice(0, 12);
-    // Echtes Säulendiagramm mit Grundlinie, y-Gitter, Wert- und Kategorie-Labels.
-    const W = 40 + rows.length * 46, H = 190;
-    const padL = 34, padR = 10, padT = 18, padB = 34;
+    // Säulendiagramm in fester 1x1-Box: die Säulen teilen sich die VOLLE
+    // Breite auf. Hover: Säule hervorheben, andere dimmen, Tooltip mit
+    // Label + exaktem Wert.
+    const all = (preset.rows ? preset.rows(client) : []);
+    const rows = all.slice(0, 6), hidden = all.slice(6);
+    const W = NAT_W, H = NAT_H;
+    const padL = 28, padR = 4, padT = 14, padB = 21;
     const plotW = W - padL - padR, plotH = H - padT - padB;
     const rawMax = Math.max(1, ...rows.map((r) => r.value || 0));
     const exp = Math.floor(Math.log10(rawMax)), base = Math.pow(10, exp), f = rawMax / base;
     const niceMax = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * base;
-    const bw = rows.length ? Math.min(40, plotW / rows.length - 10) : 20;
-    const shortV = (v) => { try { return preset.format ? preset.format(Math.round(v)) : (v >= 1e3 ? (v / 1e3).toFixed(1) + "k" : String(Math.round(v))); } catch { return String(Math.round(v)); } };
-    const grid = [0, 0.25, 0.5, 0.75, 1].map((fr) => {
+    const slot = rows.length ? plotW / rows.length : plotW;
+    const bw = Math.max(10, slot - 9);
+    const shortV = (x) => { try { return preset.format ? preset.format(Math.round(x)) : (x >= 1e3 ? (x / 1e3).toFixed(1) + "k" : String(Math.round(x))); } catch { return String(Math.round(x)); } };
+    const grid = [0, 0.5, 1].map((fr) => {
       const y = padT + plotH - fr * plotH;
       return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" opacity="0.5"/>
-        <text x="${padL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--subtext)">${shortV(niceMax * fr)}</text>`;
+        <text x="${padL - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--subtext)">${shortV(niceMax * fr)}</text>`;
     }).join("");
     const bars = rows.map((r, i) => {
-      const x = padL + i * (plotW / rows.length) + (plotW / rows.length - bw) / 2;
-      const h = ((r.value || 0) / niceMax) * plotH, y = padT + plotH - h;
-      const label = String(r.label).length > 8 ? String(r.label).slice(0, 7) + "…" : r.label;
-      return `<g title="${esc(r.label)}">
-        <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" rx="3" fill="var(--accent)"/>
-        <text x="${(x + bw / 2).toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text)">${esc(String(r.raw != null ? r.raw : Math.round(r.value || 0)))}</text>
-        <text x="${(x + bw / 2).toFixed(1)}" y="${(padT + plotH + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--subtext)">${esc(label)}</text>
+      const x = padL + i * slot + (slot - bw) / 2;
+      const hh = ((r.value || 0) / niceMax) * plotH, y = padT + plotH - hh;
+      const maxChars = Math.max(4, Math.floor(bw / 5.2));
+      const label = String(r.label).length > maxChars ? String(r.label).slice(0, maxChars - 1) + "…" : r.label;
+      return `<g class="ccol" data-i="${i}" style="cursor:pointer">
+        <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, hh).toFixed(1)}" rx="3" fill="var(--accent)" style="transition:opacity .12s"/>
+        <text x="${(x + bw / 2).toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--text)">${esc(String(r.raw != null ? r.raw : Math.round(r.value || 0)))}</text>
+        <text x="${(x + bw / 2).toFixed(1)}" y="${(padT + plotH + 11).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--subtext)">${esc(label)}</text>
       </g>`;
     }).join("");
-    target.innerHTML = rows.length
-      ? `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%">${grid}
-          <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="var(--subtext)" stroke-width="1.5"/>${bars}</svg>`
+    const wrap = document.createElement("div");
+    wrap.innerHTML = rows.length
+      ? `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${grid}
+          <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="var(--subtext)" stroke-width="1.5"/>${bars}
+          ${hidden.length ? `<text x="${W - padR}" y="${padT - 4}" text-anchor="end" font-size="8" fill="var(--subtext)">+${hidden.length} weitere</text>` : ""}</svg>`
       : `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
-    fit(); return;
+    target.appendChild(wrap);
+    const cols = wrap.querySelectorAll(".ccol");
+    cols.forEach((el) => {
+      const row = rows[+el.dataset.i];
+      const tip = () => `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(row.value))}`;
+      el.addEventListener("mouseenter", (e) => {
+        cols.forEach((c) => { if (c !== el) c.setAttribute("opacity", "0.4"); });
+        showFleetTip(tip(), e.clientX, e.clientY);
+      });
+      el.addEventListener("mousemove", (e) => showFleetTip(tip(), e.clientX, e.clientY));
+      el.addEventListener("mouseleave", () => { cols.forEach((c) => c.setAttribute("opacity", "")); hideFleetTip(); });
+    });
+    scaleToContainer(holder); return;
   }
 
   if (kind === "bars") {
-    const rows = preset.rows ? preset.rows(client) : [];
+    // Horizontale Balken: Hover PRO ZEILE (Highlight + Tooltip mit Label,
+    // exaktem Wert und Anteil am Maximum) - wie im Dashboard.
+    const all = preset.rows ? preset.rows(client) : [];
+    const rows = all.slice(0, 8), hidden = all.slice(8);
     const max = Math.max(1, ...rows.map((r) => r.value || 0), 100);
-    target.innerHTML = `<div class="widget-bars">${rows.map((r) => `
-      <div class="wbar-row" title="${esc(r.label)}${r.raw ? ": " + esc(r.raw) : ""}">
+    const wrap = document.createElement("div");
+    wrap.className = "widget-bars";
+    wrap.style.cssText = `width:${NAT_W}px`;
+    // Adaptive Größen: wenige Zeilen => größere Schrift/dickere Balken.
+    const fs = rows.length <= 3 ? 13.5 : rows.length <= 5 ? 12.5 : 11.5;
+    const th = rows.length <= 3 ? 14 : rows.length <= 5 ? 11 : 9;
+    wrap.innerHTML = rows.map((r, i) => `
+      <div class="wbar-row" data-i="${i}" style="padding:2px 3px;font-size:${fs}px">
         <span class="wbar-label">${esc(r.label)}</span>
-        <span class="wbar-track"><span class="wbar-fill" style="width:${(((r.value || 0) / max) * 100).toFixed(1)}%;background:var(--accent)"></span></span>
+        <span class="wbar-track" style="height:${th}px"><span class="wbar-fill" style="width:${(((r.value || 0) / max) * 100).toFixed(1)}%;background:var(--accent)"></span></span>
         <span class="wbar-val">${esc(r.raw != null ? r.raw : String(Math.round(r.value || 0)))}</span>
-      </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`}</div>`;
-    fit(); return;
+      </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+    target.appendChild(wrap);
+    if (hidden.length) wrap.appendChild(moreNote(hidden));
+    wrap.querySelectorAll(".wbar-row").forEach((rowEl) => {
+      const row = rows[+rowEl.dataset.i];
+      if (!row) return;
+      bindRowHover(rowEl, () => `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(Math.round(row.value || 0)))} <span style="color:var(--subtext)">(${Math.round(((row.value || 0) / max) * 100)}% vom Maximum)</span>`);
+    });
+    scaleToContainer(holder); return;
   }
 
   // info (Standard-Fallback): Zeilenliste oder einzeiliger Text.
   if (preset.rows) {
+    // Zeilenliste (z.B. "Systeminfo (kompakt)"): Hover PRO ZEILE - die Zeile
+    // wird hervorgehoben und der Tooltip zeigt Label + VOLLSTÄNDIGEN Wert
+    // genau dieser Zeile (z.B. "CPU" + kompletter CPU-Modellname, auch wenn
+    // die Anzeige abgeschnitten ist).
     const rows = preset.rows(client);
-    target.innerHTML = `<div class="status-info">${rows.map((r) => `
-      <div><span>${esc(r.label)}</span><b>${esc(r.raw != null ? r.raw : String(r.value ?? "—"))}</b></div>`).join("")}</div>`;
+    // Adaptive Schriftgröße: wenige Zeilen => größer (füllt die 1x1-Box).
+    const ifs = rows.length <= 3 ? 14.5 : rows.length <= 5 ? 13 : 12;
+    const wrap = document.createElement("div");
+    wrap.className = "status-info";
+    wrap.style.cssText = `width:${NAT_W}px;margin-top:0`;
+    wrap.innerHTML = rows.map((r, i) => `
+      <div data-i="${i}" style="padding:${rows.length <= 5 ? 3 : 1}px 4px;font-size:${ifs}px"><span>${esc(r.label)}</span><b>${esc(r.raw != null ? r.raw : String(r.value ?? "—"))}</b></div>`).join("");
+    target.appendChild(wrap);
+    wrap.querySelectorAll("[data-i]").forEach((rowEl) => {
+      const row = rows[+rowEl.dataset.i];
+      if (!row) return;
+      bindRowHover(rowEl, () => `<b>${esc(row.label)}</b><br>${esc(row.raw != null ? row.raw : String(row.value ?? "—"))}`);
+    });
   } else {
-    target.innerHTML = `<div class="widget-text">${esc(preset.text ? preset.text(client) : formatClientValue(preset, v))}</div>`;
+    target.innerHTML = `<div class="widget-text" style="width:${NAT_W}px;font-size:14.5px;line-height:1.45;text-align:center">${esc(preset.text ? preset.text(client) : formatClientValue(preset, v))}</div>`;
   }
+  scaleToContainer(holder);
 }

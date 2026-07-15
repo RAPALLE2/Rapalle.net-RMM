@@ -7,6 +7,12 @@
 //
 // Alles pro Benutzer gespeichert (persist.js -> fleetWidgets). Der Edit-Modus
 // ist derselbe globale Schalter wie bei der Client-Ansicht (Profil).
+//
+// RASTER: Der komplette Raster-Code (Host-Setup, Leerzellen, Drag mit
+// Einrasten + Drop-Vorschau, Resize in ganzen Zellen mit Einrasten an den
+// Rastergrenzen, Kollisionsauflösung) ist eine 1:1-Kopie aus der
+// Client-Ansicht (dashlayout.js). Die Rasterzellen selbst sind immer exakt
+// gleich groß (minmax(0,1fr)); Widgets können ganze Zellen überspannen.
 
 import { state, isAdmin } from "./state.js";
 import { esc, uiConfirm, uiPrompt } from "./utils.js";
@@ -18,17 +24,16 @@ import { presetsByGroup, presetById } from "./metriccatalog.js";
 import { renderWidgetBody, widgetTitle, pushWidgetHistory, availableKinds } from "./dashwidgets.js";
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
+// GEMEINSAME Raster-Engine (identisch mit der Client-Ansicht/dashlayout.js).
+import {
+  COLS, BASE_ROWS, ROW_H, GAP, clamp, overlap, clampTile, compact, neededRows,
+  findFreeSpot, cellSize, applyGridPos, growHostIfNeeded,
+} from "./gridengine.js";
 
 let _uid = 0;
 const nid = () => `w-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
 
-// GLEICHES Raster wie die Client-Ansicht (dashlayout.js): 5 Spalten,
-// Höheneinheit 150px, 14px Abstand. Höhen rasten auf Vielfache der
-// Höheneinheit ein (150, 314, 478, ... = n*164 - 14).
-const COLS = 5;
-const ROW_H = 150;
-const GAP = 14;
-const snapH = (px) => Math.max(ROW_H, Math.round((px + GAP) / (ROW_H + GAP)) * (ROW_H + GAP) - GAP);
+// Raster-Konstanten kommen aus gridengine.js (geteilt mit dashlayout).
 
 function defaults() {
   // Admin-Standard bevorzugen (falls gesetzt), sonst eingebauter Standard.
@@ -44,14 +49,16 @@ function builtinDefaults() {
   // Breiten in RASTER-SPALTEN (1..5), Höhen in px auf Höheneinheiten gerastet.
   // Die drei Flotten-Übersicht-Donuts passen jeweils in EINE Höheneinheit.
   return [
-    { id: nid(), preset: "fleet.statusDonut", kind: "fleetdonut", gx: 0, gy: 0, gw: 2, gh: 1 },
-    { id: nid(), preset: "fleet.osDonut", kind: "fleetdonut", gx: 2, gy: 0, gw: 2, gh: 1 },
-    { id: nid(), preset: "fleet.versionDonut", kind: "fleetdonut", gx: 4, gy: 0, gw: 1, gh: 1 },
-    { id: nid(), preset: "fleet.online", kind: "donut", gx: 0, gy: 1, gw: 2, gh: 2 },
-    { id: nid(), preset: "fleet.cpuLoadAvg", kind: "gauge", gx: 2, gy: 1, gw: 2, gh: 2 },
-    { id: nid(), preset: "fleet.power", kind: "number", gx: 4, gy: 1, gw: 1, gh: 1 },
-    { id: nid(), preset: "host.cpuLoad", kind: "bar", gx: 0, gy: 3, gw: 3, gh: 2 },
-    { id: nid(), preset: "fleet.osDist", kind: "pie", gx: 3, gy: 3, gw: 2, gh: 2 },
+    { id: nid(), preset: "fleet.statusDonut", kind: "fleetdonut", gx: 0, gy: 0, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.osDonut", kind: "fleetdonut", gx: 1, gy: 0, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.versionDonut", kind: "fleetdonut", gx: 2, gy: 0, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.online", kind: "donut", gx: 3, gy: 0, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.cpuLoadAvg", kind: "gauge", gx: 4, gy: 0, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.ramLoadAvg", kind: "gauge", gx: 0, gy: 1, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.gpuLoadAvg", kind: "gauge", gx: 1, gy: 1, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.power", kind: "number", gx: 2, gy: 1, gw: 1, gh: 1 },
+    { id: nid(), preset: "host.cpuLoad", kind: "bar", gx: 3, gy: 1, gw: 1, gh: 1 },
+    { id: nid(), preset: "fleet.osDist", kind: "pie", gx: 0, gy: 2, gw: 1, gh: 1 },
   ];
 }
 
@@ -77,27 +84,40 @@ function widgets() {
       save();
     }
   }
-  // Einmalige Migration aufs Panel-Raster: alte 12-Spalten-Breiten -> 5
-  // Spalten, Höhen auf Höheneinheiten einrasten (Flotten-Donuts = 1 Einheit).
-  let grid5 = false;
-  try { grid5 = !!localStorage.getItem("rmm_fleet_grid5_v1"); } catch {}
-  if (!grid5) {
-    try { localStorage.setItem("rmm_fleet_grid5_v1", "1"); } catch {}
+  // Einmalige Migration auf das Raster-Modell des Client-Panels
+  // (gx/gy/gw/gh, 5 Spalten). Alte Pixel-/12-Spalten-Felder (w/h) werden
+  // verworfen: Jedes Widget bekommt EINE Rasterzelle als Standardgröße und
+  // wird lückenlos neu platziert. Danach ist das Dashboard-Raster exakt so
+  // wie in der Client-Ansicht.
+  let gridV2 = false;
+  try { gridV2 = !!localStorage.getItem("rmm_fleet_grid_cells_v2"); } catch {}
+  if (!gridV2) {
+    try { localStorage.setItem("rmm_fleet_grid_cells_v2", "1"); } catch {}
     for (const x of w) {
-      if (x.w > COLS) x.w = Math.max(1, Math.min(COLS, Math.round(x.w * COLS / 12)));
-      if (x.kind === "fleetdonut") x.h = ROW_H;
-      else if (x.h) x.h = snapH(x.h);
-      else x.h = (x.kind === "number" || x.kind === "text" || x.kind === "spark" || x.kind === "stat" || x.kind === "progress" || x.kind === "ring") ? ROW_H : ROW_H * 2 + GAP;
+      delete x.w; delete x.h;                     // Alt-Felder entfernen
+      delete x.gx; delete x.gy;                   // Position wird neu vergeben
+      x.gw = 1; x.gh = 1;                         // Standard: eine Rasterzelle
     }
     setFleetWidgets(w); save();
   }
-  for (const x of w) { if (!x.id) x.id = nid(); if (!x.w) x.w = 2; x.w = Math.max(1, Math.min(COLS, x.w)); }
+  for (const x of w) {
+    if (!x.id) x.id = nid();
+  }
   return w;
 }
 function save() { scheduleSave(state); }
 
+// ---- Raster-Geometrie/Kollision ----
+// Kollisionen auflösen über die gemeinsame Engine - EXAKT wie in der
+// Client-Ansicht (dashlayout.js), inkl. Ordner-Sonderfall (im Dashboard gibt
+// es keine Ordner, das Prädikat greift dann schlicht nie).
+function compactPanels(panels, active) {
+  compact(panels, active, (p) => p.type === "folder");
+}
+
 // Von dashboard.js aufgerufen. host = Grid-Container, toolbar = Kopf-Aktionen.
 export function renderFleetWidgets(host, toolbar) {
+  if (!host) return;
   const list = widgets();
   const edit = getDashEdit();
 
@@ -134,26 +154,65 @@ export function renderFleetWidgets(host, toolbar) {
     });
   }
 
+  // Host-Setup: 1:1 aus der Client-Ansicht (dashlayout.js) übernommen.
   const rows = neededRows(list);
   host.className = "dash-grid-layout" + (edit ? " editing" : "");
-  // EXAKT dasselbe Raster-System wie die Client-Ansicht (dashlayout):
-  // Koordinaten-Grid mit gezeichneten Zellen, gleiche Spalten/Höhen/Gap.
-  host.style.display = "grid";
-  host.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+  // WICHTIG: minmax(0, 1fr) statt 1fr! "1fr" ist intern minmax(auto, 1fr),
+  // d.h. breiter Widget-Inhalt (Kopfzeile mit Dropdowns/Buttons) konnte
+  // seine Spalte aufdehnen -> belegte Zellen wurden breiter als leere.
+  // Mit minmax(0, 1fr) sind ALLE Spalten zu jeder Zeit exakt gleich breit.
+  host.style.gridTemplateColumns = `repeat(${COLS}, minmax(0, 1fr))`;
   host.style.gridAutoRows = `${ROW_H}px`;
   host.style.gap = `${GAP}px`;
   host.style.minHeight = `${rows * ROW_H + (rows - 1) * GAP}px`;
   host.innerHTML = "";
 
-  // Leeres Raster mit "+"-Zellen (nur im Bearbeiten-Modus) - wie beim Client.
-  if (edit) renderEmptyCells(host, list, rows, toolbar);
+  const ctx = { host, toolbar, edit, list };
+  host._rmmCtx = ctx;
 
-  list.forEach((wdg) => host.appendChild(buildWidget(wdg, { host, toolbar, edit })));
+  // Leere Zellen als belegbares Raster (nur im Edit) - wie beim Client.
+  if (edit) renderEmptyCells(host, list, rows, ctx);
+
+  list.forEach((wdg) => host.appendChild(buildWidget(wdg, ctx)));
 }
 
-// Belegte-Zellen-Karte -> freie Zellen als "+"-Buttons (öffnen den Picker an
-// genau dieser Stelle). 1:1 wie dashlayout.renderEmptyCells.
-function renderEmptyCells(host, list, rows, toolbar) {
+// gx/gy/gw/gh aus Alt-Feldern (w/h) ableiten und lückenlos platzieren.
+function ensureCoords(list) {
+  let changed = false;
+  for (const p of list) {
+    // Standardgröße: EINE Rasterzelle; per Resize-Griff in ganzen Zellen
+    // vergrößerbar (snappt an die Rastergrenzen, wie im Client-Panel).
+    if (typeof p.gw !== "number") { p.gw = 1; changed = true; }
+    if (typeof p.gh !== "number") { p.gh = 1; changed = true; }
+  }
+  // Alle ohne gültige Position lückenlos einfügen (Reihenfolge beibehalten).
+  const placed = list.filter((p) => typeof p.gx === "number" && typeof p.gy === "number");
+  const missing = list.filter((p) => typeof p.gx !== "number" || typeof p.gy !== "number");
+  for (const p of missing) { placeAt(placed, p); placed.push(p); changed = true; }
+
+  // Harte Rasterschranken erzwingen: keine Kachel darf breiter als das Raster
+  // sein oder rechts herausragen. Danach Überlappungen auflösen (stapeln).
+  for (const p of list) {
+    const before = `${p.gx},${p.gy},${p.gw},${p.gh}`;
+    clampTile(p);
+    if (`${p.gx},${p.gy},${p.gw},${p.gh}` !== before) changed = true;
+  }
+  const snap = list.map((p) => `${p.gx},${p.gy}`).join("|");
+  compactPanels(list, null);
+  if (list.map((p) => `${p.gx},${p.gy}`).join("|") !== snap) changed = true;
+
+  if (changed) save();
+}
+
+// Erste freie Position finden (gemeinsame Engine).
+function placeAt(existing, p) {
+  const spot = findFreeSpot(existing, p.gw, p.gh);
+  p.gx = spot.gx; p.gy = spot.gy;
+}
+
+// Belegbare Leerzellen rendern (Klick öffnet den Picker an dieser Stelle).
+// 1:1 aus der Client-Ansicht (dashlayout.js) kopiert.
+function renderEmptyCells(host, list, rows, ctx) {
   const occ = Array.from({ length: rows }, () => Array(COLS).fill(false));
   for (const p of list)
     for (let y = p.gy; y < p.gy + p.gh; y++)
@@ -166,59 +225,12 @@ function renderEmptyCells(host, list, rows, toolbar) {
       cell.className = "grid-empty-cell";
       cell.style.gridColumn = `${x + 1} / span 1`;
       cell.style.gridRow = `${y + 1} / span 1`;
-      cell.title = "Hier ein Widget einfügen";
+      cell.title = "Hier ein Panel einfügen";
       cell.innerHTML = "<span>+</span>";
-      cell.addEventListener("click", () => openAddDialog(host, toolbar, { gx: x, gy: y }));
+      cell.addEventListener("click", () => openAddDialog(host, ctx.toolbar, { gx: x, gy: y }));
       host.appendChild(cell);
     }
   }
-}
-
-// Anzahl benötigter Rasterreihen (mind. 2 sichtbare Reihen im Edit).
-function neededRows(list) {
-  let max = 0;
-  for (const p of list) max = Math.max(max, (p.gy || 0) + (p.gh || 1));
-  return Math.max(max + (getDashEdit() ? 1 : 0), 2);
-}
-
-// gx/gy/gw/gh aus Alt-Feldern (w/h) ableiten und lückenlos platzieren.
-function ensureCoords(list) {
-  let changed = false;
-  for (const p of list) {
-    if (typeof p.gw !== "number") { p.gw = Math.max(1, Math.min(COLS, p.w || 2)); changed = true; }
-    if (typeof p.gh !== "number") {
-      p.gh = Math.max(1, Math.round(((p.h || ROW_H) + GAP) / (ROW_H + GAP)));
-      changed = true;
-    }
-  }
-  // Alle ohne gültige Position neu einfügen (Reihenfolge beibehalten).
-  const placed = list.filter((p) => typeof p.gx === "number" && typeof p.gy === "number");
-  const missing = list.filter((p) => typeof p.gx !== "number" || typeof p.gy !== "number");
-  for (const p of missing) { placeAt(placed, p); placed.push(p); changed = true; }
-  if (changed) save();
-}
-
-// Erste freie Position finden, an die (gw x gh) passt.
-function placeAt(existing, p) {
-  const occ = [];
-  const mark = (q) => {
-    for (let y = q.gy; y < q.gy + q.gh; y++) {
-      occ[y] = occ[y] || Array(COLS).fill(false);
-      for (let x = q.gx; x < q.gx + q.gw; x++) occ[y][x] = true;
-    }
-  };
-  existing.forEach(mark);
-  const fits = (gx, gy) => {
-    if (gx + p.gw > COLS) return false;
-    for (let y = gy; y < gy + p.gh; y++)
-      for (let x = gx; x < gx + p.gw; x++)
-        if (occ[y] && occ[y][x]) return false;
-    return true;
-  };
-  for (let gy = 0; gy < 400; gy++)
-    for (let gx = 0; gx <= COLS - p.gw; gx++)
-      if (fits(gx, gy)) { p.gx = gx; p.gy = gy; return; }
-  p.gx = 0; p.gy = 0;
 }
 
 // Live-Refresh (bei neuen Metriken): Werte/Charts neu zeichnen, ohne die
@@ -240,12 +252,15 @@ function buildWidget(wdg, ctx) {
   const card = document.createElement("div");
   card.className = "panel dash-w";
   card.dataset.widget = wdg.id;
-  card.dataset.tile = wdg.id;         // für die Resize-Engine (Nachbarschaft)
-  card._panel = wdg;                  // Datensatz {w,h} für die Engine
-  // Absolute Rasterposition (wie beim Client-Panel: gx/gy/gw/gh).
-  card.style.gridColumn = `${(wdg.gx || 0) + 1} / span ${Math.max(1, Math.min(COLS, wdg.gw || 2))}`;
-  card.style.gridRow = `${(wdg.gy || 0) + 1} / span ${Math.max(1, wdg.gh || 1)}`;
-  card.style.height = "";
+  // Rasterposition über die gemeinsame Engine (identisch zum Client).
+  applyGridPos(card, wdg);
+  // Karte HART auf die Zellgröße klemmen: darf die Rasterzelle nie
+  // vergrößern/verkleinern - Inhalt, der nicht passt, wird abgeschnitten.
+  card.style.minWidth = "0";
+  card.style.maxWidth = "100%";
+  card.style.minHeight = "0";
+  card.style.maxHeight = "100%";
+  card.style.overflow = "hidden";
 
   // Kopf
   const head = document.createElement("div");
@@ -316,50 +331,19 @@ function buildWidget(wdg, ctx) {
     body.title = "Doppelklick zum Bearbeiten";
   }
 
-  attachWidgetDrag(card, head, wdg, ctx);
+  attachGridDrag(card, head, wdg, ctx);
   if (edit) attachGridResize(card, wdg, ctx);
   return card;
 }
 
-// Rasterbasiertes Resizen wie im Client-Panel: Griffe rechts/unten/Ecke
-// verändern gw/gh in ganzen Zellen (kein Pixel-Ziehen mehr).
-function attachGridResize(card, wdg, ctx) {
-  const { host, toolbar } = ctx;
-  const gxg = document.createElement("div"); gxg.className = "tile-grip tile-grip-x";
-  const gyg = document.createElement("div"); gyg.className = "tile-grip tile-grip-y";
-  const gcg = document.createElement("div"); gcg.className = "tile-grip tile-grip-xy";
-  card.appendChild(gxg); card.appendChild(gyg); card.appendChild(gcg);
-
-  function startResize(axis) {
-    return (e) => {
-      e.preventDefault(); e.stopPropagation();
-      document.body.classList.add("dash-dragging");
-      const rect0 = card.getBoundingClientRect();
-      const cw = (host.clientWidth - (COLS - 1) * GAP) / COLS;
-      const startGW = wdg.gw, startGH = wdg.gh;
-      function move(ev) {
-        if (axis !== "y") {
-          const px = ev.clientX - rect0.left;
-          wdg.gw = Math.max(1, Math.min(COLS - wdg.gx, Math.round(px / (cw + GAP)) || 1));
-        }
-        if (axis !== "x") {
-          const py = ev.clientY - rect0.top;
-          wdg.gh = Math.max(1, Math.min(20, Math.round(py / (ROW_H + GAP)) || 1));
-        }
-        card.style.gridColumn = `${wdg.gx + 1} / span ${wdg.gw}`;
-        card.style.gridRow = `${wdg.gy + 1} / span ${wdg.gh}`;
-      }
-      function up() {
-        document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
-        document.body.classList.remove("dash-dragging");
-        if (wdg.gw !== startGW || wdg.gh !== startGH) { save(); renderFleetWidgets(host, toolbar); }
-      }
-      document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
-    };
+// Alle Karten (außer der aktiv gezogenen) neu positionieren.
+// 1:1 aus der Client-Ansicht (dashlayout.js) kopiert.
+function applyAllPositions(host, list, exceptId) {
+  for (const p of list) {
+    if (p.id === exceptId) continue;
+    const c = host.querySelector(`.dash-w[data-widget="${p.id}"]`);
+    if (c) applyGridPos(c, p);
   }
-  gxg.addEventListener("mousedown", startResize("x"));
-  gyg.addEventListener("mousedown", startResize("y"));
-  gcg.addEventListener("mousedown", startResize("xy"));
 }
 
 function startTextEdit(body, wdg) {
@@ -433,74 +417,157 @@ function openAddDialog(host, toolbar, atCell) {
     b.addEventListener("click", () => {
       const arr = widgets();
       const w = b.dataset.textWidget
-        ? { id: nid(), kind: "text", text: "Neuer Text – im Bearbeiten-Modus anklicken zum Ändern.", gw: 2, gh: 1 }
-        : { id: nid(), preset: b.dataset.preset, kind: b.dataset.kind, gw: 2, gh: 1 };
-      // Am angeklickten Rasterplatz einfügen, sonst erste freie Stelle.
-      if (atCell) { w.gx = atCell.gx; w.gy = atCell.gy; }
-      else placeAt(arr, w);
+        ? { id: nid(), kind: "text", text: "Neuer Text – im Bearbeiten-Modus anklicken zum Ändern.", gw: 1, gh: 1 }
+        : { id: nid(), preset: b.dataset.preset, kind: b.dataset.kind, gw: 1, gh: 1 };
+      // Platzieren EXAKT wie im Client-Panel (placeNew in dashlayout.js):
+      // an der angeklickten Rasterzelle einfügen (hart ins Raster geklemmt),
+      // sonst erste freie Stelle; vorhandene ggf. nach unten stapeln.
+      if (atCell) {
+        w.gx = clamp(atCell.gx, 0, COLS - w.gw); w.gy = Math.max(0, atCell.gy);
+      } else {
+        const spot = findFreeSpot(arr, w.gw, w.gh);
+        w.gx = spot.gx; w.gy = spot.gy;
+      }
       arr.push(w);
+      compactPanels(arr, w);
       setFleetWidgets(arr); save(); close(); renderFleetWidgets(host, toolbar);
     }));
 }
 
-// -------------------- Drag: umsortieren / herauslösen --------------------
-function attachWidgetDrag(card, head, wdg, ctx) {
-  const { host, toolbar, edit } = ctx;
+// =================================================================
+// Raster-Drag (Verschieben mit Einrasten + Nach-unten-Stapeln)
+// 1:1 aus der Client-Ansicht (dashlayout.js) kopiert.
+// =================================================================
+function cellFromPoint(host, cx, cy, gw = 1) {
+  const { rect, cw } = cellSize(host);
+  let gx = Math.floor((cx - rect.left) / (cw + GAP));
+  let gy = Math.floor((cy - rect.top) / (ROW_H + GAP));
+  gx = clamp(gx, 0, COLS - gw); gy = Math.max(0, gy);
+  return { gx, gy };
+}
+
+function attachGridDrag(card, head, panel, ctx) {
+  const { host, toolbar, edit, list } = ctx;
   head.addEventListener("mousedown", (e) => {
+    // (Selects im Widget-Kopf sind eine Dashboard-Besonderheit und dürfen
+    // den Drag nicht starten - entspricht dem Button-Guard des Clients.)
     if (e.target.closest("button") || e.target.closest("select")) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
     const startX = e.clientX, startY = e.clientY;
-    let mode = null;
+    const rect0 = card.getBoundingClientRect();
+    const grabX = e.clientX - rect0.left, grabY = e.clientY - rect0.top;
+    // Ausgangspositionen ALLER Panels merken, damit beim Wegbewegen wieder
+    // alles an seinen Platz zurückspringt (nicht dauerhaft "runterfällt").
+    const snap = list.map((p) => ({ p, gx: p.gx, gy: p.gy }));
+    const restoreSnap = () => { for (const s of snap) { s.p.gx = s.gx; s.p.gy = s.gy; } };
+    let mode = null, preview = null, overFolder = null;
+
+    function begin() {
+      mode = "drag";
+      document.body.classList.add("dash-dragging");
+      card.classList.add("dragging");
+      card.style.position = "fixed"; card.style.margin = "0";
+      card.style.width = `${rect0.width}px`; card.style.height = `${rect0.height}px`;
+      card.style.zIndex = "9999"; card.style.pointerEvents = "none"; card.style.willChange = "transform";
+      preview = document.createElement("div"); preview.className = "grid-drop-preview"; host.appendChild(preview);
+      moveTo(e.clientX, e.clientY);
+    }
+    function moveTo(cx, cy) { card.style.transform = `translate(${cx - grabX}px, ${cy - grabY}px) scale(1.01)`; }
+
     function onMove(ev) {
       const dist = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY);
-      if (!mode && dist > 8) {
+      if (!mode && dist > 5) {
         const r = host.getBoundingClientRect();
-        const outside = ev.clientY < r.top - 40 || ev.clientY > r.bottom + 80 ||
-                        ev.clientX < r.left - 30 || ev.clientX > r.right + 30;
-        // Innerhalb + Edit = im Raster verschieben (Zellen-Snap, wie Client);
-        // außerhalb = als Fenster herauslösen.
-        if (edit && !outside) { mode = "move"; card.classList.add("dragging"); }
-        else { mode = "detach"; card.classList.add("detach-hint"); }
+        const outside = ev.clientX < r.left - 30 || ev.clientX > r.right + 30 || ev.clientY < r.top - 50 || ev.clientY > r.bottom + 120;
+        if (edit && !outside) begin(); else { mode = "detach"; card.classList.add("detach-hint"); }
       }
-      if (mode === "move") {
-        // Zielzelle unter dem Cursor bestimmen und Widget dorthin setzen.
-        const r = host.getBoundingClientRect();
-        const cw = (host.clientWidth - (COLS - 1) * GAP) / COLS;
-        let gx = Math.floor((ev.clientX - r.left) / (cw + GAP));
-        let gy = Math.floor((ev.clientY - r.top) / (ROW_H + GAP));
-        gx = Math.max(0, Math.min(COLS - wdg.gw, gx));
-        gy = Math.max(0, gy);
-        if (gx !== wdg.gx || gy !== wdg.gy) {
-          wdg.gx = gx; wdg.gy = gy;
-          card.style.gridColumn = `${gx + 1} / span ${wdg.gw}`;
-          card.style.gridRow = `${gy + 1} / span ${wdg.gh}`;
-        }
+      if (mode !== "drag") return;
+      moveTo(ev.clientX, ev.clientY);
+      restoreSnap();                             // immer von stabilen Positionen aus
+      const cell = cellFromPoint(host, ev.clientX, ev.clientY, panel.gw);
+      const cand = { gx: cell.gx, gy: cell.gy, gw: panel.gw, gh: panel.gh };
+      // Überlappt die Zielzelle einen Ordner? -> in den Ordner ablegen, NICHT
+      // umsortieren (der Ordner bleibt exakt stehen).
+      const fp = list.find((p) => p !== panel && p.type === "folder" && overlap(cand, p));
+      host.querySelectorAll(".dash-w.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
+      if (fp) {
+        overFolder = host.querySelector(`.dash-w[data-widget="${fp.id}"]`);
+        if (overFolder) overFolder.classList.add("folder-hover");
+        if (preview) preview.style.display = "none";
+        applyAllPositions(host, list, panel.id);   // alles auf Snapshot lassen
+      } else {
+        overFolder = null;
+        if (preview) preview.style.display = "";
+        panel.gx = cell.gx; panel.gy = cell.gy;
+        if (preview) { preview.style.gridColumn = `${panel.gx + 1} / span ${panel.gw}`; preview.style.gridRow = `${panel.gy + 1} / span ${panel.gh}`; }
+        compactPanels(list, panel);
+        applyAllPositions(host, list, panel.id);
+        growHostIfNeeded(host, list);
       }
     }
-    function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      if (mode === "move") {
+    function onUp(ev) {
+      document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("dash-dragging");
+      if (preview) preview.remove();
+      host.querySelectorAll(".dash-w.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
+      if (mode === "drag") {
+        for (const p of ["position", "margin", "width", "height", "left", "top", "zIndex", "pointerEvents", "willChange", "transform"]) card.style[p] = "";
         card.classList.remove("dragging");
-        resolveOverlaps(wdg);   // Überlappungen auflösen (nachrücken)
-        save(); renderFleetWidgets(host, toolbar);
+        compactPanels(list, panel);
+        setFleetWidgets(list); save(); renderFleetWidgets(host, toolbar);
       } else if (mode === "detach") {
-        card.classList.remove("detach-hint");
-        detachWidget(wdg);
+        card.classList.remove("detach-hint"); detachWidget(panel);
       }
     }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp);
   });
 }
 
-// Nach einem Verschieben Überlappungen auflösen: das bewegte Widget behält
-// seinen Platz, alle anderen weichen der Reihe nach auf die nächste freie
-// Zelle aus (stabile Reihenfolge = oben-links zuerst).
-function resolveOverlaps(moved) {
-  const all = widgets();
-  const others = all.filter((w) => w.id !== moved.id)
-    .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx));
-  const placed = [moved];
-  for (const w of others) { placeAt(placed, w); placed.push(w); }
-}
+// =================================================================
+// Raster-Resize (Breite/Höhe in ganzen Zellen, mit Einrasten)
+// 1:1 aus der Client-Ansicht (dashlayout.js) kopiert.
+// =================================================================
+function attachGridResize(card, panel, ctx) {
+  const { host, toolbar, list } = ctx;
+  const gx = document.createElement("div"); gx.className = "tile-grip tile-grip-x";
+  const gy = document.createElement("div"); gy.className = "tile-grip tile-grip-y";
+  const gc = document.createElement("div"); gc.className = "tile-grip tile-grip-xy";
+  card.appendChild(gx); card.appendChild(gy); card.appendChild(gc);
 
+  function startResize(axis) {
+    return (e) => {
+      e.preventDefault(); e.stopPropagation();
+      document.body.classList.add("dash-dragging");
+      const { cw } = cellSize(host);
+      const rect0 = card.getBoundingClientRect();
+      const startGW = panel.gw, startGH = panel.gh;
+      const snap = list.map((p) => ({ p, gx: p.gx, gy: p.gy }));
+      const restoreSnap = () => { for (const s of snap) { s.p.gx = s.gx; s.p.gy = s.gy; } };
+      function move(ev) {
+        if (axis !== "y") {
+          const px = ev.clientX - rect0.left;
+          panel.gw = clamp(Math.round(px / (cw + GAP)) || 1, 1, COLS - panel.gx);
+        }
+        if (axis !== "x") {
+          const py = ev.clientY - rect0.top;
+          panel.gh = clamp(Math.round(py / (ROW_H + GAP)) || 1, 1, 20);
+        }
+        restoreSnap();
+        applyGridPos(card, panel);
+        compactPanels(list, panel);
+        applyAllPositions(host, list, panel.id);
+        growHostIfNeeded(host, list);
+      }
+      function up() {
+        document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+        document.body.classList.remove("dash-dragging");
+        if (panel.gw !== startGW || panel.gh !== startGH) { compactPanels(list, panel); setFleetWidgets(list); save(); renderFleetWidgets(host, toolbar); }
+      }
+      document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+    };
+  }
+  gx.addEventListener("mousedown", startResize("x"));
+  gy.addEventListener("mousedown", startResize("y"));
+  gc.addEventListener("mousedown", startResize("xy"));
+}

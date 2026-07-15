@@ -11,14 +11,24 @@
 
 import { state, findClient } from "./state.js";
 import { hasClientPerm, hasGlobalPerm } from "./state.js";
-import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm } from "./utils.js";
+import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
 import { renderDashboard } from "./apps/dashboard.js";
 import { favStarHtml } from "./sidebar.js";
 import { renderClientLayout } from "./dashlayout.js";
-import { hideFleetTip } from "./fleetcharts.js";
+import { hideFleetTip, showFleetTip, attachHoverTip, scaleToContainer } from "./fleetcharts.js";
+
+// Zeilen-Hover (wie Dashboard/clientmetrics): Zeile hervorheben + Tooltip
+// mit Label + VOLLSTÄNDIGEM Wert genau dieser Zeile.
+function bindRowHover(rowEl, tipFn) {
+  rowEl.style.borderRadius = rowEl.style.borderRadius || "6px";
+  rowEl.style.cursor = "default";
+  rowEl.addEventListener("mouseenter", (e) => { rowEl.style.background = "var(--panel-2, #1b2740)"; showFleetTip(tipFn(), e.clientX, e.clientY); });
+  rowEl.addEventListener("mousemove", (e) => showFleetTip(tipFn(), e.clientX, e.clientY));
+  rowEl.addEventListener("mouseleave", () => { rowEl.style.background = ""; hideFleetTip(); });
+}
 
 // Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
 let _latestAgentVersion = null;
@@ -105,18 +115,29 @@ function renderClientView(el, clientId) {
 // -----------------------------------------------------------------
 
 // --- STATUS-Part ---
+// 1x1-optimiert (feste natürliche Breite) + proportionales Mitwachsen; jede
+// Info-Zeile hat einen eigenen Hover (Highlight + Tooltip mit Label und
+// VOLLEM Wert dieser Zeile, z.B. kompletter Hostname/OS-String).
 export function renderStatusPart(target, client) {
   const status = statusInfo(client);
   const m = client.metrics;
-  target.innerHTML = `
+  const rows = [
+    { label: t("os"), raw: `${osLabel(client.platform, client.release)}`, html: `${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))}` },
+    { label: t("ip"), raw: client.ip || "–" },
+    { label: t("hostname"), raw: client.hostname || "–" },
+    { label: t("arch"), raw: client.arch || "?" },
+    { label: t("uptime"), raw: m ? formatUptime(m.uptime) : "–" },
+    { label: "Agent", raw: client.agent_version || "–", html: agentVersionBadge(client) },
+  ];
+  target.innerHTML = "";
+  const holder = document.createElement("div");
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
+  const box = document.createElement("div");
+  box.style.cssText = "width:240px";
+  box.innerHTML = `
     <div class="status-label"><span class="status-dot-lg ${status.cls}"></span>${status.label}</div>
     <div class="status-info">
-      <div><span>${t("os")}</span><b>${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))}</b></div>
-      <div><span>${t("ip")}</span><b>${esc(client.ip || "–")}</b></div>
-      <div><span>${t("hostname")}</span><b>${esc(client.hostname)}</b></div>
-      <div><span>${t("arch")}</span><b>${esc(client.arch || "?")}</b></div>
-      <div><span>${t("uptime")}</span><b>${m ? formatUptime(m.uptime) : "–"}</b></div>
-      <div><span>Agent</span><b>${agentVersionBadge(client)}</b></div>
+      ${rows.map((r, i) => `<div data-i="${i}" style="padding:1px 4px"><span>${esc(r.label)}</span><b>${r.html || esc(r.raw)}</b></div>`).join("")}
     </div>
     <div class="quick-actions">
       <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
@@ -126,44 +147,124 @@ export function renderStatusPart(target, client) {
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✎ ${t("edit")}</button>` : ""}
     </div>`;
-  target.querySelectorAll("[data-quick]").forEach((btn) =>
+  holder.appendChild(box);
+  target.appendChild(holder);
+  box.querySelectorAll(".status-info > div[data-i]").forEach((rowEl) => {
+    const r = rows[+rowEl.dataset.i];
+    bindRowHover(rowEl, () => `<b>${esc(r.label)}</b><br>${esc(r.raw)}`);
+  });
+  box.querySelectorAll("[data-quick]").forEach((btn) =>
     btn.addEventListener("click", () => handleQuickAction(btn.dataset.quick, client)));
+  scaleToContainer(holder);
 }
 
 // --- AKTIONEN-Part ---
+// 1x1-optimiert (feste natürliche Breite) + proportionales Mitwachsen:
+// die Aktions-Buttons skalieren mit der Panelgröße mit.
 export function renderActionsPart(target, client) {
-  target.innerHTML = `
+  target.innerHTML = "";
+  const holder = document.createElement("div");
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
+  const box = document.createElement("div");
+  box.style.cssText = "width:240px;display:flex;flex-direction:column;gap:8px";
+  box.innerHTML = `
     ${hasClientPerm(client.id, "use_explorer") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
     ${hasClientPerm(client.id, "use_terminal") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
     ${hasClientPerm(client.id, "use_screen") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>` : ""}
     ${hasClientPerm(client.id, "use_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
     ${hasClientPerm(client.id, "use_taskmanager") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}`;
-  target.querySelectorAll("[data-action]").forEach((btn) =>
+  holder.appendChild(box);
+  target.appendChild(holder);
+  box.querySelectorAll("[data-action]").forEach((btn) =>
     btn.addEventListener("click", () => handleAction(btn.dataset.action, client)));
+  scaleToContainer(holder);
 }
 
 // --- WEBSITES-Part (Quick-Access) ---
 export function renderWebsitesPart(target, client) {
   target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
   api.getClientWebsites(client.id).then((sites) => {
-    if (!sites || !sites.length) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Websites verknüpft.</div>`; return; }
-    target.innerHTML = sites.map((w) => {
-      const dotColor = !w.monitor_enabled ? "var(--subtext)"
-        : w.last_status === "up" ? "var(--online, #3ecf8e)"
-        : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
-      const title = w.monitor_enabled
-        ? (w.last_status === "down" && w.last_error ? `DOWN: ${esc(w.last_error)}` : (w.last_status || "noch nicht geprüft"))
-        : "kein Monitoring";
-      const favMeta = { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname };
-      return `
-        <div class="action-btn" style="display:flex;align-items:center;gap:8px;padding-right:8px">
-          <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
-             style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit" title="${title}">
-            <span style="color:${dotColor}">●</span><span>${esc(w.name)}</span>
-          </a>
-          ${favStarHtml("websites", w.id, favMeta)}
-        </div>`;
-    }).join("");
+    target.innerHTML = "";
+    if (!sites || !sites.length) {
+      target.innerHTML = `<div style="color:var(--subtext);font-size:12px;margin-bottom:6px">Keine Websites verknüpft.</div>`;
+    } else {
+      target.innerHTML = sites.map((w) => {
+        const dotColor = !w.monitor_enabled ? "var(--subtext)"
+          : w.last_status === "up" ? "var(--online, #3ecf8e)"
+          : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
+        const favMeta = { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname };
+        return `
+          <div class="action-btn" data-ws="${esc(w.id)}" style="display:flex;align-items:center;gap:8px;padding-right:8px">
+            <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
+               style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit">
+              <span style="color:${dotColor}">●</span><span>${esc(w.name)}</span>
+            </a>
+            ${favStarHtml("websites", w.id, favMeta)}
+            <button class="taskbar-btn" data-ws-del="${esc(w.id)}" data-ws-name="${esc(w.name)}"
+              title="Website-Verknüpfung löschen"
+              style="padding:1px 6px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
+          </div>`;
+      }).join("");
+      // Hover PRO Website: Tooltip mit Name, vollständiger URL und dem
+      // Monitoring-Status GENAU DIESER Website (statt nur des Panel-Namens).
+      target.querySelectorAll("[data-ws]").forEach((rowEl) => {
+        const w = sites.find((s) => String(s.id) === rowEl.dataset.ws);
+        if (!w) return;
+        const statusTxt = !w.monitor_enabled ? "kein Monitoring"
+          : w.last_status === "up" ? "online (up)"
+          : w.last_status === "down" ? `DOWN${w.last_error ? ": " + w.last_error : ""}`
+          : "noch nicht geprüft";
+        const color = !w.monitor_enabled ? "var(--subtext)"
+          : w.last_status === "up" ? "var(--online, #3ecf8e)"
+          : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
+        rowEl.addEventListener("mouseenter", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
+        rowEl.addEventListener("mousemove", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
+        rowEl.addEventListener("mouseleave", () => hideFleetTip());
+        function tipHtml() {
+          return `<b>${esc(w.name)}</b><br><span style="color:var(--subtext)">${esc(w.url)}</span><br><span style="color:${color}">●</span> ${esc(statusTxt)}`;
+        }
+      });
+    }
+
+    // "+ Website hinzufügen" direkt im Widget (kein Umweg mehr über
+    // "Client bearbeiten"). Anlegen/Löschen aktualisiert nur dieses Panel.
+    const addBtn = document.createElement("button");
+    addBtn.className = "action-btn";
+    addBtn.style.cssText = "width:100%;justify-content:center;color:var(--accent);margin-top:4px";
+    addBtn.textContent = "+ Website hinzufügen";
+    addBtn.addEventListener("click", async () => {
+      const name = await uiPrompt("Website hinzufügen", {
+        description: `Anzeigename der Website für "${client.hostname}":`,
+        placeholder: "z.B. Web-Interface" });
+      if (name === null || !name.trim()) return;
+      const url = await uiPrompt("Website hinzufügen", {
+        description: "Vollständige URL (inkl. https://):",
+        placeholder: "https://192.168.1.10:8006" });
+      if (url === null || !url.trim()) return;
+      const monitor = await uiConfirm("Uptime-Monitoring aktivieren?", {
+        description: "Ja: Die Website wird regelmäßig geprüft und der Status farbig angezeigt.\nNein: nur als Schnellzugriff-Link speichern.",
+        okText: "Mit Monitoring", cancelText: "Ohne Monitoring" });
+      try {
+        await api.createClientWebsite(client.id, {
+          name: name.trim(), url: url.trim(), monitor_enabled: !!monitor,
+        });
+        window.notify?.(`Website "${name.trim()}" verknüpft.`, "success");
+        renderWebsitesPart(target, client);   // nur dieses Panel neu laden
+      } catch (e) { window.notify?.("Anlegen fehlgeschlagen: " + e.message, "error"); }
+    });
+    target.appendChild(addBtn);
+
+    target.querySelectorAll("[data-ws-del]").forEach((b) =>
+      b.addEventListener("click", async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (!(await uiConfirm(`Website "${b.dataset.wsName}" entfernen?`, {
+          okText: "Entfernen", danger: true }))) return;
+        try {
+          await api.deleteClientWebsite(client.id, b.dataset.wsDel);
+          window.notify?.("Website entfernt.", "success");
+          renderWebsitesPart(target, client);
+        } catch (err) { window.notify?.("Löschen fehlgeschlagen: " + err.message, "error"); }
+      }));
   }).catch(() => { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Websites.</div>`; });
 }
 
@@ -207,12 +308,21 @@ export function renderOverviewSub(target, client, tab, rerender) {
     const row = document.createElement("div");
     row.className = "metrics-row";
     row.style.flexWrap = "wrap";
-    row.innerHTML = disks.map((d) => {
+    row.innerHTML = disks.map((d, i) => {
       const pct = d.total ? (d.used / d.total) * 100 : 0;
       const label = esc(d.device || d.mountpoint || "Disk");
-      return `<div class="donut-wrap">${gradientDonutSvg(pct, DISK_GRADIENT, label, `${formatBytes(d.used)} / ${formatBytes(d.total)}`)}</div>`;
+      return `<div class="donut-wrap" data-disk="${i}" style="border-radius:10px;padding:4px">${gradientDonutSvg(pct, DISK_GRADIENT, label, `${formatBytes(d.used)} / ${formatBytes(d.total)}`)}</div>`;
     }).join("");
     target.appendChild(row);
+    // Hover PRO Datenträger: Donut hervorheben + Tooltip mit exakten Werten
+    // GENAU DIESES Datenträgers (Gerät, belegt/gesamt, frei, Prozent).
+    row.querySelectorAll("[data-disk]").forEach((el) => {
+      const d = disks[+el.dataset.disk];
+      const pct = d.total ? Math.round((d.used / d.total) * 100) : 0;
+      bindRowHover(el, () => `<b>${esc(d.device || d.mountpoint || "Disk")}</b>${d.mountpoint && d.device ? ` <span style="color:var(--subtext)">(${esc(d.mountpoint)})</span>` : ""}<br>` +
+        `Belegt: <b>${formatBytes(d.used)}</b> / ${formatBytes(d.total)} (${pct}%)<br>` +
+        `<span style="color:var(--subtext)">Frei: ${formatBytes((d.total || 0) - (d.used || 0))}</span>`);
+    });
     return;
   }
 
@@ -222,7 +332,7 @@ export function renderOverviewSub(target, client, tab, rerender) {
   const swapTotal = m.swapTotal ?? 0, swapUsed = m.swapUsed ?? 0;
   const swapPct = swapTotal ? (swapUsed / swapTotal) * 100 : 0;
   const swapDonut = swapTotal > 0 ? `
-    <div class="donut-wrap">
+    <div class="donut-wrap" data-donut="swap" style="border-radius:10px;padding:4px">
       ${gradientDonutSvg(swapPct, RAM_GRADIENT, "Swap", `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`)}
       <div class="metric-sub">${t("free")}: ${formatBytes(swapTotal - swapUsed)}</div>
     </div>` : "";
@@ -230,16 +340,31 @@ export function renderOverviewSub(target, client, tab, rerender) {
   const topRow = document.createElement("div");
   topRow.className = "metrics-row";
   topRow.innerHTML = `
-    <div class="donut-wrap">
+    <div class="donut-wrap" data-donut="cpu" style="border-radius:10px;padding:4px">
       ${gradientDonutSvg(cpuPct, CPU_GRADIENT, "CPU", "")}
       <div class="metric-sub">${m.cpuCores ?? "?"} ${t("cores")} · ${m.cpuThreads ?? "?"} ${t("threads")}</div>
     </div>
-    <div class="donut-wrap">
+    <div class="donut-wrap" data-donut="ram" style="border-radius:10px;padding:4px">
       ${gradientDonutSvg(ramPct, RAM_GRADIENT, "RAM", `${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}`)}
       <div class="metric-sub">${t("free")}: ${formatBytes(m.memAvailable ?? (m.memTotal - m.memUsed))}</div>
     </div>
     ${swapDonut}`;
   target.appendChild(topRow);
+
+  // Hover PRO Donut: hervorheben + Tooltip mit den exakten Live-Werten
+  // GENAU DIESER Metrik (nicht nur der Panel-Name).
+  {
+    const donutTips = {
+      cpu: () => `<b>CPU-Auslastung</b><br><b>${Math.round(cpuPct)}%</b>` +
+        (m.cpuModel ? `<br><span style="color:var(--subtext)">${esc(m.cpuModel)}</span>` : "") +
+        `<br><span style="color:var(--subtext)">${m.cpuCores ?? "?"} ${t("cores")} · ${m.cpuThreads ?? "?"} ${t("threads")}${m.cpuFreq ? ` · ${Math.round(m.cpuFreq)} MHz` : ""}</span>`,
+      ram: () => `<b>RAM-Auslastung</b><br><b>${Math.round(ramPct)}%</b> — ${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}` +
+        `<br><span style="color:var(--subtext)">${t("free")}: ${formatBytes(m.memAvailable ?? (m.memTotal - m.memUsed))}</span>`,
+      swap: () => `<b>Swap-Auslastung</b><br><b>${Math.round(swapPct)}%</b> — ${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}` +
+        `<br><span style="color:var(--subtext)">${t("free")}: ${formatBytes(swapTotal - swapUsed)}</span>`,
+    };
+    topRow.querySelectorAll("[data-donut]").forEach((el) => bindRowHover(el, donutTips[el.dataset.donut] || (() => "")));
+  }
 
   const range = getHistoryRange(client.id, TIME_RANGES[timeRangeIndex].ms);
   const rangeBar = document.createElement("div");

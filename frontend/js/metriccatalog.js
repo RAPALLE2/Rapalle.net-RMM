@@ -15,6 +15,7 @@
 
 import { formatBytes } from "./utils.js";
 import { groupBy } from "./fleetcharts.js";
+import { getFleetIncludeVirtual } from "./persist.js";
 // (getFleetIncludeVirtual entfernt - Zählweise ist jetzt pro Widget einstellbar)
 
 const fmtPct = (v) => `${Math.round(v)}%`;
@@ -27,14 +28,24 @@ const fmtBps = (v) => `${formatBytes(v)}/s`;
 // Aktive (nicht-Kind-)Clients.
 // Pro-Widget-Einstellung: Zählt dieses Widget ALLE Geräte oder nur physische?
 // Wird von dashwidgets/clientmetrics vor dem Rendern gesetzt (setHostScope)
-// und danach zurückgesetzt. Default null = alle Geräte (VMs/LXCs zählen mit).
+// und danach zurückgesetzt. Default null = globale Profil-Einstellung greift.
 let _hostScope = null;   // null | "all" | "physical"
 export function setHostScope(scope) { _hostScope = scope; }
 export function clearHostScope() { _hostScope = null; }
 
 function hosts(state) {
+  // Nur "echte" Geräte (keine Sub-/Kind-Clients).
   let list = (state.clients || []).filter((c) => !c.parent_client_id);
-  if (_hostScope === "physical") {
+  // Zählweise bestimmen: eine explizit gesetzte Pro-Widget-Zählweise hat
+  // Vorrang; sonst greift die globale Profil-Einstellung "VMs & LXCs als
+  // vollwertig mitzählen" (getFleetIncludeVirtual).
+  //   physical   -> nur physische Geräte
+  //   all        -> alle Geräte (VMs/LXCs zählen mit)
+  let scope = _hostScope;
+  if (scope == null) scope = getFleetIncludeVirtual() ? "all" : "physical";
+  if (scope === "physical") {
+    // WICHTIG: Nur echte VMs/LXCs ausschließen. Alles ohne gesetzten Typ gilt
+    // als physisch (Default), damit Geräte nie versehentlich ganz verschwinden.
     list = list.filter((c) => (c.device_type || "physical") === "physical");
   }
   return list;

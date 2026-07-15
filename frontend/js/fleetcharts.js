@@ -181,11 +181,19 @@ export function buildFleetDonut(segments, opts = {}) {
 
 // Hängt den Flotten-Übersicht-Hover (Tooltip folgt der Maus) generisch an ein
 // Element. htmlFn wird bei jedem Anzeigen frisch ausgewertet (Live-Werte).
+// Liefert htmlFn nichts (null/leer), wird KEIN Tooltip gezeigt - so kann ein
+// einmal angehängter Hover pro Render an-/abgeschaltet werden (z.B. wenn ein
+// Widget die Darstellung wechselt und feinere Per-Element-Hover übernehmen).
 export function attachHoverTip(el, htmlFn) {
   if (!el) return;
   el.style.cursor = el.style.cursor || "default";
-  el.addEventListener("mouseenter", (e) => showFleetTip(htmlFn(), e.clientX, e.clientY));
-  el.addEventListener("mousemove", (e) => showFleetTip(htmlFn(), e.clientX, e.clientY));
+  const show = (e) => {
+    const html = htmlFn();
+    if (!html) return;   // deaktiviert: Per-Element-Hover der Kinder nicht stören
+    showFleetTip(html, e.clientX, e.clientY);
+  };
+  el.addEventListener("mouseenter", show);
+  el.addEventListener("mousemove", show);
   el.addEventListener("mouseleave", () => hideFleetTip());
 }
 
@@ -214,4 +222,134 @@ export function fitToContainer(holder) {
   ro.observe(holder);
   // Initial nach dem Layout messen.
   requestAnimationFrame(apply);
+}
+
+// ------------------------------------------------------------------
+// Responsive-Scale V2: skaliert einen Inhalt mit FESTER natürlicher Größe
+// (für 1x1-Zellen optimiert) proportional in seinen Container - nach UNTEN
+// (passt immer) und nach OBEN (2x2-Zelle => Inhalt ~doppelt so groß, exakt
+// gleiche Proportionen). Aufruf NACH dem Einfügen des Inhalts in `holder`.
+// ------------------------------------------------------------------
+export function scaleToContainer(holder) {
+  if (!holder || !holder.firstElementChild) return;
+  const inner = holder.firstElementChild;
+  // Der Holder ist ein Flex-Container: Inhalt darf NICHT gestaucht werden,
+  // sonst misst scrollWidth/scrollHeight nicht die natürliche Größe.
+  inner.style.flex = "none";
+  const apply = () => {
+    if (!holder.isConnected) { ro.disconnect(); return; }
+    // Transform zurücksetzen, um die natürliche Größe zu messen.
+    inner.style.transform = "";
+    inner.style.transformOrigin = "center center";
+    const availW = holder.clientWidth, availH = holder.clientHeight;
+    const needW = inner.scrollWidth, needH = inner.scrollHeight;
+    if (!availW || !availH || !needW || !needH) return;
+    const scale = Math.min(availW / needW, availH / needH);
+    if (Math.abs(scale - 1) > 0.005) inner.style.transform = `scale(${scale.toFixed(3)})`;
+  };
+  const ro = new ResizeObserver(apply);
+  ro.observe(holder);
+  // Initial nach dem Layout messen.
+  requestAnimationFrame(apply);
+}
+
+// ------------------------------------------------------------------
+// Getimestampter Verlaufs-Chart (line / area / spark) mit Hover wie beim
+// Netzwerk-Diagramm im Metrics-Panel: senkrechte Hover-Linie, Punkt-Marker
+// auf der Kurve und Tooltip mit UHRZEIT + exakten Werten aller Serien am
+// nächstgelegenen Datenpunkt.
+//   series: [{ label, color, values:[..], timestamps:[..] }]
+//   opts:   { width, height, mode:"line"|"area"|"spark", axes, yMax,
+//             formatValue(v) }
+// ------------------------------------------------------------------
+export function timeSeriesChart(series, opts = {}) {
+  const {
+    width = 240, height = 82, mode = "line",
+    axes = mode !== "spark", yMax = null, formatValue = null,
+  } = opts;
+  const padL = axes ? 34 : 4, padR = 6, padT = 6, padB = axes ? 15 : 4;
+  const plotW = width - padL - padR, plotH = height - padT - padB;
+  const fmt = (v) => (formatValue ? formatValue(v) : String(Math.round(v)));
+  const timeFmt = (ts) => new Date(ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  let max = yMax;
+  if (max == null) { max = 1; for (const s of series) for (const v of (s.values || [])) if (v > max) max = v; }
+  const min = Math.min(0, ...series.flatMap((s) => s.values || []));
+  const span = (max - min) || 1;
+
+  const ptsFor = (values) => (values || []).map((v, i) => ({
+    x: padL + (values.length <= 1 ? 0 : (i / (values.length - 1)) * plotW),
+    y: padT + plotH - ((v - min) / span) * plotH, v, i,
+  }));
+
+  // y-Achse (0 / Mitte / Max) + dezente Gitterlinien
+  const yLabels = !axes ? "" : [0, 0.5, 1].map((f) => {
+    const y = padT + plotH - f * plotH;
+    return `<text x="${padL - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="var(--subtext)" font-size="8.5">${esc(fmt(min + f * span))}</text>
+      <line x1="${padL}" y1="${y.toFixed(1)}" x2="${width - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" opacity="0.45"/>`;
+  }).join("");
+
+  // x-Achse: Uhrzeit des ersten/letzten Datenpunkts (falls Timestamps da sind)
+  const ts0 = series[0]?.timestamps;
+  const xLabels = axes && ts0 && ts0.length > 1
+    ? `<text x="${padL}" y="${height - 3}" fill="var(--subtext)" font-size="8.5">${timeFmt(ts0[0])}</text>
+       <text x="${width - padR}" y="${height - 3}" text-anchor="end" fill="var(--subtext)" font-size="8.5">${timeFmt(ts0[ts0.length - 1])}</text>`
+    : "";
+
+  const paths = series.map((s) => {
+    const pts = ptsFor(s.values);
+    if (!pts.length) return "";
+    const d = pts.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    const base = (padT + plotH).toFixed(1);
+    const area = mode === "area"
+      ? `<path d="${d} L ${pts[pts.length - 1].x.toFixed(1)},${base} L ${pts[0].x.toFixed(1)},${base} Z" fill="${s.color}" opacity="0.2"/>` : "";
+    return `${area}<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join("");
+
+  const container = document.createElement("div");
+  container.style.cssText = `position:relative;width:${width}px`;
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="display:block;overflow:visible">
+      ${yLabels}${xLabels}${paths}
+      <line class="tsc-line" x1="0" x2="0" y1="${padT}" y2="${padT + plotH}" stroke="var(--accent)" stroke-width="1" opacity="0.85" style="display:none"/>
+      ${series.map((s, si) => `<circle class="tsc-dot" data-s="${si}" r="3" fill="${s.color}" stroke="var(--panel, #131c2b)" stroke-width="1.5" style="display:none"/>`).join("")}
+    </svg>`;
+
+  const svg = container.querySelector("svg");
+  const hoverLine = container.querySelector(".tsc-line");
+  const dots = [...container.querySelectorAll(".tsc-dot")];
+  const first = series.find((s) => s.values && s.values.length);
+
+  svg.addEventListener("mousemove", (e) => {
+    if (!first) return;
+    const rect = svg.getBoundingClientRect();
+    const mouseX = ((e.clientX - rect.left) / (rect.width || 1)) * width;
+    const pts = ptsFor(first.values);
+    let nearest = pts[0];
+    for (const p of pts) if (Math.abs(p.x - mouseX) < Math.abs(nearest.x - mouseX)) nearest = p;
+    if (!nearest) return;
+    hoverLine.style.display = "";
+    hoverLine.setAttribute("x1", nearest.x); hoverLine.setAttribute("x2", nearest.x);
+    // Punkt-Marker jeder Serie auf ihrer Kurve platzieren.
+    series.forEach((s, si) => {
+      const p = ptsFor(s.values)[nearest.i];
+      const dot = dots[si];
+      if (p && dot) { dot.style.display = ""; dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y); }
+      else if (dot) dot.style.display = "none";
+    });
+    // Tooltip: Uhrzeit des Datenpunkts + Wert(e) aller Serien.
+    const ts = first.timestamps && first.timestamps[nearest.i];
+    const timeStr = ts ? `<span style="color:var(--subtext)">${timeFmt(ts)}</span><br>` : "";
+    const lines = series.map((s) => {
+      const v = (s.values || [])[nearest.i];
+      return v === undefined ? "" : `<span style="color:${s.color}">●</span> ${esc(s.label)}: <b>${esc(fmt(v))}</b>`;
+    }).filter(Boolean).join("<br>");
+    showFleetTip(timeStr + lines, e.clientX, e.clientY);
+  });
+  svg.addEventListener("mouseleave", () => {
+    hoverLine.style.display = "none";
+    dots.forEach((d) => (d.style.display = "none"));
+    hideFleetTip();
+  });
+  return container;
 }

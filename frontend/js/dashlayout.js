@@ -24,16 +24,16 @@ import {
 } from "./persist.js";
 import { state, isAdmin } from "./state.js";
 import { api } from "./api.js";
+// GEMEINSAME Raster-Engine (identisch mit dem Dashboard/fleetdash.js).
+import {
+  COLS, BASE_ROWS, ROW_H, GAP, clamp, overlap, compact, neededRows,
+  findFreeSpot, cellSize, applyGridPos, growHostIfNeeded,
+} from "./gridengine.js";
 
 let _uid = 0;
 const nid = () => `p-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-// ---- Raster-Konstanten ----
-const COLS = 5;         // feste Spaltenzahl
-const BASE_ROWS = 4;    // Grundhöhe (Reihen), wächst nach unten
-const ROW_H = 150;      // Reihenhöhe in px
-const GAP = 14;         // Abstand zwischen Zellen in px
+// Raster-Konstanten kommen aus gridengine.js (geteilt mit dem Dashboard).
 
 const LEAF_LABEL = {
   status: () => t("status"),
@@ -157,35 +157,10 @@ function panelTitle(p) {
 }
 
 // ---- Raster-Geometrie/Kollision ----
-function overlap(a, b) {
-  return a.gx < b.gx + b.gw && a.gx + a.gw > b.gx && a.gy < b.gy + b.gh && a.gy + a.gh > b.gy;
-}
-// Kollisionen auflösen: das aktive Panel UND alle Ordner bleiben fix, die
-// übrigen Panels werden in y-Reihenfolge nach unten geschoben (Stapeln).
-// Ordner "fliehen" dadurch nie, wenn man etwas auf sie zieht.
-function compact(panels, active) {
-  const fixed = panels.filter((p) => p === active || p.type === "folder");
-  const placed = [...fixed];
-  const rest = panels.filter((p) => !fixed.includes(p)).sort((a, b) => a.gy - b.gy || a.gx - b.gx);
-  for (const p of rest) {
-    let guard = 0;
-    while (placed.some((q) => overlap(p, q)) && guard++ < 500) p.gy++;
-    placed.push(p);
-  }
-}
-function neededRows(panels) {
-  return Math.max(BASE_ROWS, ...panels.map((p) => p.gy + p.gh), 0);
-}
-// Erste freie Position für ein gw×gh-Panel (sonst unten anhängen).
-function findFreeSpot(panels, gw, gh) {
-  const rows = neededRows(panels) + gh;
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x <= COLS - gw; x++) {
-      const cand = { gx: x, gy: y, gw, gh };
-      if (!panels.some((p) => overlap(cand, p))) return { gx: x, gy: y };
-    }
-  }
-  return { gx: 0, gy: neededRows(panels) };
+// Kollisionen auflösen über die gemeinsame Engine. Ordner bleiben zusätzlich
+// fix, damit sie beim Draufziehen nicht "fliehen" (Client-Besonderheit).
+function compactPanels(panels, active) {
+  compact(panels, active, (p) => p.type === "folder");
 }
 
 // =================================================================
@@ -387,10 +362,6 @@ function buildPanel(panel, client, ctx) {
   return card;
 }
 
-function applyGridPos(card, panel) {
-  card.style.gridColumn = `${panel.gx + 1} / span ${panel.gw}`;
-  card.style.gridRow = `${panel.gy + 1} / span ${panel.gh}`;
-}
 // Alle Karten (außer der aktiv gezogenen) neu positionieren.
 function applyAllPositions(host, layout, exceptId) {
   for (const p of layout.panels) {
@@ -554,7 +525,7 @@ function attachTabInteraction(tab, folder, child, client, ctx) {
       const cell = cellFromPoint(host, ev.clientX, ev.clientY, dw);
       child.gx = cell.gx; child.gy = cell.gy;
       layout.panels.push(child);
-      compact(layout.panels, child);
+      compactPanels(layout.panels, child);
       saveLayout(); renderClientLayout(host, toolbarHost, client);
     }
     document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
@@ -606,7 +577,7 @@ function placeNew(panel, atCell) {
     panel.gx = spot.gx; panel.gy = spot.gy;
   }
   layout.panels.push(panel);
-  compact(layout.panels, panel);   // vorhandene ggf. nach unten stapeln
+  compactPanels(layout.panels, panel);   // vorhandene ggf. nach unten stapeln
   saveLayout();
 }
 async function addPanelType(type, atCell) {
@@ -667,11 +638,6 @@ export function detachPanel(panel, client) {
 // =================================================================
 // Raster-Drag (Verschieben mit Einrasten + Nach-unten-Stapeln)
 // =================================================================
-function cellSize(host) {
-  const rect = host.getBoundingClientRect();
-  const cw = (rect.width - GAP * (COLS - 1)) / COLS;
-  return { rect, cw, ch: ROW_H };
-}
 function cellFromPoint(host, cx, cy, gw = 1) {
   const { rect, cw } = cellSize(host);
   let gx = Math.floor((cx - rect.left) / (cw + GAP));
@@ -733,9 +699,9 @@ function attachGridDrag(card, head, panel, client, ctx) {
         if (preview) preview.style.display = "";
         panel.gx = cell.gx; panel.gy = cell.gy;
         if (preview) { preview.style.gridColumn = `${panel.gx + 1} / span ${panel.gw}`; preview.style.gridRow = `${panel.gy + 1} / span ${panel.gh}`; }
-        compact(layout.panels, panel);
+        compactPanels(layout.panels, panel);
         applyAllPositions(host, layout, panel.id);
-        growHostIfNeeded(host, layout);
+        growHostIfNeeded(host, layout.panels);
       }
     }
     function onUp(ev) {
@@ -754,7 +720,7 @@ function attachGridDrag(card, head, panel, client, ctx) {
             saveLayout(); renderClientLayout(host, toolbarHost, client); return;
           }
         }
-        compact(layout.panels, panel);
+        compactPanels(layout.panels, panel);
         saveLayout(); renderClientLayout(host, toolbarHost, client);
       } else if (mode === "detach") {
         card.classList.remove("detach-hint"); detachPanel(panel, client);
@@ -764,10 +730,6 @@ function attachGridDrag(card, head, panel, client, ctx) {
   });
 }
 
-function growHostIfNeeded(host, layout) {
-  const rows = neededRows(layout.panels);
-  host.style.minHeight = `${rows * ROW_H + (rows - 1) * GAP}px`;
-}
 
 // =================================================================
 // Raster-Resize (Breite/Höhe in ganzen Zellen, mit Einrasten)
@@ -799,14 +761,14 @@ function attachGridResize(card, panel, client, ctx) {
         }
         restoreSnap();
         applyGridPos(card, panel);
-        compact(layout.panels, panel);
+        compactPanels(layout.panels, panel);
         applyAllPositions(host, layout, panel.id);
-        growHostIfNeeded(host, layout);
+        growHostIfNeeded(host, layout.panels);
       }
       function up() {
         document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
         document.body.classList.remove("dash-dragging");
-        if (panel.gw !== startGW || panel.gh !== startGH) { compact(layout.panels, panel); saveLayout(); renderClientLayout(host, toolbarHost, client); }
+        if (panel.gw !== startGW || panel.gh !== startGH) { compactPanels(layout.panels, panel); saveLayout(); renderClientLayout(host, toolbarHost, client); }
       }
       document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
     };
