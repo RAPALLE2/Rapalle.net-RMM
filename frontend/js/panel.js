@@ -115,8 +115,9 @@ function renderClientView(el, clientId) {
 // -----------------------------------------------------------------
 
 // --- STATUS-Part ---
-// 1x1-optimiert (feste natürliche Breite) + proportionales Mitwachsen; jede
-// Info-Zeile hat einen eigenen Hover (Highlight + Tooltip mit Label und
+// Layout: AKTIONS-BUTTONS LINKS untereinander, TEXT (Status + Info-Zeilen)
+// RECHTS - füllt die Box gut aus. 1x1-optimiert + proportionales Mitwachsen;
+// jede Info-Zeile hat einen eigenen Hover (Highlight + Tooltip mit Label und
 // VOLLEM Wert dieser Zeile, z.B. kompletter Hostname/OS-String).
 export function renderStatusPart(target, client) {
   const status = statusInfo(client);
@@ -130,24 +131,27 @@ export function renderStatusPart(target, client) {
     { label: "Agent", raw: client.agent_version || "–", html: agentVersionBadge(client) },
   ];
   target.innerHTML = "";
+  // STRETCH statt Skalieren: Buttons links, Text rechts - die beiden Spalten
+  // dehnen sich immer über die KOMPLETTE Panelfläche aus (gleiches Layout,
+  // voller Platz), die Schrift bleibt konstant lesbar.
   const holder = document.createElement("div");
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
-  const box = document.createElement("div");
-  box.style.cssText = "width:240px";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;gap:20px";
+  const box = holder;
   box.innerHTML = `
-    <div class="status-label"><span class="status-dot-lg ${status.cls}"></span>${status.label}</div>
-    <div class="status-info">
-      ${rows.map((r, i) => `<div data-i="${i}" style="padding:1px 4px"><span>${esc(r.label)}</span><b>${r.html || esc(r.raw)}</b></div>`).join("")}
-    </div>
-    <div class="quick-actions">
+    <div class="quick-actions" style="flex:none;width:180px;display:flex;flex-direction:column;gap:7px;margin-top:0;flex-wrap:nowrap;justify-content:center;align-self:stretch">
       <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
       <button data-quick="shutdown" ${client.online ? "" : "disabled"}>⏻ ${t("shutdown")}</button>
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✎ ${t("edit")}</button>` : ""}
+    </div>
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center">
+      <div class="status-label" style="font-size:15px"><span class="status-dot-lg ${status.cls}"></span>${status.label}</div>
+      <div class="status-info" style="margin-top:10px">
+        ${rows.map((r, i) => `<div data-i="${i}" style="padding:2px 4px;font-size:14px"><span>${esc(r.label)}</span><b style="word-break:normal">${r.html || esc(r.raw)}</b></div>`).join("")}
+      </div>
     </div>`;
-  holder.appendChild(box);
   target.appendChild(holder);
   box.querySelectorAll(".status-info > div[data-i]").forEach((rowEl) => {
     const r = rows[+rowEl.dataset.i];
@@ -155,7 +159,6 @@ export function renderStatusPart(target, client) {
   });
   box.querySelectorAll("[data-quick]").forEach((btn) =>
     btn.addEventListener("click", () => handleQuickAction(btn.dataset.quick, client)));
-  scaleToContainer(holder);
 }
 
 // --- AKTIONEN-Part ---

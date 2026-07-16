@@ -75,8 +75,14 @@ export function buildFleetDonut(segments, opts = {}) {
   const { title = null, card = false, size = 168 } = opts;
   const total = segments.reduce((s, x) => s + x.count, 0);
   // Kompakt-Modus (kleine Widgets, z.B. eine Höheneinheit): dünnerer Ring,
-  // kleinere Schriften, engere Legende.
+  // aber Legendentexte bleiben bewusst so groß wie beim gut lesbaren Pie.
   const compact = size <= 110;
+  const legendFs = compact ? (segments.length <= 3 ? 15 : 13.5) : 13;
+  const legendPad = compact ? (segments.length <= 3 ? "3px 3px" : "1px 3px") : "3px 4px";
+  const legendGap = compact ? 6 : 8;
+  const totalFs = compact ? (String(total).length > 2 ? 18 : 22) : 30;
+  const totalLabelFs = compact ? 8.5 : 11;
+  const totalLabelOffset = compact ? 11 : 16;
   const stroke = compact ? 16 : 26, hoverGrow = compact ? 4 : 6;
   // Radius so wählen, dass auch der beim Hover verdickte Ring vollständig in
   // die SVG-Fläche passt und nicht am Rand abgeschnitten wird.
@@ -105,8 +111,8 @@ export function buildFleetDonut(segments, opts = {}) {
   }
 
   const legend = segments.map((s, i) => `
-    <div class="dash-legend-row" data-seg="${i}" style="display:flex;align-items:center;gap:${compact ? 6 : 8}px;padding:${compact ? "1px 3px" : "3px 4px"};border-radius:6px;cursor:pointer;font-size:${compact ? 11 : 13}px">
-      <span style="width:11px;height:11px;border-radius:3px;background:${s.color};flex-shrink:0"></span>
+    <div class="dash-legend-row" data-seg="${i}" style="display:flex;align-items:center;gap:${legendGap}px;padding:${legendPad};border-radius:6px;cursor:pointer;font-size:${legendFs}px">
+      <span style="width:${compact ? 9 : 11}px;height:${compact ? 9 : 11}px;border-radius:3px;background:${s.color};flex-shrink:0"></span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.label)}</span>
       <span style="color:var(--subtext);font-variant-numeric:tabular-nums">${s.count}</span>
     </div>`).join("") || `<div style="color:var(--subtext);font-size:12px;padding:4px">Keine Daten</div>`;
@@ -116,9 +122,9 @@ export function buildFleetDonut(segments, opts = {}) {
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
       <div style="position:relative;width:${size}px;height:${size}px;flex-shrink:0">
         <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="overflow:visible">${circles}</svg>
-        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none">
-          <div style="font-size:${compact ? 19 : 30}px;font-weight:700;line-height:1">${total}</div>
-          <div style="font-size:${compact ? 9 : 11}px;color:var(--subtext)">gesamt</div>
+        <div style="position:absolute;inset:0;pointer-events:none;text-align:center">
+          <div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);font-size:${totalFs}px;font-weight:700;line-height:1">${total}</div>
+          <div style="position:absolute;left:0;right:0;top:calc(50% + ${totalLabelOffset}px);font-size:${totalLabelFs}px;line-height:1;color:var(--subtext);white-space:nowrap">gesamt</div>
         </div>
       </div>
       <div style="flex:1;min-width:${compact ? 90 : 150}px;${compact ? `max-height:${size}px;overflow:auto` : ""}">${legend}</div>
@@ -233,12 +239,21 @@ export function fitToContainer(holder) {
 export function scaleToContainer(holder) {
   if (!holder || !holder.firstElementChild) return;
   const inner = holder.firstElementChild;
-  // Der Holder ist ein Flex-Container: Inhalt darf NICHT gestaucht werden,
-  // sonst misst scrollWidth/scrollHeight nicht die natürliche Größe.
+  if (inner.dataset && inner.dataset.stretch === "fill") {
+    inner.style.transform = "";
+    inner.style.transformOrigin = "";
+    inner.style.width = "100%";
+    inner.style.height = "100%";
+    inner.style.maxWidth = "100%";
+    inner.style.maxHeight = "100%";
+    inner.style.minWidth = "0";
+    inner.style.minHeight = "0";
+    inner.style.boxSizing = "border-box";
+    return;
+  }
   inner.style.flex = "none";
   const apply = () => {
     if (!holder.isConnected) { ro.disconnect(); return; }
-    // Transform zurücksetzen, um die natürliche Größe zu messen.
     inner.style.transform = "";
     inner.style.transformOrigin = "center center";
     const availW = holder.clientWidth, availH = holder.clientHeight;
@@ -249,7 +264,6 @@ export function scaleToContainer(holder) {
   };
   const ro = new ResizeObserver(apply);
   ro.observe(holder);
-  // Initial nach dem Layout messen.
   requestAnimationFrame(apply);
 }
 

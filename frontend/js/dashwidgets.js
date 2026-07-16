@@ -39,7 +39,7 @@ const PIE_COLORS = [
 // Alle Darstellungen sind auf GENAU diese Box designt und füllen sie aus;
 // der Skalierer bringt sie dann verlustfrei auf die echte Widget-Größe.
 const NAT_W = 240;
-const NAT_H = 104;
+const NAT_H = 88;   // echte 1x1-Bodyhöhe (~150px-Zelle minus Kopf/Padding)
 
 // Rollierende Historie je Widget-Instanz (id -> {ts:[], v:[]}), max N Punkte.
 const _history = new Map();
@@ -108,7 +108,7 @@ function renderWidgetInner(target, widget, preset) {
   // proportional auf die tatsächliche Widget-Größe skaliert (runter UND rauf).
   const holder = document.createElement("div");
   holder.className = "widget-fit-holder";
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:stretch;justify-content:stretch;overflow:hidden;min-width:0;min-height:0";
   target.appendChild(holder);
   const out = holder;
 
@@ -182,7 +182,7 @@ function bindRowHover(rowEl, tipFn) {
 function moreNote(hidden) {
   if (!hidden.length) return null;
   const el = document.createElement("div");
-  el.style.cssText = "font-size:10px;color:var(--subtext);padding:2px 4px;cursor:default";
+  el.style.cssText = "font-size:11.5px;color:var(--subtext);padding:2px 4px;cursor:default";
   el.textContent = `+ ${hidden.length} weitere`;
   attachHoverTip(el, () => hidden.slice(0, 15).map((r) => `${esc(r.label)}: <b>${esc(r.raw != null ? r.raw : String(r.value ?? "—"))}</b>`).join("<br>")
     + (hidden.length > 15 ? `<br><span style="color:var(--subtext)">…</span>` : ""));
@@ -207,14 +207,14 @@ function renderSeries(target, widget, preset, mode) {
   const head = document.createElement("div");
   head.style.cssText = "display:flex;justify-content:space-between;align-items:baseline;gap:8px";
   head.innerHTML = spark
-    ? `<span style="font-size:24px;font-weight:800;line-height:1.1">${esc(formatValue(preset, cur))}</span>
-       <span style="font-size:11px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>`
-    : `<span style="font-size:12px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>
-       <span style="font-size:17px;font-weight:800">${esc(formatValue(preset, cur))}</span>`;
+    ? `<span style="font-size:28px;font-weight:800;line-height:1.1">${esc(formatValue(preset, cur))}</span>
+       <span style="font-size:13px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>`
+    : `<span style="font-size:13.5px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>
+       <span style="font-size:20px;font-weight:800">${esc(formatValue(preset, cur))}</span>`;
   wrap.appendChild(head);
   wrap.appendChild(timeSeriesChart(
     [{ label: widget.title || preset.label, color: "var(--accent)", values: h.v, timestamps: h.ts }],
-    { width: NAT_W, height: spark ? 66 : 80, mode, yMax: typeof preset.max === "number" ? Math.max(preset.max, ...h.v) : null,
+    { width: NAT_W, height: spark ? 54 : 62, mode, yMax: typeof preset.max === "number" ? Math.max(preset.max, ...h.v) : null,
       formatValue: (v) => formatValue(preset, v) },
   ));
   target.appendChild(wrap);
@@ -233,18 +233,18 @@ function renderNumber(target, widget, preset) {
   const v = preset.value ? preset.value(state) : 0;
   const txt = formatValue(preset, v);
   // Wertgröße adaptiv: kurze Werte RIESIG, lange Werte kleiner (passt immer).
-  const fs = txt.length > 12 ? 22 : txt.length > 8 ? 28 : 38;
+  const fs = txt.length > 12 ? 26 : txt.length > 8 ? 34 : 44;
   const box = document.createElement("div");
   box.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center`;
   box.innerHTML = `<div style="font-size:${fs}px;font-weight:800;line-height:1.05">${esc(txt)}</div>
-    <div style="font-size:12px;color:var(--subtext);margin-top:5px;max-width:${NAT_W - 10}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div>`;
+    <div style="font-size:14px;color:var(--subtext);margin-top:5px;max-width:${NAT_W - 10}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div>`;
   target.appendChild(box);
 }
 
 // Einzelwert-Donut: Donut SEITLICH (links), rechts großer Wert + Label -
 // so wird die komplette 1x1-Box (240x104) ausgenutzt.
 function donutSideLayout(pct, insideText, valueText, label, sub, color = "var(--accent)") {
-  const size = 96, stroke = 14, r = (size - stroke) / 2 - 1, cx = size / 2, cy = size / 2;
+  const size = 88, stroke = 13, r = (size - stroke) / 2 - 1, cx = size / 2, cy = size / 2;
   const C = 2 * Math.PI * r;
   const len = Math.max(0, Math.min(1, pct / 100)) * C;
   return `
@@ -257,13 +257,13 @@ function donutSideLayout(pct, insideText, valueText, label, sub, color = "var(--
             transform="rotate(-90 ${cx} ${cy})"/>
         </svg>
         <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-          <div style="font-size:17px;font-weight:700">${esc(insideText)}</div>
+          <div style="font-size:22px;font-weight:800">${esc(insideText)}</div>
         </div>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:${String(valueText).length > 9 ? 18 : 23}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valueText)}</div>
-        <div style="font-size:12px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(label)}</div>
-        ${sub ? `<div style="font-size:10.5px;color:var(--subtext);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</div>` : ""}
+        <div style="font-size:${String(valueText).length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valueText)}</div>
+        <div style="font-size:14.5px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(label)}</div>
+        ${sub ? `<div style="font-size:13px;color:var(--subtext);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</div>` : ""}
       </div>
     </div>`;
 }
@@ -282,7 +282,7 @@ function renderDonut(target, widget, preset) {
       .map((r, i) => ({ label: r.label, count: r.value, color: r.color || PIE_COLORS[i % PIE_COLORS.length], items: r.items }));
     const box = document.createElement("div");
     box.style.cssText = `width:${NAT_W}px`;
-    box.appendChild(buildFleetDonut(segs, { card: false, size: 100 }));
+    box.appendChild(buildFleetDonut(segs, { card: false, size: 88 }));
     target.appendChild(box);
     return;
   } else {
@@ -295,25 +295,31 @@ function renderDonut(target, widget, preset) {
   target.appendChild(wrap.firstElementChild);
 }
 
-// Halbkreis-Gauge: nutzt die volle 1x1-Box (240x104), Wert + Label IM Bogen.
+// Halbkreis-Gauge SEITLICH: Bogen links auf voller Höhe, rechts GROSSER
+// Wert + Label - kein Überlappen von Text und Bogen, volle Boxausnutzung.
 function renderGauge(target, widget, preset) {
   const v = preset.value(state);
   const max = preset.max || 100;
   const pct = Math.max(0, Math.min(100, ((v || 0) / max) * 100));
-  const w = NAT_W, h = NAT_H, cx = w / 2, cy = h - 4, r = 86, stroke = 17;
+  const gw = 148, gh = NAT_H, cx = gw / 2, cy = gh - 4, r = 66, stroke = 15;
   const ang = Math.PI * (pct / 100);
   const ex = cx - r * Math.cos(ang), ey = cy - r * Math.sin(ang);
   const color = pct > 85 ? "#ff4d6d" : pct > 65 ? "#f5a524" : "#3ecf8e";
   const wrap = document.createElement("div");
-  wrap.style.cssText = `position:relative;width:${w}px;height:${h}px`;
+  wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:10px`;
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="overflow:visible">
-      <path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}" fill="none" stroke="var(--border)" stroke-width="${stroke}" stroke-linecap="round"/>
-      ${v === null || v === undefined ? "" : `<path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${ex.toFixed(2)} ${ey.toFixed(2)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"/>`}
-    </svg>
-    <div style="position:absolute;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;pointer-events:none">
-      <div style="font-size:25px;font-weight:800;line-height:1.05">${esc(formatValue(preset, v))}</div>
-      <div style="font-size:11px;color:var(--subtext);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div>
+    <div style="position:relative;width:${gw}px;height:${gh}px;flex:none">
+      <svg viewBox="0 0 ${gw} ${gh}" width="${gw}" height="${gh}" style="overflow:visible">
+        <path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}" fill="none" stroke="var(--border)" stroke-width="${stroke}" stroke-linecap="round"/>
+        ${v === null || v === undefined ? "" : `<path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${ex.toFixed(2)} ${ey.toFixed(2)}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"/>`}
+      </svg>
+      <div style="position:absolute;left:0;right:0;bottom:2px;text-align:center;pointer-events:none">
+        <div style="font-size:21px;font-weight:800;line-height:1">${Math.round(pct)}%</div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:${String(formatValue(preset, v)).length > 7 ? 20 : 26}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, v))}</div>
+      <div style="font-size:13px;color:var(--subtext);margin-top:4px;line-height:1.3">${esc(preset.label)}</div>
     </div>`;
   target.appendChild(wrap);
 }
@@ -328,13 +334,13 @@ function renderProgress(target, widget, preset) {
   wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;justify-content:center`;
   wrap.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:8px">
-      <span style="font-size:13px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>
-      <span style="font-size:22px;font-weight:800">${esc(formatValue(preset, v))}</span>
+      <span style="font-size:14.5px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</span>
+      <span style="font-size:25px;font-weight:800">${esc(formatValue(preset, v))}</span>
     </div>
     <div style="height:18px;border-radius:9px;background:var(--panel-2);overflow:hidden">
       <div style="height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:9px;transition:width .3s"></div>
     </div>
-    <div style="font-size:11px;color:var(--subtext);margin-top:6px;text-align:right">${Math.round(pct)}% von ${esc(formatValue(preset, max))}</div>`;
+    <div style="font-size:12.5px;color:var(--subtext);margin-top:6px;text-align:right">${Math.round(pct)}% von ${esc(formatValue(preset, max))}</div>`;
   target.appendChild(wrap);
 }
 
@@ -343,7 +349,7 @@ function renderRing(target, widget, preset) {
   const v = preset.value ? preset.value(state) : 0;
   const max = typeof preset.max === "number" ? preset.max : 100;
   const pct = Math.max(0, Math.min(100, ((v || 0) / (max || 1)) * 100));
-  const size = 92, stroke = 10, r = (size - stroke) / 2 - 1, cx = size / 2, cy = size / 2;
+  const size = 86, stroke = 10, r = (size - stroke) / 2 - 1, cx = size / 2, cy = size / 2;
   const C = 2 * Math.PI * r, len = (pct / 100) * C;
   const wrap = document.createElement("div");
   wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:14px`;
@@ -355,11 +361,11 @@ function renderRing(target, widget, preset) {
           stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
       </svg>
       <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-        <div style="font-size:16px;font-weight:700">${Math.round(pct)}%</div>
+        <div style="font-size:19px;font-weight:800">${Math.round(pct)}%</div>
       </div>
     </div>
     <div style="flex:1;min-width:0">
-      <div style="font-size:${String(formatValue(preset, v)).length > 9 ? 18 : 23}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, v))}</div>
+      <div style="font-size:${String(formatValue(preset, v)).length > 9 ? 21 : 27}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, v))}</div>
       <div style="font-size:12px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(preset.label)}</div>
     </div>`;
   target.appendChild(wrap);
@@ -378,16 +384,16 @@ function renderStat(target, widget, preset) {
   wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:12px`;
   wrap.innerHTML = `
     <div style="flex:none;max-width:118px">
-      <div style="font-size:27px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, cur))}</div>
-      <div style="font-size:11px;color:var(--subtext);margin-top:2px">${esc(preset.label)}</div>
+      <div style="font-size:30px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, cur))}</div>
+      <div style="font-size:13px;color:var(--subtext);margin-top:2px">${esc(preset.label)}</div>
     </div>
     <div style="text-align:right;flex:1;min-width:0">
-      <div style="font-size:14px;font-weight:700;color:${trendColor};margin-bottom:2px">${flat ? "→" : (up ? "▲" : "▼")} ${esc(formatValue(preset, Math.abs(diff)))}</div>
+      <div style="font-size:15.5px;font-weight:700;color:${trendColor};margin-bottom:2px">${flat ? "→" : (up ? "▲" : "▼")} ${esc(formatValue(preset, Math.abs(diff)))}</div>
       <div class="stat-spark"></div>
     </div>`;
   wrap.querySelector(".stat-spark").appendChild(timeSeriesChart(
     [{ label: widget.title || preset.label, color: trendColor, values: data, timestamps: h.ts }],
-    { width: 112, height: 52, mode: "spark", formatValue: (v) => formatValue(preset, v) },
+    { width: 112, height: 44, mode: "spark", formatValue: (v) => formatValue(preset, v) },
   ));
   target.appendChild(wrap);
 }
@@ -400,8 +406,8 @@ function renderStat(target, widget, preset) {
 function renderPie(target, widget, preset) {
   const all = (preset.rows ? preset.rows(state) : []).filter((r) => (r.value || 0) > 0);
   const total = all.reduce((s, r) => s + r.value, 0);
-  const rows = all.slice(0, 5), hidden = all.slice(5);
-  const size = 104, r = size / 2 - 2, cx = size / 2, cy = size / 2;
+  const rows = all.slice(0, 4), hidden = all.slice(4);
+  const size = 88, r = size / 2 - 2, cx = size / 2, cy = size / 2;
   let a0 = -Math.PI / 2;
   let paths = "";
   rows.forEach((row, i) => {
@@ -427,7 +433,7 @@ function renderPie(target, widget, preset) {
   const legend = rows.map((row, i) => {
     const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
     const pct = total ? Math.round((row.value / total) * 100) : 0;
-    return `<div class="wpie-row" data-seg="${i}" style="display:flex;align-items:center;gap:6px;font-size:${rows.length <= 3 ? 13 : 11.5}px;padding:${rows.length <= 3 ? 3 : 1}px 3px;border-radius:6px;cursor:pointer">
+    return `<div class="wpie-row" data-seg="${i}" style="display:flex;align-items:center;gap:6px;font-size:${rows.length <= 3 ? 15 : 13.5}px;padding:${rows.length <= 3 ? 3 : 1}px 3px;border-radius:6px;cursor:pointer">
       <span style="width:9px;height:9px;border-radius:3px;background:${color};flex:none"></span>
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
       <span style="color:var(--subtext);font-variant-numeric:tabular-nums">${row.value} · ${pct}%</span>
@@ -473,7 +479,7 @@ function renderColumn(target, widget, preset) {
   const rows = all.slice(0, 6), hidden = all.slice(6);
   // Feste 1x1-Box: die Säulen teilen sich die VOLLE Breite auf.
   const W = NAT_W, H = NAT_H;
-  const padL = 28, padR = 4, padT = 14, padB = 21;
+  const padL = 30, padR = 4, padT = 13, padB = 20;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const niceMax = niceCeil(Math.max(1, ...rows.map((r) => r.value || 0)));
   const slot = rows.length ? plotW / rows.length : plotW;
@@ -481,25 +487,27 @@ function renderColumn(target, widget, preset) {
   const gridY = [0, 0.5, 1].map((f) => {
     const y = padT + plotH - f * plotH;
     return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" opacity="0.5"/>
-      <text x="${padL - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--subtext)">${fmtShort(niceMax * f, preset)}</text>`;
+      <text x="${padL - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--subtext)">${fmtShort(niceMax * f, preset)}</text>`;
   }).join("");
   const bars = rows.map((row, i) => {
     const x = padL + i * slot + (slot - bw) / 2;
     const hh = ((row.value || 0) / niceMax) * plotH;
     const y = padT + plotH - hh;
     const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
-    const maxChars = Math.max(4, Math.floor(bw / 5.2));
+    const maxChars = Math.max(4, Math.floor(bw / 6.2));
     const label = String(row.label).length > maxChars ? String(row.label).slice(0, maxChars - 1) + "…" : row.label;
     return `<g class="wcol" data-i="${i}" style="cursor:pointer">
       <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, hh).toFixed(1)}"
         rx="3" fill="${color}" style="transition:opacity .12s"/>
-      <text x="${(x + bw / 2).toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--text)">${esc(String(row.raw != null ? row.raw : Math.round(row.value || 0)))}</text>
-      <text x="${(x + bw / 2).toFixed(1)}" y="${(padT + plotH + 11).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--subtext)">${esc(label)}</text>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="middle" font-size="13" font-weight="700" fill="var(--text)">${esc(String(row.raw != null ? row.raw : Math.round(row.value || 0)))}</text>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${(padT + plotH + 12).toFixed(1)}" text-anchor="middle" font-size="12" fill="var(--subtext)">${esc(label)}</text>
     </g>`;
   }).join("");
   const wrap = document.createElement("div");
+  wrap.dataset.stretch = "fill";
+  wrap.style.cssText = "width:100%;height:100%;min-width:0;min-height:0";
   wrap.innerHTML = rows.length
-    ? `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+    ? `<svg viewBox="0 0 ${W} ${H}" width="100%" height="100%" preserveAspectRatio="none" style="display:block">
         ${gridY}
         <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="var(--subtext)" stroke-width="1.5"/>
         ${bars}
@@ -542,17 +550,30 @@ function fmtShort(v, preset) {
 // mit Rang, Label und exaktem Wert der Zeile.
 function renderList(target, widget, preset) {
   const all = (preset.rows ? preset.rows(state) : []);
-  const rows = all.slice(0, 8), hidden = all.slice(8);
+  const rows = all.slice(0, 10), hidden = all.slice(10);
   const wrap = document.createElement("div");
-  wrap.style.cssText = `width:${NAT_W}px`;
-  const lfs = rows.length <= 3 ? 14 : rows.length <= 5 ? 13 : 11.5;
+  wrap.dataset.stretch = "fill";
+  wrap.style.cssText = "width:100%;height:100%;display:flex;flex-direction:column;justify-content:center;gap:2px;box-sizing:border-box;padding:2px 8px;min-width:0;min-height:0;overflow:hidden";
   wrap.innerHTML = rows.map((row, i) => `
-    <div class="wlist-row" data-i="${i}" style="display:flex;gap:8px;align-items:center;font-size:${lfs}px;padding:${rows.length <= 5 ? 3 : 2}px 4px;border-radius:6px">
-      <span style="color:var(--subtext);width:16px;text-align:right;font-variant-numeric:tabular-nums">${i + 1}.</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
-      <span style="font-weight:600;font-variant-numeric:tabular-nums">${esc(row.raw != null ? row.raw : String(row.value))}</span>
-    </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+    <div class="wlist-row" data-i="${i}" style="display:grid;grid-template-columns:2.1em minmax(0,1fr) max-content;gap:8px;align-items:center;border-radius:6px;min-width:0">
+      <span style="color:var(--subtext);text-align:right;font-variant-numeric:tabular-nums">${i + 1}.</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
+      <span style="font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(row.raw != null ? row.raw : String(row.value))}</span>
+    </div>`).join("") || `<span style="color:var(--subtext);font-size:14px">Keine Daten</span>`;
   target.appendChild(wrap);
+  const applySize = () => {
+    if (!wrap.isConnected) { ro.disconnect(); return; }
+    const n = Math.max(1, rows.length || 1);
+    const h = Math.max(32, wrap.clientHeight || NAT_H);
+    const w = Math.max(120, wrap.clientWidth || NAT_W);
+    const gap = Math.max(1, Math.min(7, Math.floor(h / (n * 10))));
+    const fs = Math.max(10, Math.min(20, Math.floor((h - gap * (n - 1) - 4) / n * 0.62), Math.floor(w / 32)));
+    wrap.style.gap = gap + "px";
+    wrap.querySelectorAll(".wlist-row").forEach((el) => { el.style.fontSize = fs + "px"; });
+  };
+  const ro = new ResizeObserver(applySize);
+  ro.observe(wrap);
+  requestAnimationFrame(applySize);
   if (hidden.length) wrap.appendChild(moreNote(hidden));
   wrap.querySelectorAll(".wlist-row").forEach((el) => {
     const row = rows[+el.dataset.i];
@@ -565,7 +586,7 @@ function renderFleetDonut(target, widget, preset) {
   const segments = preset.segments ? preset.segments(state) : [];
   const box = document.createElement("div");
   box.style.cssText = `width:${NAT_W}px`;
-  box.appendChild(buildFleetDonut(segments, { card: false, size: 100 }));
+  box.appendChild(buildFleetDonut(segments, { card: false, size: 88 }));
   target.appendChild(box);
 }
 
@@ -645,23 +666,40 @@ function renderBar(target, widget, preset) {
   const rows = all.slice(0, 8), hidden = all.slice(8);
   const max = Math.max(1, ...rows.map((r) => r.value || 0));
   const wrap = document.createElement("div");
+  wrap.dataset.stretch = "fill";
   wrap.className = "widget-bars";
-  wrap.style.cssText = `width:${NAT_W}px`;
-  // Adaptive Größen: wenige Zeilen => größere Schrift/dickere Balken,
-  // damit die 1x1-Box gut gefüllt und alles leserlich ist.
-  const fs = rows.length <= 3 ? 13.5 : rows.length <= 5 ? 12.5 : 11.5;
-  const th = rows.length <= 3 ? 14 : rows.length <= 5 ? 11 : 9;
+  wrap.style.cssText = "width:100%;height:100%;display:flex;flex-direction:column;justify-content:center;box-sizing:border-box;padding:2px 6px;min-width:0;min-height:0;overflow:hidden";
   wrap.innerHTML = rows.map((row, i) => {
     const pct = ((row.value || 0) / max) * 100;
     const color = row.color || PIE_COLORS[i % PIE_COLORS.length];
-    return `<div class="wbar-row" data-i="${i}" style="padding:2px 3px;font-size:${fs}px">
-      
-      <span class="wbar-label">${esc(row.label)}</span>
-      <span class="wbar-track" style="height:${th}px"><span class="wbar-fill" style="width:${pct.toFixed(1)}%;background:${color}"></span></span>
-      <span class="wbar-val">${esc(row.raw != null ? row.raw : String(row.value))}</span>
+    return `<div class="wbar-row" data-i="${i}" style="width:100%;display:grid;grid-template-columns:72px minmax(70px, 1fr) max-content;align-items:center;gap:8px;box-sizing:border-box;min-width:0;min-height:0">
+      <span class="wbar-label" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--subtext)">${esc(row.label)}</span>
+      <span class="wbar-track" style="display:block;min-width:0;height:10px;border-radius:999px;background:var(--panel-2);overflow:hidden"><span class="wbar-fill" style="display:block;height:100%;width:${pct.toFixed(1)}%;background:${color};border-radius:999px"></span></span>
+      <span class="wbar-val" style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(row.raw != null ? row.raw : String(row.value))}</span>
     </div>`;
-  }).join("") || `<span style="color:var(--subtext);font-size:12px">Keine Daten</span>`;
+  }).join("") || `<span style="color:var(--subtext);font-size:14px">Keine Daten</span>`;
   target.appendChild(wrap);
+  const applySize = () => {
+    if (!wrap.isConnected) { ro.disconnect(); return; }
+    const n = Math.max(1, rows.length || 1);
+    const h = Math.max(32, wrap.clientHeight || NAT_H);
+    const w = Math.max(120, wrap.clientWidth || NAT_W);
+    const gap = Math.max(1, Math.min(7, Math.floor(h / (n * 8))));
+    const fs = Math.max(10, Math.min(18, Math.floor((h - gap * (n - 1) - 4) / n * 0.55), Math.floor(w / 34)));
+    const th = Math.max(7, Math.min(14, Math.floor((h - gap * (n - 1) - 4) / n * 0.34)));
+    const labelW = Math.max(58, Math.min(170, Math.floor(w * 0.24)));
+    const valueW = Math.max(34, Math.min(90, Math.floor(w * 0.14)));
+    wrap.style.gap = gap + "px";
+    wrap.querySelectorAll(".wbar-row").forEach((el) => {
+      el.style.gridTemplateColumns = `${labelW}px minmax(70px, 1fr) ${valueW}px`;
+      el.style.fontSize = fs + "px";
+      const tr = el.querySelector(".wbar-track");
+      if (tr) tr.style.height = th + "px";
+    });
+  };
+  const ro = new ResizeObserver(applySize);
+  ro.observe(wrap);
+  requestAnimationFrame(applySize);
   if (hidden.length) wrap.appendChild(moreNote(hidden));
   wrap.querySelectorAll(".wbar-row").forEach((rowEl) => {
     const row = rows[+rowEl.dataset.i];
@@ -674,16 +712,29 @@ function renderBar(target, widget, preset) {
 // Tooltip mit Client + exaktem Wert.
 function renderTable(target, widget, preset) {
   const all = preset.rows ? preset.rows(state) : [];
-  const rows = all.slice(0, 8), hidden = all.slice(8);
+  const rows = all.slice(0, 7), hidden = all.slice(7);
   const box = document.createElement("div");
-  box.style.cssText = `width:${NAT_W}px`;
+  box.dataset.stretch = "fill";
+  box.style.cssText = "width:100%;height:100%;display:flex;flex-direction:column;justify-content:center;box-sizing:border-box;padding:2px 8px;min-width:0;min-height:0;overflow:hidden";
   const tbl = document.createElement("table");
   tbl.className = "widget-table";
+  tbl.style.cssText = "width:100%;border-collapse:collapse;table-layout:fixed;line-height:1.12";
   tbl.innerHTML = `
-    <thead><tr><th>Client</th><th style="text-align:right">${esc(preset.label.replace(/ je Client$/, ""))}</th></tr></thead>
-    <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td>${esc(r.label)}</td><td style="text-align:right">${esc(r.raw != null ? r.raw : String(r.value))}</td></tr>`).join("") || `<tr><td colspan="2" style="color:var(--subtext)">Keine Daten</td></tr>`}</tbody>`;
+    <thead><tr><th style="font-size:.66em;letter-spacing:.04em;text-align:left;padding:.15em .45em;color:var(--subtext);text-transform:uppercase">Client</th><th style="font-size:.66em;letter-spacing:.04em;text-align:right;padding:.15em .45em;color:var(--subtext);text-transform:uppercase">${esc(preset.label.replace(/ je Client$/, ""))}</th></tr></thead>
+    <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td style="padding:.18em .45em;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.label)}</td><td style="padding:.18em .45em;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.raw != null ? r.raw : String(r.value))}</td></tr>`).join("") || `<tr><td colspan="2" style="color:var(--subtext);padding:.35em .45em">Keine Daten</td></tr>`}</tbody>`;
   box.appendChild(tbl);
   target.appendChild(box);
+  const applySize = () => {
+    if (!box.isConnected) { ro.disconnect(); return; }
+    const n = Math.max(1, rows.length + 1);
+    const h = Math.max(32, box.clientHeight || NAT_H);
+    const w = Math.max(120, box.clientWidth || NAT_W);
+    const fs = Math.max(10, Math.min(20, Math.floor(h / n * 0.7), Math.floor(w / 32)));
+    tbl.style.fontSize = fs + "px";
+  };
+  const ro = new ResizeObserver(applySize);
+  ro.observe(box);
+  requestAnimationFrame(applySize);
   if (hidden.length) box.appendChild(moreNote(hidden));
   tbl.querySelectorAll("tbody tr[data-i]").forEach((tr) => {
     const row = rows[+tr.dataset.i];

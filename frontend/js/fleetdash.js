@@ -320,6 +320,7 @@ function buildWidget(wdg, ctx) {
   // Körper
   const body = document.createElement("div");
   body.className = "dash-w-body";
+  body.style.minWidth = "0"; body.style.minHeight = "0";
   card.appendChild(body);
   renderWidgetBody(body, wdg);
 
