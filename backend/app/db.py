@@ -305,6 +305,9 @@ def init_db() -> None:
     # clients-Tabelle noch aus einer älteren Version stammt.
     _migrate_add_column("clients", "device_type", "TEXT DEFAULT 'physical'")  # 'physical' | 'vm' | 'lxc'
     _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
+    # Automatisches Agent-Update pro Client: 'global' = folgt der Einstellung
+    # in den Settings, 'on' = immer, 'off' = nie.
+    _migrate_add_column("clients", "auto_update", "TEXT NOT NULL DEFAULT 'global'")
     _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optionaler Wunschname beim Onboarding
     _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # persönliche Farbpalette
     _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = lokaler User, sonst Realm-ID (AD)
@@ -339,6 +342,97 @@ def init_db() -> None:
         )
         _conn.commit()
         print("[db] Standard-Login angelegt: Benutzername 'admin', Passwort 'admin' (Änderung beim ersten Login erforderlich)")
+
+    # Standard-Skripte (Agent-Update, App-Updates) einmalig einspielen.
+    _seed_default_scripts()
+
+
+def _seed_default_scripts() -> None:
+    """
+    Legt die mitgelieferten Standard-Skripte EINMALIG an (Settings-Flag
+    'default_scripts_seeded'). Dadurch bleiben sie löschbar/bearbeitbar,
+    ohne bei jedem Backend-Start wieder aufzutauchen.
+
+    Enthalten:
+      - Agent Update (Linux)   -> offizielles /agent-dist/update.sh, losgelöst
+      - Agent Update (Windows) -> SYSTEM-Wartungstask (Event 812), Fallback update.ps1
+      - Windows-Apps aktualisieren (winget upgrade --all)
+      - Linux-Pakete aktualisieren (apt/dnf/yum/pacman/zypper)
+    """
+    row = _conn.execute(
+        "SELECT value FROM settings WHERE key = 'default_scripts_seeded'"
+    ).fetchone()
+    if row is not None:
+        return
+
+    defaults = [
+        (
+            "Agent Update (Linux)",
+            "linux",
+            "# Startet das offizielle Agent-Update. WICHTIG: losgelöst vom\n"
+            "# Agent-Prozess (systemd-run), denn das Update stoppt den\n"
+            "# Agent-Dienst - sonst würde das Update sich selbst mit abschießen.\n"
+            "BACKEND_URL=$(sed -n 's/^BACKEND_URL=//p' /opt/rapalle-rmm-agent/.env | tr -d '\\r')\n"
+            "if [ -z \"$BACKEND_URL\" ]; then echo 'BACKEND_URL nicht gefunden (/opt/rapalle-rmm-agent/.env)'; exit 1; fi\n"
+            "if command -v systemd-run >/dev/null 2>&1; then\n"
+            "  systemd-run --collect --quiet bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/rapalle-agent-update.log 2>&1\"\n"
+            "else\n"
+            "  nohup bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/rapalle-agent-update.log 2>&1\" >/dev/null 2>&1 &\n"
+            "fi\n"
+            "echo \"Agent-Update gestartet (Log: /tmp/rapalle-agent-update.log)\"",
+        ),
+        (
+            "Agent Update (Windows)",
+            "windows",
+            "REM Loest das offizielle Agent-Update aus. Bevorzugt ueber den vor-\n"
+            "REM installierten SYSTEM-Wartungstask (Event 812, elevated). Fallback:\n"
+            "REM update.ps1 losgeloest starten (Log: %TEMP%\\rapalle-agent-update.log).\n"
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ok=$false; try { Write-EventLog -LogName Application -Source 'RapalleRMM' -EventId 812 -EntryType Information -Message 'rmm update'; $ok=$true; Write-Host 'Agent-Update per SYSTEM-Task (Event 812) ausgeloest.' } catch {}; if (-not $ok) { $b=(Select-String -Path 'C:\\Program Files\\RapalleRmmAgent\\.env' -Pattern '^BACKEND_URL=(.+)$').Matches[0].Groups[1].Value.Trim(); $cmd='iwr ' + $b + '/agent-dist/update.ps1 -UseBasicParsing | iex > $env:TEMP\\rapalle-agent-update.log 2>&1'; Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd); Write-Host 'Agent-Update gestartet (update.ps1).' }\"",
+        ),
+        (
+            "Windows-Apps aktualisieren (winget)",
+            "windows",
+            "REM Aktualisiert ALLE per winget verwalteten Programme unbeaufsichtigt.\n"
+            "winget upgrade --all --silent --disable-interactivity --accept-source-agreements --accept-package-agreements --include-unknown",
+        ),
+        (
+            "Linux-Pakete aktualisieren",
+            "linux",
+            "# Aktualisiert alle Systempakete - erkennt den Paketmanager automatisch.\n"
+            "export DEBIAN_FRONTEND=noninteractive\n"
+            "if command -v apt-get >/dev/null 2>&1; then\n"
+            "  apt-get update && apt-get upgrade -y\n"
+            "elif command -v dnf >/dev/null 2>&1; then\n"
+            "  dnf upgrade -y\n"
+            "elif command -v yum >/dev/null 2>&1; then\n"
+            "  yum update -y\n"
+            "elif command -v pacman >/dev/null 2>&1; then\n"
+            "  pacman -Syu --noconfirm\n"
+            "elif command -v zypper >/dev/null 2>&1; then\n"
+            "  zypper --non-interactive update\n"
+            "else\n"
+            "  echo 'Kein bekannter Paketmanager gefunden'; exit 1\n"
+            "fi",
+        ),
+    ]
+
+    existing_names = {r["name"] for r in _conn.execute("SELECT name FROM scripts").fetchall()}
+    created = 0
+    for name, os_target, command in defaults:
+        if name in existing_names:
+            continue
+        _conn.execute(
+            "INSERT INTO scripts (id, name, command, os, created_at) VALUES (?, ?, ?, ?, ?)",
+            (_new_id(), name, command, os_target, _now_ms()),
+        )
+        created += 1
+    _conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('default_scripts_seeded', '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    )
+    _conn.commit()
+    if created:
+        print(f"[db] {created} Standard-Skript(e) angelegt (Agent-Update, App-Updates)")
 
 
 # ------------------------------------------------------------------
@@ -747,7 +841,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
     """
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
-        "color", "notes", "status_override", "active", "device_type",
+        "color", "notes", "status_override", "active", "device_type", "auto_update",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -1300,6 +1394,10 @@ DEFAULT_SETTINGS = {
     # Extern gehostetes Apache guacd (für Remote-Desktop im Browser).
     "guacd_host": "127.0.0.1",
     "guacd_port": "4822",
+    # Automatisches Agent-Update: "1" = veraltete Agenten aktualisieren sich
+    # beim Verbinden selbst (Clients mit auto_update='global' folgen dieser
+    # Einstellung; 'on'/'off' pro Client hat Vorrang). Default aus.
+    "agent_auto_update": "0",
 }
 
 

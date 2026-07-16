@@ -34,8 +34,7 @@ export function setHostScope(scope) { _hostScope = scope; }
 export function clearHostScope() { _hostScope = null; }
 
 function hosts(state) {
-  // Nur "echte" Geräte (keine Sub-/Kind-Clients).
-  let list = (state.clients || []).filter((c) => !c.parent_client_id);
+  let list = state.clients || [];
   // Zählweise bestimmen: eine explizit gesetzte Pro-Widget-Zählweise hat
   // Vorrang; sonst greift die globale Profil-Einstellung "VMs & LXCs als
   // vollwertig mitzählen" (getFleetIncludeVirtual).
@@ -44,10 +43,15 @@ function hosts(state) {
   let scope = _hostScope;
   if (scope == null) scope = getFleetIncludeVirtual() ? "all" : "physical";
   if (scope === "physical") {
-    // WICHTIG: Nur echte VMs/LXCs ausschließen. Alles ohne gesetzten Typ gilt
-    // als physisch (Default), damit Geräte nie versehentlich ganz verschwinden.
-    list = list.filter((c) => (c.device_type || "physical") === "physical");
+    // WICHTIG: Nur echte VMs/LXCs bzw. Kind-Clients ausschließen. Alles ohne
+    // gesetzten Typ gilt als physisch (Default), damit Geräte nie
+    // versehentlich ganz verschwinden.
+    list = list.filter((c) => !c.parent_client_id && (c.device_type || "physical") === "physical");
   }
+  // BUGFIX: Früher wurden Kind-Clients (parent_client_id gesetzt, z.B. eine
+  // VM, die einem physischen Host untergeordnet ist) IMMER herausgefiltert -
+  // dadurch fehlten sie im Dashboard auch bei Zählweise "alle Geräte".
+  // Bei scope "all" zählen jetzt wirklich ALLE Geräte mit.
   return list;
 }
 function onlineHosts(state) { return hosts(state).filter((c) => c.online && c.metrics); }

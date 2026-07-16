@@ -560,9 +560,13 @@ function openAddPicker(host, toolbarHost, client, atCell) {
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
   back.querySelector("[data-close]").addEventListener("click", close);
   back.querySelectorAll(".wp-item").forEach((b) => b.addEventListener("click", async () => {
+    // Picker SOFORT schließen: Beim Ordner öffnet sich danach ein Eingabe-
+    // Dialog - der lag früher HINTER dem "Panel hinzufügen"-Fenster
+    // (Picker z-index 8000 > Dialog 6000) und man konnte nichts eingeben.
+    close();
     if (b.dataset.metric) addMetricPanel(b.dataset.metric, atCell);
     else await addPanelType(b.dataset.type, atCell);   // wartet ggf. auf den Ordnername-Dialog
-    close(); renderClientLayout(host, toolbarHost, client);
+    renderClientLayout(host, toolbarHost, client);
   }));
 }
 
@@ -666,6 +670,11 @@ function attachGridDrag(card, head, panel, client, ctx) {
       document.body.classList.add("dash-dragging");
       card.classList.add("dragging");
       card.style.position = "fixed"; card.style.margin = "0";
+      // WICHTIG: left/top explizit auf 0 setzen! Ohne das bleibt eine
+      // fixed-Karte an ihrer "statischen" Position (= alte Rasterzelle)
+      // stehen und translate() addiert obendrauf -> je weiter unten/rechts
+      // das Panel lag, desto größer der Versatz beim Ziehen.
+      card.style.left = "0"; card.style.top = "0";
       card.style.width = `${rect0.width}px`; card.style.height = `${rect0.height}px`;
       card.style.zIndex = "9999"; card.style.pointerEvents = "none"; card.style.willChange = "transform";
       preview = document.createElement("div"); preview.className = "grid-drop-preview"; host.appendChild(preview);

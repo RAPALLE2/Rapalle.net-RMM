@@ -557,6 +557,8 @@ class SettingsBody(BaseModel):
     guac_record_scale: float | None = None
     guacd_host: str | None = None
     guacd_port: int | None = None
+    # Automatisches Agent-Update ("1" = an, "0" = aus; pro Client übersteuerbar)
+    agent_auto_update: str | None = None
 
 
 @router.get("/settings")

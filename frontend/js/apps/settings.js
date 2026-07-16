@@ -196,6 +196,19 @@ export function renderSettings(body, win) {
           <input type="number" min="1" step="1" id="ge-replay" value="${esc(String(s.replay_retention_days ?? 10))}" />
         </div>
 
+        <h3 style="margin-top:24px">Agent Auto-Update</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Aktualisiert veraltete Agenten automatisch, sobald sie sich mit dem
+          Backend verbinden (gleicher Mechanismus wie der „Agent aktualisieren"-Button).
+          Pro Client übersteuerbar unter „Client bearbeiten" → Automatisches Agent-Update.
+        </p>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="ge-autoupdate" ${(s.agent_auto_update ?? "0") === "1" ? "checked" : ""} />
+            Automatisches Agent-Update aktiviert (global)
+          </label>
+        </div>
+
         <h3 style="margin-top:24px">Aufnahme (Replays)</h3>
         <p style="color:var(--subtext);font-size:13px">
           Steuert, wie Remote-Sessions als Replay aufgezeichnet werden — für den
@@ -269,6 +282,7 @@ export function renderSettings(body, win) {
         metrics_retention_hours: parseInt(root.querySelector("#ge-retention").value, 10) || 1,
         replay_retention_days: parseInt(root.querySelector("#ge-replay").value, 10) || 10,
         recording_enabled: root.querySelector("#ge-rec-enabled").checked ? "1" : "0",
+        agent_auto_update: root.querySelector("#ge-autoupdate").checked ? "1" : "0",
         screen_record_quality: parseInt(root.querySelector("#ge-screen-q").value, 10) || 40,
         screen_record_fps: parseInt(root.querySelector("#ge-screen-fps").value, 10) || 5,
         guac_record_quality: parseInt(root.querySelector("#ge-guac-q").value, 10) || 50,

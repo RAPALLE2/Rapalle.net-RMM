@@ -224,6 +224,86 @@ async def request_fs_op(client_id: str, event: str, data: dict,
 # Handler für den /agent Namespace (Verbindungen von den Agent-Programmen)
 # ====================================================================
 
+# ------------------------------------------------------------------
+# Automatisches Agent-Update
+# ------------------------------------------------------------------
+# Veraltete Agenten werden beim Verbinden automatisch aktualisiert, wenn das
+# Feature greift. Effektiver Modus pro Client:
+#   auto_update = 'on'     -> immer aktualisieren
+#   auto_update = 'off'    -> nie automatisch aktualisieren
+#   auto_update = 'global' -> Settings-Schalter 'agent_auto_update' entscheidet
+# Ein Cooldown pro Client verhindert Update-Schleifen, falls ein Update
+# fehlschlägt und der Agent sich immer wieder mit alter Version meldet.
+
+_AUTO_UPDATE_COOLDOWN_S = 1800   # 30 min zwischen zwei Auto-Update-Versuchen
+_auto_update_last: dict[str, float] = {}
+
+# Pfad zur ausgelieferten Agent-Version (…/backend/app/sockets.py -> …/agent/version.txt)
+from pathlib import Path as _Path
+_AGENT_VERSION_FILE = _Path(__file__).resolve().parents[2] / "agent" / "version.txt"
+
+
+def _latest_agent_version() -> str:
+    """Aktuell ausgelieferte Agent-Version (Single Source: agent/version.txt)."""
+    try:
+        return _AGENT_VERSION_FILE.read_text(encoding="utf-8").strip() or ""
+    except OSError:
+        return ""
+
+
+def _version_tuple(v: str):
+    """'1.2.10' -> (1, 2, 10). Nicht-numerische Teile werden als 0 gewertet."""
+    parts = []
+    for p in str(v).strip().split("."):
+        try:
+            parts.append(int("".join(ch for ch in p if ch.isdigit()) or 0))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts) if parts else (0,)
+
+
+def _agent_outdated(agent_v: str, latest_v: str) -> bool:
+    if not agent_v or not latest_v:
+        return False
+    try:
+        return _version_tuple(agent_v) < _version_tuple(latest_v)
+    except Exception:
+        return agent_v.strip() != latest_v.strip()
+
+
+async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
+    """Stößt bei veralteter Version das Selbst-Update an, falls Auto-Update greift."""
+    latest = _latest_agent_version()
+    if not _agent_outdated(agent_version or "", latest):
+        _auto_update_last.pop(client_id, None)   # aktuell -> Cooldown zurücksetzen
+        return
+
+    client = db.get_client(client_id)
+    if not client or not client.get("active", 1):
+        return
+    mode = (client.get("auto_update") or "global").lower()
+    if mode == "off":
+        return
+    if mode != "on" and db.get_setting("agent_auto_update", "0") != "1":
+        return
+
+    now = time.monotonic()
+    last = _auto_update_last.get(client_id)
+    if last is not None and now - last < _AUTO_UPDATE_COOLDOWN_S:
+        return   # kürzlich schon versucht -> keine Update-Schleife bauen
+    _auto_update_last[client_id] = now
+
+    ok = await send_to_agent(client_id, "update-agent", {})
+    if ok:
+        db.add_audit_entry(None, "agent.auto_update_triggered", target=client_id,
+                           details=f"{client.get('hostname')}: {agent_version} -> {latest}")
+        print(f"[auto-update] {client.get('hostname')} ({client_id}): "
+              f"Agent {agent_version} -> {latest} wird aktualisiert")
+        # Dashboard informieren (gleiches Event wie beim manuellen Update-Start).
+        await sio.emit("client:update-started", {"id": client_id, "auto": True},
+                       namespace="/dashboard")
+
+
 @sio.event(namespace="/agent")
 async def connect(sid, environ, auth):
     """
@@ -262,6 +342,10 @@ async def on_register(sid, payload):
 
     # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
     db.set_agent_version(client_id, payload.get("agent_version"))
+    # Automatisches Agent-Update: Ist der Agent veraltet und Auto-Update für
+    # diesen Client aktiv (pro Client 'on' oder 'global' + Settings-Schalter),
+    # wird das Update direkt beim Verbinden angestoßen.
+    await _maybe_auto_update(client_id, payload.get("agent_version"))
 
     # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
     db.upsert_client(

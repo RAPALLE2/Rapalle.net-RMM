@@ -17,7 +17,9 @@ import { renderFleetWidgets, refreshFleetWidgets } from "../fleetdash.js";
 //  fleetcharts.js und wird über die Widgets [kind "fleetdonut"] gerendert.)
 
 export function renderDashboard(target) {
-  const clients = (state.clients || []).filter((c) => !c.parent_client_id);
+  // ALLE verwalteten Clients zählen - auch VMs/LXCs, die einem Host
+  // untergeordnet sind (parent_client_id). Vorher fehlten diese in der Zahl.
+  const clients = state.clients || [];
 
   target.innerHTML = `
     <div class="dash-wrap">

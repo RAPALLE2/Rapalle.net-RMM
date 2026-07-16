@@ -605,6 +605,21 @@ export function snapWindowTo(key, zone, { assist = true, animate = true } = {}) 
   if (!win || !win._el) return;
   const rect = snapRect(zone);
   if (!rect) return;
+  // Sonderfall "max" (Fenster oben mittig hochgezogen): Das ist ein ECHTES
+  // Maximieren, kein Snap. Früher wurde hier win.snap="max" gesetzt und
+  // win.maximized blieb false - ein Klick auf den Maximize-Button hat das
+  // Fenster dann erneut "maximiert" (keine sichtbare Änderung) statt es
+  // wiederherzustellen. Jetzt läuft der Fall über toggleMaximize, damit
+  // der Button das Fenster korrekt auf die alte Größe zurückbringt.
+  if (zone === "max") {
+    win.snap = null;
+    win.minimized = false;
+    win._el.style.display = "flex";
+    if (!win.maximized) toggleMaximize(key);
+    else { focusWindow(key); notifyChanged(); }
+    updateSnapDividers();
+    return;
+  }
   // Vor dem ERSTEN Snap die normale Geometrie merken (fürs Herausziehen).
   if (!win.snap && !win.maximized) {
     win._snapRestore = { x: win.x, y: win.y, w: win.w, h: win.h };

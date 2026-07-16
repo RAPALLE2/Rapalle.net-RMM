@@ -285,7 +285,7 @@ function _uiDialog({ title, description = "", input = null, okText = "OK",
                      cancelText = "Abbrechen", danger = false }) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
-    overlay.style.cssText = `position:fixed;inset:0;z-index:6000;background:rgba(0,0,0,0.5);
+    overlay.style.cssText = `position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.5);
       display:flex;align-items:center;justify-content:center;`;
     const okColor = danger ? "var(--danger, #ff4d6d)" : "var(--accent, #4da6ff)";
     overlay.innerHTML = `

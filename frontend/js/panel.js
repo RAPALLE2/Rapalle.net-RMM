@@ -16,7 +16,7 @@ import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricsh
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
 import { renderDashboard } from "./apps/dashboard.js";
-import { favStarHtml } from "./sidebar.js";
+import { favStarHtml, favState, cycleFav } from "./sidebar.js";
 import { renderClientLayout } from "./dashlayout.js";
 import { hideFleetTip, showFleetTip, attachHoverTip, scaleToContainer } from "./fleetcharts.js";
 
@@ -185,12 +185,36 @@ export function renderActionsPart(target, client) {
 
 // --- WEBSITES-Part (Quick-Access) ---
 export function renderWebsitesPart(target, client) {
+  // Bei Favoriten-Änderung (Stern-Klick, auch anderswo) neu rendern, damit
+  // Favoriten sofort nach oben rutschen. Listener nur EINMAL pro Ziel binden.
+  if (!target._wsFavListener) {
+    target._wsFavListener = (e) => {
+      if (!document.body.contains(target)) {
+        window.removeEventListener("favorites-changed", target._wsFavListener);
+        return;
+      }
+      if (e.detail?.kind === "websites") renderWebsitesPart(target, client);
+    };
+    window.addEventListener("favorites-changed", target._wsFavListener);
+  }
   target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
   api.getClientWebsites(client.id).then((sites) => {
     target.innerHTML = "";
     if (!sites || !sites.length) {
       target.innerHTML = `<div style="color:var(--subtext);font-size:12px;margin-bottom:6px">Keine Websites verknüpft.</div>`;
     } else {
+      // Favoriten-Hierarchie im Widget: goldene Sterne (Seitenleiste+Dashboard)
+      // ganz oben, dann Akzent 1 (Seitenleiste), dann Akzent 2 (Dashboard),
+      // ganz unten Websites ohne Stern. Innerhalb der Gruppen bleibt die
+      // Reihenfolge stabil.
+      const favRank = (w) => {
+        const f = favState("websites", w.id);
+        if (f.s && f.d) return 0;   // ★ gold  = beide
+        if (f.s) return 1;          // ★ Akzent 1 = Seitenleiste
+        if (f.d) return 2;          // ★ Akzent 2 = Dashboard
+        return 3;                   // ☆ kein Favorit
+      };
+      sites = [...sites].sort((a, b) => favRank(a) - favRank(b));
       target.innerHTML = sites.map((w) => {
         const dotColor = !w.monitor_enabled ? "var(--subtext)"
           : w.last_status === "up" ? "var(--online, #3ecf8e)"
@@ -208,6 +232,25 @@ export function renderWebsitesPart(target, client) {
               style="padding:1px 6px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
           </div>`;
       }).join("");
+      // BUGFIX: Der Favoriten-Stern im Website-WIDGET reagierte nicht auf
+      // Klicks (weder öffnen noch favorisieren). Deshalb wird der Stern hier
+      // zusätzlich DIREKT verkabelt. Kein Doppel-Toggle möglich: Greift der
+      // globale, delegierte Capture-Handler (sidebar.js), stoppt der die
+      // Propagation und dieser Listener feuert gar nicht erst.
+      target.querySelectorAll(".fav-star[data-fav]").forEach((star) => {
+        star.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+        star.addEventListener("click", (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const [kind, id] = star.dataset.fav.split(":");
+          let meta;
+          if (star.dataset.favMeta) { try { meta = JSON.parse(star.dataset.favMeta); } catch {} }
+          // Stern-Pop-Animation abspielen, dann umschalten.
+          // cycleFav feuert "favorites-changed" -> das Widget rendert sich
+          // (inkl. neuer Sortierung) über den Listener oben selbst neu.
+          star.classList.add("fav-pop");
+          setTimeout(() => cycleFav(kind, id, meta), 120);
+        });
+      });
       // Hover PRO Website: Tooltip mit Name, vollständiger URL und dem
       // Monitoring-Status GENAU DIESER Website (statt nur des Panel-Namens).
       target.querySelectorAll("[data-ws]").forEach((rowEl) => {
@@ -241,7 +284,8 @@ export function renderWebsitesPart(target, client) {
         placeholder: "z.B. Web-Interface" });
       if (name === null || !name.trim()) return;
       const url = await uiPrompt("Website hinzufügen", {
-        description: "Vollständige URL (inkl. https://):",
+        description: "Vollständige URL (inkl. http(s)://):",
+        value: client.ip ? `http://${client.ip}:80/` : "",
         placeholder: "https://192.168.1.10:8006" });
       if (url === null || !url.trim()) return;
       const monitor = await uiConfirm("Uptime-Monitoring aktivieren?", {

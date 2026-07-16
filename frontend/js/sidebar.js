@@ -482,10 +482,10 @@ export function initSidebarNav() {
       if (!star) return;
       e.stopPropagation();
       e.preventDefault();
-      star.classList.add("fav-pop");
       const [kind, id] = star.dataset.fav.split(":");
       let meta;
       if (star.dataset.favMeta) { try { meta = JSON.parse(star.dataset.favMeta); } catch {} }
+      star.classList.add("fav-pop");
       setTimeout(() => cycleFav(kind, id, meta), 120);
     }, true);
   }

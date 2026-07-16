@@ -190,6 +190,9 @@ class UpdateClientBody(BaseModel):
     # wurde eine im Edit-Dialog gewählte VM/LXC-Einstufung NIE gespeichert und
     # der Dialog zeigte nach jedem Neuladen wieder "Physisches Gerät".
     device_type: str | None = None       # physical | vm | lxc
+    # Automatisches Agent-Update pro Client: 'global' (folgt den Settings),
+    # 'on' (immer) oder 'off' (nie).
+    auto_update: str | None = None
 
 
 def _with_live_state(c: dict) -> dict:
@@ -228,6 +231,10 @@ async def update_client(client_id: str, body: UpdateClientBody, user: dict = Dep
         fields["active"] = int(fields["active"])  # SQLite kennt kein echtes Bool
     if "device_type" in fields and fields["device_type"] not in ("physical", "vm", "lxc", None):
         raise HTTPException(400, "Ungültiger Gerätetyp (physical|vm|lxc)")
+    if "auto_update" in fields and fields["auto_update"] not in ("global", "on", "off", None):
+        raise HTTPException(400, "Ungültiger Auto-Update-Modus (global|on|off)")
+    if fields.get("auto_update") is None and "auto_update" in fields:
+        fields["auto_update"] = "global"
 
     updated = db.update_client(client_id, fields)
     db.add_audit_entry(user["username"], "client.updated", target=client_id, details=str(fields))

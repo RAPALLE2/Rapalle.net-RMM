@@ -110,6 +110,22 @@ export function renderEditClient(body, win) {
         </select>
       </div>
 
+      <div class="form-row">
+        <label>Automatisches Agent-Update</label>
+        <select id="ec-autoupdate">
+          <option value="global" ${(client.auto_update || "global") === "global" ? "selected" : ""}>Globale Einstellung verwenden</option>
+          <option value="on" ${client.auto_update === "on" ? "selected" : ""}>An — veralteter Agent aktualisiert sich selbst</option>
+          <option value="off" ${client.auto_update === "off" ? "selected" : ""}>Aus — nie automatisch aktualisieren</option>
+        </select>
+      </div>
+
+      <div id="ec-error" class="form-error hidden"></div>
+
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn-primary" id="ec-save" style="margin:0">Speichern</button>
+        <button class="action-btn" id="ec-delete" style="border-color:var(--danger);color:var(--danger)">Löschen</button>
+      </div>
+
       <h3 style="margin-top:22px">🔗 Verknüpfte Websites (Quick Access)</h3>
       <p style="color:var(--subtext);font-size:12px;margin:4px 0 10px">
         Binde Websites an diesen Client (z.B. Web-Interfaces, Portale). Favoriten (★)
@@ -125,7 +141,7 @@ export function renderEditClient(body, win) {
         </div>
         <div class="form-row">
           <label>URL</label>
-          <input type="text" id="ec-ws-url" placeholder="https://..." />
+          <input type="text" id="ec-ws-url" value="${esc(client.ip ? `http://${client.ip}:80/` : "")}" placeholder="https://..." />
         </div>
         <div class="form-row">
           <label style="color:var(--subtext);font-size:12px">Favoriten setzt du nach dem Anlegen über den Stern in der Liste (☆ → Seitenleiste → Dashboard → beide).</label>
@@ -162,12 +178,6 @@ export function renderEditClient(body, win) {
         <button class="btn-primary" id="ec-ws-add" style="margin-top:4px">+ Website hinzufügen</button>
       </div>
 
-      <div id="ec-error" class="form-error hidden"></div>
-
-      <div style="display:flex;gap:8px;margin-top:16px">
-        <button class="btn-primary" id="ec-save" style="margin:0">Speichern</button>
-        <button class="action-btn" id="ec-delete" style="border-color:var(--danger);color:var(--danger)">Löschen</button>
-      </div>
     </div>
   `;
 
@@ -268,7 +278,8 @@ export function renderEditClient(body, win) {
         monitor_interval_seconds: parseInt(body.querySelector("#ec-ws-interval").value, 10),
       });
       body.querySelector("#ec-ws-name").value = "";
-      body.querySelector("#ec-ws-url").value = "";
+      // Wieder die Standard-URL (Client-IP) vorbelegen statt leer.
+      body.querySelector("#ec-ws-url").value = client.ip ? `http://${client.ip}:80/` : "";
       window.notify?.("Website verknüpft", "success");
       loadWebsites();
     } catch (e) {
@@ -355,6 +366,7 @@ export function renderEditClient(body, win) {
         status_override: body.querySelector("#ec-status").value || null,
         active: body.querySelector("#ec-active").checked,
         device_type: devTypeSel.value,
+        auto_update: body.querySelector("#ec-autoupdate").value,
         // Host nur setzen, wenn VM/LXC — sonst kein Parent
         parent_client_id: (devTypeSel.value === "vm" || devTypeSel.value === "lxc")
           ? (body.querySelector("#ec-host").value || null)

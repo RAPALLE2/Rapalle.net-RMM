@@ -54,7 +54,7 @@ export function pushWidgetHistory(widget) {
   const now = Date.now();
   // Doppelte Punkte < 2 s überspringen (mehrere Renders pro Tick).
   if (h.ts.length && now - h.ts[h.ts.length - 1] < 2000) return;
-  setHostScope(widget.scope || null);
+  setHostScope(widget.scope || "all");
   try { h.ts.push(now); h.v.push(p.value(state) || 0); } finally { clearHostScope(); }
   if (h.ts.length > MAX_POINTS) { h.ts.shift(); h.v.shift(); }
   _history.set(widget.id, h);
@@ -95,7 +95,11 @@ export function renderWidgetBody(target, widget) {
   if (!preset) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Unbekannte Metrik.</div>`; return; }
 
   // Pro-Widget-Zählweise: "physical" = nur physische Geräte, "all" = alle.
-  setHostScope(widget.scope || null);
+  // WICHTIG: Default ist "all" - exakt das, was das Dropdown anzeigt. Früher
+  // wurde bei fehlendem scope null übergeben und damit die alte GLOBALE
+  // Profileinstellung benutzt; stand die auf "nur physische", zählten
+  // untergeordnete VMs (parent_client_id) trotz Anzeige "alle Geräte" nicht mit.
+  setHostScope(widget.scope || "all");
   try {
     renderWidgetInner(target, widget, preset);
   } finally {
@@ -148,7 +152,7 @@ function renderWidgetInner(target, widget, preset) {
     || (widget.kind === "donut" && (preset.donut || !preset.rows));
   target._tipFn = valueTip ? () => {
     const p = presetById(widget.preset) || preset;
-    setHostScope(widget.scope || null);
+    setHostScope(widget.scope || "all");
     let v, max;
     try {
       v = p.value ? p.value(state) : null;

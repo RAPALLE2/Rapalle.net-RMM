@@ -777,6 +777,13 @@ button, .btn-primary, .action-btn, .taskbar-btn {
 button:active, .btn-primary:active, .action-btn:active, .taskbar-btn:active {
   transform: scale(0.96);
 }
+/* Website-Zeilen im Websites-Widget (tragen data-ws): Die ganze Zeile darf
+   beim Drücken NICHT schrumpfen - sonst rutschen Favoriten-Stern und
+   Löschen-Button unter dem Cursor weg und sind kaum zu treffen. Stattdessen
+   schrumpft nur der Link-Bereich (der Teil, der die Website öffnet). */
+.action-btn[data-ws]:active { transform: none; }
+.action-btn[data-ws] > a { transition: transform 0.08s ease; }
+.action-btn[data-ws] > a:active { transform: scale(0.96); }
 
 /* ---- Taskbar-Fensterknöpfe: Hereingleiten ---- */
 .taskbar-window-btn { animation: row-in 0.16s ease; }
