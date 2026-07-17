@@ -2053,6 +2053,8 @@ def _detect_graphical_display():
         os.environ["DISPLAY"] = display
         if auth and os.path.isfile(auth):
             os.environ["XAUTHORITY"] = auth
+        else:
+            _find_xauthority_fallback()
         return True, f"Display {display} erkannt"
 
     # 2) Ersatz: aktive X-Sockets in /tmp/.X11-unix suchen
@@ -2065,13 +2067,70 @@ def _detect_graphical_display():
                     nums.append(int(entry[1:]))
         if nums:
             os.environ["DISPLAY"] = f":{sorted(nums)[0]}"
+            _find_xauthority_fallback()
             return True, f"Display :{sorted(nums)[0]} erkannt"
+    except Exception:
+        pass
+
+    # 3) Wayland-Sitzung? Dann klar sagen, WARUM keine Aufnahme möglich ist
+    #    (mss kann Wayland nicht erfassen - X11-Sitzung nötig).
+    try:
+        run_dir = "/run/user"
+        if os.path.isdir(run_dir):
+            for uid in os.listdir(run_dir):
+                udir = os.path.join(run_dir, uid)
+                if any(e.startswith("wayland-") for e in os.listdir(udir)):
+                    return False, ("Wayland-Sitzung erkannt - Bildschirmaufnahme benötigt X11. "
+                                   "Bei Ubuntu: am Anmeldebildschirm (Zahnrad) 'Ubuntu auf Xorg' wählen. "
+                                   "Es wird stattdessen eine Shell geöffnet.")
     except Exception:
         pass
 
     # Kein grafischer Bildschirm -> Shell-only.
     return False, ("Kein grafischer Bildschirm gefunden (headless VM/Server). "
                    "Es wird stattdessen eine Shell geöffnet.")
+
+
+def _find_xauthority_fallback():
+    """
+    Setzt XAUTHORITY, wenn der X-Server keinen '-auth'-Parameter verraten hat.
+    Ohne das richtige Cookie verweigert der X-Server (z.B. Ubuntu Desktop mit
+    GDM) dem als root laufenden Agenten sonst Bildaufnahme UND Tkinter-Dialog.
+    Kandidaten: GDM-Xauthority unter /run/user/<uid>/, ~/.Xauthority der
+    angemeldeten Benutzer, Mutter-XWayland-Auth.
+    """
+    if os.environ.get("XAUTHORITY") and os.path.isfile(os.environ["XAUTHORITY"]):
+        return
+    candidates = []
+    try:
+        run_dir = "/run/user"
+        if os.path.isdir(run_dir):
+            for uid in os.listdir(run_dir):
+                udir = os.path.join(run_dir, uid)
+                candidates.append(os.path.join(udir, "gdm", "Xauthority"))
+                try:
+                    for e in os.listdir(udir):
+                        if e.startswith(".mutter-Xwaylandauth"):
+                            candidates.append(os.path.join(udir, e))
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    try:
+        import pwd
+        for u in pwd.getpwall():
+            if u.pw_uid >= 1000 and os.path.isdir(u.pw_dir):
+                candidates.append(os.path.join(u.pw_dir, ".Xauthority"))
+    except Exception:
+        pass
+    for c in candidates:
+        try:
+            if os.path.isfile(c):
+                os.environ["XAUTHORITY"] = c
+                _print(f"[agent] XAUTHORITY gesetzt: {c}")
+                return
+        except OSError:
+            continue
 
 # Maus-/Tastatur-Controller erst hier erstellen. Auch das kann fehlschlagen
 # (z.B. keine grafische Sitzung) - dann deaktivieren wir die Fernsteuerung,
@@ -2225,6 +2284,150 @@ def _notify_screen_mode(loop, mode, reason=""):
         pass
 
 
+def _someone_logged_in() -> bool:
+    """
+    Prüft, ob am Gerät gerade jemand angemeldet ist. Nur dann wird um
+    Zustimmung gebeten - an unbeaufsichtigten Geräten (niemand angemeldet)
+    verbindet der Remote-Bildschirm direkt. Bei unklarer Lage wird zur
+    Sicherheit "angemeldet" angenommen (dann wird gefragt).
+    """
+    try:
+        if IS_WINDOWS:
+            r = _run(["quser"])           # Exit-Code 1 + leere Liste, wenn niemand angemeldet
+            out = (r.stdout or "").strip()
+            return r.returncode == 0 and len(out.splitlines()) > 1
+        # Linux: 'who' erfasst klassische Logins; 'loginctl' zusätzlich
+        # xrdp-/Wayland-/Seat-Sitzungen, die 'who' teils nicht listet.
+        r = _run(["who"])
+        if (r.stdout or "").strip():
+            return True
+        r = _run(["loginctl", "list-sessions", "--no-legend"])
+        return r.returncode == 0 and bool((r.stdout or "").strip())
+    except Exception:
+        return True
+
+
+def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
+    """
+    Schön gestaltetes Tkinter-Zustimmungsfenster (dunkles Design, Countdown,
+    Zulassen/Ablehnen). Läuft blockierend im Executor-Thread. Wirft bei
+    Problemen (kein Tkinter/kein Display) - der Aufrufer fällt dann auf die
+    nativen Dialoge (MessageBox/zenity/...) zurück.
+    """
+    import tkinter as tk
+
+    BG = "#0f1520"; PANEL = "#161e2c"; TEXT = "#e6ecf5"; SUB = "#8ea0b8"
+    ACCENT = "#4f8cff"; DANGER = "#3a4356"
+
+    result = {"allow": False}
+    # Windows-Taskleiste: Ohne eigene AppUserModelID gruppiert Windows das
+    # Fenster unter pythonw.exe und zeigt in der TASKLEISTE das Python-Icon,
+    # egal was iconphoto setzt. Mit eigener ID zieht die Taskleiste das
+    # Fenster-Icon (unser Logo).
+    if IS_WINDOWS:
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("RapalleRMM.Agent.Consent")
+        except Exception:
+            pass
+    root = tk.Tk()
+    root.withdraw()
+    root.title("RAPALLE.net RMM")
+    # Logo: logo.png (PNG!) liegt seit Install/Update neben agent.py.
+    # iconphoto kann PNG auf Windows UND Linux - iconbitmap dagegen nur echte
+    # .ico-Dateien (das alte favicon.ico war ein PNG -> blankes Icon).
+    # Mehrere Größen mitgeben, damit Titelleiste (klein) UND Taskleiste
+    # (mittel) jeweils eine scharfe Variante bekommen.
+    _logo_img = None
+    try:
+        _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+        if os.path.isfile(_logo_path):
+            _logo_img = tk.PhotoImage(file=_logo_path)
+            _sizes = []
+            for target in (64, 32, 16):
+                f = max(1, _logo_img.width() // target)
+                _sizes.append(_logo_img.subsample(f, f))
+            root._icon_refs = [_logo_img, *_sizes]   # GC-Schutz
+            root.iconphoto(True, *_sizes, _logo_img)
+    except Exception:
+        _logo_img = None
+    root.configure(bg=BG)
+    root.resizable(False, False)
+    root.attributes("-topmost", True)
+    try:
+        root.overrideredirect(False)
+    except Exception:
+        pass
+
+    frame = tk.Frame(root, bg=BG, padx=28, pady=22)
+    frame.pack()
+    if _logo_img is not None:
+        try:
+            # 1024er-Logo auf ~64 px fürs Fenster herunterrechnen.
+            _factor = max(1, _logo_img.width() // 64)
+            _logo_small = _logo_img.subsample(_factor, _factor)
+            root._logo_refs = (_logo_img, _logo_small)   # GC-Schutz
+            tk.Label(frame, image=_logo_small, bg=BG).pack()
+        except Exception:
+            tk.Label(frame, text="🖥️", font=("Segoe UI Emoji", 30), bg=BG, fg=TEXT).pack()
+    else:
+        tk.Label(frame, text="🖥️", font=("Segoe UI Emoji", 30), bg=BG, fg=TEXT).pack()
+    tk.Label(frame, text="Remote-Bildschirm angefragt", font=("Segoe UI", 14, "bold"),
+             bg=BG, fg=TEXT, pady=6).pack()
+    tk.Label(frame,
+             text=f"{who} möchte den Bildschirm dieses Computers\nsehen und steuern.",
+             font=("Segoe UI", 10), bg=BG, fg=SUB, justify="center").pack()
+    countdown = tk.Label(frame, text="", font=("Segoe UI", 9), bg=BG, fg=SUB, pady=8)
+    countdown.pack()
+
+    btns = tk.Frame(frame, bg=BG)
+    btns.pack(pady=(4, 0))
+
+    def _finish(allow):
+        result["allow"] = allow
+        try:
+            root.destroy()
+        except Exception:
+            pass
+
+    def _mkbtn(parent, text, bg, fg, cmd):
+        b = tk.Label(parent, text=text, font=("Segoe UI", 10, "bold"),
+                     bg=bg, fg=fg, padx=22, pady=8, cursor="hand2")
+        b.bind("<Button-1>", lambda e: cmd())
+        return b
+
+    deny_btn = _mkbtn(btns, "Ablehnen", DANGER, TEXT, lambda: _finish(False))
+    allow_btn = _mkbtn(btns, "✓ Zulassen", ACCENT, "#ffffff", lambda: _finish(True))
+    deny_btn.pack(side="left", padx=6)
+    allow_btn.pack(side="left", padx=6)
+
+    remaining = {"s": timeout_s}
+    def _tick():
+        remaining["s"] -= 1
+        if remaining["s"] <= 0:
+            _finish(False)   # keine Antwort -> ablehnen
+            return
+        countdown.config(text=f"Ohne Antwort wird in {remaining['s']} s automatisch abgelehnt.")
+        root.after(1000, _tick)
+    countdown.config(text=f"Ohne Antwort wird in {timeout_s} s automatisch abgelehnt.")
+    root.after(1000, _tick)
+
+    # Zentrieren + in den Vordergrund
+    root.update_idletasks()
+    w, h = root.winfo_reqwidth(), root.winfo_reqheight()
+    x = (root.winfo_screenwidth() - w) // 2
+    y = (root.winfo_screenheight() - h) // 3
+    root.geometry(f"+{x}+{y}")
+    root.deiconify()
+    try:
+        root.lift(); root.focus_force()
+    except Exception:
+        pass
+    root.protocol("WM_DELETE_WINDOW", lambda: _finish(False))   # X = ablehnen
+    root.mainloop()
+    return result["allow"]
+
+
 def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
     """
     Zeigt am Gerät eine Abfrage "Remote-Bildschirm zulassen?" und gibt True
@@ -2237,6 +2440,12 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
     title = "RAPALLE.net RMM - Remote-Bildschirm"
     text = (f"{who} möchte den Bildschirm dieses Computers sehen und steuern.\n\n"
             f"Zulassen? (Ohne Antwort wird nach {timeout_s} Sekunden automatisch abgelehnt.)")
+    # 1) Bevorzugt: das schön gestaltete Tkinter-Fenster (Windows + Linux).
+    try:
+        return _tk_consent_dialog(who, timeout_s)
+    except Exception as e:
+        _print(f"[agent] Tkinter-Dialog nicht möglich ({e}) - nutze nativen Dialog")
+    # 2) Fallbacks: native Dialoge des jeweiligen Systems.
     try:
         if IS_WINDOWS:
             import ctypes
@@ -2309,7 +2518,16 @@ async def on_screen_start(data):
     # require_consent entsprechend - und als doppelte Absicherung fragen VMs
     # und LXCs auch bei gesetztem Flag nie).
     require_consent = bool(isinstance(data, dict) and data.get("require_consent"))
-    if DETECTED_DEVICE_TYPE in ("vm", "lxc"):
+    _print(f"[agent] screen-start empfangen (require_consent={require_consent}, "
+           f"device_type={DETECTED_DEVICE_TYPE or 'physical'})")
+    # Nur LXC-Container fragen nie (dort meldet sich niemand grafisch an).
+    # VMs fragen sehr wohl - z.B. wenn jemand per RDP in der VM arbeitet.
+    if DETECTED_DEVICE_TYPE == "lxc":
+        require_consent = False
+    # Niemand angemeldet? Dann gibt es niemanden, der zustimmen könnte ->
+    # direkt verbinden (typisch: unbeaufsichtigter physischer Rechner).
+    if require_consent and not await loop.run_in_executor(None, _someone_logged_in):
+        _print("[agent] Remote-Bildschirm: niemand angemeldet - verbinde ohne Abfrage")
         require_consent = False
     if require_consent:
         requested_by = (data or {}).get("requested_by") or ""

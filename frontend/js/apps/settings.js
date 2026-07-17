@@ -882,22 +882,94 @@ export function renderSettings(body, win) {
     await draw();
   }
 
-  // ---------------- NOTIFICATIONS (Verweis auf die App) ----------------
+  // ---------------- NOTIFICATIONS (Webhook-Verwaltung) ----------------
   function renderNotifTab(root) {
     root.innerHTML = `
       <div class="settings-section">
+        <h3>Benachrichtigungen (Webhooks)</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Webhooks (Discord/Custom) werden in der eigenen App „Benachrichtigungen"
-          verwaltet. Öffne sie über das Startmenü.
+          Sende Benachrichtigungen an einen Chat-Kanal oder ein eigenes System.
+          Für Discord: im Channel unter „Integrationen → Webhooks" eine Webhook-URL
+          erstellen und hier einfügen.
         </p>
-        <button class="btn-primary" id="open-notif" style="width:auto">Benachrichtigungen öffnen</button>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:1">
+            <label>Typ</label>
+            <select id="nt-type">
+              <option value="discord">Discord</option>
+              <option value="custom">Benutzerdefiniert (Custom)</option>
+            </select>
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>Name</label>
+            <input type="text" id="nt-name" placeholder="z.B. Alerts-Channel" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Webhook-URL</label>
+          <input type="text" id="nt-url" placeholder="https://discord.com/api/webhooks/..." />
+        </div>
+        <div id="nt-error" class="form-error hidden"></div>
+        <button class="btn-primary" id="nt-add" style="margin-top:4px;width:auto">+ Webhook speichern</button>
+
+        <h3 style="margin-top:24px">Konfigurierte Webhooks</h3>
+        <div id="nt-list"></div>
       </div>
     `;
-    root.querySelector("#open-notif").addEventListener("click", () => {
-      import("../windowmanager.js").then((m) =>
-        m.openWindow({ key: "notifications", appId: "notifications", title: t("notifications"), w: 600, h: 560 })
-      );
+
+    async function ntLoadList() {
+      const listEl = root.querySelector("#nt-list");
+      try {
+        const hooks = await api.getWebhooks();
+        if (!hooks.length) {
+          listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Noch keine Webhooks konfiguriert.</div>`;
+          return;
+        }
+        listEl.innerHTML = hooks.map((w) => `
+          <div class="panel" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <div style="min-width:0">
+              <strong>${esc(w.name)}</strong>
+              <span style="font-size:11px;color:var(--subtext);margin-left:6px">${esc(w.type)}</span>
+              <div style="font-size:11px;color:var(--subtext);font-family:monospace;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.url.slice(0, 48))}…</div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              <button class="taskbar-btn" data-nt-test="${w.id}">Testen</button>
+              <button class="taskbar-btn" data-nt-del="${w.id}">Löschen</button>
+            </div>
+          </div>`).join("");
+        listEl.querySelectorAll("[data-nt-test]").forEach((btn) =>
+          btn.addEventListener("click", async () => {
+            btn.textContent = "...";
+            try {
+              await api.testWebhook(btn.dataset.ntTest);
+              window.notify?.("Test-Benachrichtigung gesendet", "success");
+            } catch (e) { window.notify?.("Test fehlgeschlagen: " + e.message, "error"); }
+            btn.textContent = "Testen";
+          }));
+        listEl.querySelectorAll("[data-nt-del]").forEach((btn) =>
+          btn.addEventListener("click", async () => {
+            if (!(await uiConfirm("Webhook löschen?", { okText: "Löschen", danger: true }))) return;
+            await api.deleteWebhook(btn.dataset.ntDel); ntLoadList();
+          }));
+      } catch (e) {
+        listEl.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`;
+      }
+    }
+
+    root.querySelector("#nt-add").addEventListener("click", async () => {
+      const name = root.querySelector("#nt-name").value.trim();
+      const url = root.querySelector("#nt-url").value.trim();
+      const type = root.querySelector("#nt-type").value;
+      const err = root.querySelector("#nt-error"); err.classList.add("hidden");
+      if (!name || !url) { err.textContent = "Name und URL erforderlich"; err.classList.remove("hidden"); return; }
+      try {
+        await api.createWebhook({ name, url, type });
+        root.querySelector("#nt-name").value = ""; root.querySelector("#nt-url").value = "";
+        window.notify?.("Webhook gespeichert", "success");
+        ntLoadList();
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
+    ntLoadList();
   }
 
   draw();

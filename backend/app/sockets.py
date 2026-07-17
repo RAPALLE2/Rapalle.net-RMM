@@ -690,11 +690,15 @@ async def dashboard_screen_start(sid, data):
     quality = _db.get_int_setting("screen_record_quality") or 40
     fps = _db.get_int_setting("screen_record_fps") or 5
 
-    # Zustimmung am Gerät: PHYSISCHE Geräte bekommen eine Abfrage angezeigt und
-    # der Bildschirm startet erst nach Bestätigung. VMs und LXCs sind bewusst
-    # ausgenommen (dort sitzt niemand davor) und verbinden direkt.
+    # Zustimmung am Gerät: Physische Geräte UND VMs bekommen eine Abfrage
+    # angezeigt (z.B. wenn jemand per RDP in der VM arbeitet) - der Bildschirm
+    # startet erst nach Bestätigung. Ist niemand angemeldet, verbindet der
+    # Agent direkt. Nur LXC-Container sind ausgenommen (keine grafische
+    # Anmeldung möglich).
     client = _db.get_client(client_id)
-    needs_consent = bool(client) and (client.get("device_type") or "physical") == "physical"
+    needs_consent = bool(client) and (client.get("device_type") or "physical") != "lxc"
+    print(f"[screen] Start für {client.get('hostname') if client else client_id}: "
+          f"device_type={client.get('device_type') if client else '?'} -> require_consent={needs_consent}")
 
     await send_to_agent(client_id, "screen-start", {
         "quality": quality, "fps": fps,

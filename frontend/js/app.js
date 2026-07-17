@@ -21,7 +21,7 @@ import { renderTaskbar, initTaskbar } from "./taskbar.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
-import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults } from "./persist.js";
+import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults, setOrgProfilePresets } from "./persist.js";
 
 // notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
 // die schönen Slide-Down-Meldungen nutzen können.
@@ -41,7 +41,6 @@ import { renderScripts } from "./apps/scripts.js";
 import { renderBulk } from "./apps/bulk.js";
 import { renderTowerDefense } from "./apps/towerdefense.js";
 import { renderAutomation } from "./apps/automation.js";
-import { renderNotifications } from "./apps/notifications.js";
 import { renderRelayManager } from "./apps/relaymanager.js";
 import { renderNetwork } from "./apps/network.js";
 import { renderPortscan } from "./apps/portscan.js";
@@ -72,7 +71,6 @@ const APP_RENDERERS = {
   bulk: renderBulk,
   towerdefense: renderTowerDefense,
   automation: renderAutomation,
-  notifications: renderNotifications,
   "relay-manager": renderRelayManager,
   network: renderNetwork,
   portscan: renderPortscan,
@@ -224,6 +222,12 @@ async function startSession(user) {
   try {
     const defs = await api.getDefaultLayouts();
     setOrgDefaults({ dash: defs.dash || null, fleet: defs.fleet || null });
+    // Org-weite Profil-Presets (Physisch/VMs/LXCs) für die Client-Ansicht.
+    setOrgProfilePresets({
+      "Physisch": defs.dash_profile_physical || null,
+      "VMs": defs.dash_profile_vm || null,
+      "LXCs": defs.dash_profile_lxc || null,
+    });
   } catch { /* kein org-Standard erreichbar -> eingebauter Standard */ }
 
   await refreshAll();
@@ -258,7 +262,7 @@ function restoreWindows(saved) {
         singleton: true,   // Restore: exakt diesen Key wiederherstellen
         key: w.key, appId: w.appId, title: w.title, props: w.props || {},
         clientColor: w.clientColor, w: w.w, h: w.h, x: w.x, y: w.y,
-        minimized: w.minimized, maximized: w.maximized,
+        minimized: w.minimized, maximized: w.maximized, pinned: !!w.pinned,
         focus: false,   // Fokus am Ende gesetzt (Reihenfolge)
       });
     } catch (e) {
@@ -424,7 +428,6 @@ function initMenusAndButtons() {
       else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
       else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
       else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
-      else if (app === "notifications") openWindow({ key: "notifications", appId: "notifications", title: "Benachrichtigungen", w: 600, h: 560 });
       else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
       else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
     })

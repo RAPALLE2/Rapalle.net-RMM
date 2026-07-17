@@ -547,6 +547,30 @@ def _multistatus(responses: list[str]) -> Response:
 
 
 # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# WICHTIG für "net use \\host@port\dav" (Windows-Mini-Redirector):
+# Windows prüft VOR dem Verbinden mit "OPTIONS /" die SERVER-WURZEL,
+# nicht /dav. Antwortet dort nur das statische Frontend (ohne DAV-Header),
+# bricht Windows mit "Systemfehler 67: Netzwerkname nicht gefunden" ab.
+# Deshalb beantworten wir OPTIONS und PROPFIND auf "/" hier als WebDAV-
+# Server (GET "/" liefert weiterhin ganz normal das Dashboard aus).
+# ------------------------------------------------------------------
+@router.api_route("/", methods=["OPTIONS", "PROPFIND"], include_in_schema=False)
+async def dav_root_probe(request: Request):
+    if request.method.upper() == "OPTIONS":
+        return Response(status_code=200, headers={
+            "DAV": "1, 2",
+            "Allow": "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE",
+            "MS-Author-Via": "DAV",
+        })
+    # PROPFIND auf "/": minimale Antwort - Wurzel als Ordner, darin "dav".
+    # Verrät nichts Sensibles und macht den Redirector glücklich.
+    responses = [_propfind_response("/", "RMM", True, 0, 0)]
+    if request.headers.get("depth", "1") != "0":
+        responses.append(_propfind_response("/dav/", "dav", True, 0, 0))
+    return _multistatus(responses)
+
+
 # Der eigentliche WebDAV-Endpunkt: fängt ALLE Methoden unter /dav ab.
 # ------------------------------------------------------------------
 @router.api_route("/dav",

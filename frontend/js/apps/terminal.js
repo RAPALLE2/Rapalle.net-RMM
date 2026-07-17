@@ -300,14 +300,35 @@ export function renderTerminal(body, win) {
   scriptBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     const show = scriptMenu.classList.contains("hidden");
-    scriptMenu.classList.toggle("hidden", !show);
-    if (show) { renderScriptMenu(); scriptSearch.value = ""; renderScriptMenu(); scriptSearch.focus(); }
+    if (!show) { scriptMenu.classList.add("hidden"); return; }
+    // WICHTIG: Das Menü in den <body> hängen und FIXED positionieren - sonst
+    // wird es vom Fenster (overflow) abgeschnitten und "verschwindet" am Rand.
+    if (scriptMenu.parentElement !== document.body) document.body.appendChild(scriptMenu);
+    scriptMenu.style.position = "fixed";
+    scriptMenu.style.zIndex = "9200";
+    const r = scriptBtn.getBoundingClientRect();
+    const W = 280;
+    let left = Math.min(r.left, window.innerWidth - W - 8);   // rechts nicht raus
+    left = Math.max(8, left);                                  // links nicht raus
+    scriptMenu.style.left = `${left}px`;
+    scriptMenu.style.right = "auto";
+    // Unter dem Button, aber nie über den unteren Rand hinaus.
+    const maxH = Math.max(140, Math.min(320, window.innerHeight - r.bottom - 16));
+    scriptMenu.style.top = `${r.bottom + 4}px`;
+    scriptMenu.style.maxHeight = `${maxH}px`;
+    scriptMenu.classList.remove("hidden");
+    renderScriptMenu(); scriptSearch.value = ""; renderScriptMenu(); scriptSearch.focus();
   });
   scriptSearch?.addEventListener("input", renderScriptMenu);
   scriptSearch?.addEventListener("keydown", (e) => e.stopPropagation());
   scriptMenu?.addEventListener("click", (e) => e.stopPropagation());
   document.addEventListener("click", function closeMenu(e) {
-    if (!document.body.contains(scriptMenu)) { document.removeEventListener("click", closeMenu); return; }
+    // Terminal-Fenster geschlossen -> Menü (liegt jetzt im <body>) mit aufräumen.
+    if (!document.body.contains(scriptBtn)) {
+      document.removeEventListener("click", closeMenu);
+      scriptMenu?.remove();
+      return;
+    }
     if (!scriptMenu.classList.contains("hidden") && !scriptMenu.contains(e.target) && e.target !== scriptBtn) {
       scriptMenu.classList.add("hidden");
     }

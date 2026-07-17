@@ -360,16 +360,22 @@ def _seed_default_scripts() -> None:
       - Windows-Apps aktualisieren (winget upgrade --all)
       - Linux-Pakete aktualisieren (apt/dnf/yum/pacman/zypper)
     """
+    # Versionierter Seed: "2" = aktueller Stand (mit Ordnern + Ping-Skript).
+    # Bestehende Installationen mit Wert "1" bekommen die Ordner nachgetragen
+    # und fehlende Skripte ergänzt; gelöschte Skripte bleiben gelöscht.
     row = _conn.execute(
         "SELECT value FROM settings WHERE key = 'default_scripts_seeded'"
     ).fetchone()
-    if row is not None:
+    seed_version = row["value"] if row else None
+    if seed_version == "2":
         return
 
+    # (name, os, folder, command)
     defaults = [
         (
             "Agent Update (Linux)",
             "linux",
+            "Linux",
             "# Startet das offizielle Agent-Update. WICHTIG: losgelöst vom\n"
             "# Agent-Prozess (systemd-run), denn das Update stoppt den\n"
             "# Agent-Dienst - sonst würde das Update sich selbst mit abschießen.\n"
@@ -385,6 +391,7 @@ def _seed_default_scripts() -> None:
         (
             "Agent Update (Windows)",
             "windows",
+            "Windows",
             "REM Loest das offizielle Agent-Update aus. Bevorzugt ueber den vor-\n"
             "REM installierten SYSTEM-Wartungstask (Event 812, elevated). Fallback:\n"
             "REM update.ps1 losgeloest starten (Log: %TEMP%\\rapalle-agent-update.log).\n"
@@ -393,12 +400,14 @@ def _seed_default_scripts() -> None:
         (
             "Windows-Apps aktualisieren (winget)",
             "windows",
+            "Windows",
             "REM Aktualisiert ALLE per winget verwalteten Programme unbeaufsichtigt.\n"
             "winget upgrade --all --silent --disable-interactivity --accept-source-agreements --accept-package-agreements --include-unknown",
         ),
         (
             "Linux-Pakete aktualisieren",
             "linux",
+            "Linux",
             "# Aktualisiert alle Systempakete - erkennt den Paketmanager automatisch.\n"
             "export DEBIAN_FRONTEND=noninteractive\n"
             "if command -v apt-get >/dev/null 2>&1; then\n"
@@ -417,23 +426,40 @@ def _seed_default_scripts() -> None:
         ),
     ]
 
-    existing_names = {r["name"] for r in _conn.execute("SELECT name FROM scripts").fetchall()}
-    created = 0
-    for name, os_target, command in defaults:
-        if name in existing_names:
+    defaults.append((
+        "Ping-Test (1.1.1.1)",
+        "any",
+        "Test",
+        # Läuft auf BEIDEN Plattformen: Linux nimmt -c 4; unter Windows schlägt
+        # -c fehl und der zweite Aufruf mit -n 4 greift.
+        "ping -c 4 1.1.1.1 || ping -n 4 1.1.1.1",
+    ))
+
+    existing = {r["name"]: r for r in _conn.execute("SELECT * FROM scripts").fetchall()}
+    created = updated = 0
+    for name, os_target, folder, command in defaults:
+        if name in existing:
+            # Upgrade von Seed-Version 1: Ordner nachtragen, falls der Nutzer
+            # das Skript noch nicht selbst einsortiert hat.
+            if seed_version == "1" and not (existing[name]["folder"] or "").strip():
+                _conn.execute("UPDATE scripts SET folder = ? WHERE id = ?",
+                              (folder, existing[name]["id"]))
+                updated += 1
             continue
+        if seed_version == "1" and name != "Ping-Test (1.1.1.1)":
+            continue   # bei Upgrade nur das NEUE Skript ergänzen (gelöschte bleiben weg)
         _conn.execute(
-            "INSERT INTO scripts (id, name, command, os, folder, created_at) VALUES (?, ?, ?, ?, 'Standard', ?)",
-            (_new_id(), name, command, os_target, _now_ms()),
+            "INSERT INTO scripts (id, name, command, os, folder, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (_new_id(), name, command, os_target, folder, _now_ms()),
         )
         created += 1
     _conn.execute(
-        "INSERT INTO settings (key, value) VALUES ('default_scripts_seeded', '1') "
+        "INSERT INTO settings (key, value) VALUES ('default_scripts_seeded', '2') "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
     )
     _conn.commit()
-    if created:
-        print(f"[db] {created} Standard-Skript(e) angelegt (Agent-Update, App-Updates)")
+    if created or updated:
+        print(f"[db] Standard-Skripte: {created} angelegt, {updated} in Ordner einsortiert")
 
 
 # ------------------------------------------------------------------

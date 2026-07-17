@@ -321,6 +321,35 @@ async def restart_backend(user: dict = Depends(get_current_user)):
     return {"ok": True, "message": "Backend startet in ca. 1 Sekunde neu…"}
 
 
+@router.post("/stop")
+async def stop_backend(user: dict = Depends(get_current_user)):
+    """
+    STOPPT den Backend-Prozess (sauberer Exit, Code 0). Achtung: Läuft das
+    Backend unter einem Prozess-Manager mit Auto-Restart (systemd
+    Restart=always), startet der Manager es sofort wieder - dann muss der
+    Dienst dort gestoppt werden. Vor dem Beenden wird noch der finale
+    Datenbank-Sync ausgeführt (externer DB-Modus). Antwortet SOFORT und
+    beendet sich ~1 s später.
+    """
+    require_admin(user)
+    db.add_audit_entry(user["username"], "backend.stop")
+
+    import asyncio as _asyncio
+
+    async def _do_stop():
+        await _asyncio.sleep(1.0)
+        try:
+            from app import dbsync as _dbsync
+            _dbsync.periodic_sync()   # letzten Stand in die externe DB schreiben
+        except Exception:
+            pass
+        print("[admin] Backend wird auf Nutzerwunsch GESTOPPT.")
+        os._exit(0)
+
+    _asyncio.create_task(_do_stop())
+    return {"ok": True, "message": "Backend wird in ca. 1 Sekunde gestoppt."}
+
+
 # ==================================================================
 # Webhooks / Benachrichtigungen
 # ==================================================================
@@ -795,6 +824,11 @@ class DefaultLayoutBody(BaseModel):
 _LAYOUT_SETTING_KEYS = {
     "dash": "default_layout_dash",
     "fleet": "default_layout_fleet",
+    # Organisationsweite Layout-Profil-PRESETS für die Client-Ansicht
+    # (Settings -> Profil "Physisch"/"VMs"/"LXCs"; vom Admin überschreibbar).
+    "dash_profile_physical": "default_layout_dash_profile_physical",
+    "dash_profile_vm": "default_layout_dash_profile_vm",
+    "dash_profile_lxc": "default_layout_dash_profile_lxc",
 }
 
 

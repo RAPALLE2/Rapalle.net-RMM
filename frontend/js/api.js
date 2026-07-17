@@ -174,6 +174,7 @@ export const api = {
 
   // --- Backend neu starten (Admin) ---
   restartBackend: () => request("/api/admin/restart", { method: "POST" }),
+  stopBackend: () => request("/api/admin/stop", { method: "POST" }),
 
   // --- Neueste ausgelieferte Agent-Version (für "veraltet"-Hinweis) ---
   getAgentVersion: () => request("/api/agent/version"),

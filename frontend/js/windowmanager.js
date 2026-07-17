@@ -58,7 +58,7 @@ window.addEventListener("resize", () => {
 
 export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
                             x = null, y = null, minimized = false, maximized = false, focus = true,
-                            singleton = false }) {
+                            singleton = false, pinned = false }) {
   // Alte, noch mit '#' persistierte Keys reparieren (CSS-Selektor-sicher).
   key = String(key).replace(/#/g, "--");
   const existing = state.windows.find((win) => win.key === key);
@@ -101,6 +101,7 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
     w, h,
     minimized: !!minimized,
     maximized: !!maximized,
+    pinned: !!pinned,
     _el: null,
     _rendered: false,
   };
@@ -242,11 +243,25 @@ export function minimizeAll() {
 // -----------------------------------------------------------------
 
 function applyFocusZIndex() {
+  // Angepinnte Fenster (📌) liegen IMMER über allen normalen Fenstern -
+  // untereinander gilt weiterhin die Fokus-Reihenfolge. Offset 2000 bleibt
+  // sicher unter Dialogen (9500), Pickern (8000) und Drag-Karten (9999).
   state.windows.forEach((win) => {
     if (win._el) {
-      win._el.style.zIndex = 100 + state.focusOrder.indexOf(win.key);
+      win._el.style.zIndex = (win.pinned ? 2000 : 100) + state.focusOrder.indexOf(win.key);
     }
   });
+}
+
+export function togglePin(key) {
+  const win = state.windows.find((w) => w.key === key);
+  if (!win) return;
+  win.pinned = !win.pinned;
+  if (win._pinBtn) {
+    win._pinBtn.classList.toggle("pinned", win.pinned);
+    win._pinBtn.title = win.pinned ? "Nicht mehr anheften" : "Anheften (immer im Vordergrund)";
+  }
+  focusWindow(key);   // wendet auch den neuen z-Index an
 }
 
 // -----------------------------------------------------------------
@@ -276,6 +291,14 @@ function createWindowElement(win) {
   const controls = document.createElement("span");
   controls.className = "win-controls";
 
+  const pinBtn = document.createElement("button");
+  pinBtn.textContent = "📌";
+  pinBtn.className = "win-pin-btn" + (win.pinned ? " pinned" : "");
+  pinBtn.title = win.pinned ? "Nicht mehr anheften" : "Anheften (immer im Vordergrund)";
+  pinBtn.addEventListener("click", (e) => { e.stopPropagation(); togglePin(win.key); });
+  pinBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+  win._pinBtn = pinBtn;
+
   const minBtn = document.createElement("button");
   minBtn.textContent = "–";
   minBtn.title = "Minimieren";
@@ -295,6 +318,7 @@ function createWindowElement(win) {
   closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeWindow(win.key); });
   closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 
+  controls.appendChild(pinBtn);
   controls.appendChild(minBtn);
   controls.appendChild(maxBtn);
   controls.appendChild(closeBtn);

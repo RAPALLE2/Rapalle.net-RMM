@@ -30,6 +30,20 @@ let _dashEdit = false;
 let _fleetWidgets = null;      // benutzerdefinierte Widgets im Flotten-Dashboard
 export function getDashLayout() { return _dashLayout; }
 export function setDashLayout(layout) { _dashLayout = layout; }
+
+// --- Layout-PROFILE (pro Benutzer): benannte Client-Panel-Layouts, z.B.
+// "Physisch", "VMs", "LXCs". Zusätzlich merkt sich _clientDashProfiles pro
+// Client, WELCHES Profil dort genutzt wird ('' / fehlend = Standard-Layout).
+let _dashProfiles = {};         // name -> layout
+let _clientDashProfiles = {};   // clientId -> profilname
+export function getDashProfiles() { return _dashProfiles; }
+export function setDashProfiles(p) { _dashProfiles = p || {}; }
+export function getClientDashProfile(clientId) { return _clientDashProfiles[clientId] || null; }
+export function setClientDashProfile(clientId, name) {
+  if (name) _clientDashProfiles[clientId] = name;
+  else delete _clientDashProfiles[clientId];
+}
+export function getClientDashProfileMap() { return _clientDashProfiles; }
 export function getDashEdit() { return _dashEdit; }
 export function setDashEdit(on) { _dashEdit = !!on; }
 export function getFleetWidgets() { return _fleetWidgets; }
@@ -44,8 +58,12 @@ export function setFleetIncludeVirtual(on) { _fleetIncludeVirtual = !!on; }
 // Standard zurücksetzen". null = kein org-Standard gesetzt.
 let _orgDefaultDash = null;
 let _orgDefaultFleet = null;
+// Org-weite Layout-Profil-Presets ("Physisch"/"VMs"/"LXCs"), vom Admin gesetzt.
+let _orgProfilePresets = {};
 export function getOrgDefaultDash() { return _orgDefaultDash; }
 export function getOrgDefaultFleet() { return _orgDefaultFleet; }
+export function getOrgProfilePresets() { return _orgProfilePresets; }
+export function setOrgProfilePresets(map) { _orgProfilePresets = map || {}; }
 export function setOrgDefaults({ dash, fleet }) {
   if (dash !== undefined) _orgDefaultDash = dash;
   if (fleet !== undefined) _orgDefaultFleet = fleet;
@@ -74,6 +92,8 @@ export function saveNow(state) {
       selection: state.selection || null,
       sidebar: state.sidebar || null,
       dashLayout: _dashLayout,
+      dashProfiles: _dashProfiles,
+      clientDashProfiles: _clientDashProfiles,
       dashEdit: _dashEdit,
       fleetWidgets: _fleetWidgets,
       fleetIncludeVirtual: _fleetIncludeVirtual,
@@ -87,6 +107,7 @@ export function saveNow(state) {
         x: w.x, y: w.y, w: w.w, h: w.h,
         minimized: !!w.minimized,
         maximized: !!w.maximized,
+        pinned: !!w.pinned,
       })),
     };
     localStorage.setItem(_key, JSON.stringify(data));
@@ -115,6 +136,8 @@ export function loadState() {
 export function applyExpanded(data) {
   if (data && Array.isArray(data.expanded)) _setExpanded(data.expanded);
   if (data && data.dashLayout) _dashLayout = data.dashLayout;
+  if (data && data.dashProfiles && typeof data.dashProfiles === "object") _dashProfiles = data.dashProfiles;
+  if (data && data.clientDashProfiles && typeof data.clientDashProfiles === "object") _clientDashProfiles = data.clientDashProfiles;
   if (data && typeof data.dashEdit === "boolean") _dashEdit = data.dashEdit;
   if (data && data.fleetWidgets) _fleetWidgets = data.fleetWidgets;
   if (data && typeof data.fleetIncludeVirtual === "boolean") _fleetIncludeVirtual = data.fleetIncludeVirtual;

@@ -351,6 +351,10 @@ body {
   color: var(--subtext); cursor: pointer;
 }
 .rmm-window-titlebar button:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+/* 📌 Anheften: standardmäßig gedimmt, angepinnt = Akzent-Hintergrund + gerade */
+.rmm-window-titlebar .win-pin-btn { font-size: 11px; filter: grayscale(1); opacity: 0.55; transform: rotate(35deg); transition: transform 0.15s ease, opacity 0.15s ease; }
+.rmm-window-titlebar .win-pin-btn:hover { opacity: 1; }
+.rmm-window-titlebar .win-pin-btn.pinned { filter: none; opacity: 1; transform: rotate(0deg); background: rgba(79,140,255,0.22); }
 .rmm-window-body { flex: 1; overflow: auto; position: relative; }
 .rmm-window-resize-handle {
   position: absolute; right: 0; bottom: 0; width: 20px; height: 20px;

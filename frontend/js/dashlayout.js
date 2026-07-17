@@ -21,7 +21,13 @@ import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvail
 import {
   getDashLayout, setDashLayout, getDashEdit, setDashEdit, scheduleSave,
   getOrgDefaultDash,
+  getDashProfiles, getClientDashProfile, setClientDashProfile, getClientDashProfileMap,
+  getOrgProfilePresets,
 } from "./persist.js";
+
+// Zuletzt gerenderter Client (für die Layout-Auflösung in Handlern, die
+// keinen Client-Parameter haben - z.B. placeNew/folderUnder).
+let _activeClientId = null;
 import { state, isAdmin } from "./state.js";
 import { api } from "./api.js";
 // GEMEINSAME Raster-Engine (identisch mit dem Dashboard/fleetdash.js).
@@ -88,6 +94,8 @@ function orgOrBuiltinDefault() {
   return builtinDefaultLayout();
 }
 function builtinDefaultLayout() {
+  // Allzweck-Standard: Status/Aktionen, Übersicht, die wichtigsten Live-Werte
+  // und je ein Ordner für Leistung und System/Hardware.
   return {
     grid: true, cols: COLS,
     panels: [
@@ -96,11 +104,84 @@ function builtinDefaultLayout() {
       { id: nid(), type: "folder", title: t("overview"), gx: 2, gy: 0, gw: 3, gh: 3,
         children: [
           { id: nid(), type: "metrics" },
-          { id: nid(), type: "notes" },
           { id: nid(), type: "disk" },
+          { id: nid(), type: "notes" },
         ], activeChild: null },
+      { id: nid(), type: "cmetric", metric: "c.cpuLoad", gx: 0, gy: 2, gw: 1, gh: 1 },
+      { id: nid(), type: "cmetric", metric: "c.ramPct", gx: 1, gy: 2, gw: 1, gh: 1 },
+      { id: nid(), type: "folder", title: "Leistung", gx: 0, gy: 3, gw: 2, gh: 2,
+        children: [
+          { id: nid(), type: "cmetric", metric: "c.netBoth" },
+          { id: nid(), type: "cmetric", metric: "c.cpuPerCore" },
+          { id: nid(), type: "cmetric", metric: "c.diskIO" },
+          { id: nid(), type: "cmetric", metric: "c.pingCf" },
+        ], activeChild: null },
+      { id: nid(), type: "folder", title: "System & Hardware", gx: 2, gy: 3, gw: 3, gh: 2,
+        children: [
+          { id: nid(), type: "cmetric", metric: "c.sysinfo" },
+          { id: nid(), type: "cmetric", metric: "c.tempsAll" },
+          { id: nid(), type: "cmetric", metric: "c.gpus" },
+          { id: nid(), type: "cmetric", metric: "c.uptime" },
+        ], activeChild: null },
+      { id: nid(), type: "websites", gx: 0, gy: 5, gw: 2, gh: 2 },
     ],
   };
+}
+
+// Eingebaute Layouts der drei Profil-Presets - abgestimmt darauf, welche
+// Metriken auf dem jeweiligen Gerätetyp überhaupt verfügbar sind (siehe
+// clientmetrics.js: VMs/LXCs ohne GPU/Sensoren/Hardware usw.).
+function builtinPresetLayout(name) {
+  const P = (type, extra = {}) => ({ id: nid(), type, ...extra });
+  const CM = (metric, extra = {}) => P("cmetric", { metric, ...extra });
+  if (name === "Physisch") {
+    return { grid: true, cols: COLS, panels: [
+      P("status", { gx: 0, gy: 0, gw: 1, gh: 2 }),
+      P("actions", { gx: 1, gy: 0, gw: 1, gh: 2 }),
+      P("folder", { title: t("overview"), gx: 2, gy: 0, gw: 3, gh: 3, activeChild: null,
+        children: [P("metrics"), P("disk"), P("notes")] }),
+      CM("c.cpuLoad", { gx: 0, gy: 2, gw: 1, gh: 1 }),
+      CM("c.cpuTemp", { gx: 1, gy: 2, gw: 1, gh: 1 }),
+      P("folder", { title: "Sensoren & Strom", gx: 0, gy: 3, gw: 2, gh: 2, activeChild: null,
+        children: [CM("c.tempsAll"), CM("c.fansAll"), CM("c.power"), CM("c.battery")] }),
+      P("folder", { title: "Leistung", gx: 2, gy: 3, gw: 3, gh: 2, activeChild: null,
+        children: [CM("c.cpuPerCore"), CM("c.netBoth"), CM("c.diskIO"), CM("c.pingCf")] }),
+      P("folder", { title: "Hardware", gx: 0, gy: 5, gw: 2, gh: 2, activeChild: null,
+        children: [CM("c.sysinfo"), CM("c.gpus"), CM("c.gpuModel"), CM("c.ramModules")] }),
+      P("websites", { gx: 2, gy: 5, gw: 2, gh: 2 }),
+    ] };
+  }
+  if (name === "VMs") {
+    return { grid: true, cols: COLS, panels: [
+      P("status", { gx: 0, gy: 0, gw: 1, gh: 2 }),
+      P("actions", { gx: 1, gy: 0, gw: 1, gh: 2 }),
+      P("folder", { title: t("overview"), gx: 2, gy: 0, gw: 3, gh: 3, activeChild: null,
+        children: [P("metrics"), P("disk"), P("notes")] }),
+      CM("c.cpuLoad", { gx: 0, gy: 2, gw: 1, gh: 1 }),
+      CM("c.ramPct", { gx: 1, gy: 2, gw: 1, gh: 1 }),
+      P("folder", { title: "Leistung", gx: 0, gy: 3, gw: 2, gh: 2, activeChild: null,
+        children: [CM("c.cpuPerCore"), CM("c.netBoth"), CM("c.diskIO"), CM("c.load")] }),
+      P("folder", { title: "System", gx: 2, gy: 3, gw: 3, gh: 2, activeChild: null,
+        children: [CM("c.procs"), CM("c.swap"), CM("c.uptime"), CM("c.pingCf")] }),
+      P("websites", { gx: 0, gy: 5, gw: 2, gh: 2 }),
+    ] };
+  }
+  if (name === "LXCs") {
+    return { grid: true, cols: COLS, panels: [
+      P("status", { gx: 0, gy: 0, gw: 1, gh: 2 }),
+      P("actions", { gx: 1, gy: 0, gw: 1, gh: 2 }),
+      P("folder", { title: t("overview"), gx: 2, gy: 0, gw: 3, gh: 2, activeChild: null,
+        children: [P("metrics"), P("notes")] }),
+      CM("c.cpuLoad", { gx: 0, gy: 2, gw: 1, gh: 1 }),
+      CM("c.ramPct", { gx: 1, gy: 2, gw: 1, gh: 1 }),
+      P("folder", { title: "Leistung", gx: 2, gy: 2, gw: 3, gh: 2, activeChild: null,
+        children: [CM("c.cpuPerCore"), CM("c.netBoth"), CM("c.load")] }),
+      P("folder", { title: "System", gx: 0, gy: 3, gw: 2, gh: 2, activeChild: null,
+        children: [CM("c.procs"), CM("c.swap"), CM("c.ramInfo"), CM("c.pingCf")] }),
+      P("websites", { gx: 2, gy: 4, gw: 2, gh: 2 }),
+    ] };
+  }
+  return null;
 }
 
 function migrateFolder(f) {
@@ -131,9 +212,60 @@ function migrateToGrid(layout) {
   }
 }
 
-function currentLayout() {
-  let l = getDashLayout();
-  if (!l || !Array.isArray(l.panels) || !l.panels.length) { l = orgOrBuiltinDefault(); setDashLayout(l); }
+// Fest eingebaute Profil-Presets (org-weit vom Admin überschreibbar).
+// Benutzer-Bearbeitungen werden erst beim EDITIEREN als lokale Kopie angelegt -
+// bis dahin sehen alle die Admin-Vorgabe (bzw. den eingebauten Standard).
+const PROFILE_PRESETS = ["Physisch", "VMs", "LXCs"];
+const PRESET_ORG_KIND = { "Physisch": "dash_profile_physical", "VMs": "dash_profile_vm", "LXCs": "dash_profile_lxc" };
+const _presetSession = {};   // Session-Cache der (nicht persistierten) Vorgabe-Layouts
+
+function _freshCopy(layout) {
+  const copy = JSON.parse(JSON.stringify(layout));
+  for (const p of copy.panels || []) p.id = nid();
+  return copy;
+}
+
+function presetBaseLayout(name) {
+  // Vorgabe eines Presets: Admin-Version (falls gesetzt), sonst das
+  // eingebaute Preset-Layout, sonst der allgemeine Standard.
+  const org = getOrgProfilePresets()[name];
+  if (org && Array.isArray(org.panels) && org.panels.length) return _freshCopy(org);
+  const builtin = builtinPresetLayout(name);
+  if (builtin) return builtin;
+  return orgOrBuiltinDefault();
+}
+
+function resolveProfileLayout(name, materialize) {
+  // 1) Lokale (vom Benutzer bearbeitete) Fassung gewinnt immer.
+  const profiles = getDashProfiles();
+  if (profiles[name]) return profiles[name];
+  // 2) Preset ohne lokale Kopie: Vorgabe nutzen. materialize=true (Edit-Modus)
+  //    legt die lokale Kopie an, damit Änderungen NUR diesen Benutzer betreffen.
+  if (!PROFILE_PRESETS.includes(name)) return null;
+  if (materialize) {
+    profiles[name] = _presetSession[name] || presetBaseLayout(name);
+    delete _presetSession[name];
+    return profiles[name];
+  }
+  if (!_presetSession[name]) _presetSession[name] = presetBaseLayout(name);
+  return _presetSession[name];
+}
+
+function currentLayout(client) {
+  // Layout-Auflösung: Hat DIESER Client ein Profil zugewiesen, wird das
+  // Profil-Layout genutzt (und dort auch hineineditiert). Sonst das normale
+  // Standard-Layout des Benutzers (bzw. Org-/eingebauter Standard).
+  const cid = (client && client.id) || _activeClientId;
+  _activeClientId = cid || _activeClientId;
+  const profName = cid ? getClientDashProfile(cid) : null;
+  const profLayout = profName ? resolveProfileLayout(profName, getDashEdit()) : null;
+  const usingProfile = !!profLayout;
+  let l = usingProfile ? profLayout : getDashLayout();
+  if (!l || !Array.isArray(l.panels) || !l.panels.length) {
+    l = orgOrBuiltinDefault();
+    if (usingProfile) getDashProfiles()[profName] = l;
+    else setDashLayout(l);
+  }
   for (const p of l.panels) { if (!p.id) p.id = nid(); if (p.type === "folder") migrateFolder(p); }
   migrateToGrid(l);
   // Einmalige Anpassung: bestehende Status-Panels auf 2 Rasterreihen bringen
@@ -168,20 +300,111 @@ function compactPanels(panels, active) {
 // =================================================================
 export function renderClientLayout(host, toolbarHost, client) {
   if (!host) return;
-  const layout = currentLayout();
+  _activeClientId = client?.id || null;
+  const layout = currentLayout(client);
   const edit = getDashEdit();
 
   if (toolbarHost) {
+    // ---- Profil-Auswahl (immer sichtbar): Presets (Physisch/VMs/LXCs) plus
+    // eigene Profile. "(Standard)" = das normale Layout des Benutzers.
+    const profiles = getDashProfiles();
+    const customNames = Object.keys(profiles).filter((n) => !PROFILE_PRESETS.includes(n)).sort((a, b) => a.localeCompare(b));
+    const activeProf = getClientDashProfile(client.id) || "";
+    const isPreset = PROFILE_PRESETS.includes(activeProf);
+    const profSelect = `<select data-prof-select title="Layout-Profil für diesen Client" style="max-width:150px;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+        <option value="">(Standard)</option>
+        ${PROFILE_PRESETS.map((n) => `<option value="${esc(n)}" ${n === activeProf ? "selected" : ""}>${esc(n)}${profiles[n] ? " (angepasst)" : ""}</option>`).join("")}
+        ${customNames.map((n) => `<option value="${esc(n)}" ${n === activeProf ? "selected" : ""}>${esc(n)}</option>`).join("")}
+      </select>`;
+
     toolbarHost.innerHTML = edit ? `<span class="dash-edit-tools">
+          ${profSelect}
+          <button data-prof-new title="Neues Profil (Kopie des aktuellen Layouts) anlegen">＋ Profil</button>
+          ${activeProf && !isPreset ? `<button data-prof-rename title="Aktives Profil umbenennen">✎</button>` : ""}
+          ${activeProf ? `<button data-prof-delete title="${isPreset ? "Eigene Anpassungen dieses Presets verwerfen (zurück zur Vorgabe)" : "Aktives Profil löschen"}">🗑</button>` : ""}
+          ${activeProf && isPreset && isAdmin() ? `<button data-prof-org title="Dieses Preset mit dem aktuellen Layout für ALLE Nutzer überschreiben">💾 Profil für alle</button>` : ""}
           <button data-add-panel>+ Panel</button>
           <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
           ${isAdmin() ? `<button data-set-default title="Aktuelles Layout als Standard für ALLE Nutzer speichern">💾 Als Standard für alle</button>` : ""}
           <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="Bearbeiten-Modus verlassen">✓ Bearbeiten beenden</button>
-        </span>` : "";
+        </span>` : `<span class="dash-edit-tools" style="opacity:0.9">${profSelect}</span>`;
+
+    // Profil für diesen Client wechseln
+    toolbarHost.querySelector("[data-prof-select]")?.addEventListener("change", (e) => {
+      setClientDashProfile(client.id, e.target.value || null);
+      saveLayout();
+      renderClientLayout(host, toolbarHost, client);
+    });
+    // Neues Profil = Kopie des aktuell angezeigten Layouts, direkt zugewiesen
+    toolbarHost.querySelector("[data-prof-new]")?.addEventListener("click", async () => {
+      const name = (await uiPrompt("Neues Layout-Profil", {
+        description: "Das aktuelle Layout wird als Profil kopiert und diesem Client zugewiesen. Beispiele: Physisch, VMs, LXCs.",
+        placeholder: "Profilname" }))?.trim();
+      if (!name) return;
+      if (getDashProfiles()[name] && !(await uiConfirm(`Profil "${name}" überschreiben?`, { okText: "Überschreiben", danger: true }))) return;
+      const copy = JSON.parse(JSON.stringify(layout));
+      for (const p of copy.panels) p.id = nid();
+      getDashProfiles()[name] = copy;
+      setClientDashProfile(client.id, name);
+      saveLayout();
+      window.notify?.(`Profil "${name}" angelegt und diesem Client zugewiesen.`, "success");
+      renderClientLayout(host, toolbarHost, client);
+    });
+    // Aktives Profil umbenennen
+    toolbarHost.querySelector("[data-prof-rename]")?.addEventListener("click", async () => {
+      const oldName = getClientDashProfile(client.id);
+      if (!oldName) return;
+      const name = (await uiPrompt("Profil umbenennen", { value: oldName }))?.trim();
+      if (!name || name === oldName) return;
+      const profs = getDashProfiles();
+      if (profs[name] && !(await uiConfirm(`Profil "${name}" überschreiben?`, { okText: "Überschreiben", danger: true }))) return;
+      profs[name] = profs[oldName]; delete profs[oldName];
+      // Alle Client-Zuordnungen auf den neuen Namen umziehen
+      const map = getClientDashProfileMap();
+      for (const cid of Object.keys(map)) if (map[cid] === oldName) map[cid] = name;
+      saveLayout(); renderClientLayout(host, toolbarHost, client);
+    });
+    // Aktives Profil löschen. Bei PRESETS werden nur die eigenen Anpassungen
+    // verworfen - das Preset selbst bleibt (Vorgabe greift wieder).
+    toolbarHost.querySelector("[data-prof-delete]")?.addEventListener("click", async () => {
+      const name = getClientDashProfile(client.id);
+      if (!name) return;
+      const preset = PROFILE_PRESETS.includes(name);
+      if (!(await uiConfirm(preset ? `Eigene Anpassungen von "${name}" verwerfen?` : `Profil "${name}" löschen?`, {
+        description: preset
+          ? "Das Preset zeigt danach wieder die Vorgabe (Admin-Version bzw. Standard)."
+          : "Alle Clients mit diesem Profil nutzen danach wieder das Standard-Layout.",
+        okText: preset ? "Verwerfen" : "Löschen", danger: true }))) return;
+      delete getDashProfiles()[name];
+      delete _presetSession[name];
+      if (!preset) {
+        const map = getClientDashProfileMap();
+        for (const cid of Object.keys(map)) if (map[cid] === name) delete map[cid];
+      }
+      saveLayout(); renderClientLayout(host, toolbarHost, client);
+    });
+    // Admin: aktives Preset mit dem aktuellen Layout für ALLE Nutzer überschreiben
+    toolbarHost.querySelector("[data-prof-org]")?.addEventListener("click", async () => {
+      const name = getClientDashProfile(client.id);
+      const kind = PRESET_ORG_KIND[name];
+      if (!kind) return;
+      if (!(await uiConfirm(`Preset "${name}" für ALLE Nutzer überschreiben?`, {
+        description: "Nutzer ohne eigene Anpassungen dieses Presets sehen ab dem nächsten Laden das neue Layout. Eigene Anpassungen anderer Nutzer bleiben unangetastet.",
+        okText: "Für alle speichern" }))) return;
+      try {
+        await api.setDefaultLayout(kind, layout);
+        getOrgProfilePresets()[name] = JSON.parse(JSON.stringify(layout));
+        window.notify?.(`Preset "${name}" für alle Nutzer gespeichert.`, "success");
+      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+    });
+
     toolbarHost.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddPicker(host, toolbarHost, client, null));
     toolbarHost.querySelector("[data-reset]")?.addEventListener("click", async () => {
-      if (!(await uiConfirm("Layout auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true }))) return;
-      setDashLayout(orgOrBuiltinDefault()); saveLayout(); renderClientLayout(host, toolbarHost, client);
+      const prof = getClientDashProfile(client.id);
+      if (!(await uiConfirm(prof ? `Profil "${prof}" auf Standard zurücksetzen?` : "Layout auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true }))) return;
+      if (prof) getDashProfiles()[prof] = PROFILE_PRESETS.includes(prof) ? presetBaseLayout(prof) : orgOrBuiltinDefault();
+      else setDashLayout(orgOrBuiltinDefault());
+      saveLayout(); renderClientLayout(host, toolbarHost, client);
     });
     toolbarHost.querySelector("[data-end-edit]")?.addEventListener("click", () => {
       setDashEdit(false);
@@ -420,7 +643,12 @@ function renderCMetric(bodyEl, panel, client, ctx) {
   bodyEl.innerHTML = "";
   if (preset && !presetAvailable(preset, client.device_type)) {
     const card = bodyEl.closest(".dash-lp");
-    if (!edit) { if (card) card.style.display = "none"; return; }
+    // WICHTIG: Liegt das Widget in einem ORDNER, ist die umgebende Karte der
+    // Ordner selbst - der darf NICHT versteckt werden, sonst verschwindet der
+    // ganze Ordner samt Tabs und man kann nichts mehr umstellen. Im Ordner
+    // wird stattdessen der Hinweis angezeigt.
+    const inFolder = !!bodyEl.closest(".folder-active");
+    if (!edit && !inFolder) { if (card) card.style.display = "none"; return; }
     bodyEl.innerHTML = `<div class="cmetric-na">Auf ${client.device_type === "lxc" ? "LXC-Containern" : "VMs"} nicht verfügbar.</div>`;
     return;
   }
@@ -501,7 +729,7 @@ function attachTabInteraction(tab, folder, child, client, ctx) {
       host.querySelectorAll(".dash-lp.folder-hover").forEach((c) => c.classList.remove("folder-hover"));
       tab.classList.remove("tab-dragging");
       if (!dragging) { folder.activeChild = child.id; saveLayout(); renderClientLayout(host, toolbarHost, client); return; }
-      const layout = currentLayout();
+      const layout = (host._rmmCtx && host._rmmCtx.layout) || currentLayout(client);
       const targetCard = folderUnder(ev.clientX, ev.clientY, host, null, child);
       if (targetCard && targetCard.dataset.panel !== folder.id) {
         const tf = layout.panels.find((p) => p.id === targetCard.dataset.panel);
@@ -536,6 +764,7 @@ function attachTabInteraction(tab, folder, child, client, ctx) {
 // Picker
 // =================================================================
 function openAddPicker(host, toolbarHost, client, atCell) {
+  _activeClientId = client?.id || _activeClientId;
   const back = document.createElement("div");
   back.className = "widget-picker-back";
   back.innerHTML = `
@@ -793,8 +1022,9 @@ function attachGridResize(card, panel, client, ctx) {
 function folderUnder(x, y, host, exclude, draggedPanel) {
   if (draggedPanel && draggedPanel.type === "folder") return null;
   const cards = [...host.querySelectorAll(".dash-lp")].filter((c) => c !== exclude);
+  const _lay = (host._rmmCtx && host._rmmCtx.layout) || currentLayout();
   for (const c of cards) {
-    const p = currentLayout().panels.find((pp) => pp.id === c.dataset.panel);
+    const p = _lay.panels.find((pp) => pp.id === c.dataset.panel);
     if (!p || p.type !== "folder") continue;
     const r = c.getBoundingClientRect();
     if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return c;

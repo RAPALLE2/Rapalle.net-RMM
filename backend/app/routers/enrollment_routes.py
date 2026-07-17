@@ -235,6 +235,16 @@ def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.B
             if file_path.is_file() and ".env" not in file_path.name and "__pycache__" not in str(file_path):
                 zf.write(file_path, arcname=f"agent/{file_path.relative_to(AGENT_SOURCE_DIR)}")
         zf.writestr("agent/.env", env_content)
+        # Logo mitliefern: logo_r.png (bevorzugt die Branding-Version) landet
+        # als agent/logo.png neben agent.py und wird vom Tkinter-Zustimmungs-
+        # fenster als Icon/Logo benutzt. Hinweis: favicon.ico ist in Wahrheit
+        # ein PNG und wird von Tk-iconbitmap nicht gelesen (blankes Icon).
+        _root = AGENT_SOURCE_DIR.parent
+        for _cand in (_root / "backend" / "branding" / "logo_r.png",
+                      _root / "frontend" / "images" / "logo_r.png"):
+            if _cand.is_file():
+                zf.write(_cand, arcname="agent/logo.png")
+                break
         zf.writestr(
             "agent/README.txt",
             "1. BACKEND_URL in .env auf die echte Adresse deines Servers anpassen\n"

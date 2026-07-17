@@ -388,19 +388,26 @@ export function renderExplorer(body, win) {
         </div>
       </div>`);
 
-    // Netzlaufwerk MIT Laufwerksbuchstaben (Z:). net use akzeptiert die
-    // http://ip:port/dav-Form direkt und vergibt einen Laufwerksbuchstaben.
+    // Netzlaufwerk MIT Laufwerksbuchstaben (Z:). WICHTIG: Für net use die
+    // WebDAV-UNC-Form \\\\host@Port\\dav verwenden! Die http://…-Form schlägt in
+    // cmd mit Nicht-Standard-Port oft mit "Systemfehler 67" fehl - der grafische
+    // Dialog ("Netzwerkadresse hinzufügen") nimmt dagegen die http-Form.
+    // Bei https lautet die Form \\\\host@SSL@Port\\dav.
+    const uncRoot = `\\\\${host}@${scheme === "https" ? "SSL@" : ""}${port}\\dav`;
     const netUse = username ? card(`
       <div style="font-weight:700;margin-bottom:6px">💽 Als Netzlaufwerk (mit Laufwerksbuchstaben Z:)</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
         Zuverlässigster Weg für einen echten Laufwerksbuchstaben: in der
         <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
+        Vorher muss der Dienst „WebClient" laufen (<code>net start webclient</code>).
       </div>
-      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use Z: ${httpRoot} /user:${username} `)}
+      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        Statt <code>Z:</code> geht jeder freie Buchstabe. <code>/persistent:yes</code> anhängen,
-        damit das Laufwerk nach dem Neustart bleibt. Windows mappt es per Digest über HTTP –
-        ohne Registry-Änderung.
+        Statt <code>Z:</code> geht jeder freie Buchstabe. <code>/persistent:yes</code> ist schon
+        dabei, damit das Laufwerk nach dem Neustart bleibt. Die Form
+        <code>\\\\${esc(host)}@${esc(port)}\\dav</code> ist die offizielle WebDAV-Schreibweise mit
+        Port - <b>nicht</b> <code>:${esc(port)}</code> mit Doppelpunkt (das versucht SMB und
+        endet in Fehler 67 bzw. 0x800704b3).
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
         Trennen später mit: <code>net use Z: /delete</code>
@@ -418,10 +425,10 @@ export function renderExplorer(body, win) {
           Dashboard-Login eingeben.</li>
       </ol>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        Wichtig: <b>niemals</b> die Form <code>\\\\host:Port\\dav</code> mit Backslashes verwenden –
-        damit versucht Windows SMB und meldet <code>0x800704b3</code>. Immer die
-        <code>http://…/dav</code>-Adresse nehmen (im Dialog oder per <code>net use</code>).
-        Klappt der grafische Dialog nicht, den <code>net use</code>-Befehl oben verwenden.
+        Wichtig: <b>niemals</b> die Form <code>\\\\host:Port\\dav</code> mit Doppelpunkt verwenden –
+        damit versucht Windows SMB und meldet Fehler 67 bzw. <code>0x800704b3</code>. Im grafischen
+        Dialog die <code>http://…/dav</code>-Adresse nehmen; in <code>cmd</code> (net use) die
+        WebDAV-Form <code>\\\\host@Port\\dav</code> von oben.
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
         Der jeweilige Client muss online sein, damit sein Ordner Inhalte zeigt.
@@ -455,10 +462,32 @@ export function renderExplorer(body, win) {
           catch (e) { window.notify?.("Fehler: " + e.message, "error"); btn.disabled = false; }
         });
       }
+      // Kopieren: navigator.clipboard existiert nur in sicheren Kontexten
+      // (HTTPS/localhost). Über plain HTTP ist es undefined - dann greift der
+      // Textarea-Fallback mit execCommand("copy").
+      function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+        return new Promise((resolve, reject) => {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+          document.body.appendChild(ta);
+          ta.focus(); ta.select();
+          try {
+            document.execCommand("copy") ? resolve() : reject(new Error("Kopieren nicht möglich"));
+          } catch (e) { reject(e); } finally { ta.remove(); }
+        });
+      }
       relayPane.querySelectorAll("[data-copy]").forEach((b) =>
         b.addEventListener("click", () =>
-          navigator.clipboard?.writeText(b.dataset.copy).then(
-            () => window.notify?.("Kopiert", "success"), () => {})));
+          copyText(b.dataset.copy).then(
+            () => window.notify?.("Kopiert", "success"),
+            () => {
+              // Letzter Ausweg: Feld markieren, damit Strg+C reicht.
+              const input = b.parentElement?.querySelector("input");
+              if (input) { input.focus(); input.select(); }
+              window.notify?.("Automatisches Kopieren nicht möglich - Text ist markiert, bitte Strg+C drücken.", "warning");
+            })));
     }
   }
 

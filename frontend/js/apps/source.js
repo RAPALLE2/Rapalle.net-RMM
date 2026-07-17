@@ -62,6 +62,7 @@ function renderBackendLog(panel) {
         <button class="taskbar-btn" id="src-log-download" title="Kompletten Log herunterladen">⬇ Export</button>
         <button class="taskbar-btn" id="src-log-clear">🗑 Leeren</button>
         <button class="taskbar-btn" id="src-log-restart" style="border-color:var(--warn);color:var(--warn)">↻ Backend neu starten</button>
+        <button class="taskbar-btn" id="src-log-stop" style="border-color:var(--danger);color:var(--danger)">⏻ Backend stoppen</button>
       </div>
       <div id="src-log-host" style="flex:1;min-height:0"></div>
       <div id="src-log-status" style="font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">Verbinde…</div>
@@ -117,6 +118,18 @@ function renderBackendLog(panel) {
       window.notify?.("Backend startet neu… Die Seite lädt in ein paar Sekunden neu.", "info", 12000);
       setTimeout(() => window.location.reload(), 6000);
     } catch (e) { window.notify?.("Neustart fehlgeschlagen: " + e.message, "error"); }
+  });
+
+  panel.querySelector("#src-log-stop").addEventListener("click", async () => {
+    const ok = await uiConfirm("Backend wirklich STOPPEN?", {
+      description: "Das Dashboard und alle Agent-Verbindungen gehen offline, bis das Backend manuell wieder gestartet wird. (Läuft es unter systemd mit Auto-Restart, startet es sofort wieder.)",
+      okText: "Stoppen", danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.stopBackend();
+      window.notify?.("Backend wird gestoppt. Die Oberfläche verliert gleich die Verbindung.", "info", 12000);
+    } catch (e) { window.notify?.("Stoppen fehlgeschlagen: " + e.message, "error"); }
   });
 
   return () => {
