@@ -93,6 +93,17 @@ export function renderProfile(body, win) {
     // Offene Dashboard-Fenster über den Umschalter informieren.
     try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
   });
+  // Umgekehrte Richtung: Wird die Bearbeitung anderswo beendet (z.B. Button
+  // "✓ Bearbeiten beenden" in der Client-Toolbar), Haken hier mitziehen.
+  const _syncEditCheckbox = () => {
+    const cb = body.querySelector("#pr-dashedit");
+    if (!document.body.contains(body)) {
+      window.removeEventListener("dashedit-changed", _syncEditCheckbox);
+      return;
+    }
+    if (cb) cb.checked = getDashEdit();
+  };
+  window.addEventListener("dashedit-changed", _syncEditCheckbox);
 
   // Live-Vorschau: Theme sofort umschalten, wenn im Dropdown geändert
   body.querySelector("#pr-theme").addEventListener("change", (e) => applyTheme(e.target.value));

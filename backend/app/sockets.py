@@ -357,12 +357,24 @@ async def on_register(sid, payload):
         payload.get("ip"),
     )
 
-    # Automatisch erkannter Gerätetyp (VM/LXC): übernehmen, solange noch der
-    # Default "physical" gesetzt ist. Manuelle Auswahl bleibt unangetastet.
-    # Damit zeigt der Bearbeiten-Dialog bei VMs/CTs nicht mehr fälschlich
-    # "Physisches Gerät" an.
+    # Automatisch erkannter Gerätetyp (VM/LXC): wird nur GESPEICHERT
+    # (detected_device_type) - übernommen wird er erst nach Bestätigung durch
+    # den Nutzer im Client-Panel (device_type_ack).
     if db.apply_detected_device_type(client_id, payload.get("device_type")):
         await sio.emit("clients:changed", namespace="/dashboard")
+
+    # Absturz-Meldung des Agenten (Crash-Schutz: Agent startet sich selbst neu
+    # und meldet den Traceback beim nächsten Registrieren) -> Audit + dem
+    # Nutzer im Dashboard anzeigen.
+    _crash = payload.get("last_crash")
+    if _crash:
+        _c = db.get_client(client_id)
+        _host = (_c or {}).get("hostname") or payload.get("hostname") or client_id
+        db.add_audit_entry(None, "agent.crashed", target=client_id, details=str(_crash)[:1000])
+        print(f"[agent-crash] {_host}: Agent ist abgestürzt und wurde neu gestartet:\n{_crash}")
+        await sio.emit("client:agent-crashed", {
+            "id": client_id, "hostname": _host, "error": str(_crash)[-2000:],
+        }, namespace="/dashboard")
 
     # Nach dem Speichern den aktuellen Stand aus der DB holen
     client = db.get_client(client_id)

@@ -355,6 +355,14 @@ body {
 .rmm-window-titlebar .win-pin-btn { font-size: 11px; filter: grayscale(1); opacity: 0.55; transform: rotate(35deg); transition: transform 0.15s ease, opacity 0.15s ease; }
 .rmm-window-titlebar .win-pin-btn:hover { opacity: 1; }
 .rmm-window-titlebar .win-pin-btn.pinned { filter: none; opacity: 1; transform: rotate(0deg); background: rgba(79,140,255,0.22); }
+
+/* Audit-Log: kurz hervorgehobener Eintrag (Sprung aus einer Benachrichtigung) */
+@keyframes audit-flash {
+  0%   { background: rgba(79,140,255,0.45); }
+  70%  { background: rgba(79,140,255,0.28); }
+  100% { background: transparent; }
+}
+tr.audit-flash td { animation: audit-flash 3s ease forwards; }
 .rmm-window-body { flex: 1; overflow: auto; position: relative; }
 .rmm-window-resize-handle {
   position: absolute; right: 0; bottom: 0; width: 20px; height: 20px;

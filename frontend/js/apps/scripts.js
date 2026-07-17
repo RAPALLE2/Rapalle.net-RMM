@@ -158,7 +158,19 @@ export function renderScripts(body, win) {
           resultEl.textContent = "Läuft...";
           try {
             const res = await api.execOnClient(clientId, script.command);
-            resultEl.innerHTML = `<span style="color:var(--accent)">✓ Exit ${res.code}</span>`;
+            const ok = res.code === 0;
+            const out = [res.stdout, res.stderr].filter((x) => x && x.trim()).join("\n").trim();
+            resultEl.innerHTML = `<span style="color:${ok ? "var(--accent)" : "var(--danger)"}">${ok ? "✓" : "✗"} Exit ${res.code}</span>`;
+            // Ausgabe des Clients direkt unter dem Skript anzeigen.
+            let pre = listEl.querySelector(`[data-output="${scriptId}"]`);
+            if (!pre) {
+              pre = document.createElement("pre");
+              pre.dataset.output = scriptId;
+              pre.style.cssText = "background:var(--panel-2);border:1px solid var(--border);padding:8px;" +
+                "border-radius:6px;margin:8px 0 0;font-size:12px;white-space:pre-wrap;overflow:auto;max-height:240px";
+              resultEl.closest(".panel")?.appendChild(pre);
+            }
+            pre.textContent = out || "(keine Ausgabe)";
           } catch (e) {
             resultEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
           }

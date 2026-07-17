@@ -569,6 +569,14 @@ function initLiveUpdates() {
     notifyError(data.error || "Fehler bei der Bildschirmübertragung", "error", "remote-screen", 12000);
   });
 
+  // Agent-Absturz: Der Agent hat sich selbst neu gestartet und meldet den
+  // Fehler - dem Nutzer deutlich anzeigen (letzte Traceback-Zeile reicht).
+  dashboardSocket.on("client:agent-crashed", (d) => {
+    const lastLine = String(d.error || "").trim().split("\n").filter(Boolean).slice(-1)[0] || "unbekannter Fehler";
+    notifyError(`⚠️ Agent auf ${d.hostname || d.id} ist abgestürzt und wurde automatisch neu gestartet.\nFehler: ${lastLine}\n(Details im Audit-Log)`,
+      "error", `agent-crash-${d.id}`, 20000);
+  });
+
   // Neue Metriken für einen Client
   dashboardSocket.on("client:metrics", ({ id, metrics }) => {
     const client = state.clients.find((c) => c.id === id);

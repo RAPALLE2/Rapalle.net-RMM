@@ -384,6 +384,7 @@ export function renderTerminal(body, win) {
 
   // Aufräumen beim Schließen
   registerCleanup(win.key, () => {
+    try { scriptMenu?.remove(); } catch {}   // Skript-Auswahlmenü (liegt im <body>)
     dashboardSocket.off("term-output", onOutput);
     dashboardSocket.off("term-exit", onExit);
     dashboardSocket.off("term-ack", onAck);

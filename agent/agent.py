@@ -418,6 +418,27 @@ def _detect_device_type():
 DETECTED_DEVICE_TYPE = _detect_device_type()
 
 
+def _read_and_clear_last_crash():
+    """
+    Liest last_crash.txt (vom Crash-Schutz in __main__ geschrieben), löscht
+    die Datei und gibt den Inhalt (gekürzt) zurück - wird beim Registrieren
+    ans Backend gemeldet und dort dem Nutzer angezeigt.
+    """
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_crash.txt")
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read().strip()
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return content[-4000:] if content else None
+    except Exception:
+        return None
+
+
 @sio.event(namespace="/agent")
 async def connect():
     """Wird automatisch aufgerufen, sobald die Verbindung zum Backend steht."""
@@ -436,6 +457,7 @@ async def connect():
             "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
             "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
             "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (Auto-Erkennung)
+            "last_crash": _read_and_clear_last_crash(),  # Traceback des letzten Absturzes (falls vorhanden)
         },
         namespace="/agent",
     )
@@ -2953,6 +2975,26 @@ if __name__ == "__main__":
         _AGENT_LOOP.run_until_complete(main())
     except KeyboardInterrupt:
         pass
+    except SystemExit:
+        raise
+    except BaseException:
+        # CRASH-SCHUTZ: Traceback in last_crash.txt sichern (wird beim nächsten
+        # erfolgreichen Registrieren ans Backend gemeldet und dem Nutzer
+        # angezeigt), kurz warten und den Agenten NEU STARTEN.
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            _crash_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_crash.txt")
+            with open(_crash_file, "w", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + tb)
+        except OSError:
+            pass
+        _print("[agent] ABSTURZ - Neustart in 5 Sekunden:\n" + tb)
+        try:
+            time.sleep(5)
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
     finally:
         try:
             _AGENT_LOOP.close()

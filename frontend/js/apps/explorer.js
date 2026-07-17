@@ -24,6 +24,21 @@ function extOf(name) {
   const i = name.lastIndexOf(".");
   return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
 }
+// Kopieren mit Fallback: navigator.clipboard existiert nur in sicheren
+// Kontexten (HTTPS/localhost) - über plain HTTP greift der Textarea-Fallback.
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { document.execCommand("copy") ? resolve() : reject(new Error("Kopieren nicht möglich")); }
+    catch (err) { reject(err); } finally { ta.remove(); }
+  });
+}
+
 function sep(path) { return path.includes("\\") ? "\\" : "/"; }
 function joinPath(dir, name) {
   if (!dir) return name;
@@ -73,7 +88,9 @@ export function renderExplorer(body, win) {
           <button id="exp-back-${win.key}" title="Zurück">←</button>
           <button id="exp-refresh-${win.key}" title="Aktualisieren">⟳</button>
           <button id="exp-up-${win.key}" title="Übergeordneter Ordner">⬆</button>
-          <div id="exp-crumbs-${win.key}" style="flex:1;color:var(--subtext);overflow-x:auto;white-space:nowrap"></div>
+          <div id="exp-crumbs-${win.key}" title="Klicken, um den Pfad zu bearbeiten oder einzufügen" style="flex:1;color:var(--subtext);overflow-x:auto;white-space:nowrap;cursor:text"></div>
+          <input id="exp-path-${win.key}" class="hidden" spellcheck="false" style="flex:1;font-family:monospace;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--accent);background:var(--panel-2);color:var(--text)" />
+          <button id="exp-copy-${win.key}" title="Aktuellen Pfad kopieren">📋</button>
           <button id="exp-mkdir-${win.key}" title="Neuer Ordner">➕📁</button>
           <button id="exp-upload-${win.key}" title="Datei hochladen">⬆️ Upload</button>
           <input type="file" id="exp-file-${win.key}" multiple style="display:none" />
@@ -111,6 +128,36 @@ export function renderExplorer(body, win) {
     const parts = path.split(sep(path)).filter(Boolean);
     crumbs.innerHTML = `<b>${esc(where)}</b> : ` + parts.map((p) => esc(p)).join(" › ");
   }
+
+  // --- Pfad direkt bearbeiten/einfügen + kopieren ---
+  const pathInput = body.querySelector(`#exp-path-${win.key}`);
+  function openPathEdit() {
+    pathInput.value = currentPath || "";
+    crumbs.classList.add("hidden");
+    pathInput.classList.remove("hidden");
+    pathInput.focus(); pathInput.select();
+  }
+  function closePathEdit() {
+    pathInput.classList.add("hidden");
+    crumbs.classList.remove("hidden");
+  }
+  crumbs.addEventListener("click", openPathEdit);
+  pathInput.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") { closePathEdit(); return; }
+    if (e.key === "Enter") {
+      const p = pathInput.value.trim();
+      closePathEdit();
+      load(p);   // leer = Laufwerksliste
+    }
+  });
+  pathInput.addEventListener("blur", closePathEdit);
+  body.querySelector(`#exp-copy-${win.key}`).addEventListener("click", () => {
+    if (!currentPath) { window.notify?.("Kein Pfad geöffnet (Laufwerksliste).", "warning"); return; }
+    copyToClipboard(currentPath).then(
+      () => window.notify?.("Pfad kopiert", "success"),
+      () => { openPathEdit(); window.notify?.("Automatisches Kopieren nicht möglich - Pfad ist markiert, bitte Strg+C drücken.", "warning"); });
+  });
 
   async function downloadFile(entry) {
     try {
@@ -462,25 +509,9 @@ export function renderExplorer(body, win) {
           catch (e) { window.notify?.("Fehler: " + e.message, "error"); btn.disabled = false; }
         });
       }
-      // Kopieren: navigator.clipboard existiert nur in sicheren Kontexten
-      // (HTTPS/localhost). Über plain HTTP ist es undefined - dann greift der
-      // Textarea-Fallback mit execCommand("copy").
-      function copyText(text) {
-        if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
-        return new Promise((resolve, reject) => {
-          const ta = document.createElement("textarea");
-          ta.value = text;
-          ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
-          document.body.appendChild(ta);
-          ta.focus(); ta.select();
-          try {
-            document.execCommand("copy") ? resolve() : reject(new Error("Kopieren nicht möglich"));
-          } catch (e) { reject(e); } finally { ta.remove(); }
-        });
-      }
       relayPane.querySelectorAll("[data-copy]").forEach((b) =>
         b.addEventListener("click", () =>
-          copyText(b.dataset.copy).then(
+          copyToClipboard(b.dataset.copy).then(
             () => window.notify?.("Kopiert", "success"),
             () => {
               // Letzter Ausweg: Feld markieren, damit Strg+C reicht.

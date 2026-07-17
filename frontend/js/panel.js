@@ -106,6 +106,78 @@ function renderClientView(el, clientId) {
   // Anpassbares Layout (Status/Aktionen/Übersicht-Ordner) rendern.
   renderClientLayout(el.querySelector("#dash-layout-host"),
                      el.querySelector("#dash-layout-toolbar"), client);
+
+  maybePromptDeviceType(client);
+}
+
+// -----------------------------------------------------------------
+// Auto-Erkennung des Gerätetyps: Der Agent meldet, wenn er in einer VM oder
+// einem LXC-Container läuft. Beim ersten Öffnen des Client-Panels wird der
+// Nutzer gefragt, ob der Client als VM/LXC (mit Host-Auswahl) oder weiterhin
+// als physisch geführt werden soll. Die Antwort wird gespeichert
+// (device_type_ack), danach kommt die Frage nie wieder.
+// -----------------------------------------------------------------
+const _dtPromptShown = new Set();   // pro Sitzung nur einmal je Client
+
+function maybePromptDeviceType(client) {
+  const detected = client.detected_device_type;
+  if (!detected || !["vm", "lxc"].includes(detected)) return;
+  if (client.device_type_ack) return;
+  if ((client.device_type || "physical") !== "physical") return;   // schon manuell gesetzt
+  if (_dtPromptShown.has(client.id)) return;
+  _dtPromptShown.add(client.id);
+
+  const label = detected === "vm" ? "virtuelle Maschine (VM)" : "LXC-Container";
+  // Mögliche Hosts: physische Clients (außer dem Client selbst).
+  const hosts = state.clients.filter((c) =>
+    c.id !== client.id && (c.device_type || "physical") === "physical");
+
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9400;background:rgba(0,0,0,0.5);" +
+    "display:flex;align-items:center;justify-content:center";
+  overlay.innerHTML = `
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;width:440px;max-width:92vw">
+      <h3 style="margin:0 0 8px">🔎 Gerätetyp erkannt: ${esc(label)}</h3>
+      <p style="color:var(--subtext);font-size:13px;margin:0 0 12px">
+        Der Agent auf <b>${esc(client.hostname)}</b> hat erkannt, dass er in einer
+        ${esc(label)} läuft. Soll der Client entsprechend eingeordnet werden?
+        Das beeinflusst Zählweisen, Layout-Presets und die Remote-Screen-Abfrage.
+      </p>
+      <div class="form-row">
+        <label>Übergeordneter Host (optional)</label>
+        <select id="dt-host">
+          <option value="">— kein Host zuordnen —</option>
+          ${hosts.map((h) => `<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("")}
+        </select>
+      </div>
+      <div id="dt-error" class="form-error hidden"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <button class="taskbar-btn" id="dt-keep">Als physisch behalten</button>
+        <button class="btn-primary" id="dt-apply" style="width:auto;margin:0">Als ${detected === "vm" ? "VM" : "LXC"} übernehmen</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const finish = async (fields) => {
+    try {
+      const updated = await api.updateClient(client.id, { ...fields, device_type_ack: 1 });
+      Object.assign(client, updated);   // lokalen Zustand aktualisieren
+      overlay.remove();
+      renderMainContent();
+      window.notify?.(
+        fields.device_type === "physical"
+          ? `${client.hostname} bleibt als physisches Gerät geführt.`
+          : `${client.hostname} ist jetzt als ${fields.device_type.toUpperCase()} eingeordnet.`,
+        "success");
+    } catch (e) {
+      const err = overlay.querySelector("#dt-error");
+      err.textContent = e.message; err.classList.remove("hidden");
+    }
+  };
+  overlay.querySelector("#dt-keep").addEventListener("click", () =>
+    finish({ device_type: "physical" }));
+  overlay.querySelector("#dt-apply").addEventListener("click", () =>
+    finish({ device_type: detected, parent_client_id: overlay.querySelector("#dt-host").value || null }));
 }
 
 // -----------------------------------------------------------------

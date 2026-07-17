@@ -94,6 +94,38 @@ export function renderAudit(body, win) {
 
   let existingRecIds = null;   // Set der Replay-IDs, deren Datei noch existiert
 
+  // ---- Highlight aus einer Benachrichtigung ("📋 Im Audit öffnen") ----
+  // Das notify-System schickt "audit-highlight" mit einem Textausschnitt
+  // (needle) des Eintrags. Wir laden neu (der Eintrag ist ggf. gerade erst
+  // entstanden), scrollen zum passenden Eintrag und heben ihn kurz hervor.
+  let pendingHighlight = null;
+
+  function applyPendingHighlight() {
+    if (!pendingHighlight) return;
+    const { needle, ts } = pendingHighlight;
+    const cand = allEntries.find((e) =>
+      (e.details || "").includes(needle) && Math.abs((e.ts || 0) - ts) < 10 * 60 * 1000);
+    if (!cand) return;   // (noch) nicht da - beim nächsten Render erneut versuchen
+    pendingHighlight = null;
+    const tr = tbody.querySelector(`[data-audit-id="${cand.id}"]`);
+    if (!tr) return;
+    tr.scrollIntoView({ block: "center", behavior: "smooth" });
+    tr.classList.add("audit-flash");
+    setTimeout(() => tr.classList.remove("audit-flash"), 3000);
+  }
+
+  const onHighlight = (ev) => {
+    if (!document.body.contains(body)) {
+      window.removeEventListener("audit-highlight", onHighlight);
+      return;
+    }
+    pendingHighlight = ev.detail || null;
+    // Filter zurücksetzen, damit der Eintrag sicher sichtbar ist.
+    userSel.value = ""; kindSel.value = "";
+    load();   // frisch laden (der Eintrag wurde evtl. gerade erst geschrieben)
+  };
+  window.addEventListener("audit-highlight", onHighlight);
+
   async function load() {
     try {
       allEntries = await api.getAuditLog();
@@ -189,8 +221,11 @@ export function renderAudit(body, win) {
         <td>${esc(e.username || "—")}</td>
         <td>${esc(label)}${e.target ? ` <span style="color:var(--subtext);font-size:11px">→ ${esc(String(e.target).slice(0, 12))}</span>` : ""}</td>
         <td style="color:var(--subtext)">${detailsHtml}</td>`;
+      tr.dataset.auditId = e.id || "";
       tbody.appendChild(tr);
     }
+
+    applyPendingHighlight();
 
     tbody.querySelectorAll("[data-rec]").forEach((btn) =>
       btn.addEventListener("click", () => {

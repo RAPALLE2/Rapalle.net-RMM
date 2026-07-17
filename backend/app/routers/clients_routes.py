@@ -193,6 +193,8 @@ class UpdateClientBody(BaseModel):
     # Automatisches Agent-Update pro Client: 'global' (folgt den Settings),
     # 'on' (immer) oder 'off' (nie).
     auto_update: str | None = None
+    # Bestätigung der Gerätetyp-Auto-Erkennung (1 = Nutzer hat entschieden)
+    device_type_ack: int | None = None
 
 
 def _with_live_state(c: dict) -> dict:

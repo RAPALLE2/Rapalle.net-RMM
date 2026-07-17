@@ -308,6 +308,10 @@ def init_db() -> None:
     # Automatisches Agent-Update pro Client: 'global' = folgt der Einstellung
     # in den Settings, 'on' = immer, 'off' = nie.
     _migrate_add_column("clients", "auto_update", "TEXT NOT NULL DEFAULT 'global'")
+    # Auto-Erkennung des Gerätetyps: Der Agent meldet vm/lxc - übernommen wird
+    # das aber erst nach BESTÄTIGUNG durch den Nutzer im Client-Panel.
+    _migrate_add_column("clients", "detected_device_type", "TEXT")
+    _migrate_add_column("clients", "device_type_ack", "INTEGER NOT NULL DEFAULT 0")
     _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optionaler Wunschname beim Onboarding
     _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # persönliche Farbpalette
     _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = lokaler User, sonst Realm-ID (AD)
@@ -825,20 +829,19 @@ def touch_client(client_id: str) -> None:
 
 def apply_detected_device_type(client_id: str, detected: str | None) -> bool:
     """
-    Übernimmt den vom Agenten automatisch erkannten Gerätetyp ("vm"/"lxc"),
-    aber NUR wenn aktuell noch der Default "physical" (oder nichts) gesetzt
-    ist - eine manuelle Auswahl im Bearbeiten-Dialog wird nie überschrieben.
-    Gibt True zurück, wenn etwas geändert wurde.
+    Merkt sich den vom Agenten automatisch erkannten Gerätetyp ("vm"/"lxc")
+    in detected_device_type. Der eigentliche device_type wird NICHT mehr
+    automatisch geändert - stattdessen fragt das Client-Panel den Nutzer
+    einmalig, ob der Client als VM/LXC (mit Host-Auswahl) oder als physisch
+    geführt werden soll (Bestätigung -> device_type_ack = 1).
+    Gibt True zurück, wenn eine (neue) Erkennung gespeichert wurde.
     """
     if detected not in ("vm", "lxc"):
         return False
-    row = _conn.execute("SELECT device_type FROM clients WHERE id = ?", (client_id,)).fetchone()
-    if not row:
+    row = _conn.execute("SELECT detected_device_type FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row or row["detected_device_type"] == detected:
         return False
-    current = (row["device_type"] or "physical")
-    if current != "physical":
-        return False
-    _conn.execute("UPDATE clients SET device_type = ? WHERE id = ?", (detected, client_id))
+    _conn.execute("UPDATE clients SET detected_device_type = ? WHERE id = ?", (detected, client_id))
     _conn.commit()
     return True
 
@@ -869,6 +872,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
+        "device_type_ack",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:

@@ -5,6 +5,8 @@
 
 import { state } from "../state.js";
 import { api } from "../api.js";
+import { attachScriptPicker } from "../scriptpicker.js";
+import { registerCleanup } from "../windowmanager.js";
 import { esc } from "../utils.js";
 
 export function renderBulk(body, win) {
@@ -40,10 +42,7 @@ export function renderBulk(body, win) {
 
         <div class="form-row">
           <label>Gespeichertes Skript einsetzen (optional)</label>
-          <select id="bulk-script">
-            <option value="">— eigenen Befehl eingeben —</option>
-            ${scripts.map((s) => `<option value="${esc(s.command)}">${esc(s.name)} (${esc(s.os)})</option>`).join("")}
-          </select>
+          <button class="taskbar-btn" id="bulk-script" style="width:auto;align-self:flex-start;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 Skript wählen…</button>
         </div>
 
         <div class="form-row">
@@ -62,10 +61,16 @@ export function renderBulk(body, win) {
     const clientChecks = () => Array.from(body.querySelectorAll(".bulk-client"));
     allCheck?.addEventListener("change", () => clientChecks().forEach((cb) => (cb.checked = allCheck.checked)));
 
-    // Skript-Auswahl füllt das Befehlsfeld
-    body.querySelector("#bulk-script").addEventListener("change", (e) => {
-      if (e.target.value) body.querySelector("#bulk-cmd").value = e.target.value;
+    // Skript-Auswahl (Suche + Ordnerstruktur) füllt das Befehlsfeld
+    const detachPicker = attachScriptPicker({
+      button: body.querySelector("#bulk-script"),
+      scripts,
+      onPick: (sc) => {
+        body.querySelector("#bulk-cmd").value = sc.command;
+        body.querySelector("#bulk-script").textContent = `📜 ${sc.name}`;
+      },
     });
+    registerCleanup(win.key, () => detachPicker());
 
     body.querySelector("#bulk-run").addEventListener("click", async () => {
       const selected = clientChecks().filter((cb) => cb.checked).map((cb) => cb.value);

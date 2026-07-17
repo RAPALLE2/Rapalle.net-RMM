@@ -76,6 +76,11 @@ export function notify(message, level = "info", durationMs = 5000, opts = {}) {
       <span style="color:${cfg.color};font-size:16px;flex-shrink:0">${cfg.icon}</span>
       <span style="flex:1">${escapeHtml(message)}</span>
     </div>
+    ${opts.action ? `<div style="margin-top:10px;text-align:right">
+      <button class="notify-action" style="background:${cfg.color}22;border:1px solid ${cfg.color}66;
+        color:var(--text,#e8eef7);border-radius:7px;padding:5px 12px;cursor:pointer;font-size:12.5px">
+        ${escapeHtml(opts.action.label)}</button>
+    </div>` : ""}
     <button class="notify-close" style="position:absolute;top:10px;right:10px;background:none;
       border:none;color:var(--subtext,#8fa3bd);cursor:pointer;font-size:14px;line-height:1">✕</button>
     <div class="notify-bar" style="position:absolute;bottom:0;left:0;height:3px;width:100%;
@@ -146,6 +151,12 @@ export function notify(message, level = "info", durationMs = 5000, opts = {}) {
   box.addEventListener("mouseleave", resumeCountdown);
   // WegXen gilt ebenfalls als gelesen.
   box.querySelector(".notify-close").addEventListener("click", () => { markAsRead(); close(); });
+  // Aktions-Button (z.B. "Im Audit öffnen"): ausführen und Box schließen.
+  box.querySelector(".notify-action")?.addEventListener("click", () => {
+    markAsRead();
+    try { opts.action.onClick?.(); } catch {}
+    close();
+  });
   // Jede sonstige Interaktion (Klick auf die Box) -> gelesen.
   box.addEventListener("mousedown", markAsRead);
 
@@ -162,9 +173,30 @@ function escapeHtml(text) {
 
 // Wie notify(), protokolliert Fehler/Warnungen aber ZUSÄTZLICH im Audit-Log
 // (best effort - schlägt das Logging fehl, wird die Box trotzdem angezeigt).
+// Weil der Eintrag im Audit landet, bekommt die Box neben dem ✕ einen
+// "Im Audit öffnen"-Button, der das Audit-Log öffnet und den Eintrag kurz
+// hervorhebt.
 export function notifyError(message, level = "error", context = null, durationMs = 8000) {
-  const close = notify(message, level, durationMs);
-  if (level === "error" || level === "warn") {
+  const logged = level === "error" || level === "warn";
+  // Muss zum Backend-Format passen (audit_routes.log_client_error):
+  const expectedDetails = context ? `[${context}] ${message}` : message;
+  const opts = logged ? {
+    action: {
+      label: "📋 Im Audit öffnen",
+      onClick: () => {
+        import("./windowmanager.js").then(({ openWindow }) => {
+          openWindow({ singleton: true, key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
+          // Kurz warten, bis das Audit-Fenster gerendert ist und seinen
+          // Highlight-Listener registriert hat.
+          setTimeout(() => window.dispatchEvent(new CustomEvent("audit-highlight", {
+            detail: { needle: expectedDetails.slice(0, 120), ts: Date.now() },
+          })), 400);
+        }).catch(() => {});
+      },
+    },
+  } : {};
+  const close = notify(message, level, durationMs, opts);
+  if (logged) {
     // dynamischer Import, um Zyklen zu vermeiden
     import("./api.js").then(({ api }) => {
       api.logError(message, level, context).catch(() => { /* egal */ });
