@@ -24,3 +24,8 @@ ldap3>=2.9.0            # LDAP/Active-Directory-Anmeldung (Realms). Optional: oh
 # Der zuverlässige Weg ist immer der native ".rdp"-Download (mstsc).
 # Zum Aktivieren die folgende Zeile einkommentieren:
 # pyrdp-mitm>=2.1.0
+
+# --- Optional: Externe SQL-Datenbank (Settings -> Datenbank) ---
+# Nur nötig, wenn auf eine externe Datenbank umgeschaltet werden soll:
+# PyMySQL>=1.1.0          # MySQL / MariaDB
+# psycopg2-binary>=2.9.0  # PostgreSQL

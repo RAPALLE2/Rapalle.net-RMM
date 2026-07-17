@@ -282,6 +282,12 @@ export const api = {
 
   // --- Rechte / Gruppen ---
   getSettings: () => request("/api/admin/settings"),  updateSettings: (data) => request("/api/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
+  getServerUpdateInfo: () => request("/api/admin/update/info"),
+  setServerUpdateRepo: (url) => request("/api/admin/update/repo", { method: "PUT", body: JSON.stringify({ url }) }),
+  runServerUpdate: (target, tag) => request("/api/admin/update/run", { method: "POST", body: JSON.stringify({ target, tag: tag || null }) }),
+  getDatabaseInfo: () => request("/api/admin/database/info"),
+  testDatabase: (cfg) => request("/api/admin/database/test", { method: "POST", body: JSON.stringify(cfg) }),
+  switchDatabase: (cfg) => request("/api/admin/database/switch", { method: "POST", body: JSON.stringify(cfg) }),
 
   getPermissions: () => request("/api/admin/permissions"),
   getGroups: () => request("/api/admin/groups"),

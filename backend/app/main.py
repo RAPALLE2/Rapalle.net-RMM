@@ -39,12 +39,18 @@ from app.routers import (
     scripts_routes,
     admin_routes,
     agent_update_routes,
+    update_routes,
+    database_routes,
     guac_routes,
     source_routes,
     relay_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
+# Vorher: Ist der externe Datenbank-Modus aktiv, den Stand von extern laden
+# (danach laufen init_db-Migrationen ganz normal über den geladenen Stand).
+from app import dbsync as _dbsync
+_dbsync.startup_restore_if_external()
 db.init_db()
 
 # Beim Start aufräumen: alte Audit-Einträge (30 Tage) und alte
@@ -80,6 +86,8 @@ api.include_router(recordings_routes.router)
 api.include_router(scripts_routes.router)
 api.include_router(admin_routes.router)
 api.include_router(agent_update_routes.router)
+api.include_router(update_routes.router)
+api.include_router(database_routes.router)
 api.include_router(guac_routes.router)
 api.include_router(source_routes.router)
 api.include_router(relay_routes.router)
@@ -380,6 +388,39 @@ async def _uptime_monitor_engine():
 async def _start_background_tasks():
     _asyncio.create_task(_automation_engine())
     _asyncio.create_task(_uptime_monitor_engine())
+    _asyncio.create_task(_server_auto_update_engine())
+    _asyncio.create_task(_db_sync_engine())
+
+
+async def _db_sync_engine():
+    """Spiegelt die lokale DB alle 60 s in die externe DB (nur bei Änderungen)."""
+    while True:
+        await _asyncio.sleep(60)
+        try:
+            loop = _asyncio.get_event_loop()
+            await loop.run_in_executor(None, _dbsync.periodic_sync)
+        except Exception as e:
+            print(f"[dbsync] Engine-Fehler: {e}")
+
+
+@api.on_event("shutdown")
+async def _final_db_sync():
+    """Beim Herunterfahren letzten Stand in die externe DB schreiben."""
+    try:
+        _dbsync.periodic_sync()
+    except Exception as e:
+        print(f"[dbsync] Finaler Sync fehlgeschlagen: {e}")
+
+
+async def _server_auto_update_engine():
+    """Prüft periodisch (alle 30 min), ob ein Server-Auto-Update ansteht."""
+    await _asyncio.sleep(60)   # dem Backend erst Zeit zum Hochfahren geben
+    while True:
+        try:
+            await update_routes.auto_update_tick()
+        except Exception as e:
+            print(f"[auto-update] Engine-Fehler: {e}")
+        await _asyncio.sleep(1800)
 
 
 # 3) Frontend-Ordner als statische Dateien einhängen.

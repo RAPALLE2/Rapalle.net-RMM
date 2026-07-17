@@ -2225,6 +2225,59 @@ def _notify_screen_mode(loop, mode, reason=""):
         pass
 
 
+def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
+    """
+    Zeigt am Gerät eine Abfrage "Remote-Bildschirm zulassen?" und gibt True
+    zurück, wenn der Benutzer zustimmt. Keine Antwort innerhalb des Timeouts,
+    Ablehnung oder ein Fehler (kein Dialog möglich) bedeuten NEIN - verbunden
+    wird nur bei ausdrücklicher Bestätigung.
+    Läuft blockierend und wird deshalb im Executor ausgeführt.
+    """
+    who = requested_by or "Ein Administrator"
+    title = "RAPALLE.net RMM - Remote-Bildschirm"
+    text = (f"{who} möchte den Bildschirm dieses Computers sehen und steuern.\n\n"
+            f"Zulassen? (Ohne Antwort wird nach {timeout_s} Sekunden automatisch abgelehnt.)")
+    try:
+        if IS_WINDOWS:
+            import ctypes
+            MB_YESNO = 0x4; MB_ICONQUESTION = 0x20
+            MB_SYSTEMMODAL = 0x1000; MB_SETFOREGROUND = 0x10000; MB_TOPMOST = 0x40000
+            flags = MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
+            user32 = ctypes.windll.user32
+            try:
+                # MessageBoxTimeoutW: wie MessageBox, aber mit Timeout (ms).
+                # Rückgabe 6 = Ja, 7 = Nein, 32000 = Timeout.
+                res = user32.MessageBoxTimeoutW(0, text, title, flags, 0, timeout_s * 1000)
+            except AttributeError:
+                res = user32.MessageBoxW(0, text, title, flags)
+            return res == 6
+        # Linux (Desktop): zenity -> kdialog -> xmessage, was verfügbar ist.
+        import shutil as _shutil
+        if _shutil.which("zenity"):
+            r = _run(["zenity", "--question", f"--title={title}", f"--text={text}",
+                      f"--timeout={timeout_s}", "--ok-label=Zulassen", "--cancel-label=Ablehnen"],
+                     capture_output=True)
+            return r.returncode == 0   # 0=Ja, 1=Nein, 5=Timeout
+        if _shutil.which("kdialog"):
+            try:
+                r = _run(["kdialog", "--title", title, "--yesno", text],
+                         capture_output=True, timeout=timeout_s + 5)
+                return r.returncode == 0
+            except Exception:
+                return False           # Timeout/Fehler -> abgelehnt
+        if _shutil.which("xmessage"):
+            # Exit-Code = Button-Wert; Timeout liefert 0 -> deshalb 101/102.
+            r = _run(["xmessage", "-center", "-timeout", str(timeout_s),
+                      "-buttons", "Zulassen:101,Ablehnen:102", text],
+                     capture_output=True)
+            return r.returncode == 101
+        _print("[agent] Kein Dialog-Werkzeug (zenity/kdialog/xmessage) gefunden - Remote-Bildschirm abgelehnt")
+        return False
+    except Exception as e:
+        _print(f"[agent] Zustimmungs-Dialog fehlgeschlagen ({e}) - Remote-Bildschirm abgelehnt")
+        return False
+
+
 @sio.on("screen-start", namespace="/agent")
 async def on_screen_start(data):
     """Startet das Bildschirm-Streaming - oder signalisiert Shell-Modus bei headless."""
@@ -2251,6 +2304,31 @@ async def on_screen_start(data):
 
     if _screen_stream["active"]:
         return  # läuft schon
+
+    # Zustimmung am Gerät einholen (nur physische Geräte; das Backend schickt
+    # require_consent entsprechend - und als doppelte Absicherung fragen VMs
+    # und LXCs auch bei gesetztem Flag nie).
+    require_consent = bool(isinstance(data, dict) and data.get("require_consent"))
+    if DETECTED_DEVICE_TYPE in ("vm", "lxc"):
+        require_consent = False
+    if require_consent:
+        requested_by = (data or {}).get("requested_by") or ""
+        _notify_screen_mode(loop, "consent", "Warte auf Bestätigung am Gerät...")
+        allowed = await loop.run_in_executor(None, _ask_screen_consent, requested_by)
+        if _screen_stream["active"]:
+            return  # in der Zwischenzeit anderweitig gestartet
+        if not allowed:
+            _print("[agent] Remote-Bildschirm am Gerät ABGELEHNT (oder keine Antwort)")
+            try:
+                await sio.emit("screen-error", {
+                    "id": DEVICE_ID, "consent_denied": True,
+                    "error": "Der Benutzer am Gerät hat den Remote-Bildschirm nicht bestätigt.",
+                }, namespace="/agent")
+            except Exception:
+                pass
+            return
+        _print("[agent] Remote-Bildschirm am Gerät ZUGELASSEN")
+
     _screen_stream["active"] = True
     _screen_stream["thread"] = threading.Thread(target=_screen_capture_loop, args=(loop,), daemon=True)
     _screen_stream["thread"].start()

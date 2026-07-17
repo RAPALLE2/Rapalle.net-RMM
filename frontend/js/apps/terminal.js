@@ -36,10 +36,13 @@ export function renderTerminal(body, win) {
         </select>
         <span style="font-size:11px;color:var(--subtext)">gilt beim (Neu-)Start</span>
         <span style="flex:1"></span>
-        <select id="term-script-${win.key}" title="Gespeichertes Skript in dieser Shell ausführen"
-          style="max-width:160px;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
-          <option value="">📜 Skript…</option>
-        </select>
+        <span style="position:relative;display:inline-flex">
+          <button class="taskbar-btn" id="term-script-${win.key}" title="Gespeichertes Skript wählen (mit Suche und Ordnern)" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 Skript…</button>
+          <div id="term-script-menu-${win.key}" class="hidden" style="position:absolute;top:calc(100% + 4px);right:0;z-index:60;width:280px;max-height:320px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
+            <input type="text" id="term-script-search-${win.key}" placeholder="🔍 Skript suchen…" style="margin:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
+            <div id="term-script-list-${win.key}" style="overflow-y:auto;padding:0 6px 8px"></div>
+          </div>
+        </span>
         <button class="taskbar-btn" id="term-script-run-${win.key}" title="Gewähltes Skript ausführen">▶</button>
         <button class="taskbar-btn" id="term-agentcon-${win.key}" title="Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten">🤖 Agent-Konsole</button>
         <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
@@ -52,10 +55,13 @@ export function renderTerminal(body, win) {
       <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center">
         <span style="font-size:11px;color:var(--subtext)">Interaktive Shell auf ${esc(clientName || "Client")}</span>
         <span style="flex:1"></span>
-        <select id="term-script-${win.key}" title="Gespeichertes Skript in dieser Shell ausführen"
-          style="max-width:160px;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
-          <option value="">📜 Skript…</option>
-        </select>
+        <span style="position:relative;display:inline-flex">
+          <button class="taskbar-btn" id="term-script-${win.key}" title="Gespeichertes Skript wählen (mit Suche und Ordnern)" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 Skript…</button>
+          <div id="term-script-menu-${win.key}" class="hidden" style="position:absolute;top:calc(100% + 4px);right:0;z-index:60;width:280px;max-height:320px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
+            <input type="text" id="term-script-search-${win.key}" placeholder="🔍 Skript suchen…" style="margin:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
+            <div id="term-script-list-${win.key}" style="overflow-y:auto;padding:0 6px 8px"></div>
+          </div>
+        </span>
         <button class="taskbar-btn" id="term-script-run-${win.key}" title="Gewähltes Skript ausführen">▶</button>
         <button class="taskbar-btn" id="term-agentcon-${win.key}" title="Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten">🤖 Agent-Konsole</button>
         <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
@@ -237,20 +243,79 @@ export function renderTerminal(body, win) {
 
   // --- Skript ausführen: gespeicherte Skripte laden (passend zum OS des
   //     Clients gefiltert) und den Befehl direkt in die laufende Shell tippen.
+  //     Auswahl über ein durchsuchbares Menü MIT Ordnerstruktur.
   //     Mehrzeilige Skripte werden Zeile für Zeile mit Enter gesendet. ---
-  const scriptSel = body.querySelector(`#term-script-${win.key}`);
+  const scriptBtn = body.querySelector(`#term-script-${win.key}`);
+  const scriptMenu = body.querySelector(`#term-script-menu-${win.key}`);
+  const scriptSearch = body.querySelector(`#term-script-search-${win.key}`);
+  const scriptList = body.querySelector(`#term-script-list-${win.key}`);
   let termScripts = [];
+  let selectedScript = null;
+
+  function renderScriptMenu() {
+    const q = (scriptSearch?.value || "").trim().toLowerCase();
+    const match = (sc) => !q ||
+      sc.name.toLowerCase().includes(q) ||
+      (sc.folder || "").toLowerCase().includes(q) ||
+      (sc.command || "").toLowerCase().includes(q);
+    const filtered = termScripts.filter(match);
+    if (!filtered.length) {
+      scriptList.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:6px">Keine Skripte gefunden.</div>`;
+      return;
+    }
+    // Nach Ordnern gruppieren (Ordner alphabetisch, "ohne Ordner" zuletzt)
+    const groups = new Map();
+    for (const sc of filtered) {
+      const f = (sc.folder || "").trim();
+      if (!groups.has(f)) groups.set(f, []);
+      groups.get(f).push(sc);
+    }
+    const keys = [...groups.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+    const item = (sc, indent) => `
+      <div data-pick="${esc(sc.id)}" style="padding:5px 8px 5px ${indent}px;border-radius:6px;cursor:pointer;font-size:12px;display:flex;gap:6px;align-items:center${selectedScript?.id === sc.id ? ";background:var(--panel-2)" : ""}"
+           onmouseover="this.style.background='var(--panel-2)'" onmouseout="this.style.background='${selectedScript?.id === sc.id ? "var(--panel-2)" : ""}'">
+        <span>📜</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sc.name)}</span>
+        <span style="font-size:10px;color:var(--subtext);text-transform:uppercase">${esc(sc.os)}</span>
+      </div>`;
+    scriptList.innerHTML = keys.map((f) => f === ""
+      ? groups.get(f).map((sc) => item(sc, 8)).join("")
+      : `<div style="font-size:11px;color:var(--subtext);font-weight:600;padding:6px 4px 2px">📁 ${esc(f)}</div>` +
+        groups.get(f).map((sc) => item(sc, 20)).join("")
+    ).join("");
+    scriptList.querySelectorAll("[data-pick]").forEach((el) =>
+      el.addEventListener("click", () => {
+        selectedScript = termScripts.find((x) => x.id === el.dataset.pick) || null;
+        if (selectedScript) scriptBtn.textContent = `📜 ${selectedScript.name}`;
+        scriptMenu.classList.add("hidden");
+        term.focus();
+      })
+    );
+  }
+
   import("../api.js").then(({ api }) => api.getScripts()).then((scripts) => {
     termScripts = (scripts || []).filter((sc) =>
       sc.os === "any" || (isWindows ? sc.os === "windows" : sc.os === "linux"));
-    if (scriptSel) {
-      scriptSel.innerHTML = `<option value="">📜 Skript…</option>` +
-        termScripts.map((sc) => `<option value="${esc(sc.id)}">${esc(sc.name)}</option>`).join("");
-    }
   }).catch(() => {});
+
+  scriptBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const show = scriptMenu.classList.contains("hidden");
+    scriptMenu.classList.toggle("hidden", !show);
+    if (show) { renderScriptMenu(); scriptSearch.value = ""; renderScriptMenu(); scriptSearch.focus(); }
+  });
+  scriptSearch?.addEventListener("input", renderScriptMenu);
+  scriptSearch?.addEventListener("keydown", (e) => e.stopPropagation());
+  scriptMenu?.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", function closeMenu(e) {
+    if (!document.body.contains(scriptMenu)) { document.removeEventListener("click", closeMenu); return; }
+    if (!scriptMenu.classList.contains("hidden") && !scriptMenu.contains(e.target) && e.target !== scriptBtn) {
+      scriptMenu.classList.add("hidden");
+    }
+  });
+
   function runSelectedScript() {
-    const sc = termScripts.find((x) => x.id === scriptSel?.value);
-    if (!sc) return;
+    const sc = selectedScript;
+    if (!sc) { scriptBtn?.click(); return; }   // noch nichts gewählt -> Menü öffnen
     const lines = String(sc.command || "").replace(/\r\n/g, "\n").split("\n").filter((l) => l.trim() !== "");
     for (const line of lines) {
       dashboardSocket.emit("term-input", { clientId, session: sessionId, data: line + "\r" });

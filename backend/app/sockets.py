@@ -689,13 +689,23 @@ async def dashboard_screen_start(sid, data):
     # Bilder). Der Agent nutzt diese Werte fürs JPEG-Encoding & die Sende-Rate.
     quality = _db.get_int_setting("screen_record_quality") or 40
     fps = _db.get_int_setting("screen_record_fps") or 5
-    await send_to_agent(client_id, "screen-start", {"quality": quality, "fps": fps})
+
+    # Zustimmung am Gerät: PHYSISCHE Geräte bekommen eine Abfrage angezeigt und
+    # der Bildschirm startet erst nach Bestätigung. VMs und LXCs sind bewusst
+    # ausgenommen (dort sitzt niemand davor) und verbinden direkt.
+    client = _db.get_client(client_id)
+    needs_consent = bool(client) and (client.get("device_type") or "physical") == "physical"
+
+    await send_to_agent(client_id, "screen-start", {
+        "quality": quality, "fps": fps,
+        "require_consent": needs_consent,
+        "requested_by": data.get("username", ""),
+    })
 
     # Aufzeichnung nur starten, wenn global aktiviert.
     recording_on = _db.get_setting("recording_enabled", "1") == "1"
 
     # Aufzeichnung starten (falls Client bekannt und aktiviert) + Audit-Log.
-    client = _db.get_client(client_id)
     if client:
         rec_id = recording.start_recording(
             client_id, client["hostname"], data.get("username", "unbekannt"),

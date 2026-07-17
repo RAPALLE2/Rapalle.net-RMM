@@ -196,6 +196,115 @@ export function renderSettings(body, win) {
           <input type="number" min="1" step="1" id="ge-replay" value="${esc(String(s.replay_retention_days ?? 10))}" />
         </div>
 
+        <h3 style="margin-top:24px">Update</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Aktualisiert den RMM-Server direkt aus dem GitHub-Repo. Das Backend
+          startet nach einem Update automatisch neu.
+        </p>
+        <button class="btn-primary" id="up-toggle" style="width:auto">🔄 Update-Optionen anzeigen</button>
+        <div id="up-panel" class="hidden" style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--panel-2)">
+          <div id="up-loading" style="color:var(--subtext);font-size:13px">Lade Update-Informationen von GitHub…</div>
+          <div id="up-content" class="hidden">
+            <div style="font-size:13px;margin-bottom:10px">
+              Installierte Version: <b id="up-current"></b>
+            </div>
+            <div class="form-row">
+              <label>GitHub-Repo (backend/repo.txt)</label>
+              <div style="display:flex;gap:8px">
+                <input type="text" id="up-repo" style="flex:1" />
+                <button class="taskbar-btn" id="up-repo-save">Speichern</button>
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Update-Ziel</label>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+                <input type="radio" name="up-target" value="commit" checked /> <span id="up-lbl-commit">Neuester Commit</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+                <input type="radio" name="up-target" value="full" /> <span id="up-lbl-full">Neuestes Full-Release</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+                <input type="radio" name="up-target" value="any" /> <span id="up-lbl-any">Neuestes Release (Alpha + Full)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
+                <input type="radio" name="up-target" value="custom" /> Custom:
+                <select id="up-custom" style="flex:1"></select>
+              </label>
+            </div>
+            <div id="up-error" class="form-error hidden"></div>
+            <button class="btn-primary" id="up-run" style="margin-top:6px">⬇️ Update installieren</button>
+
+            <h4 style="margin-top:18px">Auto-Update</h4>
+            <div class="form-row">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="up-auto" ${(s.server_auto_update ?? "0") === "1" ? "checked" : ""} />
+                Server automatisch aktualisieren
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Auto-Update-Kanal</label>
+              <select id="up-auto-channel">
+                <option value="commit" ${(s.server_auto_update_channel || "full") === "commit" ? "selected" : ""}>Neuester Commit</option>
+                <option value="full" ${(s.server_auto_update_channel || "full") === "full" ? "selected" : ""}>Neuestes Full-Release</option>
+                <option value="any" ${(s.server_auto_update_channel || "full") === "any" ? "selected" : ""}>Neuestes Release (Alpha + Full)</option>
+              </select>
+            </div>
+            <button class="taskbar-btn" id="up-auto-save">Auto-Update speichern</button>
+          </div>
+        </div>
+
+        <h3 style="margin-top:24px">Datenbank</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Speicherort der RMM-Daten: <b>Lokal</b> (SQLite-Datei im Backend) oder
+          <b>Extern</b> (MySQL/MariaDB, PostgreSQL oder SQLite-Datei z.B. auf einer
+          Netzwerkfreigabe). Beim Umschalten werden <b>alle Daten kopiert</b>
+          (lokal → extern bzw. extern → lokal) und das Backend startet neu.
+          Im externen Modus ist die externe DB der persistente Speicher und wird
+          im Betrieb laufend synchron gehalten.
+        </p>
+        <div id="dbx-loading" style="color:var(--subtext);font-size:13px">Lade Datenbank-Status…</div>
+        <div id="dbx-content" class="hidden">
+          <div style="font-size:13px;margin-bottom:8px">Aktueller Modus: <b id="dbx-mode"></b></div>
+          <div class="form-row">
+            <label>Typ der externen Datenbank</label>
+            <select id="dbx-type">
+              <option value="mysql">MySQL / MariaDB</option>
+              <option value="postgres">PostgreSQL</option>
+              <option value="sqlite">SQLite-Datei (Pfad)</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:12px" id="dbx-hostrow">
+            <div class="form-row" style="flex:2">
+              <label>Host</label>
+              <input type="text" id="dbx-host" placeholder="192.168.1.50" />
+            </div>
+            <div class="form-row" style="flex:1">
+              <label>Port</label>
+              <input type="number" id="dbx-port" min="1" max="65535" />
+            </div>
+          </div>
+          <div style="display:flex;gap:12px" id="dbx-userrow">
+            <div class="form-row" style="flex:1">
+              <label>Benutzer</label>
+              <input type="text" id="dbx-user" />
+            </div>
+            <div class="form-row" style="flex:1">
+              <label>Passwort</label>
+              <input type="password" id="dbx-pass" placeholder="(unverändert lassen = leer)" />
+            </div>
+          </div>
+          <div class="form-row">
+            <label id="dbx-dblabel">Datenbank-Name</label>
+            <input type="text" id="dbx-name" placeholder="rapalle_rmm" />
+          </div>
+          <div id="dbx-error" class="form-error hidden"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+            <button class="taskbar-btn" id="dbx-test">Verbindung testen</button>
+            <button class="btn-primary" id="dbx-to-external" style="width:auto;margin:0">→ Auf externe Datenbank umschalten</button>
+            <button class="btn-primary" id="dbx-to-local" style="width:auto;margin:0">→ Auf lokale Datenbank umschalten</button>
+          </div>
+        </div>
+
         <h3 style="margin-top:24px">Agent Auto-Update</h3>
         <p style="color:var(--subtext);font-size:13px">
           Aktualisiert veraltete Agenten automatisch, sobald sie sich mit dem
@@ -296,6 +405,155 @@ export function renderSettings(body, win) {
         err.textContent = e.message; err.classList.remove("hidden");
       }
     });
+
+    // ---- Server-Update (Settings -> Update) ----
+    const upPanel = root.querySelector("#up-panel");
+    let upInfoLoaded = false;
+
+    async function loadUpdateInfo() {
+      const loading = root.querySelector("#up-loading");
+      const content = root.querySelector("#up-content");
+      loading.classList.remove("hidden"); content.classList.add("hidden");
+      try {
+        const info = await api.getServerUpdateInfo();
+        root.querySelector("#up-current").textContent =
+          info.current_version + (info.current_commit ? ` (Stand: ${String(info.current_commit).slice(0, 10)})` : "");
+        root.querySelector("#up-repo").value = info.repo_url || "";
+        const c = info.latest_commit || {};
+        root.querySelector("#up-lbl-commit").textContent =
+          `Neuester Commit${c.sha ? ` — ${c.sha.slice(0, 10)}` : ""}${c.message ? `: ${c.message}` : ""}`;
+        root.querySelector("#up-lbl-full").textContent =
+          `Neuestes Full-Release${info.latest_full_tag ? ` — ${info.latest_full_tag}` : " — keins gefunden"}`;
+        root.querySelector("#up-lbl-any").textContent =
+          `Neuestes Release (Alpha + Full)${info.latest_any_tag ? ` — ${info.latest_any_tag}` : " — keins gefunden"}`;
+        const sel = root.querySelector("#up-custom");
+        sel.innerHTML = (info.releases || []).length
+          ? info.releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}${r.alpha ? " (Alpha)" : " (Full)"}</option>`).join("")
+          : `<option value="">Keine Releases im Repo</option>`;
+        upInfoLoaded = true;
+        loading.classList.add("hidden"); content.classList.remove("hidden");
+      } catch (e) {
+        loading.textContent = `Fehler: ${e.message}`;
+      }
+    }
+
+    root.querySelector("#up-toggle").addEventListener("click", () => {
+      const show = upPanel.classList.contains("hidden");
+      upPanel.classList.toggle("hidden", !show);
+      root.querySelector("#up-toggle").textContent =
+        show ? "🔄 Update-Optionen ausblenden" : "🔄 Update-Optionen anzeigen";
+      if (show && !upInfoLoaded) loadUpdateInfo();
+    });
+
+    root.querySelector("#up-repo-save").addEventListener("click", async () => {
+      const err = root.querySelector("#up-error"); err.classList.add("hidden");
+      try {
+        await api.setServerUpdateRepo(root.querySelector("#up-repo").value.trim());
+        window.notify?.("Repo-URL gespeichert (backend/repo.txt)", "success");
+        upInfoLoaded = false; loadUpdateInfo();
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    });
+
+    root.querySelector("#up-run").addEventListener("click", async () => {
+      const err = root.querySelector("#up-error"); err.classList.add("hidden");
+      const target = root.querySelector('input[name="up-target"]:checked').value;
+      const tag = target === "custom" ? root.querySelector("#up-custom").value : null;
+      if (target === "custom" && !tag) { err.textContent = "Bitte ein Release wählen"; err.classList.remove("hidden"); return; }
+      const ok = await uiConfirm("Server-Update installieren?",
+        "Das Backend lädt den gewählten Stand aus GitHub, ersetzt seine Dateien und startet neu. Laufende Verbindungen brechen kurz ab.");
+      if (!ok) return;
+      const btn = root.querySelector("#up-run");
+      btn.disabled = true; btn.textContent = "Update läuft…";
+      try {
+        const res = await api.runServerUpdate(target, tag);
+        btn.textContent = "✓ Update eingespielt — Backend startet neu…";
+        window.notify?.(`${res.applied} eingespielt — Backend startet neu. Seite gleich neu laden.`, "success");
+        setTimeout(() => location.reload(), 8000);
+      } catch (e) {
+        btn.disabled = false; btn.textContent = "⬇️ Update installieren";
+        err.textContent = e.message; err.classList.remove("hidden");
+      }
+    });
+
+    root.querySelector("#up-auto-save").addEventListener("click", async () => {
+      const err = root.querySelector("#up-error"); err.classList.add("hidden");
+      try {
+        await api.updateSettings({
+          server_auto_update: root.querySelector("#up-auto").checked ? "1" : "0",
+          server_auto_update_channel: root.querySelector("#up-auto-channel").value,
+        });
+        window.notify?.("Auto-Update-Einstellungen gespeichert", "success");
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    });
+
+    // ---- Externe Datenbank (Settings -> Datenbank) ----
+    function dbxConfig() {
+      return {
+        type: root.querySelector("#dbx-type").value,
+        host: root.querySelector("#dbx-host").value.trim(),
+        port: parseInt(root.querySelector("#dbx-port").value, 10) || 0,
+        user: root.querySelector("#dbx-user").value.trim(),
+        password: root.querySelector("#dbx-pass").value,
+        database: root.querySelector("#dbx-name").value.trim(),
+      };
+    }
+
+    function dbxAdaptForm() {
+      const type = root.querySelector("#dbx-type").value;
+      const isFile = type === "sqlite";
+      root.querySelector("#dbx-hostrow").style.display = isFile ? "none" : "flex";
+      root.querySelector("#dbx-userrow").style.display = isFile ? "none" : "flex";
+      root.querySelector("#dbx-dblabel").textContent = isFile ? "Dateipfad (z.B. /mnt/share/rmm.sqlite)" : "Datenbank-Name";
+      const port = root.querySelector("#dbx-port");
+      if (!isFile && (!port.value || port.value === "0")) port.value = type === "postgres" ? "5432" : "3306";
+    }
+    root.querySelector("#dbx-type").addEventListener("change", dbxAdaptForm);
+
+    (async () => {
+      const loading = root.querySelector("#dbx-loading");
+      try {
+        const info = await api.getDatabaseInfo();
+        const c = info.config || {};
+        root.querySelector("#dbx-mode").textContent =
+          c.mode === "external" ? `Extern (${c.type})` : "Lokal (SQLite)";
+        root.querySelector("#dbx-type").value = c.type || "mysql";
+        root.querySelector("#dbx-host").value = c.host || "";
+        root.querySelector("#dbx-port").value = c.port || "";
+        root.querySelector("#dbx-user").value = c.user || "";
+        root.querySelector("#dbx-name").value = c.database || "";
+        dbxAdaptForm();
+        loading.classList.add("hidden");
+        root.querySelector("#dbx-content").classList.remove("hidden");
+        root.querySelector(c.mode === "external" ? "#dbx-to-external" : "#dbx-to-local").style.display = "none";
+      } catch (e) {
+        loading.textContent = `Fehler: ${e.message}`;
+      }
+    })();
+
+    root.querySelector("#dbx-test").addEventListener("click", async () => {
+      const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
+      try {
+        await api.testDatabase(dbxConfig());
+        window.notify?.("Verbindung erfolgreich", "success");
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    });
+
+    async function dbxSwitch(mode) {
+      const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
+      const ok = await uiConfirm(
+        mode === "external" ? "Auf externe Datenbank umschalten?" : "Auf lokale Datenbank umschalten?",
+        mode === "external"
+          ? "Alle Daten werden von der lokalen SQLite in die externe Datenbank kopiert (ersetzt dort vorhandene RMM-Daten). Danach startet das Backend neu."
+          : "Der Stand der externen Datenbank wird in die lokale SQLite kopiert. Danach startet das Backend neu und arbeitet lokal.");
+      if (!ok) return;
+      try {
+        const res = await api.switchDatabase({ ...dbxConfig(), mode });
+        window.notify?.(`${res.detail} — Backend startet neu, Seite lädt gleich neu.`, "success");
+        setTimeout(() => location.reload(), 8000);
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    }
+    root.querySelector("#dbx-to-external").addEventListener("click", () => dbxSwitch("external"));
+    root.querySelector("#dbx-to-local").addEventListener("click", () => dbxSwitch("local"));
 
     // ---- Guacamole (extern gehostet): Host/Port speichern + Erreichbarkeit ----
     const guacStatusEl = root.querySelector("#guacd-status");

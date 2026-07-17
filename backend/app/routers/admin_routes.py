@@ -559,6 +559,9 @@ class SettingsBody(BaseModel):
     guacd_port: int | None = None
     # Automatisches Agent-Update ("1" = an, "0" = aus; pro Client übersteuerbar)
     agent_auto_update: str | None = None
+    # Server-Selbst-Update (Settings -> Update)
+    server_auto_update: str | None = None            # "1" | "0"
+    server_auto_update_channel: str | None = None    # "commit" | "full" | "any"
 
 
 @router.get("/settings")

@@ -29,6 +29,11 @@ export function renderScripts(body, win) {
             <option value="windows">Windows</option>
           </select>
         </div>
+        <div class="form-row">
+          <label>Ordner (optional)</label>
+          <input type="text" id="sc-folder" list="sc-folder-list" placeholder="z.B. Wartung" />
+          <datalist id="sc-folder-list"></datalist>
+        </div>
         <div id="sc-error" class="form-error hidden"></div>
         <button class="btn-primary" id="sc-add" style="margin-top:4px">+ Skript speichern</button>
 
@@ -41,11 +46,12 @@ export function renderScripts(body, win) {
       const name = body.querySelector("#sc-name").value.trim();
       const command = body.querySelector("#sc-cmd").value.trim();
       const os = body.querySelector("#sc-os").value;
+      const folder = body.querySelector("#sc-folder").value.trim();
       const err = body.querySelector("#sc-error");
       err.classList.add("hidden");
       if (!name || !command) { err.textContent = "Name und Befehl erforderlich"; err.classList.remove("hidden"); return; }
       try {
-        await api.createScript({ name, command, os });
+        await api.createScript({ name, command, os, folder });
         draw();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
@@ -65,9 +71,14 @@ export function renderScripts(body, win) {
       const onlineClients = state.clients.filter((c) => c.online);
       const clientOptions = onlineClients.map((c) => `<option value="${c.id}">${esc(c.hostname)}</option>`).join("");
 
-      listEl.innerHTML = scripts.map((s) => `
+      // Vorhandene Ordner sammeln (für Datalist im Formular + Verschieben-Auswahl)
+      const folders = [...new Set(scripts.map((s) => (s.folder || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+      const dl = body.querySelector("#sc-folder-list");
+      if (dl) dl.innerHTML = folders.map((f) => `<option value="${esc(f)}"></option>`).join("");
+
+      const renderScript = (s) => `
         <div class="panel" style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
             <strong>${esc(s.name)}</strong>
             <span style="font-size:11px;color:var(--subtext);text-transform:uppercase">${esc(s.os)}</span>
           </div>
@@ -77,11 +88,63 @@ export function renderScripts(body, win) {
               <option value="">Client wählen...</option>${clientOptions}
             </select>
             <button class="action-btn" data-run="${s.id}">▶ Ausführen</button>
+            <select data-move="${s.id}" title="In Ordner verschieben" style="padding:5px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+              <option value="">📁 ${(s.folder || "").trim() ? esc(s.folder) : "Kein Ordner"}</option>
+              ${(s.folder || "").trim() ? `<option value="__root__">(Kein Ordner)</option>` : ""}
+              ${folders.filter((f) => f !== (s.folder || "").trim()).map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")}
+              <option value="__new__">+ Neuer Ordner…</option>
+            </select>
             <button class="taskbar-btn" data-del="${s.id}">Löschen</button>
             <span data-result="${s.id}" style="font-size:12px;color:var(--subtext)"></span>
           </div>
-        </div>
-      `).join("");
+        </div>`;
+
+      // Nach Ordnern gruppiert anzeigen: erst alle Ordner (auf-/zuklappbar),
+      // dann Skripte ohne Ordner.
+      const byFolder = new Map();
+      for (const s of scripts) {
+        const key = (s.folder || "").trim();
+        if (!byFolder.has(key)) byFolder.set(key, []);
+        byFolder.get(key).push(s);
+      }
+      let html = "";
+      for (const f of folders) {
+        html += `
+          <details open style="margin-bottom:10px">
+            <summary style="cursor:pointer;font-weight:600;padding:6px 4px">📁 ${esc(f)} <span style="color:var(--subtext);font-weight:normal;font-size:12px">(${byFolder.get(f).length})</span></summary>
+            <div style="margin:8px 0 0 14px;border-left:2px solid var(--border);padding-left:12px">
+              ${byFolder.get(f).map(renderScript).join("")}
+            </div>
+          </details>`;
+      }
+      const rootScripts = byFolder.get("") || [];
+      if (rootScripts.length) {
+        html += folders.length
+          ? `<div style="font-weight:600;padding:6px 4px">📄 Ohne Ordner <span style="color:var(--subtext);font-weight:normal;font-size:12px">(${rootScripts.length})</span></div>`
+          : "";
+        html += rootScripts.map(renderScript).join("");
+      }
+      listEl.innerHTML = html;
+
+      // In Ordner verschieben
+      listEl.querySelectorAll("[data-move]").forEach((sel) =>
+        sel.addEventListener("change", async () => {
+          const s = scripts.find((x) => x.id === sel.dataset.move);
+          if (!s || !sel.value) return;
+          let folder = sel.value;
+          if (folder === "__root__") folder = "";
+          if (folder === "__new__") {
+            const { uiPrompt } = await import("../utils.js");
+            folder = await uiPrompt("Neuer Ordner", { placeholder: "Ordnername" });
+            if (!folder || !folder.trim()) { sel.value = ""; return; }
+            folder = folder.trim();
+          }
+          try {
+            await api.updateScript(s.id, { name: s.name, command: s.command, os: s.os, folder });
+            loadList();
+          } catch (e) { sel.value = ""; console.warn(e); }
+        })
+      );
 
       // Ausführen
       listEl.querySelectorAll("[data-run]").forEach((btn) =>

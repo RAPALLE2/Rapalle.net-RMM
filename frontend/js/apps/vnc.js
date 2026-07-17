@@ -260,6 +260,13 @@ export function renderVnc(body, win) {
     if (data.id !== clientId) return;
     // Rohen Fehlertext nur in die Konsole - die Oberfläche bleibt freundlich.
     console.warn("[screen] Fehler vom Agent:", data.error);
+    if (data.consent_denied) {
+      // Der Benutzer am Gerät hat nicht zugestimmt - das ist KEIN technischer
+      // Fehler, deshalb ohne Alternativen-Angebot anzeigen.
+      statusEl.textContent = "Am Gerät abgelehnt — keine Bestätigung durch den Benutzer";
+      statusEl.style.color = "var(--danger)";
+      return;
+    }
     statusEl.textContent = "Kein Bildschirm verfügbar";
     statusEl.style.color = "var(--danger)";
     showRdpOffer(data.error);
@@ -269,6 +276,11 @@ export function renderVnc(body, win) {
   function onMode(data) {
     if (data.id !== clientId) return;
     if (data.mode === "shell") switchToShell(data.reason);
+    if (data.mode === "consent") {
+      // Am Gerät wird gerade um Zustimmung gebeten.
+      statusEl.textContent = "Warte auf Bestätigung am Gerät…";
+      statusEl.style.color = "var(--subtext)";
+    }
   }
 
   // Zeigt bei einem Bildschirm-Fehler (typisch: headless VM) eine freundliche

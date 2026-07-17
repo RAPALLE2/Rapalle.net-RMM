@@ -315,6 +315,7 @@ def init_db() -> None:
     _migrate_add_column("users", "relay_ha1", "TEXT")  # Digest-HA1 = MD5(user:realm:konto-passwort), bei Login gesetzt
     _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = im Explorer-Relay freigegeben
     _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
+    _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
 
     # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
     # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
@@ -422,7 +423,7 @@ def _seed_default_scripts() -> None:
         if name in existing_names:
             continue
         _conn.execute(
-            "INSERT INTO scripts (id, name, command, os, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO scripts (id, name, command, os, folder, created_at) VALUES (?, ?, ?, ?, 'Standard', ?)",
             (_new_id(), name, command, os_target, _now_ms()),
         )
         created += 1
@@ -1024,20 +1025,20 @@ def get_script(script_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def create_script(name: str, command: str, os_target: str) -> dict:
+def create_script(name: str, command: str, os_target: str, folder: str = "") -> dict:
     sid = _new_id()
     _conn.execute(
-        "INSERT INTO scripts (id, name, command, os, created_at) VALUES (?, ?, ?, ?, ?)",
-        (sid, name, command, os_target, _now_ms()),
+        "INSERT INTO scripts (id, name, command, os, folder, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (sid, name, command, os_target, (folder or "").strip(), _now_ms()),
     )
     _conn.commit()
     return get_script(sid)
 
 
-def update_script(script_id: str, name: str, command: str, os_target: str) -> dict | None:
+def update_script(script_id: str, name: str, command: str, os_target: str, folder: str = "") -> dict | None:
     _conn.execute(
-        "UPDATE scripts SET name = ?, command = ?, os = ? WHERE id = ?",
-        (name, command, os_target, script_id),
+        "UPDATE scripts SET name = ?, command = ?, os = ?, folder = ? WHERE id = ?",
+        (name, command, os_target, (folder or "").strip(), script_id),
     )
     _conn.commit()
     return get_script(script_id)
@@ -1394,6 +1395,11 @@ DEFAULT_SETTINGS = {
     # Extern gehostetes Apache guacd (für Remote-Desktop im Browser).
     "guacd_host": "127.0.0.1",
     "guacd_port": "4822",
+    # Server-Selbst-Update aus GitHub: "1" = automatisch, Kanal siehe unten.
+    "server_auto_update": "0",
+    # "commit" = neuester Commit, "full" = neuestes Full-Release,
+    # "any" = neuestes Release (Alpha und Full)
+    "server_auto_update_channel": "full",
     # Automatisches Agent-Update: "1" = veraltete Agenten aktualisieren sich
     # beim Verbinden selbst (Clients mit auto_update='global' folgen dieser
     # Einstellung; 'on'/'off' pro Client hat Vorrang). Default aus.

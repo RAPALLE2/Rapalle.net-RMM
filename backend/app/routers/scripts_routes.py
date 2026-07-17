@@ -25,6 +25,7 @@ class ScriptBody(BaseModel):
     name: str
     command: str
     os: str = "any"   # "windows" | "linux" | "any"
+    folder: str = ""  # Ordner in der Scripts-App ("" = kein Ordner)
 
 
 @router.get("")
@@ -34,14 +35,14 @@ async def list_scripts(user: dict = Depends(get_current_user)):
 
 @router.post("")
 async def create_script(body: ScriptBody, user: dict = Depends(get_current_user)):
-    script = db.create_script(body.name, body.command, body.os)
+    script = db.create_script(body.name, body.command, body.os, body.folder)
     db.add_audit_entry(user["username"], "script.created", target=script["id"], details=body.name)
     return script
 
 
 @router.put("/{script_id}")
 async def update_script(script_id: str, body: ScriptBody, user: dict = Depends(get_current_user)):
-    script = db.update_script(script_id, body.name, body.command, body.os)
+    script = db.update_script(script_id, body.name, body.command, body.os, body.folder)
     db.add_audit_entry(user["username"], "script.updated", target=script_id, details=body.name)
     return script
 
