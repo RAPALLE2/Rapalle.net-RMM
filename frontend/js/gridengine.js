@@ -78,6 +78,11 @@ export function cellSize(host) {
 export function applyGridPos(card, tile) {
   card.style.gridColumn = `${tile.gx + 1} / span ${tile.gw}`;
   card.style.gridRow = `${tile.gy + 1} / span ${tile.gh}`;
+  // Handy-Modus (mobile.css stapelt alles in EINE Spalte): "order" sorgt
+  // dafür, dass die Stapel-Reihenfolge der visuellen Desktop-Reihenfolge
+  // (erst Reihe, dann Spalte) entspricht. Am Desktop wirkungslos, weil dort
+  // alle Kacheln explizite gridColumn/gridRow-Positionen haben.
+  card.style.order = (tile.gy || 0) * 1000 + (tile.gx || 0);
 }
 
 // Host-Höhe nachziehen, wenn Kacheln nach unten wachsen.

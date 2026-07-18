@@ -320,7 +320,7 @@ export function renderClientLayout(host, toolbarHost, client) {
     toolbarHost.innerHTML = edit ? `<span class="dash-edit-tools">
           ${profSelect}
           <button data-prof-new title="Neues Profil (Kopie des aktuellen Layouts) anlegen">＋ Profil</button>
-          ${activeProf && !isPreset ? `<button data-prof-rename title="Aktives Profil umbenennen">✎</button>` : ""}
+          ${activeProf && !isPreset ? `<button data-prof-rename title="Aktives Profil umbenennen">✏️</button>` : ""}
           ${activeProf ? `<button data-prof-delete title="${isPreset ? "Eigene Anpassungen dieses Presets verwerfen (zurück zur Vorgabe)" : "Aktives Profil löschen"}">🗑</button>` : ""}
           ${activeProf && isPreset && isAdmin() ? `<button data-prof-org title="Dieses Preset mit dem aktuellen Layout für ALLE Nutzer überschreiben">💾 Profil für alle</button>` : ""}
           <button data-add-panel>+ Panel</button>
@@ -430,7 +430,11 @@ export function renderClientLayout(host, toolbarHost, client) {
   // Render-Kontext merken - so können bei neuen Agent-Metriken NUR die
   // Werte/SVGs überschrieben werden, statt das ganze Panel neu einzufügen.
   host.dataset.clientId = client.id;
-  host.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+  // minmax(0, 1fr) statt 1fr: "1fr" ist intern minmax(auto, 1fr), d.h. breiter
+  // Inhalt konnte seine Spalte aufdehnen und das Raster über den Bildschirm
+  // hinausschieben. Mit minmax(0, 1fr) sind IMMER alle 5 Spalten sichtbar und
+  // wachsen/schrumpfen exakt mit der Bildschirmbreite mit (wie im Dashboard).
+  host.style.gridTemplateColumns = `repeat(${COLS}, minmax(0, 1fr))`;
   host.style.gridAutoRows = `${ROW_H}px`;
   host.style.gap = `${GAP}px`;
   host.style.minHeight = `${rows * ROW_H + (rows - 1) * GAP}px`;
@@ -546,7 +550,7 @@ function buildPanel(panel, client, ctx) {
   const tools = document.createElement("span");
   tools.className = "dash-lp-tools";
   const popBtn = document.createElement("button");
-  popBtn.className = "dash-lp-btn"; popBtn.title = "Als eigenes Fenster herauslösen"; popBtn.textContent = "⧉";
+  popBtn.className = "dash-lp-btn"; popBtn.title = "Als eigenes Fenster herauslösen"; popBtn.textContent = "↗️";
   popBtn.addEventListener("click", (e) => { e.stopPropagation(); detachPanel(panel, client); });
   tools.appendChild(popBtn);
   if (edit) {
@@ -554,7 +558,7 @@ function buildPanel(panel, client, ctx) {
       // Eigener Name für JEDES Client-Widget (nicht nur Ordner/Text) - wie
       // bei den Flotten-Widgets im Dashboard. Leer = Standard-Titel.
       const ren = document.createElement("button");
-      ren.className = "dash-lp-btn"; ren.title = "Eigenen Namen geben"; ren.textContent = "✎";
+      ren.className = "dash-lp-btn"; ren.title = "Eigenen Namen geben"; ren.textContent = "✏️";
       ren.addEventListener("click", async (e) => {
         e.stopPropagation();
         const name = await uiPrompt("Widget-Namen ändern", {

@@ -26,7 +26,7 @@ export function renderTaskManager(body, win) {
         <label style="color:var(--subtext);font-size:12px;display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="tm-auto-${win.key}" checked /> Auto
         </label>
-        <button id="tm-refresh-${win.key}">⟳</button>
+        <button id="tm-refresh-${win.key}">🔄</button>
       </div>
       <div style="padding:6px 10px;font-size:12px;color:var(--subtext)" id="tm-summary-${win.key}"></div>
       <div style="flex:1;overflow:auto">

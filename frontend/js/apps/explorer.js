@@ -86,8 +86,8 @@ export function renderExplorer(body, win) {
       <div id="exp-files-${win.key}" style="display:flex;flex-direction:column;flex:1;min-height:0">
         <div class="explorer-toolbar" style="flex-wrap:wrap;gap:6px">
           <button id="exp-back-${win.key}" title="Zurück">←</button>
-          <button id="exp-refresh-${win.key}" title="Aktualisieren">⟳</button>
-          <button id="exp-up-${win.key}" title="Übergeordneter Ordner">⬆</button>
+          <button id="exp-refresh-${win.key}" title="Aktualisieren">🔄</button>
+          <button id="exp-up-${win.key}" title="Übergeordneter Ordner">⬆️</button>
           <div id="exp-crumbs-${win.key}" title="Klicken, um den Pfad zu bearbeiten oder einzufügen" style="flex:1;color:var(--subtext);overflow-x:auto;white-space:nowrap;cursor:text"></div>
           <input id="exp-path-${win.key}" class="hidden" spellcheck="false" style="flex:1;font-family:monospace;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--accent);background:var(--panel-2);color:var(--text)" />
           <button id="exp-copy-${win.key}" title="Aktuellen Pfad kopieren">📋</button>
@@ -192,7 +192,7 @@ export function renderExplorer(body, win) {
       catch { text = atob(res.data); }
       const overlay = openOverlay(`
         <div style="display:flex;flex-direction:column;height:70vh">
-          <div style="margin-bottom:8px;color:var(--subtext)">✎ ${esc(entry.name)}</div>
+          <div style="margin-bottom:8px;color:var(--subtext)">✏️ ${esc(entry.name)}</div>
           <textarea id="exp-editor" style="flex:1;width:100%;font-family:monospace;font-size:13px;
             background:var(--panel-2,#0f1626);color:var(--text);border:1px solid var(--border);
             border-radius:8px;padding:10px;resize:none"></textarea>
@@ -299,7 +299,7 @@ export function renderExplorer(body, win) {
           tr.firstElementChild.addEventListener("dblclick", () => { history.push(entry.path); load(entry.path); });
         } else {
           if (isImg) actionsTd.appendChild(mkBtn("👁", "Ansehen", () => viewImage(entry)));
-          if (isTxt) actionsTd.appendChild(mkBtn("✎", "Bearbeiten", () => editFile(entry)));
+          if (isTxt) actionsTd.appendChild(mkBtn("✏️", "Bearbeiten", () => editFile(entry)));
           actionsTd.appendChild(mkBtn("⬇", "Download", () => downloadFile(entry)));
           tr.firstElementChild.title = isImg ? "Ansehen" : (isTxt ? "Bearbeiten" : "Download");
           tr.firstElementChild.addEventListener("dblclick", () =>

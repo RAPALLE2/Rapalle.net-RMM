@@ -29,6 +29,9 @@ export function renderTerminal(body, win) {
 
   const shellBar = isWindows ? `
       <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
+        <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
+        <button class="taskbar-btn term-fs-btn" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
+        <span class="bar-opts">
         <span style="font-size:11px;color:var(--subtext)">Shell:</span>
         <select id="term-shell-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
           <option value="cmd">CMD</option>
@@ -50,9 +53,13 @@ export function renderTerminal(body, win) {
         </select>
         <button class="taskbar-btn" id="term-export-${win.key}" title="Kompletten Terminal-Log herunterladen">⬇ Export</button>
         <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet cls/clear)">🧹 Clear</button>
-        <button class="taskbar-btn" id="term-restart-${win.key}">↻ Neustart</button>
+        <button class="taskbar-btn" id="term-restart-${win.key}">🔄 Neustart</button>
+        </span>
       </div>` : `
-      <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center">
+      <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
+        <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
+        <button class="taskbar-btn term-fs-btn" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
+        <span class="bar-opts">
         <span style="font-size:11px;color:var(--subtext)">Interaktive Shell auf ${esc(clientName || "Client")}</span>
         <span style="flex:1"></span>
         <span style="position:relative;display:inline-flex">
@@ -69,7 +76,8 @@ export function renderTerminal(body, win) {
         </select>
         <button class="taskbar-btn" id="term-export-${win.key}" title="Kompletten Terminal-Log herunterladen">⬇ Export</button>
         <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet clear)">🧹 Clear</button>
-        <button class="taskbar-btn" id="term-restart-${win.key}">↻ Neustart</button>
+        <button class="taskbar-btn" id="term-restart-${win.key}">🔄 Neustart</button>
+        </span>
       </div>`;
 
   body.innerHTML = `
@@ -78,7 +86,7 @@ export function renderTerminal(body, win) {
       <div id="term-host-${win.key}" style="flex:1 1 0;min-height:0;overflow:hidden;position:relative"></div>
       <div id="term-agenthost-${win.key}" style="flex:1 1 0;min-height:0;overflow:hidden;position:relative;display:none"></div>
       <div id="term-status-${win.key}" style="flex:none;font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">Verbinde…</div>
-      <div style="flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border)">
+      <div class="bar-optrow" style="flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border);flex-wrap:wrap">
         <span style="color:var(--subtext)">Text senden:</span>
         <select id="term-layout-${win.key}" title="Tastaturlayout: Text wird 1:1 als Zeichen an die Shell (PTY) gesendet - die Layout-Auswahl entspricht dem Remote-Screen und ist nur für Sonderfälle relevant"
           style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
@@ -95,6 +103,24 @@ export function renderTerminal(body, win) {
       </div>
     </div>
   `;
+
+  // ---- Browser-Vollbild (wie Remote Screen / Guacamole): Button toggelt ----
+  const fsBtnT = body.querySelector(".term-fs-btn");
+  if (fsBtnT) {
+    const fsRoot = () => body.closest(".rmm-window") || body;
+    const fsLabel = () => { fsBtnT.textContent = document.fullscreenElement ? "✕ Vollbild beenden" : "Vollbild"; };
+    fsBtnT.addEventListener("click", () => {
+      if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+      const el = fsRoot();
+      (el.requestFullscreen?.() || el.webkitRequestFullscreen?.());
+    });
+    const onFsChange = () => {
+      if (!document.body.contains(fsBtnT)) { document.removeEventListener("fullscreenchange", onFsChange); return; }
+      fsLabel();
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    fsLabel();
+  }
 
   const host = body.querySelector(`#term-host-${win.key}`);
   const statusEl = body.querySelector(`#term-status-${win.key}`);
@@ -115,7 +141,7 @@ export function renderTerminal(body, win) {
   function onExit(p) {
     if (p.session !== sessionId || !term) return;
     term.write("\r\n\x1b[33m[Session beendet]\x1b[0m\r\n");
-    statusEl.textContent = "Session beendet — ↻ Neustart zum Wiederverbinden.";
+    statusEl.textContent = "Session beendet — 🔄 Neustart zum Wiederverbinden.";
   }
   function onAck(p) {
     if (p.session !== sessionId) return;

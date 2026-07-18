@@ -25,7 +25,10 @@
 
 body {
   margin: 0;
-  font-family: system-ui, "Segoe UI", sans-serif;
+  font-family: system-ui, "Segoe UI", sans-serif,
+    /* Emoji/Symbol-Fallbacks: Windows, macOS/iOS, Android/Linux */
+    "Segoe UI Emoji", "Segoe UI Symbol", "Apple Color Emoji",
+    "Noto Color Emoji", "Noto Sans Symbols 2", "Android Emoji", "EmojiOne Color";
   background: var(--bg);
   color: var(--text);
   height: 100vh;
@@ -320,9 +323,15 @@ body {
 
 /* Status-Infoliste (OS, IP, Hostname, ...) */
 .status-info { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
-.status-info > div { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; gap: 10px; }
+.status-info > div {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12.5px; gap: 2px 10px;
+  /* Zu wenig Platz? Dann bricht der Wert automatisch in die naechste Zeile um
+     -> Label oben, Wert darunter (Betriebssystem / Debian ... / IP / Wert ...). */
+  flex-wrap: wrap;
+}
 .status-info > div span { color: var(--subtext); }
-.status-info > div b { color: var(--text); text-align: right; word-break: break-all; }
+.status-info > div b { color: var(--text); text-align: right; word-break: break-word; margin-left: auto; }
 
 /* Zusatzinfo unter den Donuts (Cores/Threads, freier RAM) */
 .metric-sub { font-size: 11px; color: var(--subtext); text-align: center; margin-top: 4px; }
@@ -1304,7 +1313,8 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
 /* Festes Raster-Layout der Client-Ansicht (dashlayout.js)          */
 /* ================================================================ */
 .dash-grid-layout { display: grid; position: relative; align-items: stretch; }
-.dash-grid-layout .dash-lp { display: flex; flex-direction: column; overflow: visible; min-height: 0; }
+.dash-grid-layout .dash-lp { display: flex; flex-direction: column; overflow: visible; min-height: 0; min-width: 0; }
+.dash-grid-layout .dash-w { min-width: 0; }
 .dash-grid-layout.editing .dash-lp,
 .dash-grid-layout.editing .dash-w { outline: 1px dashed rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
 .dash-grid-layout.editing .dash-lp-head,
@@ -1393,3 +1403,28 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
 .dash-lp-body.overview-content { min-height: 0; }
 .cmetric-body { flex: 1 1 auto; min-height: 0; }
 .cmetric-holder { min-height: 0; }
+
+/* ---- Einklappbare Options-Leisten (Terminal/VNC/Guacamole) ---- */
+/* Desktop: .bar-opts ist "unsichtbarer" Wrapper (Kinder liegen direkt in der
+   Leiste, Layout wie zuvor), der Toggle-Knopf existiert nur am Handy. */
+.bar-opts { display: contents; }
+.bar-opts-toggle { display: none; }
+
+/* ---- Browser-Vollbild fuer Remote Screen / Guacamole ---- */
+.rmm-window:fullscreen {
+  left: 0 !important; top: 0 !important;
+  width: 100vw !important; height: 100vh !important;
+  border-radius: 0; border: none;
+}
+.rmm-window:fullscreen .rmm-window-resize-handle,
+.rmm-window:fullscreen .rmm-window-resize-edge-r,
+.rmm-window:fullscreen .rmm-window-resize-edge-b { display: none; }
+
+/* ---- SVG-Icons (Ersatz fuer Emojis, Profil > Symbole) ---- */
+.svgicon {
+  display: inline-block; width: 1.05em; height: 1.05em;
+  vertical-align: -0.16em; line-height: 0; flex-shrink: 0;
+}
+.svgicon svg { width: 100%; height: 100%; display: block; }
+/* Grosse Kachel-Icons (Startmenue) skalieren ueber font-size automatisch mit */
+.start-menu-grid .app-icon .svgicon { width: 1em; height: 1em; vertical-align: -0.1em; }

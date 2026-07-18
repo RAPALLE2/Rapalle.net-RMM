@@ -24,9 +24,12 @@ export function renderGuacamole(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:#000">
       <div id="guac-bar-${win.key}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
+        <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
         <span id="guac-status-${win.key}" style="color:var(--subtext)">Nicht verbunden</span>
+        <button class="taskbar-btn" id="guac-fs-${win.key}" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
         <span style="flex:1"></span>
-        <span class="guac-tools-${win.key}" style="display:none;align-items:center;gap:6px">
+        <span class="bar-opts">
+        <span class="guac-tools-${win.key}" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
           <button class="taskbar-btn" id="guac-mod-ctrl-${win.key}" title="Strg gedrückt halten (Toggle) · Doppelklick = einmal tippen">Strg</button>
           <button class="taskbar-btn" id="guac-mod-alt-${win.key}" title="Alt gedrückt halten (Toggle) · Doppelklick = einmal tippen">Alt</button>
           <button class="taskbar-btn" id="guac-mod-win-${win.key}" title="Windows-Taste gedrückt halten (Toggle) · Doppelklick = einmal tippen">Win</button>
@@ -34,11 +37,12 @@ export function renderGuacamole(body, win) {
           <button class="taskbar-btn" id="guac-key-esc-${win.key}" title="Esc senden">Esc</button>
         </span>
         <button class="taskbar-btn" id="guac-cad-${win.key}" style="display:none">Strg+Alt+Entf</button>
-        <span class="guac-tools-${win.key}" style="display:none;align-items:center;gap:6px">
+        <span class="guac-tools-${win.key}" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
           <button class="taskbar-btn" id="guac-clip-send-${win.key}" title="Lokale Zwischenablage an den Remote-PC senden">📋→</button>
           <button class="taskbar-btn" id="guac-clip-get-${win.key}" title="Zuletzt vom Remote-PC empfangene Zwischenablage übernehmen">→📋</button>
         </span>
         <button class="taskbar-btn" id="guac-disc-${win.key}" style="display:none">Trennen</button>
+        </span>
       </div>
 
       <div id="guac-form-${win.key}" style="padding:14px;overflow:auto;color:var(--text)">
@@ -99,7 +103,7 @@ export function renderGuacamole(body, win) {
       <div id="guac-display-${win.key}" tabindex="0"
         style="flex:1;display:none;align-items:center;justify-content:center;overflow:hidden;position:relative;outline:none"></div>
 
-      <div id="guac-sendbar-${win.key}" style="flex:none;display:none;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border)">
+      <div id="guac-sendbar-${win.key}" class="bar-optrow" style="flex:none;display:none;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border);flex-wrap:wrap">
         <span style="color:var(--subtext)">Text senden:</span>
         <select id="guac-layout-${win.key}" title="Tastaturlayout: Zeichen werden als layout-unabhängige Keysyms gesendet - 1:1 ist fast immer richtig"
           style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
@@ -117,6 +121,24 @@ export function renderGuacamole(body, win) {
     </div>
   `;
 
+
+  // ---- Browser-Vollbild (Desktop + Handy): Button toggelt, Esc beendet ----
+  const fsBtnG = body.querySelector(`#guac-fs-${win.key}`);
+  if (fsBtnG) {
+    const fsRoot = () => body.closest(".rmm-window") || body;
+    const fsLabel = () => { fsBtnG.textContent = document.fullscreenElement ? "✕ Vollbild beenden" : "Vollbild"; };
+    fsBtnG.addEventListener("click", () => {
+      if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+      const el = fsRoot();
+      (el.requestFullscreen?.() || el.webkitRequestFullscreen?.());
+    });
+    const onFsChange = () => {
+      if (!document.body.contains(fsBtnG)) { document.removeEventListener("fullscreenchange", onFsChange); return; }
+      fsLabel();
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    fsLabel();
+  }
   const statusEl = body.querySelector(`#guac-status-${win.key}`);
   const formEl = body.querySelector(`#guac-form-${win.key}`);
   const formMsg = body.querySelector(`#guac-form-msg-${win.key}`);

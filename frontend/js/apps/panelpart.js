@@ -29,6 +29,22 @@ export function renderPanelPart(body, win) {
   let activePanelId = win.props.activePanelId
     || (panels && panels[0] ? panels[0].id : null);
 
+  // -----------------------------------------------------------------
+  // BUGFIX: Ordner-Kinder vom Typ "actions", "websites" oder "status"
+  // wurden im herausgelösten Fenster IMMER als Metrics gerendert, weil
+  // renderOverviewSub nur metrics/notes/disk kennt und alles Unbekannte
+  // auf Metrics zurückfällt. Dieser Router leitet jeden Kind-Typ an den
+  // korrekten Renderer weiter (identisch zur Client-Ansicht).
+  // -----------------------------------------------------------------
+  function renderFolderChild(target, client, type) {
+    target.classList.toggle("actions-panel", type === "actions" || type === "websites");
+    if (type === "actions")       return renderActionsPart(target, client);
+    if (type === "websites")      return renderWebsitesPart(target, client);
+    if (type === "status")        { target.innerHTML = ""; return renderStatusPart(target, client); }
+    const rr = () => renderOverviewSub(target, client, type, rr);
+    rr();
+  }
+
   function draw() {
     const client = findClient(clientId);
     if (!client) {
@@ -87,13 +103,11 @@ export function renderPanelPart(body, win) {
           import("../clientmetrics.js").then(({ renderClientMetric }) =>
             renderClientMetric(target, client, { id: `${win.key}-${p.id}`, metric: p.metric, kind: p.kind }));
         } else if (p) {
-          const rerenderFolder = () => renderOverviewSub(target, client, p.type, rerenderFolder);
-          rerenderFolder();
+          renderFolderChild(target, client, p.type);
         }
       } else {
         // Fallback: altes Fenster ohne panels-Prop (nur Typen bekannt).
-        const rerenderFolder = () => renderOverviewSub(target, client, activeSub, rerenderFolder);
-        rerenderFolder();
+        renderFolderChild(target, client, activeSub);
       }
     }
 
@@ -144,13 +158,11 @@ export function renderPanelPart(body, win) {
         import("../clientmetrics.js").then(({ renderClientMetric }) =>
           renderClientMetric(target, client, { id: `${win.key}-${p2.id}`, metric: p2.metric, kind: p2.kind }));
       } else if (p2) {
-        const rr = () => renderOverviewSub(target, client, p2.type, rr);
-        rr();
+        renderFolderChild(target, client, p2.type);   // status/metrics/disk korrekt
       }
     } else {
       if (!liveTypes.has(activeSub)) return;
-      const rr = () => renderOverviewSub(target, client, activeSub, rr);
-      rr();
+      renderFolderChild(target, client, activeSub);
     }
   }
   dashboardSocket.on("client:metrics", onMetrics);

@@ -45,6 +45,18 @@ export function renderProfile(body, win) {
           `).join("")}
         </div>
       </div>
+      <div class="form-row">
+        <label>Symbole</label>
+        <select id="pr-icons">
+          <option value="svg">SVG-Icons (empfohlen, auf jedem System gleich)</option>
+          <option value="emoji">System-Emojis</option>
+        </select>
+      </div>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+        SVG-Icons sehen auf Windows, Linux, macOS und Android identisch aus.
+        System-Emojis nutzen die Emoji-Schrift des Geräts (kann auf Linux/Android
+        fehlen und als leere Kästchen erscheinen).
+      </p>
       <button class="btn-primary" id="pr-save" style="margin-top:6px">Profil speichern</button>
 
       <h3 style="margin-top:26px">Dashboard</h3>
@@ -59,7 +71,7 @@ export function renderProfile(body, win) {
         Ist die Bearbeitung an, kannst du in der Client-Ansicht Status, Aktionen und
         Übersicht-Ordner per Ziehen anordnen, ihre Breite ziehen, weitere Ordner
         anlegen und Sub-Ansichten (Metrics/Notes/Disk) zwischen Ordnern verschieben.
-        Über das ⧉-Symbol lässt sich jeder Baustein als eigenes Fenster herauslösen
+        Über das ↗️-Symbol lässt sich jeder Baustein als eigenes Fenster herauslösen
         (auch ohne Bearbeitung). Clients kannst du aus der Seitenleiste direkt auf
         die Arbeitsfläche ziehen.
       </p>
@@ -107,6 +119,14 @@ export function renderProfile(body, win) {
 
   // Live-Vorschau: Theme sofort umschalten, wenn im Dropdown geändert
   body.querySelector("#pr-theme").addEventListener("change", (e) => applyTheme(e.target.value));
+
+  // Symbole: SVG-Icons vs. System-Emojis — wirkt sofort, pro Gerät gespeichert
+  import("../icons.js").then(({ getIconMode, setIconMode }) => {
+    const sel = body.querySelector("#pr-icons");
+    if (!sel) return;
+    sel.value = getIconMode();
+    sel.addEventListener("change", () => setIconMode(sel.value));
+  });
 
   // Farbpalette wählen: markiert die Auswahl und zeigt sie sofort als Vorschau
   let selectedAccent = u.accent || "teal";

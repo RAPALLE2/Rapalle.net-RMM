@@ -61,8 +61,8 @@ function renderBackendLog(panel) {
         </select>
         <button class="taskbar-btn" id="src-log-download" title="Kompletten Log herunterladen">⬇ Export</button>
         <button class="taskbar-btn" id="src-log-clear">🗑 Leeren</button>
-        <button class="taskbar-btn" id="src-log-restart" style="border-color:var(--warn);color:var(--warn)">↻ Backend neu starten</button>
-        <button class="taskbar-btn" id="src-log-stop" style="border-color:var(--danger);color:var(--danger)">⏻ Backend stoppen</button>
+        <button class="taskbar-btn" id="src-log-restart" style="border-color:var(--warn);color:var(--warn)">🔄 Backend neu starten</button>
+        <button class="taskbar-btn" id="src-log-stop" style="border-color:var(--danger);color:var(--danger)">📴 Backend stoppen</button>
       </div>
       <div id="src-log-host" style="flex:1;min-height:0"></div>
       <div id="src-log-status" style="font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">Verbinde…</div>
@@ -353,7 +353,7 @@ function joinPath(dir, name) { return dir ? `${dir}/${name}` : name; }
 async function renderDb(panel) {
   panel.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-      <button class="taskbar-btn" id="src-db-reload" title="Tabellenliste und aktuelle Tabelle neu laden">⟳ Neu laden</button>
+      <button class="taskbar-btn" id="src-db-reload" title="Tabellenliste und aktuelle Tabelle neu laden">🔄 Neu laden</button>
       <button class="taskbar-btn" id="src-db-newtable" title="Neue Tabelle anlegen">🗄️+ Tabelle erstellen</button>
       <button class="taskbar-btn" id="src-db-backup" title="Konsistente Kopie der Datenbank als backend/data.sqlite.bak erstellen">💾 Backup (data.sqlite.bak)</button>
       <span style="font-size:11px;color:var(--subtext)">Doppelklick = Zelle editieren · Rechtsklick = Zelle löschen (NULL) · Buttons je Zeile/Tabelle</span>

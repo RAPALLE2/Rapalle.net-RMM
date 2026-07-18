@@ -90,7 +90,7 @@ function renderClientView(el, clientId) {
   const status = statusInfo(client);
 
   el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+    <div class="client-view-head" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <h2 style="margin:0;display:flex;align-items:center;gap:8px">
         <span class="status-dot-lg ${status.cls}"></span>${esc(client.hostname)}
         ${favStarHtml("clients", client.id)}
@@ -207,18 +207,18 @@ export function renderStatusPart(target, client) {
   // dehnen sich immer über die KOMPLETTE Panelfläche aus (gleiches Layout,
   // voller Platz), die Schrift bleibt konstant lesbar.
   const holder = document.createElement("div");
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;gap:20px";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;gap:14px 20px;flex-wrap:wrap;min-width:0;align-content:center";
   const box = holder;
   box.innerHTML = `
     <div class="quick-actions" style="flex:none;width:180px;display:flex;flex-direction:column;gap:7px;margin-top:0;flex-wrap:nowrap;justify-content:center;align-self:stretch">
-      <button data-quick="reboot" ${client.online ? "" : "disabled"}>⟳ ${t("reboot")}</button>
-      <button data-quick="shutdown" ${client.online ? "" : "disabled"}>⏻ ${t("shutdown")}</button>
+      <button data-quick="reboot" ${client.online ? "" : "disabled"}>🔄 ${t("reboot")}</button>
+      <button data-quick="shutdown" ${client.online ? "" : "disabled"}>📴 ${t("shutdown")}</button>
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
-      ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✎ ${t("edit")}</button>` : ""}
+      ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✏️ ${t("edit")}</button>` : ""}
     </div>
-    <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center">
+    <div style="flex:1;min-width:200px;display:flex;flex-direction:column;justify-content:center">
       <div class="status-label" style="font-size:15px"><span class="status-dot-lg ${status.cls}"></span>${status.label}</div>
       <div class="status-info" style="margin-top:10px">
         ${rows.map((r, i) => `<div data-i="${i}" style="padding:2px 4px;font-size:14px"><span>${esc(r.label)}</span><b style="word-break:normal">${r.html || esc(r.raw)}</b></div>`).join("")}

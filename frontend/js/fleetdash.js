@@ -291,13 +291,13 @@ function buildWidget(wdg, ctx) {
   }
 
   const pop = document.createElement("button");
-  pop.className = "dash-w-btn"; pop.title = "Als Fenster herauslösen"; pop.textContent = "⧉";
+  pop.className = "dash-w-btn"; pop.title = "Als Fenster herauslösen"; pop.textContent = "↗️";
   pop.addEventListener("click", (e) => { e.stopPropagation(); detachWidget(wdg); });
   tools.appendChild(pop);
 
   if (edit) {
     const ren = document.createElement("button");
-    ren.className = "dash-w-btn"; ren.title = "Titel ändern"; ren.textContent = "✎";
+    ren.className = "dash-w-btn"; ren.title = "Titel ändern"; ren.textContent = "✏️";
     ren.addEventListener("click", async (e) => {
       e.stopPropagation();
       const name = await uiPrompt("Widget-Titel ändern", {

@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>RAPALLE.net RMM</title>
 
   <!-- Socket.IO Client-Bibliothek von einem CDN (kein npm/Build nötig) -->
@@ -15,6 +15,7 @@
 
 
   <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/mobile.css" />
   <link rel="icon" href="images/logo_r.png"/>
 </head>
 <body>
@@ -79,6 +80,7 @@
     <!-- Kopfleiste -->
     <header class="topbar">
       <div class="topbar-left">
+        <button id="mobile-sidebar-btn" class="mobile-sidebar-btn" title="Geräte" aria-label="Geräte-Liste öffnen">☰</button>
         <img src="/images/logo_r.png" alt="Logo" class="topbar-logo" onerror="this.style.display='none'" />
         <span class="topbar-title">RAPALLE<span class="accent">.net</span> RMM</span>
         <span class="topbar-version"><!-- wird aus /api/version (version.txt) befüllt --></span>
@@ -100,19 +102,22 @@
     <!-- Hauptbereich: Sidebar links + Content rechts -->
     <div class="main-area">
 
+      <!-- Backdrop hinter dem Mobile-Drawer (nur auf kleinen Screens sichtbar) -->
+      <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
       <!-- Einklappbare Seitenleiste mit der Tenant/Location/Client-Hierarchie -->
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-header">
           <span>Geräte</span>
           <div>
-            <button id="btn-manage-hierarchy" title="Tenants/Standorte verwalten">⚙</button>
+            <button id="btn-manage-hierarchy" title="Tenants/Standorte verwalten">⚙️</button>
             <button id="sidebar-collapse-btn" title="Einklappen">«</button>
           </div>
         </div>
         
         <!-- Dashboard-Eintrag (Platzhalter für die Zukunft) -->
         <div id="sidebar-dashboard" class="sidebar-nav-item" data-nav="dashboard">
-          <span class="nav-ico">▚</span> Dashboard
+          <span class="nav-ico">📊</span> Dashboard
           <!-- <span class="nav-soon">bald</span>-->
         </div>
 
@@ -178,6 +183,8 @@
   </div>
 
   <!-- Eigener Code, als ES-Modul geladen (erlaubt "import" zwischen Dateien) -->
+  <script type="module" src="/js/icons.js"></script>
   <script type="module" src="/js/app.js"></script>
+  <script type="module" src="/js/mobile.js"></script>
 </body>
 </html>

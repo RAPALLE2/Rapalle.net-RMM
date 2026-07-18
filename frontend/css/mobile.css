@@ -1,0 +1,375 @@
+/* ============================================================
+   mobile.css — 100% Handy- & Hochkant-Support (RAPALLE.net RMM)
+   ------------------------------------------------------------
+   Wird IMMER geladen, greift aber nur per Media-Queries bzw.
+   über die Klasse "is-mobile" auf <html> (gesetzt von js/mobile.js).
+   Desktop-Verhalten bleibt zu 100% unverändert.
+
+   Konzept auf kleinen Screens:
+   - Sidebar = Off-Canvas-Drawer (☰ oben links), mit Backdrop
+   - Jedes Fenster = automatisch Vollbild (CSS erzwingt Geometrie,
+     der windowmanager-State bleibt unangetastet)
+   - Fenster-Wechsel über die Taskleiste (Touch-groß + Safe-Area)
+   - Snap/Resize/Drag-UI ausgeblendet (auf Touch sinnlos)
+   ============================================================ */
+
+/* ---- Basis-Variablen für Leisten-Höhen (Desktop-Defaults) ---- */
+:root {
+  --mob-topbar-h: 48px;
+  --mob-taskbar-h: 40px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* Hamburger + Backdrop existieren im DOM, sind am Desktop unsichtbar */
+.mobile-sidebar-btn { display: none; }
+.sidebar-backdrop { display: none; }
+
+/* ============================================================
+   HAUPT-BREAKPOINT: Handys & schmale Hochkant-Monitore
+   (greift bei <= 900px Breite ODER Touch-Gerät im Hochformat)
+   ============================================================ */
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+
+  :root {
+    --mob-topbar-h: calc(50px + var(--safe-top));
+    --mob-taskbar-h: calc(52px + var(--safe-bottom));
+  }
+
+  html, body { height: 100%; overscroll-behavior: none; }
+
+  /* dvh statt vh: berücksichtigt ein-/ausfahrende Browser-Leisten */
+  .app { height: 100dvh; }
+
+  /* ---------------- Login ---------------- */
+  .login-box {
+    width: min(420px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    padding: 22px 18px;
+    margin: 0 16px;
+  }
+  .login-box input, .login-box select {
+    font-size: 16px;           /* verhindert iOS-Auto-Zoom beim Fokus */
+    min-height: 44px;
+  }
+  .login-box .btn-primary { min-height: 46px; font-size: 15px; }
+
+  /* ---------------- Topbar ---------------- */
+  .topbar {
+    height: var(--mob-topbar-h);
+    padding: var(--safe-top) calc(10px + var(--safe-right)) 0 calc(10px + var(--safe-left));
+  }
+  .topbar-version { display: none; }
+  .topbar-title { font-size: 14px; white-space: nowrap; }
+  .topbar-logo { height: 26px; }
+  .user-menu-btn { min-height: 40px; padding: 0 8px; }
+  .user-menu { top: 42px; max-width: calc(100vw - 20px); }
+  .user-menu button { min-height: 44px; }
+
+  /* Hamburger sichtbar */
+  .mobile-sidebar-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; margin-right: 2px;
+    border: none; border-radius: 8px;
+    background: rgba(255,255,255,0.06); color: var(--accent);
+    font-size: 20px; cursor: pointer; flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-sidebar-btn:active { background: rgba(255,255,255,0.14); }
+
+  /* ---------------- Sidebar als Off-Canvas-Drawer ---------------- */
+  .sidebar {
+    position: fixed;
+    top: var(--mob-topbar-h);
+    bottom: var(--mob-taskbar-h);
+    left: 0;
+    width: min(86vw, 320px) !important;   /* schlägt Inline-Breite vom Resizer */
+    z-index: 1500;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    box-shadow: 12px 0 40px rgba(0,0,0,0.5);
+    border-right: 1px solid var(--border);
+    padding-left: var(--safe-left);
+  }
+  .sidebar.mobile-open { transform: translateX(0); }
+
+  /* Eingeklappt-Zustand vom Desktop hat auf dem Handy keine Bedeutung */
+  .sidebar.collapsed { width: min(86vw, 320px) !important; cursor: default; }
+  .sidebar.collapsed .sidebar-tree, .sidebar.collapsed .btn-add-client,
+  .sidebar.collapsed .sidebar-header span, .sidebar.collapsed .sidebar-fav,
+  .sidebar.collapsed .sidebar-section-label, .sidebar.collapsed .sidebar-nav-item { display: revert; }
+  #sidebar-collapse-btn { display: none; }
+  .sidebar-resizer { display: none; }
+
+  /* Touch-Größen im Baum */
+  .sidebar-header { min-height: 46px; }
+  .sidebar-header button { min-width: 40px; min-height: 40px; font-size: 16px; }
+  .sidebar-nav-item, .sidebar-fav-header { min-height: 44px; display: flex; align-items: center; }
+  .sidebar-tree, .sidebar-fav-list { -webkit-overflow-scrolling: touch; }
+  .sidebar-tree * { -webkit-tap-highlight-color: transparent; }
+  .btn-add-client { min-height: 46px; margin-bottom: 4px; }
+
+  /* Backdrop hinter dem Drawer */
+  .sidebar-backdrop {
+    display: block;
+    position: fixed; inset: 0; z-index: 1400;
+    background: rgba(4, 8, 14, 0.6);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .sidebar-backdrop.visible { opacity: 1; pointer-events: auto; }
+
+  /* ---------------- Hauptinhalt ---------------- */
+  .main-area { min-width: 0; }
+  .main-content {
+    width: 100%;
+    padding-left: calc(10px + var(--safe-left));
+    padding-right: calc(10px + var(--safe-right));
+    -webkit-overflow-scrolling: touch;
+  }
+  .client-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+
+  /* Breite Tabellen horizontal scrollbar statt Layout-Bruch */
+  .main-content table, .rmm-window-body table { max-width: 100%; }
+
+  /* ---------------- Fenster => Vollbild ---------------- */
+  .window-layer {
+    top: var(--mob-topbar-h);
+    bottom: var(--mob-taskbar-h);
+  }
+  .rmm-window {
+    /* Geometrie hart erzwingen — Inline-Styles (Drag/Resize/Restore)
+       können das nicht überschreiben. windowmanager bleibt unverändert. */
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    border-radius: 0;
+    border-left: none; border-right: none;
+    box-shadow: none;
+  }
+  /* Resize-/Snap-/Pin-UI ausblenden */
+  .rmm-window-resize-handle,
+  .rmm-window-resize-edge-r,
+  .rmm-window-resize-edge-b,
+  .win-pin-btn,
+  .snap-preview, .snap-divider, .snap-assist { display: none !important; }
+
+  .rmm-window-titlebar { cursor: default; padding: 3px 8px; min-height: 36px; font-size: 12px; }
+  .rmm-window-titlebar button {
+    width: 32px; height: 30px; font-size: 15px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Handy: Fenster sind immer Vollbild oder minimiert -> Maximieren sinnlos.
+     Am PC bleibt der Button normal sichtbar (Regel liegt im Mobile-Breakpoint). */
+  .win-max-btn { display: none !important; }
+  .rmm-window-titlebar .win-controls { gap: 6px; }
+  .rmm-window-body { -webkit-overflow-scrolling: touch; }
+
+  /* Eingaben in Fenstern: kein iOS-Zoom, Touch-Höhe */
+  .rmm-window-body input, .rmm-window-body select, .rmm-window-body textarea {
+    font-size: 16px;
+  }
+  .rmm-window-body button { min-height: 38px; }
+
+  /* ---------------- Taskleiste ---------------- */
+  .taskbar {
+    height: var(--mob-taskbar-h);
+    padding: 0 calc(8px + var(--safe-right)) var(--safe-bottom) calc(8px + var(--safe-left));
+    gap: 8px;
+  }
+  .taskbar-btn { height: 38px; min-width: 42px; font-size: 16px; }
+  .taskbar-windows { gap: 8px; scrollbar-width: none; }
+  .taskbar-windows::-webkit-scrollbar { display: none; }
+  .taskbar-window-btn { height: 38px; font-size: 13px; padding: 0 12px; }
+  .taskbar-clock { display: none; }   /* Uhr hat das Handy selbst */
+
+  /* ---------------- Startmenü ---------------- */
+  .start-menu-overlay { padding: 12px; }
+  .start-menu-panel {
+    width: 100%;
+    max-height: calc(100dvh - var(--mob-topbar-h) - var(--mob-taskbar-h) - 24px);
+    padding: 16px 12px calc(16px + var(--safe-bottom));
+    border-radius: 14px;
+  }
+  .start-menu-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+  .start-menu-grid button { padding: 14px 6px; font-size: 11.5px; gap: 8px; }
+  .start-menu-grid .app-icon { font-size: 28px; }
+
+  /* Terminal etwas kompakter, aber gut tippbar */
+  .terminal-body { font-size: 12.5px; }
+  .terminal-input-row { padding: 10px 8px calc(8px + var(--safe-bottom) * 0.5); }
+  .terminal-input-row input { font-size: 16px; min-height: 34px; }
+}
+
+/* ============================================================
+   Sehr schmale Geräte (< 400px): Titel eindampfen
+   ============================================================ */
+@media (max-width: 400px) {
+  .topbar-title { display: none; }
+  .client-grid { grid-template-columns: 1fr; }
+  .start-menu-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ============================================================
+   Handy quer (niedrige Höhe): Leisten kompakter
+   ============================================================ */
+@media ((pointer: coarse) and (max-height: 500px)) {
+  :root {
+    --mob-topbar-h: calc(42px + var(--safe-top));
+    --mob-taskbar-h: calc(42px + var(--safe-bottom));
+  }
+  .start-menu-panel { max-height: calc(100dvh - 20px); }
+}
+
+/* ============================================================
+   is-mobile-Feinschliff (Klasse setzt js/mobile.js via matchMedia)
+   ============================================================ */
+html.is-mobile .rmm-window-titlebar { user-select: none; }
+html.is-mobile ::-webkit-scrollbar { width: 0; height: 0; }
+html.is-mobile { -webkit-text-size-adjust: 100%; }
+
+/* ============================================================
+   WIDGET-RASTER (Client-Ansicht + Dashboard) — "Handy-Profil"
+   ------------------------------------------------------------
+   Auf kleinen Screens gibt es nur EINE Spalte: alle Kacheln
+   werden untereinander gestapelt (Reihenfolge = Desktop-Reihen-
+   folge über style.order aus gridengine.applyGridPos). Höhe je
+   Kachel = Inhalt (kein starres 150px-Raster mehr).
+   Gilt identisch für Client-Panels UND Flotten-Dashboard, da
+   beide denselben Host ".dash-grid-layout" benutzen.
+   ============================================================ */
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+
+  /* ---- Raster => 1 Spalte, gestapelt ---- */
+  .dash-grid-layout {
+    grid-template-columns: 1fr !important;   /* schlägt Inline repeat(5,...) */
+    grid-auto-rows: auto !important;
+    grid-auto-flow: row;
+    gap: 12px !important;
+    min-height: 0 !important;
+  }
+  .dash-grid-layout > .dash-lp,
+  .dash-grid-layout > .dash-w {
+    grid-column: 1 / -1 !important;          /* schlägt Inline gx/gw */
+    grid-row: auto !important;               /* schlägt Inline gy/gh */
+    min-height: 150px;
+    height: auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+  /* Leerzellen + Resize-Griffe: auf Touch nutzlos */
+  .dash-grid-layout .grid-empty-cell { display: none !important; }
+  .tile-grip { display: none !important; }
+
+  /* ---- Client-Kopf: Name + Online-Punkt IMMER sichtbar ---- */
+  .client-view-head {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-bottom: 10px !important;
+  }
+  .client-view-head h2 {
+    font-size: 16px !important;
+    line-height: 1.25;
+    min-width: 0;
+    flex-wrap: wrap;
+    word-break: break-word;
+  }
+  .client-view-head .status-dot-lg {
+    width: 10px; height: 10px; margin-right: 4px; flex-shrink: 0;
+  }
+  .client-view-head > span:last-child {
+    flex-wrap: wrap;
+    gap: 6px 10px !important;
+    min-width: 0;
+    font-size: 12px;
+  }
+  .client-view-head > span:last-child > span:first-child {
+    font-size: 11.5px !important;
+    white-space: normal;
+  }
+
+  /* ---- Metrics-Widget: Donuts & Verläufe untereinander ---- */
+  .metrics-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .metrics-row .donut-wrap { align-self: center; }
+  .mini-chart { min-width: 0 !important; width: 100%; }
+  .mini-chart svg { max-width: 100%; }
+
+  /* ---- Übersicht-Ordner: Tab-Leisten umbruch-/scrollfähig ---- */
+  .panelpart-tabs, .tab-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    max-width: 100%;
+  }
+  .tab-btn { min-height: 34px; }
+
+  /* ---- Kachel-Inhalte: nichts darf seitlich rausragen ---- */
+  .dash-lp-body, .dash-w-body, .panelpart-body, .overview-content {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  .dash-lp-body table, .dash-w-body table { width: 100%; }
+  .dash-lp-head, .dash-w-head { min-height: 40px; }
+  .dash-lp-head .dash-lp-btn, .dash-w-head button { min-width: 34px; min-height: 34px; }
+  .dash-lp-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Balken-/Listen-Widgets (wbar/wlist): Spalten dürfen schrumpfen */
+  .wbar-row { grid-template-columns: minmax(56px, 30%) 1fr auto; }
+  .wp-grid { grid-template-columns: 1fr; }
+
+  /* Layout-Werkzeugleiste (Profil-Dropdown etc.) umbrechen lassen */
+  #dash-layout-toolbar { display: inline-flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+}
+
+
+/* ============================================================
+   EINGEKLAPPTE OPTIONS-LEISTEN (Handy): Terminal / VNC / Guacamole
+   Toggle (⚙️) oben links im Fenster zeigt/versteckt alle Optionen.
+   ============================================================ */
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+  .bar-opts-toggle { display: inline-flex; }
+  /* Eingeklappt: Options-Gruppe UND Options-Zeilen (untere Sendeleisten) weg */
+  .rmm-window:not(.opts-open) .bar-opts   { display: none !important; }
+  .rmm-window:not(.opts-open) .bar-optrow { display: none !important; }
+  /* Ausgeklappt: Gruppe als umbrechende Zeile. Elemente MIT eigenem
+     Inline-display (Guacamole-Tools, Sendbar) behalten ihre JS-Steuerung. */
+  .rmm-window.opts-open .bar-opts {
+    display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center;
+  }
+}
+
+/* ============================================================
+   BILDSCHIRMTASTATUR OFFEN (html.kbd-open, gesetzt von mobile.js):
+   Topbar, Taskbar, Sidebar & Backdrop weg -> Fenster nutzt den
+   KOMPLETTEN Bildschirm, es bleibt maximal Platz ueber der Tastatur.
+   ============================================================ */
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+  html.kbd-open .topbar,
+  html.kbd-open .taskbar,
+  html.kbd-open .sidebar,
+  html.kbd-open .sidebar-backdrop { display: none !important; }
+  html.kbd-open .window-layer { top: 0; bottom: 0; }
+  /* BUGFIX "Prompt hinter der Tastatur": Die App wird exakt auf die Hoehe des
+     SICHTBAREN Viewports (visualViewport, ohne Tastatur) gesetzt (--vvh kommt
+     live aus mobile.js). Der Browser hat dann nichts zum Wegschieben und der
+     Terminal-Inhalt (inkl. Prompt oben) bleibt vollstaendig im Bild — xterm
+     fittet sich per ResizeObserver automatisch auf die neue Hoehe ein. */
+  html.kbd-open .app { height: var(--vvh, 100dvh) !important; }
+  html.kbd-open body { overflow: hidden; }
+  /* Titelleiste auf ein Minimum: nur Titel + Minimieren/Schliessen */
+  html.kbd-open .rmm-window-titlebar { min-height: 30px; padding: 1px 6px; }
+  html.kbd-open .rmm-window-titlebar button { height: 26px; width: 30px; }
+  html.kbd-open .rmm-window-titlebar .rmm-window-title { font-size: 11px; }
+  /* Terminal-Statuszeile eindampfen */
+  html.kbd-open [id^="term-status-"] { display: none; }
+}

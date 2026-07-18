@@ -18,7 +18,7 @@ const APP_ICON = {
   settings: "⚙️",
   network: "📡",
   audit: "📝",
-  "edit-client": "✎",
+  "edit-client": "✏️",
   "add-client": "➕",
 };
 

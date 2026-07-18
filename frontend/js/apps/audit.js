@@ -23,7 +23,7 @@ const ACTION_LABELS = {
   "process.kill": "❌ Prozess beendet",
   "screen.session_started": "🖥️ Remote-Session gestartet",
   "recording.deleted": "🗑️ Aufzeichnung gelöscht",
-  "client.updated": "✎ Client geändert",
+  "client.updated": "✏️ Client geändert",
   "client.deleted": "🗑️ Client gelöscht",
   "user.created": "👤 Benutzer angelegt",
   "user.deleted": "👤 Benutzer gelöscht",
@@ -62,7 +62,7 @@ export function renderAudit(body, win) {
           <option value="">Alle Aktionen</option>
         </select>
         <span style="flex:1"></span>
-        <button id="au-refresh-${win.key}">⟳</button>
+        <button id="au-refresh-${win.key}">🔄</button>
       </div>
       <div style="flex:1;overflow:auto">
         <table class="data-table">

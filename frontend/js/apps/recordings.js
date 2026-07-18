@@ -26,7 +26,7 @@ export function renderRecordings(body, win) {
     <div style="display:flex;flex-direction:column;height:100%">
       <div class="explorer-toolbar">
         <span style="flex:1;color:var(--subtext)">Aufgezeichnete Remote-Sessions (Auto-Löschung nach 10 Tagen)</span>
-        <button id="rec-refresh-${win.key}">⟳</button>
+        <button id="rec-refresh-${win.key}">🔄</button>
       </div>
       <div style="flex:1;display:flex;min-height:0">
         <!-- Linke Spalte: Liste -->

@@ -22,9 +22,12 @@ export function renderVnc(body, win) {
 
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:#000">
-      <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px">
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
+        <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
         <span id="vnc-status-${win.key}" style="color:var(--subtext)">Verbinde...</span>
+        <button class="taskbar-btn" id="vnc-fs-${win.key}" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
         <span style="flex:1"></span>
+        <span class="bar-opts">
         <label style="color:var(--subtext);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="vnc-control-${win.key}" checked /> Steuerung aktiv
         </label>
@@ -40,12 +43,13 @@ export function renderVnc(body, win) {
         <span style="width:1px;height:16px;background:var(--border)"></span>
         <button class="taskbar-btn" id="vnc-clip-send-${win.key}" title="Lokale Zwischenablage an den Remote-PC senden">📋→</button>
         <button class="taskbar-btn" id="vnc-clip-get-${win.key}" title="Zwischenablage des Remote-PCs holen">→📋</button>
+        </span>
       </div>
       <div style="flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative">
         <img id="vnc-img-${win.key}" style="max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair"
              tabindex="0" />
       </div>
-      <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px">
+      <div class="bar-optrow" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
         <span style="color:var(--subtext)">Text senden:</span>
         <select id="vnc-layout-${win.key}" title="Tastaturlayout des Ziel-PCs"
           style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
@@ -65,6 +69,24 @@ export function renderVnc(body, win) {
   const sendBtn = body.querySelector(`#vnc-send-${win.key}`);
 
   const img = body.querySelector(`#vnc-img-${win.key}`);
+
+  // ---- Browser-Vollbild (Desktop + Handy): Button toggelt, Esc beendet ----
+  const fsBtnV = body.querySelector(`#vnc-fs-${win.key}`);
+  if (fsBtnV) {
+    const fsRoot = () => body.closest(".rmm-window") || body;
+    const fsLabel = () => { fsBtnV.textContent = document.fullscreenElement ? "✕ Vollbild beenden" : "Vollbild"; };
+    fsBtnV.addEventListener("click", () => {
+      if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+      const el = fsRoot();
+      (el.requestFullscreen?.() || el.webkitRequestFullscreen?.());
+    });
+    const onFsChange = () => {
+      if (!document.body.contains(fsBtnV)) { document.removeEventListener("fullscreenchange", onFsChange); return; }
+      fsLabel();
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    fsLabel();
+  }
   const statusEl = body.querySelector(`#vnc-status-${win.key}`);
   const controlToggle = body.querySelector(`#vnc-control-${win.key}`);
   const ctrlAltDelBtn = body.querySelector(`#vnc-ctrlaltdel-${win.key}`);
@@ -206,7 +228,7 @@ export function renderVnc(body, win) {
     body.style.flexDirection = "column";
     body.style.height = "100%";
     const banner = document.createElement("div");
-    banner.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border)";
+    banner.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border);flex-wrap:wrap";
     const label = document.createElement("span");
     label.style.flex = "1";
     label.textContent = "🖥️ → ⌨️ " + (reason || "Kein grafischer Bildschirm – Shell geöffnet.");
@@ -315,7 +337,7 @@ export function renderVnc(body, win) {
           ⌨️ Shell öffnen
         </button>
         <button class="taskbar-btn" id="rdp-retry-${win.key}" style="width:100%;display:flex;align-items:center;gap:10px;justify-content:center">
-          ↻ Bildschirm erneut versuchen
+          🔄 Bildschirm erneut versuchen
         </button>
       </div>
     `;

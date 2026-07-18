@@ -307,6 +307,7 @@ function createWindowElement(win) {
   minBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 
   const maxBtn = document.createElement("button");
+  maxBtn.className = "win-max-btn";   // NUR am Handy per CSS versteckt (Fenster dort eh Vollbild)
   maxBtn.textContent = "□";
   maxBtn.title = "Vollbild / Wiederherstellen";
   maxBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMaximize(win.key); });
