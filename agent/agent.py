@@ -114,6 +114,72 @@ logging.basicConfig(
 log = logging.getLogger("agent")
 
 
+# ------------------------------------------------------------------
+# WATCHDOG (Selbst-Neustart auch bei HARTEN Abstuerzen)
+# ------------------------------------------------------------------
+# Der bisherige Crash-Schutz unten (os.execv nach Traceback) faengt nur
+# PYTHON-Fehler. Stirbt der Prozess dagegen nativ (z.B. Segfault in
+# mss/Pillow beim Bildschirm-Grabben nach Sitzungswechsel/Sperrbildschirm,
+# OOM-Kill, Scheduler-Kill), steht im Log NICHTS und niemand startet neu -
+# exakt das beobachtete "am Ende gecrasht, kein Selbst-Restart".
+#
+# Loesung: Beim Start laeuft dieser Prozess zuerst als winziger WATCHDOG
+# (nur Standardbibliothek, kann selbst nicht nativ crashen) und startet den
+# eigentlichen Agenten als KINDPROZESS (Umgebungsvariable RMM_SUPERVISED=1).
+# Stirbt das Kind - egal wie -, wird der Exit-Code geloggt, in
+# last_crash.txt vermerkt und nach kurzer Wartezeit neu gestartet
+# (Backoff bei Crash-Schleifen, max. 60s). Exit-Code 0 = gewolltes Ende,
+# dann beendet sich auch der Watchdog.
+# Deaktivierbar mit RMM_NO_WATCHDOG=1 (z.B. fuer Debugging in der Konsole).
+def _run_watchdog() -> "int":
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    crash_file = os.path.join(here, "last_crash.txt")
+    fast_fails = 0
+    log.info("[agent] Watchdog aktiv (PID %s) - ueberwacht den Agent-Prozess.", os.getpid())
+    while True:
+        env = dict(os.environ)
+        env["RMM_SUPERVISED"] = "1"
+        started = time.time()
+        try:
+            child = subprocess.Popen([sys.executable] + sys.argv, cwd=here, env=env)
+            code = child.wait()
+        except KeyboardInterrupt:
+            return 0
+        except Exception as e:
+            log.error("[agent] Watchdog: Agent-Start fehlgeschlagen: %r", e)
+            code = -1
+        ran = time.time() - started
+        if code == 0:
+            log.info("[agent] Watchdog: Agent regulaer beendet (Exit 0) - Watchdog endet.")
+            return 0
+        log.error("[agent] Watchdog: Agent-Prozess gestorben (Exit-Code %s) nach %.0fs Laufzeit.", code, ran)
+        try:
+            # Nur schreiben, wenn der Agent selbst keinen Traceback hinterlassen
+            # hat (harter/nativer Tod) - Python-Crashes schreiben die Datei unten.
+            if ran > 2:
+                with open(crash_file, "w", encoding="utf-8") as f:
+                    f.write(time.strftime("%Y-%m-%d %H:%M:%S")
+                            + f"\nHarter Prozess-Tod ohne Python-Traceback (Exit-Code {code},"
+                              f" Laufzeit {ran:.0f}s).\nTypische Ursachen: nativer Absturz in"
+                              " mss/Pillow/pynput, OOM-Kill, externes Beenden.\n")
+        except OSError:
+            pass
+        fast_fails = fast_fails + 1 if ran < 300 else 0
+        delay = min(60, 5 * (fast_fails + 1))
+        log.info("[agent] Watchdog: Neustart in %ss...", delay)
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            return 0
+
+
+if (__name__ == "__main__"
+        and os.environ.get("RMM_SUPERVISED") != "1"
+        and os.environ.get("RMM_NO_WATCHDOG") != "1"):
+    sys.exit(_run_watchdog())
+
+
 def _print(msg):
     """Ersetzt print() - schreibt in Konsole UND Log-Datei."""
     log.info(msg)
@@ -2927,7 +2993,29 @@ def _apply_input(data):
 # Programmstart
 # --------------------------------------------------------------
 
+def _install_exception_logging():
+    """Sorgt dafuer, dass NICHTS mehr stumm stirbt: unbehandelte Fehler aus
+    Threads und asyncio-Tasks landen im agent.log statt im Nirwana."""
+    def _thread_hook(args):
+        log.error("[agent] Unbehandelter Fehler in Thread %s: %r",
+                  getattr(args.thread, "name", "?"), args.exc_value,
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+    try:
+        threading.excepthook = _thread_hook
+    except Exception:
+        pass
+    def _loop_handler(loop, context):
+        exc = context.get("exception")
+        log.error("[agent] Unbehandelter Fehler im Event-Loop: %s%s",
+                  context.get("message", ""), f" ({exc!r})" if exc else "")
+    try:
+        _AGENT_LOOP.set_exception_handler(_loop_handler)
+    except Exception:
+        pass
+
+
 async def main():
+    _install_exception_logging()
     _print(f"[agent] Gerätename : {DEVICE_NAME}")
     _print(f"[agent] Geräte-ID  : {DEVICE_ID}")
     _print(f"[agent] Backend    : {BACKEND_URL}")

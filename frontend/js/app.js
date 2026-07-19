@@ -42,6 +42,7 @@ import { renderBulk } from "./apps/bulk.js";
 import { renderTowerDefense } from "./apps/towerdefense.js";
 import { renderAutomation } from "./apps/automation.js";
 import { renderRelayManager } from "./apps/relaymanager.js";
+import { renderSpeedtest } from "./apps/speedtest.js";
 import { renderNetwork } from "./apps/network.js";
 import { renderPortscan } from "./apps/portscan.js";
 import { renderGuacamole } from "./apps/guacamole.js";
@@ -72,6 +73,7 @@ const APP_RENDERERS = {
   towerdefense: renderTowerDefense,
   automation: renderAutomation,
   "relay-manager": renderRelayManager,
+  "speedtest": renderSpeedtest,
   network: renderNetwork,
   portscan: renderPortscan,
   guacamole: renderGuacamole,
@@ -429,6 +431,7 @@ function initMenusAndButtons() {
       else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
       else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
       else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
+      else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
       else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
     })
   );

@@ -259,7 +259,15 @@ export function scaleToContainer(holder) {
     const availW = holder.clientWidth, availH = holder.clientHeight;
     const needW = inner.scrollWidth, needH = inner.scrollHeight;
     if (!availW || !availH || !needW || !needH) return;
-    const scale = Math.min(availW / needW, availH / needH);
+    // WICHTIG: Beim Herausloesen in eine App ist der Container VIEL groesser
+    // als die native Widget-Groesse (240x88). Frueher wurde dann unbegrenzt
+    // hochskaliert -> der Inhalt (grosse Zahl + nowrap-Label) wuchs ueber den
+    // Rand hinaus, weil eine ellipsis-Breite mitskaliert nichts mehr begrenzt.
+    // Loesung: Hochskalieren auf max. 2.4x deckeln, sodass Text immer im
+    // sichtbaren Bereich bleibt; Herunterskalieren (Zelle kleiner als nativ)
+    // bleibt unbegrenzt, damit in kleinen Kacheln nichts abgeschnitten wird.
+    const raw = Math.min(availW / needW, availH / needH);
+    const scale = raw > 1 ? Math.min(raw, 2.4) : raw;
     if (Math.abs(scale - 1) > 0.005) inner.style.transform = `scale(${scale.toFixed(3)})`;
   };
   const ro = new ResizeObserver(apply);

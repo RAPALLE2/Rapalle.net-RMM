@@ -337,7 +337,14 @@ html.is-mobile { -webkit-text-size-adjust: 100%; }
    Toggle (⚙️) oben links im Fenster zeigt/versteckt alle Optionen.
    ============================================================ */
 @media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
-  .bar-opts-toggle { display: inline-flex; }
+  .bar-opts-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    width: 38px;
+  }
+  .bar-opts-toggle .svgicon { width: 17px; height: 17px; vertical-align: middle; }
   /* Eingeklappt: Options-Gruppe UND Options-Zeilen (untere Sendeleisten) weg */
   .rmm-window:not(.opts-open) .bar-opts   { display: none !important; }
   .rmm-window:not(.opts-open) .bar-optrow { display: none !important; }

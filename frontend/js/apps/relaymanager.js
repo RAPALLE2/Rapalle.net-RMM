@@ -15,6 +15,16 @@ export function renderRelayManager(body, win) {
   const selected = new Set();   // ausgewählte Client-IDs
   const isAdmin = (() => { try { return userIsAdmin(); } catch { return false; } })();
 
+  // Verbindungsdaten dynamisch aus der aktuellen Adresse ableiten
+  const RM_HTTPS = location.protocol === "https:";
+  const RM_HOST = location.hostname;
+  const RM_PORT = location.port || (RM_HTTPS ? "443" : "80");
+  const RM_DAV_URL = `${location.protocol}//${location.host}/dav`;
+  const RM_WIN_PATH = RM_HTTPS
+    ? `\\\\${RM_HOST}@SSL@${RM_PORT}\\dav`
+    : `\\\\${RM_HOST}@${RM_PORT}\\dav`;
+  const RM_LINUX_URL = `${RM_HTTPS ? "davs" : "dav"}://${location.host}/dav`;
+
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
@@ -24,6 +34,41 @@ export function renderRelayManager(body, win) {
           ihn ein- bzw. ausgeschaltet.
           ${isAdmin ? "" : '<b style="color:var(--warn,#f5a524)"> Nur Administratoren können umschalten.</b>'}
         </div>
+
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:var(--accent);font-size:12.5px;user-select:none">
+            📄 Verbindungsanleitung anzeigen (Windows / macOS / Linux)
+          </summary>
+          <div style="font-size:12px;line-height:1.65;color:var(--text);margin-top:8px;display:grid;gap:8px">
+            <div>
+              Der Relay stellt die Laufwerke aktiver Clients als
+              <b>WebDAV</b>-Freigabe unter <code>${RM_DAV_URL}</code> bereit.
+              Anmeldung mit deinem <b>RMM-Benutzernamen und -Passwort</b>.
+              Jeder Client mit aktivem Relay erscheint als Ordner, darunter seine Laufwerke.
+            </div>
+            <div>
+              <b>Windows (Explorer):</b> In die Adressleiste eingeben:
+              <code>${RM_WIN_PATH}</code><br/>
+              Oder als Laufwerk verbinden (Eingabeaufforderung):
+              <code>net use R: ${RM_WIN_PATH} /user:DEIN_BENUTZER</code>
+            </div>
+            <div>
+              <b>macOS (Finder):</b> <i>Gehe zu → Mit Server verbinden…</i> (Cmd+K) und
+              <code>${RM_DAV_URL}</code> eintragen.
+            </div>
+            <div>
+              <b>Linux (Dateimanager):</b> Adresse <code>${RM_LINUX_URL}</code> öffnen
+              (Nautilus/Dolphin: „Mit Server verbinden“).<br/>
+              Oder mounten: <code>sudo mount -t davfs ${RM_DAV_URL} /mnt/rmm</code>
+              <span style="color:var(--subtext)">(Paket davfs2 nötig)</span>
+            </div>
+            <div style="color:var(--subtext)">
+              Hinweis: Ohne HTTPS verweigert Windows WebDAV standardmäßig
+              Basic-Anmeldungen – HTTPS wird empfohlen. Esc/Trennen: Laufwerk im
+              Explorer auswerfen bzw. <code>net use R: /delete</code>.
+            </div>
+          </div>
+        </details>
       </div>
 
       <div style="flex:1;display:grid;grid-template-columns:1fr auto 1fr;gap:0;min-height:0">

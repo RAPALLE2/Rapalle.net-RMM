@@ -44,6 +44,7 @@ from app.routers import (
     guac_routes,
     source_routes,
     relay_routes,
+    speedtest_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -91,6 +92,7 @@ api.include_router(database_routes.router)
 api.include_router(guac_routes.router)
 api.include_router(source_routes.router)
 api.include_router(relay_routes.router)
+api.include_router(speedtest_routes.router)
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.

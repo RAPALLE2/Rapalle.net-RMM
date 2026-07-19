@@ -39,7 +39,10 @@ export function applyStaticTranslations() {
   document.querySelectorAll("#start-menu [data-app]").forEach((btn) => {
     const key = startMenuKeys[btn.dataset.app];
     if (!key) return;
-    const textSpan = btn.querySelector("span:not(.app-icon)");
+    // WICHTIG: ":scope >" — nur direkte Kind-Spans! Ohne das traf der Selektor
+    // nach der Emoji->SVG-Ersetzung den .svgicon-Span IM Icon und schrieb den
+    // uebersetzten Text mit 34px ins Icon (doppelter Riesentext im Startmenue).
+    const textSpan = btn.querySelector(":scope > span:not(.app-icon)");
     if (textSpan) textSpan.textContent = t(key);
     else btn.textContent = t(key);
   });

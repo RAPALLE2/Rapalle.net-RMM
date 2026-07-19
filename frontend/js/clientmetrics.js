@@ -421,7 +421,7 @@ export function renderClientMetric(target, client, panel) {
   // Skalier-Holder: 1x1-optimierter Inhalt wächst proportional mit der Zelle.
   const holder = document.createElement("div");
   holder.className = "cmetric-fit-holder";
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:stretch;justify-content:stretch;overflow:hidden;min-width:0;min-height:0";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;min-width:0;min-height:0";
   target.appendChild(holder);
   const _t = target;            // Original für Hover-Bindung
   target = holder;              // Diagramme rendern in den Holder
@@ -459,7 +459,7 @@ export function renderClientMetric(target, client, panel) {
     const txt = formatClientValue(preset, v);
     const fs = txt.length > 12 ? 26 : txt.length > 8 ? 34 : 44;
     target.innerHTML = `<div style="width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
-      <div style="font-size:${fs}px;font-weight:800;line-height:1.05">${esc(txt)}</div>
+      <div style="font-size:${fs}px;font-weight:800;line-height:1.05;overflow-wrap:anywhere">${esc(txt)}</div>
       <div style="font-size:14px;color:var(--subtext);margin-top:5px;max-width:${NAT_W - 10}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div></div>`;
     scaleToContainer(holder); return;
   }
@@ -485,7 +485,7 @@ export function renderClientMetric(target, client, panel) {
         </div>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:${valTxt.length > 7 ? 20 : 26}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valTxt)}</div>
+        <div style="font-size:${valTxt.length > 7 ? 20 : 26}px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(valTxt)}</div>
         <div style="font-size:13px;color:var(--subtext);margin-top:4px;line-height:1.3">${esc(preset.label)}</div>
       </div></div>`;
     scaleToContainer(holder); return;
@@ -523,7 +523,7 @@ export function renderClientMetric(target, client, panel) {
         </div>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:${valTxt.length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valTxt)}</div>
+        <div style="font-size:${valTxt.length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(valTxt)}</div>
         <div style="font-size:14.5px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(preset.label)}</div>
         <div style="font-size:13px;color:var(--subtext);margin-top:3px">von ${esc(formatClientValue(preset, max))}</div>
       </div></div>`;
@@ -592,7 +592,7 @@ export function renderClientMetric(target, client, panel) {
         </div>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:${valTxt.length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valTxt)}</div>
+        <div style="font-size:${valTxt.length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(valTxt)}</div>
         <div style="font-size:14.5px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(preset.label)}</div>
       </div></div>`;
     scaleToContainer(holder); return;
@@ -610,7 +610,7 @@ export function renderClientMetric(target, client, panel) {
     wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:12px`;
     wrap.innerHTML = `
       <div style="flex:none;max-width:118px">
-        <div style="font-size:30px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatClientValue(preset, v))}</div>
+        <div style="font-size:30px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(formatClientValue(preset, v))}</div>
         <div style="font-size:13px;color:var(--subtext);margin-top:2px">${esc(preset.label)}</div>
       </div>
       <div style="text-align:right;flex:1;min-width:0">

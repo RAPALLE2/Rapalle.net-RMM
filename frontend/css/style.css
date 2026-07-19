@@ -1428,3 +1428,17 @@ body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit
 .svgicon svg { width: 100%; height: 100%; display: block; }
 /* Grosse Kachel-Icons (Startmenue) skalieren ueber font-size automatisch mit */
 .start-menu-grid .app-icon .svgicon { width: 1em; height: 1em; vertical-align: -0.1em; }
+
+/* SVG-Icons in Buttons/Leisten sauber vertikal zentrieren */
+button > .svgicon:only-child { vertical-align: middle; }
+.taskbar-btn .svgicon { vertical-align: middle; }
+
+/* --- widget overflow guard (herausgeloeste Panels/Fenster) --- */
+.cmetric-fit-holder { overflow: hidden; }
+.cmetric-fit-holder > * { max-width: 100%; }
+.rmm-window-body .dash-w-body,
+.rmm-window-body .panelpart-body,
+.rmm-window-body .cmetric-fit-holder { min-width: 0; }
+/* Werte/Label in Kacheln nie horizontal ueberlaufen lassen */
+.dash-w-body [style*="font-weight:800"],
+.cmetric-fit-holder [style*="font-weight:800"] { overflow-wrap: anywhere; }

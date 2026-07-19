@@ -112,7 +112,7 @@ function renderWidgetInner(target, widget, preset) {
   // proportional auf die tatsächliche Widget-Größe skaliert (runter UND rauf).
   const holder = document.createElement("div");
   holder.className = "widget-fit-holder";
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:stretch;justify-content:stretch;overflow:hidden;min-width:0;min-height:0";
+  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;min-width:0;min-height:0";
   target.appendChild(holder);
   const out = holder;
 
@@ -240,7 +240,7 @@ function renderNumber(target, widget, preset) {
   const fs = txt.length > 12 ? 26 : txt.length > 8 ? 34 : 44;
   const box = document.createElement("div");
   box.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center`;
-  box.innerHTML = `<div style="font-size:${fs}px;font-weight:800;line-height:1.05">${esc(txt)}</div>
+  box.innerHTML = `<div style="font-size:${fs}px;font-weight:800;line-height:1.05;overflow-wrap:anywhere">${esc(txt)}</div>
     <div style="font-size:14px;color:var(--subtext);margin-top:5px;max-width:${NAT_W - 10}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preset.label)}</div>`;
   target.appendChild(box);
 }
@@ -265,7 +265,7 @@ function donutSideLayout(pct, insideText, valueText, label, sub, color = "var(--
         </div>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:${String(valueText).length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(valueText)}</div>
+        <div style="font-size:${String(valueText).length > 9 ? 23 : 30}px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(valueText)}</div>
         <div style="font-size:14.5px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(label)}</div>
         ${sub ? `<div style="font-size:13px;color:var(--subtext);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</div>` : ""}
       </div>
@@ -322,7 +322,7 @@ function renderGauge(target, widget, preset) {
       </div>
     </div>
     <div style="flex:1;min-width:0">
-      <div style="font-size:${String(formatValue(preset, v)).length > 7 ? 20 : 26}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, v))}</div>
+      <div style="font-size:${String(formatValue(preset, v)).length > 7 ? 20 : 26}px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(formatValue(preset, v))}</div>
       <div style="font-size:13px;color:var(--subtext);margin-top:4px;line-height:1.3">${esc(preset.label)}</div>
     </div>`;
   target.appendChild(wrap);
@@ -369,7 +369,7 @@ function renderRing(target, widget, preset) {
       </div>
     </div>
     <div style="flex:1;min-width:0">
-      <div style="font-size:${String(formatValue(preset, v)).length > 9 ? 21 : 27}px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, v))}</div>
+      <div style="font-size:${String(formatValue(preset, v)).length > 9 ? 21 : 27}px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(formatValue(preset, v))}</div>
       <div style="font-size:12px;color:var(--subtext);margin-top:3px;line-height:1.3">${esc(preset.label)}</div>
     </div>`;
   target.appendChild(wrap);
@@ -388,7 +388,7 @@ function renderStat(target, widget, preset) {
   wrap.style.cssText = `width:${NAT_W}px;height:${NAT_H}px;display:flex;align-items:center;gap:12px`;
   wrap.innerHTML = `
     <div style="flex:none;max-width:118px">
-      <div style="font-size:30px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(formatValue(preset, cur))}</div>
+      <div style="font-size:30px;font-weight:800;line-height:1.1;overflow-wrap:anywhere;word-break:break-word">${esc(formatValue(preset, cur))}</div>
       <div style="font-size:13px;color:var(--subtext);margin-top:2px">${esc(preset.label)}</div>
     </div>
     <div style="text-align:right;flex:1;min-width:0">

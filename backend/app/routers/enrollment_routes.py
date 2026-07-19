@@ -444,7 +444,7 @@ $CurrentUser = "$env:USERDOMAIN\\$env:USERNAME"
 $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
 $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
 Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
 
 # --- 5. Agent SOFORT starten (versteckt, in der aktuellen Sitzung) ---
@@ -605,7 +605,7 @@ if (-not $task) {{
     $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
     $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
     $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
     Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
 }}
 
