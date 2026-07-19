@@ -105,7 +105,7 @@ export const api = {
   deleteClientWebsite: (id, websiteId) => request(`/api/clients/${id}/websites/${websiteId}`, { method: "DELETE" }),
   getServerAddress: () => request("/api/server-address"),
   getRelayStatus: (clientId) => request(`/api/relay/status?client_id=${encodeURIComponent(clientId)}`),
-  toggleRelay: (clientId) => request(`/api/relay/toggle?client_id=${encodeURIComponent(clientId)}`, { method: "POST" }),
+  toggleRelay: (clientId, autoCloseMinutes = 0) => request(`/api/relay/toggle?client_id=${encodeURIComponent(clientId)}${autoCloseMinutes ? `&auto_close_minutes=${encodeURIComponent(autoCloseMinutes)}` : ""}`, { method: "POST" }),
   getFavoriteWebsites: () => request("/api/clients/websites/favorites"),
 
   // --- Server-Dateisystem (Backend-Rechner selbst) ---
@@ -145,8 +145,8 @@ export const api = {
 
   // --- Audit-Log ---
   getAuditLog: () => request("/api/audit"),
-  logError: (message, level = "error", context = null) =>
-    request("/api/audit/log-error", { method: "POST", body: JSON.stringify({ message, level, context }) }),
+  logError: (message, level = "error", context = null, action = null) =>
+    request("/api/audit/log-error", { method: "POST", body: JSON.stringify({ message, level, context, action }) }),
 
   // --- Session-Aufzeichnungen ---
   getRecordings: () => request("/api/recordings"),
@@ -161,6 +161,7 @@ export const api = {
 
   // --- Agent-Verwaltung ---
   updateAgent: (clientId) => request(`/api/clients/${clientId}/update-agent`, { method: "POST" }),
+  updateAllAgents: () => request("/api/clients/update-all-agents", { method: "POST" }),
   uninstallAgent: (clientId) => request(`/api/clients/${clientId}/uninstall-agent`, { method: "POST" }),
 
   // --- Effektive Rechte des eingeloggten Benutzers (Frontend-Gating) ---

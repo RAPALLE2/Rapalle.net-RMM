@@ -7,8 +7,17 @@
 // (inaktiv -> aktiv bzw. aktiv -> inaktiv).
 
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiChoice } from "../utils.js";
 import { isAdmin as userIsAdmin, state } from "../state.js";
+
+// Auswahl-Optionen für das automatische Schließen eines Relays.
+const RELAY_AUTOCLOSE_OPTIONS = [
+  { label: "Nach 10 Minuten", value: 10 },
+  { label: "Nach 30 Minuten", value: 30 },
+  { label: "Nach 1 Stunde", value: 60 },
+  { label: "Nach 2 Stunden", value: 120 },
+  { label: "Nie (dauerhaft offen)", value: 0 },
+];
 
 // Kopieren mit Fallback (identisch zum Explorer): navigator.clipboard braucht
 // einen sicheren Kontext; sonst über ein temporäres Textfeld + execCommand.
@@ -281,11 +290,30 @@ export function renderRelayManager(body, win) {
 
   switchBtn.addEventListener("click", async () => {
     if (!isAdmin || selected.size === 0) return;
-    switchBtn.disabled = true;
     const ids = [...selected];
+
+    // Welche der ausgewählten Clients werden EINGESCHALTET (aktuell inaktiv)?
+    // Nur dann ist das automatische Schließen relevant.
+    const enabling = ids.filter((id) => {
+      const c = clients.find((x) => x.id === id);
+      return c && !c.relay_enabled;
+    });
+    let autoCloseMin = 0;
+    if (enabling.length) {
+      const choice = await uiChoice(
+        "Relay automatisch schließen?",
+        RELAY_AUTOCLOSE_OPTIONS,
+        { description: `Wann soll der Relay für ${enabling.length === 1 ? "diesen Client" : `diese ${enabling.length} Clients`} automatisch wieder geschlossen werden?` });
+      if (choice === null) return;   // abgebrochen -> nichts umschalten
+      autoCloseMin = choice;
+    }
+
+    switchBtn.disabled = true;
     let ok = 0, fail = 0;
     for (const id of ids) {
-      try { await api.toggleRelay(id); ok++; }
+      const c = clients.find((x) => x.id === id);
+      const turningOn = c && !c.relay_enabled;
+      try { await api.toggleRelay(id, turningOn ? autoCloseMin : 0); ok++; }
       catch { fail++; }
     }
     selected.clear();

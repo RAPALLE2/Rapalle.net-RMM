@@ -27,7 +27,7 @@ from app.auth import (
     get_current_user, require_perm, can_access_client,
     visible_client_ids, user_has_permission,
 )
-from app.sockets import state, request_exec, request_fs_list, request_proc_list, request_proc_kill, request_fs_read, request_fs_op, send_to_agent
+from app.sockets import state, request_exec, request_fs_list, request_proc_list, request_proc_kill, request_fs_read, request_fs_op, send_to_agent, sio
 
 
 def _require_client_perm(user: dict, client_id: str, perm: str) -> None:
@@ -195,6 +195,8 @@ class UpdateClientBody(BaseModel):
     auto_update: str | None = None
     # Bestätigung der Gerätetyp-Auto-Erkennung (1 = Nutzer hat entschieden)
     device_type_ack: int | None = None
+    # Favorisierter Arbeitsordner (erscheint im Web-Explorer in der Wurzelansicht)
+    fav_dir: str | None = None
 
 
 def _with_live_state(c: dict) -> dict:
@@ -454,6 +456,122 @@ async def update_client_agent(client_id: str, user: dict = Depends(get_current_u
         "bestätigt. Das Update ist möglicherweise fehlgeschlagen - bitte den "
         "Client bzw. das Log /tmp/rapalle-agent-update.log prüfen.",
     )
+
+
+@router.post("/update-all-agents")
+async def update_all_agents(user: dict = Depends(get_current_user)):
+    """
+    Löst ein Agent-Update für ALLE aktuell verbundenen Clients aus, die der
+    Benutzer verwalten darf. Bewusst „fire-and-forget": Es wird nicht auf die
+    einzelnen Bestätigungen gewartet (das würde bei vielen Clients zu lange
+    dauern) – jeder Agent aktualisiert sich selbst und verbindet neu.
+
+    Sobald ALLE angestoßenen Clients wieder verbunden sind, bekommen die
+    Dashboards automatisch eine Benachrichtigung (Hintergrund-Task).
+    """
+    all_clients = db.list_clients()
+    visible = visible_client_ids(user, [c["id"] for c in all_clients])
+
+    triggered_ids: list[str] = []
+    offline, no_perm = 0, 0
+    for c in all_clients:
+        cid = c["id"]
+        if cid not in visible:
+            continue
+        # Nur Clients mit Verwaltungsrecht anfassen (still überspringen).
+        if not user_has_permission(user, "manage_agent", cid):
+            no_perm += 1
+            continue
+        if not state.is_online(cid):
+            offline += 1
+            continue
+        # Alte Bestätigung verwerfen, damit wir nur den NEUEN Reconnect erkennen.
+        state.update_confirmed.pop(cid, None)
+        try:
+            ok = await send_to_agent(cid, "update-agent", {})
+            if ok:
+                triggered_ids.append(cid)
+            else:
+                offline += 1
+        except Exception:
+            offline += 1
+
+    db.add_audit_entry(user["username"], "agent.update_all_triggered",
+                       details=f"ausgelöst={len(triggered_ids)}, offline={offline}")
+
+    # Im Hintergrund darauf warten, dass alle angestoßenen Agents wieder
+    # verbunden sind, und dann die Dashboards benachrichtigen.
+    if triggered_ids:
+        asyncio.create_task(_await_agents_reconnect(triggered_ids, user["username"]))
+
+    return {"ok": True, "triggered": len(triggered_ids), "offline": offline,
+            "skipped_no_permission": no_perm}
+
+
+async def _await_agents_reconnect(client_ids: list[str], username: str,
+                                  timeout_seconds: float = 300.0) -> None:
+    """Wartet, bis alle per Massen-Update angestoßenen Agents ihren Neustart
+    durchlaufen haben, und benachrichtigt dann alle Dashboards.
+
+    WICHTIG: Beim Auslösen sind die Clients noch verbunden. Ein Client gilt erst
+    dann als „wieder verbunden", wenn er ZUERST offline gegangen (Update-Neustart)
+    und DANACH wieder online ist. Das zuverlässigste Signal dafür ist
+    `state.update_confirmed` (wird nur beim Reconnect NACH einem Update gesetzt).
+    Zusätzlich beobachten wir den Offline→Online-Übergang direkt, falls ein Agent
+    kein `updated`-Flag meldet."""
+    # Phase 1: auf das Offline-Gehen warten. Phase 2: auf das erneute Online-Sein.
+    waiting_offline = set(client_ids)   # muss erst weg (Update-Neustart)
+    waiting_online = set()              # war offline, muss wieder kommen
+    total = len(client_ids)
+    deadline = time.monotonic() + timeout_seconds
+
+    while (waiting_offline or waiting_online) and time.monotonic() < deadline:
+        await asyncio.sleep(1.0)
+
+        # Phase 1: Clients, die (a) offline gegangen sind -> Phase 2, oder
+        # (b) sich bereits per Update-Reconnect zurückgemeldet haben -> fertig.
+        for cid in list(waiting_offline):
+            if cid in state.update_confirmed:
+                # Hat den kompletten Zyklus schon durchlaufen (offline+online).
+                state.update_confirmed.pop(cid, None)
+                waiting_offline.discard(cid)
+            elif not state.is_online(cid):
+                # Jetzt offline (Update-Neustart) -> auf Wiederkehr warten.
+                waiting_offline.discard(cid)
+                waiting_online.add(cid)
+
+        # Phase 2: auf die Rückkehr warten (Update-Reconnect ODER wieder online).
+        for cid in list(waiting_online):
+            if cid in state.update_confirmed or state.is_online(cid):
+                state.update_confirmed.pop(cid, None)
+                waiting_online.discard(cid)
+
+    missing = waiting_offline | waiting_online
+    reconnected = total - len(missing)
+    if not missing:
+        message = (f"✅ Agent-Update abgeschlossen: alle {total} Clients sind "
+                   f"wieder verbunden.")
+        level = "success"
+        db.add_audit_entry(username, "agent.update_all_completed",
+                           details=f"alle {total} Clients wieder verbunden")
+    else:
+        # Namen der noch fehlenden Clients (max. ein paar) für die Meldung.
+        missing_names = []
+        for cid in list(missing)[:5]:
+            c = db.get_client(cid)
+            missing_names.append((c or {}).get("hostname") or cid)
+        extra = "" if len(missing) <= 5 else f" (+{len(missing) - 5} weitere)"
+        message = (f"⚠️ Agent-Update: {reconnected} von {total} Clients wieder "
+                   f"verbunden. Nicht zurückgemeldet: {', '.join(missing_names)}{extra}.")
+        level = "warning"
+        db.add_audit_entry(username, "agent.update_all_completed",
+                           details=f"{reconnected}/{total} wieder verbunden")
+
+    try:
+        await sio.emit("notify", {"message": message, "level": level},
+                       namespace="/dashboard")
+    except Exception as e:
+        print(f"[update-all] Dashboard-Notify fehlgeschlagen: {e}")
 
 
 @router.post("/{client_id}/uninstall-agent")

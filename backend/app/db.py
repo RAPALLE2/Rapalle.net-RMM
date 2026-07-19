@@ -29,18 +29,134 @@ import sqlite3
 import json
 import time
 import pathlib
+import threading
 import uuid
 
 # Pfad zur Datenbank-Datei: liegt im backend-Ordner, eine Ebene über "app/"
 DB_PATH = pathlib.Path(__file__).resolve().parent.parent / "data.sqlite"
 
+
+# ------------------------------------------------------------------
+# Thread-sichere SQLite-Verbindung
+# ------------------------------------------------------------------
+# Es gibt EINE geteilte Verbindung für die ganze App. FastAPI/Uvicorn führt
+# Request-Handler aber in mehreren Worker-Threads aus, und zusätzlich greifen
+# Hintergrund-Tasks (Automation, Uptime, Relay-Auto-Close, DB-Sync, …) aus dem
+# Event-Loop-Thread zu. Eine sqlite3.Connection darf NICHT gleichzeitig aus
+# mehreren Threads benutzt werden – sonst kommt es zu sporadischen Abstürzen
+# wie „sqlite3.InterfaceError: bad parameter or other API misuse".
+#
+# Deshalb kapseln wir die echte Verbindung in einen dünnen Wrapper, der ALLE
+# Zugriffe mit EINEM (reentranten) Lock serialisiert und Abfrage-Ergebnisse
+# sofort (noch unter dem Lock) materialisiert. So bleibt jede Operation atomar
+# und die eine Verbindung ist gefahrlos aus beliebig vielen Threads nutzbar.
+
+class _CursorResult:
+    """Ergebnis eines execute(): Zeilen sind bereits (unter Lock) geladen und
+    daher thread-sicher weiterverwendbar (fetchone/fetchall/Iteration)."""
+
+    def __init__(self, rows, rowcount, lastrowid):
+        self._rows = rows
+        self._i = 0
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+
+    def fetchone(self):
+        if self._i < len(self._rows):
+            r = self._rows[self._i]
+            self._i += 1
+            return r
+        return None
+
+    def fetchall(self):
+        r = self._rows[self._i:]
+        self._i = len(self._rows)
+        return list(r)
+
+    def fetchmany(self, size=1):
+        r = self._rows[self._i:self._i + size]
+        self._i += len(r)
+        return list(r)
+
+    def __iter__(self):
+        while self._i < len(self._rows):
+            yield self._rows[self._i]
+            self._i += 1
+
+
+class _SafeConn:
+    """Dünner, thread-sicherer Wrapper um die geteilte SQLite-Verbindung."""
+
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_lock", threading.RLock())
+
+    @property
+    def lock(self):
+        return object.__getattribute__(self, "_lock")
+
+    def _run(self, method, sql, arg):
+        with self.lock:
+            real = object.__getattribute__(self, "_conn")
+            cur = method(real, sql, arg) if arg is not None else method(real, sql)
+            try:
+                rows = cur.fetchall()
+            except Exception:
+                rows = []
+            return _CursorResult(rows, cur.rowcount, cur.lastrowid)
+
+    def execute(self, sql, params=None):
+        import sqlite3 as _sq
+        return self._run(_sq.Connection.execute, sql, params if params is not None else ())
+
+    def executemany(self, sql, seq):
+        import sqlite3 as _sq
+        return self._run(_sq.Connection.executemany, sql, list(seq))
+
+    def executescript(self, sql):
+        with self.lock:
+            return object.__getattribute__(self, "_conn").executescript(sql)
+
+    def commit(self):
+        with self.lock:
+            return object.__getattribute__(self, "_conn").commit()
+
+    def rollback(self):
+        with self.lock:
+            return object.__getattribute__(self, "_conn").rollback()
+
+    def backup(self, target, *a, **k):
+        with self.lock:
+            return object.__getattribute__(self, "_conn").backup(target, *a, **k)
+
+    def cursor(self):
+        # Direkter Cursor umgeht die Serialisierung; nur unter .lock verwenden.
+        with self.lock:
+            return object.__getattribute__(self, "_conn").cursor()
+
+    @property
+    def total_changes(self):
+        with self.lock:
+            return object.__getattribute__(self, "_conn").total_changes
+
+    # Sonstige Attribute (z.B. row_factory) an die echte Verbindung durchreichen.
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_conn"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_conn"), name, value)
+
+
 # Eine einzige, geteilte Verbindung für die ganze App.
-# check_same_thread=False, weil FastAPI/Uvicorn mehrere Threads nutzen kann.
-_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+# check_same_thread=False, weil FastAPI/Uvicorn mehrere Threads nutzen kann;
+# die Serialisierung übernimmt _SafeConn (siehe oben).
+_raw_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 
 # row_factory sorgt dafür, dass wir Zeilen wie Dictionaries ansprechen können
 # (z.B. row["hostname"] statt row[3]), das ist deutlich lesbarer.
-_conn.row_factory = sqlite3.Row
+_raw_conn.row_factory = sqlite3.Row
+
+_conn = _SafeConn(_raw_conn)
 
 
 def _new_id() -> str:
@@ -322,6 +438,12 @@ def init_db() -> None:
     _migrate_add_column("users", "relay_password", "TEXT")  # (alt, ungenutzt) - früheres Einmalpasswort
     _migrate_add_column("users", "relay_ha1", "TEXT")  # Digest-HA1 = MD5(user:realm:konto-passwort), bei Login gesetzt
     _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = im Explorer-Relay freigegeben
+    # Automatisches Schließen des Relays: Unix-Zeit in ms, zu der die Freigabe
+    # automatisch aufgehoben wird. 0 = nie (bleibt dauerhaft offen).
+    _migrate_add_column("clients", "relay_expires_at", "INTEGER NOT NULL DEFAULT 0")
+    # Favorisierter Arbeitsordner pro Client (erscheint im Web-Explorer in der
+    # Laufwerks-/Wurzel-Ansicht, z.B. /var/www bei einem Webhost). '' = keiner.
+    _migrate_add_column("clients", "fav_dir", "TEXT NOT NULL DEFAULT ''")
     _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
     _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
     _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
@@ -549,9 +671,24 @@ def get_user_by_username_any(username: str) -> dict | None:
     return get_user_by_username(username)
 
 
-def set_client_relay_enabled(client_id: str, enabled: bool) -> None:
-    _conn.execute("UPDATE clients SET relay_enabled = ? WHERE id = ?",
-                  (1 if enabled else 0, client_id))
+def set_client_relay_enabled(client_id: str, enabled: bool, expires_at: int = 0) -> None:
+    """Relay-Freigabe setzen. expires_at = Unix-ms für automatisches Schließen
+    (0 = nie). Beim Sperren wird der Ablaufzeitpunkt immer zurückgesetzt."""
+    if enabled:
+        _conn.execute(
+            "UPDATE clients SET relay_enabled = 1, relay_expires_at = ? WHERE id = ?",
+            (int(expires_at or 0), client_id))
+    else:
+        _conn.execute(
+            "UPDATE clients SET relay_enabled = 0, relay_expires_at = 0 WHERE id = ?",
+            (client_id,))
+    _conn.commit()
+
+
+def set_client_relay_expiry(client_id: str, expires_at: int) -> None:
+    """Nur den Auto-Schließen-Zeitpunkt eines (bereits freigegebenen) Clients setzen."""
+    _conn.execute("UPDATE clients SET relay_expires_at = ? WHERE id = ?",
+                  (int(expires_at or 0), client_id))
     _conn.commit()
 
 
@@ -563,6 +700,14 @@ def is_client_relay_enabled(client_id: str) -> bool:
 def list_relay_enabled_clients() -> list[dict]:
     rows = _conn.execute(
         "SELECT * FROM clients WHERE relay_enabled = 1 ORDER BY hostname").fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_expired_relay_clients(now_ms: int) -> list[dict]:
+    """Freigegebene Clients, deren Auto-Schließen-Zeitpunkt erreicht ist (>0)."""
+    rows = _conn.execute(
+        "SELECT * FROM clients WHERE relay_enabled = 1 AND relay_expires_at > 0 "
+        "AND relay_expires_at <= ?", (int(now_ms),)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -877,7 +1022,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
-        "device_type_ack",
+        "device_type_ack", "fav_dir",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:

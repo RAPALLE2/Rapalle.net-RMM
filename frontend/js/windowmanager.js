@@ -292,7 +292,9 @@ function createWindowElement(win) {
   controls.className = "win-controls";
 
   const pinBtn = document.createElement("button");
-  pinBtn.textContent = "📌";
+  // Nur das Icon (Glyph) wird schräg gestellt/gedreht, NICHT die Button-Box.
+  // Dadurch bleibt der Hover-/Angepinnt-Hintergrund immer gerade.
+  pinBtn.innerHTML = '<span class="win-pin-glyph">📌</span>';
   pinBtn.className = "win-pin-btn" + (win.pinned ? " pinned" : "");
   pinBtn.title = win.pinned ? "Nicht mehr anheften" : "Anheften (immer im Vordergrund)";
   pinBtn.addEventListener("click", (e) => { e.stopPropagation(); togglePin(win.key); });

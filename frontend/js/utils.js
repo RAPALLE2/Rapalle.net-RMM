@@ -332,6 +332,41 @@ export function uiPrompt(title, opts = {}) {
     okText: opts.okText || "Übernehmen", cancelText: opts.cancelText || "Abbrechen" });
 }
 
+// Auswahl-Dialog mit Tasten-Optionen. Gibt den value der gewählten Option
+// zurück oder null bei Abbruch.
+//   await uiChoice("Titel", [{label:"10 Min", value:10}, ...], { description })
+export function uiChoice(title, options = [], opts = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.5);
+      display:flex;align-items:center;justify-content:center;`;
+    const btns = options.map((o, i) => `
+      <button class="uic-opt" data-idx="${i}"
+        style="text-align:left;padding:9px 12px;border-radius:8px;border:1px solid var(--border,#2a3648);
+        background:var(--panel-2,#0e1520);color:var(--text,#e8eef7);font-size:13px;cursor:pointer">
+        ${esc(o.label)}</button>`).join("");
+    overlay.innerHTML = `
+      <div style="background:var(--panel,#131c2b);color:var(--text,#e8eef7);border:1px solid var(--border,#2a3648);
+        border-radius:12px;min-width:320px;max-width:420px;padding:18px;box-shadow:0 16px 48px rgba(0,0,0,0.5)">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">${esc(title)}</div>
+        ${opts.description ? `<div style="font-size:12px;color:var(--subtext,#8fa3bd);margin-bottom:12px">${esc(opts.description)}</div>` : ""}
+        <div style="display:flex;flex-direction:column;gap:7px">${btns}</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px">
+          <button class="uic-cancel taskbar-btn">${esc(opts.cancelText || "Abbrechen")}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const done = (val) => { overlay.remove(); document.removeEventListener("keydown", onKey); resolve(val); };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) done(null); });
+    overlay.querySelector(".uic-cancel").addEventListener("click", () => done(null));
+    overlay.querySelectorAll(".uic-opt").forEach((b) =>
+      b.addEventListener("click", () => done(options[+b.dataset.idx].value)));
+    setTimeout(() => overlay.querySelector(".uic-opt")?.focus(), 30);
+  });
+}
+
 // Doppelte Nachfrage für gefährliche Aktionen (z.B. Tabelle löschen).
 export async function uiConfirmTwice(title, opts = {}) {
   if (!(await uiConfirm(title, { ...opts, danger: true }))) return false;

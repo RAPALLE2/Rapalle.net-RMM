@@ -76,14 +76,29 @@ async def relay_status(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/relay/toggle")
-async def relay_toggle(client_id: str, user: dict = Depends(get_current_user)):
-    """Relay-Freigabe für diesen Client an/aus. Nur Admins."""
+async def relay_toggle(client_id: str, auto_close_minutes: int = 0,
+                       user: dict = Depends(get_current_user)):
+    """Relay-Freigabe für diesen Client an/aus. Nur Admins.
+
+    auto_close_minutes: Minuten bis zum automatischen Schließen der Freigabe
+    (0 = nie). Wird nur beim EINSCHALTEN ausgewertet.
+    """
     require_admin(user)
     new_state = not db.is_client_relay_enabled(client_id)
-    db.set_client_relay_enabled(client_id, new_state)
+    expires_at = 0
+    if new_state and auto_close_minutes and auto_close_minutes > 0:
+        expires_at = int(time.time() * 1000) + int(auto_close_minutes) * 60_000
+    db.set_client_relay_enabled(client_id, new_state, expires_at)
+    if new_state:
+        detail = "freigegeben"
+        if auto_close_minutes and auto_close_minutes > 0:
+            detail += f" (auto-schließen nach {int(auto_close_minutes)} min)"
+    else:
+        detail = "gesperrt"
     db.add_audit_entry(user["username"], "relay.toggle", target=client_id,
-                       details="freigegeben" if new_state else "gesperrt")
-    return {"enabled": new_state, "client_id": client_id}
+                       details=detail)
+    return {"enabled": new_state, "client_id": client_id,
+            "relay_expires_at": expires_at}
 
 
 # ------------------------------------------------------------------

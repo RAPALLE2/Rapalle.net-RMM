@@ -69,6 +69,21 @@ export function setOrgDefaults({ dash, fleet }) {
   if (fleet !== undefined) _orgDefaultFleet = fleet;
 }
 
+// Persönliche Wiederherstellungs-Einstellungen: Was soll beim erneuten Anmelden
+// wiederhergestellt werden? (Sonst: sauberer Start vom Dashboard.)
+//   client -> zuletzt ausgewählter Client
+//   folder -> aufgeklappte/ausgewählte Ordner-Struktur (Sidebar)
+//   apps   -> zuletzt offene Fenster/Apps (inkl. offener Ordner im Explorer)
+let _restorePrefs = { client: true, folder: true, apps: true };
+export function getRestorePrefs() { return { ..._restorePrefs }; }
+export function setRestorePrefs(p) {
+  _restorePrefs = {
+    client: p && "client" in p ? !!p.client : _restorePrefs.client,
+    folder: p && "folder" in p ? !!p.folder : _restorePrefs.folder,
+    apps: p && "apps" in p ? !!p.apps : _restorePrefs.apps,
+  };
+}
+
 export function configurePersistence({ username, getExpanded, setExpanded }) {
   _key = KEY_PREFIX + (username || "anon");
   if (getExpanded) _getExpanded = getExpanded;
@@ -97,6 +112,7 @@ export function saveNow(state) {
       dashEdit: _dashEdit,
       fleetWidgets: _fleetWidgets,
       fleetIncludeVirtual: _fleetIncludeVirtual,
+      restorePrefs: _restorePrefs,
       focusOrder: state.focusOrder || [],
       windows: (state.windows || []).map((w) => ({
         key: w.key,
@@ -141,6 +157,7 @@ export function applyExpanded(data) {
   if (data && typeof data.dashEdit === "boolean") _dashEdit = data.dashEdit;
   if (data && data.fleetWidgets) _fleetWidgets = data.fleetWidgets;
   if (data && typeof data.fleetIncludeVirtual === "boolean") _fleetIncludeVirtual = data.fleetIncludeVirtual;
+  if (data && data.restorePrefs && typeof data.restorePrefs === "object") setRestorePrefs(data.restorePrefs);
 }
 
 export function clearPersisted() {

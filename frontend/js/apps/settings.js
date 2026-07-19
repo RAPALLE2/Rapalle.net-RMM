@@ -317,6 +317,15 @@ export function renderSettings(body, win) {
             Automatisches Agent-Update aktiviert (global)
           </label>
         </div>
+        <p style="color:var(--subtext);font-size:13px;margin-top:10px">
+          Alle Agenten <b>sofort</b> aktualisieren: Es wird für jeden aktuell
+          verbundenen Client (den du verwalten darfst) ein Agent-Update ausgelöst.
+          Die Agenten aktualisieren sich selbst und verbinden neu.
+        </p>
+        <div class="form-row">
+          <button class="taskbar-btn" id="ge-updateall">⬆️ Alle Agenten jetzt aktualisieren</button>
+          <span id="ge-updateall-msg" style="margin-left:10px;font-size:12px;color:var(--subtext)"></span>
+        </div>
 
         <h3 style="margin-top:24px">Aufnahme (Replays)</h3>
         <p style="color:var(--subtext);font-size:13px">
@@ -403,6 +412,29 @@ export function renderSettings(body, win) {
         window.notify?.(t("general_saved"), "success");
       } catch (e) {
         err.textContent = e.message; err.classList.remove("hidden");
+      }
+    });
+
+    root.querySelector("#ge-updateall")?.addEventListener("click", async () => {
+      const btn = root.querySelector("#ge-updateall");
+      const msg = root.querySelector("#ge-updateall-msg");
+      const { uiConfirm } = await import("../utils.js");
+      if (!(await uiConfirm("Alle Agenten jetzt aktualisieren?", {
+        description: "Für jeden verbundenen Client wird ein Agent-Update ausgelöst.",
+        okText: "Jetzt aktualisieren" }))) return;
+      btn.disabled = true;
+      if (msg) msg.textContent = "Wird ausgelöst…";
+      try {
+        const res = await api.updateAllAgents();
+        const txt = `Ausgelöst für ${res.triggered} Client(s)` +
+          (res.offline ? `, ${res.offline} offline übersprungen` : "");
+        if (msg) msg.textContent = txt + " – Benachrichtigung folgt, sobald alle wieder verbunden sind.";
+        window.notify?.(txt + ". Du wirst benachrichtigt, sobald alle Clients wieder verbunden sind.", "info", 8000);
+      } catch (e) {
+        if (msg) msg.textContent = "";
+        window.notify?.("Fehlgeschlagen: " + e.message, "error");
+      } finally {
+        btn.disabled = false;
       }
     });
 

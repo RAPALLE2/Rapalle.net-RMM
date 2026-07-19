@@ -10,10 +10,11 @@ import { applyTheme, applyAccent, ACCENT_PALETTES } from "../theme.js";
 import { setLanguage, applyStaticTranslations } from "../i18n_apply.js";
 import { renderSidebar } from "../sidebar.js";
 import { renderMainContent } from "../panel.js";
-import { getDashEdit, setDashEdit, scheduleSave } from "../persist.js";
+import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePrefs } from "../persist.js";
 
 export function renderProfile(body, win) {
   const u = state.user;
+  const _rp = getRestorePrefs();
   body.innerHTML = `
     <div class="settings-section">
       <h3>Profil</h3>
@@ -75,6 +76,30 @@ export function renderProfile(body, win) {
         (auch ohne Bearbeitung). Clients kannst du aus der Seitenleiste direkt auf
         die Arbeitsfläche ziehen.
       </p>
+
+      <h3 style="margin-top:26px">Nach dem Anmelden</h3>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+        Lege fest, was beim erneuten Anmelden wiederhergestellt wird. Ist ein Punkt
+        deaktiviert, startest du an dieser Stelle „sauber" vom Dashboard.
+      </p>
+      <div class="form-row" style="align-items:center">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+          <input type="checkbox" id="pr-restore-client" ${_rp.client ? "checked" : ""} />
+          Zuletzt geöffneten Client wiederherstellen
+        </label>
+      </div>
+      <div class="form-row" style="align-items:center">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+          <input type="checkbox" id="pr-restore-folder" ${_rp.folder ? "checked" : ""} />
+          Zuletzt geöffnete Ordner (Seitenleiste) wiederherstellen
+        </label>
+      </div>
+      <div class="form-row" style="align-items:center">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+          <input type="checkbox" id="pr-restore-apps" ${_rp.apps ? "checked" : ""} />
+          Zuletzt geöffnete Apps/Fenster wiederherstellen
+        </label>
+      </div>
 
       <h3 style="margin-top:26px">Passwort ändern</h3>
       ${u.auth_realm ? `
@@ -138,6 +163,17 @@ export function renderProfile(body, win) {
       applyAccent(selectedAccent);  // Live-Vorschau
     })
   );
+
+  // Wiederherstellungs-Einstellungen: sofort speichern (pro Benutzer, lokal).
+  const _wireRestore = (id, keyName) => {
+    body.querySelector(id)?.addEventListener("change", (e) => {
+      setRestorePrefs({ [keyName]: e.target.checked });
+      scheduleSave(state);
+    });
+  };
+  _wireRestore("#pr-restore-client", "client");
+  _wireRestore("#pr-restore-folder", "folder");
+  _wireRestore("#pr-restore-apps", "apps");
 
   body.querySelector("#pr-save").addEventListener("click", async () => {
     const updated = await api.updateProfile({

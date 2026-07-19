@@ -12,9 +12,19 @@
 //   - "Relay"-Tab: Anleitung + fertige URL zum Netzlaufwerk-Verbinden
 
 import { api } from "../api.js";
-import { formatBytes, esc, uiConfirm, uiPrompt } from "../utils.js";
+import { formatBytes, esc, uiConfirm, uiPrompt, uiChoice } from "../utils.js";
 import { BACKEND_URL } from "../config.js";
 import { isAdmin as userIsAdmin, state } from "../state.js";
+import { scheduleSave } from "../persist.js";
+
+// Auswahl-Optionen für das automatische Schließen eines Relays.
+const RELAY_AUTOCLOSE_OPTIONS = [
+  { label: "Nach 10 Minuten", value: 10 },
+  { label: "Nach 30 Minuten", value: 30 },
+  { label: "Nach 1 Stunde", value: 60 },
+  { label: "Nach 2 Stunden", value: 120 },
+  { label: "Nie (dauerhaft offen)", value: 0 },
+];
 
 const TEXT_EXT = new Set(["txt","log","md","json","xml","yml","yaml","ini","conf","cfg",
   "csv","js","ts","py","sh","bat","ps1","html","css","c","cpp","h","java","go","rs","sql","env"]);
@@ -60,6 +70,17 @@ export function renderExplorer(body, win) {
   let currentEntries = [];
   let mode = "files";
 
+  // Favorisierter Arbeitsordner dieses Clients (aus dem geladenen Client-Objekt).
+  function currentClient() {
+    try { return (state.clients || []).find((c) => c.id === clientId) || null; }
+    catch { return null; }
+  }
+  let favDir = (currentClient()?.fav_dir) || "";
+
+  // Zuletzt offener Ordner (für „offene Apps/Ordner wiederherstellen"). Wird in
+  // load() in die Fenster-Props geschrieben und beim Wiederherstellen genutzt.
+  const startPath = (win.props && typeof win.props.path === "string") ? win.props.path : "";
+
   const fs = clientId ? {
     list: (p) => api.listClientFs(clientId, p),
     read: (p) => api.readClientFile(clientId, p),
@@ -91,6 +112,7 @@ export function renderExplorer(body, win) {
           <div id="exp-crumbs-${win.key}" title="Klicken, um den Pfad zu bearbeiten oder einzufügen" style="flex:1;color:var(--subtext);overflow-x:auto;white-space:nowrap;cursor:text"></div>
           <input id="exp-path-${win.key}" class="hidden" spellcheck="false" style="flex:1;font-family:monospace;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--accent);background:var(--panel-2);color:var(--text)" />
           <button id="exp-copy-${win.key}" title="Aktuellen Pfad kopieren">📋</button>
+          ${clientId ? `<button id="exp-fav-${win.key}" title="Diesen Ordner als Arbeitsordner merken/entfernen">⭐</button>` : ""}
           <button id="exp-mkdir-${win.key}" title="Neuer Ordner">➕📁</button>
           <button id="exp-upload-${win.key}" title="Datei hochladen">⬆️ Upload</button>
           <input type="file" id="exp-file-${win.key}" multiple style="display:none" />
@@ -257,10 +279,20 @@ export function renderExplorer(body, win) {
 
   async function load(path) {
     currentPath = path;
+    // Offenen Ordner in den Fenster-Props merken (Wiederherstellung beim Login).
+    try { win.props.path = path; scheduleSave(state); } catch {}
     tbody.innerHTML = `<tr><td colspan="6" style="color:var(--subtext)">Lädt...</td></tr>`;
     try {
       const res = await fs.list(path);
       currentEntries = res.entries || [];
+      // In der Wurzel-/Laufwerksansicht den favorisierten Arbeitsordner als
+      // ersten Eintrag einblenden (wie ein zusätzliches „Laufwerk").
+      if (!path && clientId && favDir) {
+        currentEntries = [{
+          name: `⭐ Arbeitsordner (${favDir})`,
+          path: favDir, isDir: true, size: 0, mtime: 0, _fav: true,
+        }, ...currentEntries];
+      }
       renderCrumbs(res.path);
       tbody.innerHTML = "";
       if (!currentEntries.length) {
@@ -499,9 +531,19 @@ export function renderExplorer(body, win) {
       if (btn) {
         if (!isAdmin) { btn.disabled = true; btn.title = "Nur Administratoren"; }
         else btn.addEventListener("click", async () => {
+          // Beim EINSCHALTEN nach der automatischen Schließzeit fragen.
+          let autoCloseMin = 0;
+          if (!enabled) {
+            const choice = await uiChoice(
+              "Relay automatisch schließen?",
+              RELAY_AUTOCLOSE_OPTIONS,
+              { description: "Wann soll die Freigabe dieses Clients automatisch wieder geschlossen werden?" });
+            if (choice === null) return;   // abgebrochen
+            autoCloseMin = choice;
+          }
           btn.disabled = true;
           try {
-            await api.toggleRelay(clientId);
+            await api.toggleRelay(clientId, autoCloseMin);
             window.notify?.("Gespeichert", "success");
             window.dispatchEvent(new CustomEvent("relay-changed", { detail: { clientId } }));
             renderRelay();
@@ -543,6 +585,41 @@ export function renderExplorer(body, win) {
     const p = parentOf(currentPath); history.push(p); load(p);
   });
   body.querySelector(`#exp-mkdir-${win.key}`).addEventListener("click", doMkdir);
+  const favBtn = body.querySelector(`#exp-fav-${win.key}`);
+  if (favBtn) {
+    favBtn.addEventListener("click", async () => {
+      // In der Wurzelansicht ohne Favorit: nichts sinnvolles zu tun.
+      if (!currentPath && !favDir) {
+        window.notify?.("Zuerst in einen Ordner wechseln, den du als Arbeitsordner merken willst.", "warn");
+        return;
+      }
+      const isCurrentFav = currentPath && favDir === currentPath;
+      let newFav;
+      if (isCurrentFav) {
+        if (!(await uiConfirm("Arbeitsordner entfernen?", {
+          description: favDir, okText: "Entfernen", danger: true }))) return;
+        newFav = "";
+      } else {
+        if (!(await uiConfirm("Als Arbeitsordner merken?", {
+          description: `„${currentPath}" erscheint künftig in der Laufwerksansicht dieses Clients.`,
+          okText: "Merken" }))) return;
+        newFav = currentPath;
+      }
+      try {
+        const updated = await api.updateClient(clientId, { fav_dir: newFav });
+        favDir = (updated && typeof updated.fav_dir === "string") ? updated.fav_dir : newFav;
+        // Lokalen Client-Cache aktualisieren, damit andere Ansichten mitziehen.
+        try {
+          const c = currentClient();
+          if (c) c.fav_dir = favDir;
+        } catch {}
+        window.notify?.(newFav ? "Arbeitsordner gespeichert" : "Arbeitsordner entfernt", "success");
+        if (!currentPath) load("");   // Wurzelansicht neu zeichnen
+      } catch (e) {
+        window.notify?.("Fehler: " + e.message, "error");
+      }
+    });
+  }
   body.querySelector(`#exp-upload-${win.key}`).addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => { if (fileInput.files.length) uploadFiles(fileInput.files); fileInput.value = ""; });
 
@@ -565,5 +642,7 @@ export function renderExplorer(body, win) {
   }
   window.addEventListener("relay-changed", onRelayChanged);
 
-  load("");
+  // Beim Öffnen den zuletzt offenen Ordner wiederherstellen (sonst Wurzel).
+  if (startPath) history.push(startPath);
+  load(startPath);
 }

@@ -38,3 +38,18 @@ dashboardSocket.on("boot:id", ({ boot_id }) => {
     location.reload();
   }
 });
+
+// --- Relay automatisch geschlossen (Ablaufzeit erreicht) -----------------
+// Schließt das Backend einen Explorer-Relay automatisch (relay_expires_at),
+// schickt es ein "relay-changed"-Event. Wir spiegeln das auf das gleiche
+// Fenster-Event, auf das die Relay-App und der Relay-Tab im Datei-Explorer
+// ohnehin schon hören - so aktualisieren sich beide Ansichten sofort.
+dashboardSocket.on("relay-changed", (detail = {}) => {
+  try {
+    window.dispatchEvent(new CustomEvent("relay-changed", { detail }));
+  } catch {}
+  if (detail && detail.auto && window.notify) {
+    window.notify("Ein Explorer-Relay wurde automatisch geschlossen (Zeit abgelaufen).",
+      "info", 6000, { source: "webhook" });
+  }
+});

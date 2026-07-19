@@ -388,10 +388,48 @@ async def _uptime_monitor_engine():
 
 @api.on_event("startup")
 async def _start_background_tasks():
+    # Wurde der Backend-Prozess zuvor durch einen Absturz beendet und von run.py
+    # automatisch neu gestartet, wird das hier – nach erfolgreichem Hochfahren –
+    # im Audit-Log vermerkt (Gegenstück zu 'backend.crash').
+    try:
+        if db.get_setting("backend_crash_pending", "0") == "1":
+            db.add_audit_entry("system", "backend.restarted",
+                               details="Automatischer Neustart nach Absturz")
+            db.set_setting("backend_crash_pending", "0")
+    except Exception as e:
+        print(f"[startup] Crash-Recovery-Audit fehlgeschlagen: {e}")
     _asyncio.create_task(_automation_engine())
     _asyncio.create_task(_uptime_monitor_engine())
     _asyncio.create_task(_server_auto_update_engine())
     _asyncio.create_task(_db_sync_engine())
+    _asyncio.create_task(_relay_expiry_engine())
+
+
+async def _relay_expiry_engine():
+    """Schließt freigegebene Explorer-Relays automatisch, sobald ihr
+    eingestellter Zeitpunkt (relay_expires_at) erreicht ist. Prüft jede Minute.
+    Jede automatische Schließung wird – wie bei den Agents – im Audit-Log
+    festgehalten (Aktion 'relay.auto_closed')."""
+    await _asyncio.sleep(15)   # dem Start-Ansturm erst Ruhe gönnen
+    while True:
+        try:
+            import time as _time
+            now_ms = int(_time.time() * 1000)
+            for c in db.list_expired_relay_clients(now_ms):
+                db.set_client_relay_enabled(c["id"], False)
+                db.add_audit_entry("system", "relay.auto_closed", target=c["id"],
+                                   details=c.get("hostname"))
+                # Offene Dashboards informieren, damit die Relay-Ansichten
+                # (Explorer-Relay-App / Relay-Tab) sich aktualisieren.
+                try:
+                    await sio.emit("relay-changed",
+                                   {"client_id": c["id"], "auto": True},
+                                   namespace="/dashboard")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[relay] Auto-Close-Engine-Fehler: {e}")
+        await _asyncio.sleep(60)
 
 
 async def _db_sync_engine():

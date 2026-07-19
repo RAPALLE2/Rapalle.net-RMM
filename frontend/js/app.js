@@ -18,10 +18,11 @@ import { setLanguage, applyStaticTranslations } from "./i18n_apply.js";
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
 import { renderTaskbar, initTaskbar } from "./taskbar.js";
-import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll } from "./windowmanager.js";
+import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll, closeWindow } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
 import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults, setOrgProfilePresets } from "./persist.js";
+import { initCrashGuard } from "./crashguard.js";
 
 // notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
 // die schönen Slide-Down-Meldungen nutzen können.
@@ -213,11 +214,33 @@ async function startSession(user) {
   initFavorites(user.username);   // Favoriten des Benutzers laden
   initSidebarNav();               // Dashboard-Tab + Favoriten-Header verkabeln
   const saved = loadState();
+  // Persönliche Wiederherstellungs-Einstellungen (Standard: alles wiederherstellen).
+  const restorePrefs = (saved && saved.restorePrefs) || { client: true, folder: true, apps: true };
   if (saved) {
-    applyExpanded(saved);           // Aufklapp-Zustand
-    if (saved.selection) state.selection = saved.selection;
-    if (saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
+    applyExpanded(saved);           // Aufklapp-Zustand + Layouts/Profile
+    // „Offene Ordner" (Sidebar-Baum) nur wiederherstellen, wenn gewünscht.
+    if (!restorePrefs.folder) {
+      try { setExpandedIds([]); } catch {}
+    }
+    // Auswahl: Client vs. Ordner getrennt steuerbar.
+    if (saved.selection) {
+      const selIsClient = saved.selection.type === "client";
+      if ((selIsClient && restorePrefs.client) || (!selIsClient && restorePrefs.folder)) {
+        state.selection = saved.selection;
+      }
+    }
+    if (restorePrefs.folder && saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
   }
+
+  // Frontend-Crash-Guard: erkennt Abstürze/Einfrieren, protokolliert sie und
+  // startet die Oberfläche im Ernstfall neu (schließt dabei die offenen Apps).
+  initCrashGuard({
+    username: user.username,
+    onPanic: () => {
+      try { for (const w of [...(state.windows || [])]) closeWindow(w.key); } catch {}
+      try { saveNow(state); } catch {}   // ohne offene Fenster sichern -> kein Wiederauftreten
+    },
+  });
 
   // Organisationsweite Standard-Layouts laden (vom Admin gesetzt). Werden als
   // Basis für Nutzer OHNE eigenes Layout und beim "Auf Standard zurücksetzen"
@@ -246,8 +269,9 @@ async function startSession(user) {
   applyAppVisibility();
 
   // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
-  // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern).
-  if (saved) restoreWindows(saved);
+  // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern) – nur wenn
+  // der Benutzer „offene Apps wiederherstellen" aktiviert hat.
+  if (saved && restorePrefs.apps) restoreWindows(saved);
 
   // Ab jetzt jede Fenster-/Baum-Änderung speichern.
   setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
