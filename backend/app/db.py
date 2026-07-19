@@ -26,6 +26,7 @@ damit man als Python-Einsteiger genau sieht, was passiert.
 """
 
 import sqlite3
+import json
 import time
 import pathlib
 import uuid
@@ -293,7 +294,10 @@ def init_db() -> None:
             cpu REAL NOT NULL DEFAULT 0,    -- Prozent
             ram REAL NOT NULL DEFAULT 0,    -- Prozent
             net_in REAL NOT NULL DEFAULT 0, -- Bytes/s
-            net_out REAL NOT NULL DEFAULT 0 -- Bytes/s
+            net_out REAL NOT NULL DEFAULT 0,-- Bytes/s
+            extra TEXT                      -- JSON: komplette Metrik-Momentaufnahme
+                                            -- (damit AUCH Ping/Temp/Power/... eine
+                                            --  Historie haben, nicht nur cpu/ram/net)
         );
         CREATE INDEX IF NOT EXISTS idx_metrics_history_client_ts
             ON metrics_history (client_id, ts);
@@ -320,6 +324,7 @@ def init_db() -> None:
     _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = im Explorer-Relay freigegeben
     _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
     _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
+    _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
 
     # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
     # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
@@ -1491,14 +1496,17 @@ def set_setting(key: str, value) -> None:
 
 def record_metric_point(
     client_id: str, cpu: float, ram: float, net_in: float, net_out: float,
-    ts: int | None = None,
+    ts: int | None = None, extra: str | None = None,
 ) -> None:
-    """Speichert einen einzelnen Metrik-Messpunkt für einen Client."""
+    """Speichert einen einzelnen Metrik-Messpunkt für einen Client.
+    extra = JSON-String der kompletten Metrik-Momentaufnahme (optional), damit
+    auch Metriken ohne eigene Spalte (Ping, Temperatur, Leistung, ...) eine
+    Historie bekommen."""
     ts = ts if ts is not None else _now_ms()
     _conn.execute(
-        """INSERT INTO metrics_history (client_id, ts, cpu, ram, net_in, net_out)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (client_id, ts, cpu, ram, net_in, net_out),
+        """INSERT INTO metrics_history (client_id, ts, cpu, ram, net_in, net_out, extra)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (client_id, ts, cpu, ram, net_in, net_out, extra),
     )
     _conn.commit()
 
@@ -1507,17 +1515,31 @@ def get_metrics_history(client_id: str, since_ts: int | None = None) -> list[dic
     """Gibt die gespeicherten Messpunkte eines Clients aufsteigend nach Zeit zurück."""
     if since_ts is not None:
         rows = _conn.execute(
-            """SELECT ts, cpu, ram, net_in, net_out FROM metrics_history
+            """SELECT ts, cpu, ram, net_in, net_out, extra FROM metrics_history
                WHERE client_id = ? AND ts >= ? ORDER BY ts ASC""",
             (client_id, since_ts),
         ).fetchall()
     else:
         rows = _conn.execute(
-            """SELECT ts, cpu, ram, net_in, net_out FROM metrics_history
+            """SELECT ts, cpu, ram, net_in, net_out, extra FROM metrics_history
                WHERE client_id = ? ORDER BY ts ASC""",
             (client_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        # extra (JSON-Snapshot) direkt in den Punkt mergen, damit das Frontend
+        # jede Metrik (Ping/Temp/Power/...) als Verlauf abgreifen kann.
+        raw = d.pop("extra", None)
+        if raw:
+            try:
+                snap = json.loads(raw)
+                if isinstance(snap, dict):
+                    d["m"] = snap
+            except (ValueError, TypeError):
+                pass
+        out.append(d)
+    return out
 
 
 def prune_metrics_history(older_than_ts: int) -> None:

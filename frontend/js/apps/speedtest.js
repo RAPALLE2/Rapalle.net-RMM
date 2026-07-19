@@ -248,12 +248,18 @@ export function renderSpeedtest(body, win) {
 
   // Naechstgelegene M-Lab-Server holen (liefert wss-URLs fuer download/upload)
   async function locateServers() {
-    const url = "https://locate.measurementlab.net/v2/nearest/ndt/ndt7";
-    const r = await fetch(url, { cache: "no-store" });
+    const url = "https://locate.measurementlab.net/v2/nearest/ndt/ndt7"
+      + "?client_name=rapalle-rmm&client_version=1.0";
+    let r;
+    try {
+      r = await fetch(url, { cache: "no-store" });
+    } catch (e) {
+      throw new Error("M-Lab-Serverauswahl nicht erreichbar (Internet/Firewall?).");
+    }
     if (!r.ok) throw new Error(`Serverauswahl fehlgeschlagen (HTTP ${r.status})`);
     const j = await r.json();
     if (!j.results || !j.results.length) throw new Error("Kein M-Lab-Server verfügbar");
-    return j.results[0];   // { machine, location, urls: { "wss:///ndt/v7/download": ..., upload: ... } }
+    return j.results[0];   // { machine, location, urls: {...} }
   }
 
   // Eine NDT7-Richtung messen. dir = "download" | "upload".
@@ -267,20 +273,31 @@ export function renderSpeedtest(body, win) {
       ws.binaryType = "arraybuffer";
       ndtSockets.push(ws);
 
+      // Sicherheitsnetz: oeffnet der Socket nicht binnen 8s (Firewall blockt
+      // wss, kein Internet, ...), sauber mit Fehler abbrechen statt still zu
+      // haengen (dann kaeme "kein Wert").
+      let opened = false;
+      const openTimer = setTimeout(() => {
+        if (!opened) { try { ws.close(); } catch {}; reject(new Error(`${dir}: keine Verbindung zum M-Lab-Server (Firewall/Proxy blockt WebSockets?)`)); }
+      }, 8000);
+
       let finalMbps = 0;
       const t0 = () => performance.now();
       let start = 0;
       let sentBytes = 0;
+      let recvBytes = 0;        // im Download tatsaechlich empfangene Bytes
       let uploadTimer = null;
       const CHUNK = 1 << 16;                    // 64 KiB
       const payload = new Uint8Array(CHUNK);    // Uploaddaten (Nullen sind ok fuer NDT7)
 
       const cleanup = () => {
+        clearTimeout(openTimer);
         if (uploadTimer) { clearInterval(uploadTimer); uploadTimer = null; }
         ndtSockets = ndtSockets.filter((s) => s !== ws);
       };
 
       ws.onopen = () => {
+        opened = true; clearTimeout(openTimer);
         start = t0();
         if (dir === "upload") {
           // So viel senden, wie der Socket-Puffer aufnimmt (max ~1s Vorlauf)
@@ -303,25 +320,30 @@ export function renderSpeedtest(body, win) {
 
       ws.onmessage = (ev) => {
         if (closed) { try { ws.close(); } catch {}; return; }
-        // Server-Messungen kommen als JSON-Text; Binaerframes = Nutzlast (Download).
-        if (typeof ev.data === "string") {
+        if (dir === "download") {
+          // Download: Rate rein clientseitig aus tatsaechlich empfangenen Bytes.
+          // Binaerframes koennen je nach Browser als ArrayBuffer ODER Blob
+          // ankommen; Text = Server-Messungen (mitzaehlen ist vernachlaessigbar).
+          const d = ev.data;
+          if (typeof d === "string") recvBytes += d.length;
+          else if (d && d.byteLength != null) recvBytes += d.byteLength;
+          else if (d && d.size != null) recvBytes += d.size;
+          const secs = (t0() - start) / 1000;
+          if (secs > 0.15 && recvBytes > 0) {
+            const mbps = (recvBytes * 8) / secs / 1e6;
+            finalMbps = mbps; onRate(mbps);
+          }
+        } else if (typeof ev.data === "string") {
+          // Upload: der Server meldet seine empfangene Datenmenge (autoritativ).
           try {
             const m = JSON.parse(ev.data);
-            // Autoritative Rate aus TCPInfo/ BBRInfo bzw. Application-Bytes
             const tcp = m.TCPInfo || {};
-            const app = m.AppInfo || {};
-            if (dir === "download" && app.NumBytes && app.ElapsedTime) {
-              const mbps = (app.NumBytes * 8) / (app.ElapsedTime) ; // ElapsedTime in µs
-              const v = mbps; // = bytes*8 / µs = Mbit/s
-              if (v > 0) { finalMbps = v; onRate(v); }
-            } else if (dir === "upload" && tcp.BytesReceived && tcp.ElapsedTime) {
+            if (tcp.BytesReceived && tcp.ElapsedTime) {
               const v = (tcp.BytesReceived * 8) / tcp.ElapsedTime; // Mbit/s
               if (v > 0) { finalMbps = v; onRate(v); }
             }
           } catch { /* ignorieren */ }
         }
-        // Binaerframes im Download zaehlen wir nicht selbst – die AppInfo-
-        // Messungen des Servers sind praeziser (echte TCP-Goodput).
       };
 
       ws.onclose = () => { cleanup(); resolve(finalMbps); };

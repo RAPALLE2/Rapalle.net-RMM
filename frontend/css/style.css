@@ -1442,3 +1442,105 @@ button > .svgicon:only-child { vertical-align: middle; }
 /* Werte/Label in Kacheln nie horizontal ueberlaufen lassen */
 .dash-w-body [style*="font-weight:800"],
 .cmetric-fit-holder [style*="font-weight:800"] { overflow-wrap: anywhere; }
+
+/* ============================================================
+   ANPASSBARES ANWENDUNGSMENÜ (startmenu.js)
+   ============================================================ */
+.start-menu-header .sm-tools { display: inline-flex; gap: 8px; }
+.start-menu-header .sm-tools button {
+  font-size: 12px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.start-menu-header .sm-tools button:hover { border-color: var(--accent); }
+
+/* Live-Grid: freie Anordnung, gleiche Optik wie zuvor */
+.sm-live-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr)); /* wird von JS ueberschrieben */
+}
+/* Leerer Rasterplatz: unsichtbar (haelt Position); im Bearbeiten-Modus sichtbar */
+.sm-cell-empty { min-height: 92px; border-radius: 12px; }
+.sm-cell-empty.sm-cell-visible {
+  border: 1.5px dashed var(--border); background: rgba(255,255,255,0.02);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.sm-cell-empty.sm-drop-into {
+  border-color: var(--accent); background: rgba(var(--accent-2-rgb),0.16);
+}
+.sm-tile {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  min-height: 92px;
+  padding: 16px 10px; border-radius: 12px; border: 1px solid transparent;
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+  font-size: 12.5px; text-align: center; transition: border-color 0.12s ease, transform 0.12s ease, background 0.12s ease;
+}
+.sm-tile:hover { border-color: var(--accent); transform: translateY(-2px); background: rgba(var(--accent-2-rgb),0.08); }
+.sm-tile .app-icon { font-size: 34px; line-height: 1; }
+.sm-tile .app-icon .svgicon { width: 1em; height: 1em; vertical-align: -0.1em; }
+.sm-tile .sm-label { font-weight: 500; line-height: 1.25; }
+
+/* Ordner-Kachel: 2x2-Icon-Vorschau + Name + App-Anzahl */
+.sm-folder { background: rgba(var(--accent-2-rgb),0.06); border-color: var(--border); }
+.sm-folder .sm-folder-icon {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+  width: 40px; height: 40px; align-items: center; justify-items: center;
+  background: rgba(255,255,255,0.05); border-radius: 10px; padding: 4px; font-size: 16px; line-height: 1;
+}
+.sm-folder .sm-fp { font-size: 15px; line-height: 1; }
+.sm-folder .sm-fp .svgicon { width: 15px; height: 15px; }
+.sm-folder-name { font-weight: 700; }
+.sm-folder-count { font-size: 11px; color: var(--subtext); }
+
+/* Bearbeiten-Modus: Wackeln + Entfernen-Kreuz */
+.start-menu-panel.sm-editing .sm-tile { cursor: grab; }
+.start-menu-panel.sm-editing .sm-tile:active { cursor: grabbing; }
+.sm-remove {
+  position: absolute; top: 4px; right: 4px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--danger, #f75c5c); color: #fff;
+  font-size: 11px; line-height: 18px; text-align: center; cursor: pointer;
+}
+.sm-remove:hover { filter: brightness(1.15); }
+
+/* Drag-Zustände */
+.sm-tile.sm-dragging { opacity: 0.4; }
+.sm-tile.sm-drop-before { box-shadow: -3px 0 0 0 var(--accent); }
+.sm-tile.sm-drop-after { box-shadow: 3px 0 0 0 var(--accent); }
+.sm-tile.sm-drop-into, .sm-drawer-grid.sm-drop-into {
+  border-color: var(--accent); background: rgba(var(--accent-2-rgb),0.16);
+}
+
+/* Aufgeklappter Ordner (Drawer) über volle Breite */
+.sm-folder-drawer {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: rgba(255,255,255,0.03); padding: 12px; margin: 2px 0 4px;
+}
+.sm-drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; font-size: 13.5px;
+}
+.sm-drawer-tools { display: inline-flex; gap: 6px; }
+.sm-drawer-tools button {
+  font-size: 11.5px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.sm-drawer-tools button:hover { border-color: var(--accent); }
+.sm-drawer-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px;
+  min-height: 60px;
+}
+.sm-drawer-empty {
+  grid-column: 1 / -1; color: var(--subtext); font-size: 12px;
+  text-align: center; padding: 16px; border: 1px dashed var(--border); border-radius: 8px;
+}
+
+/* Mobil: kompaktere Kacheln */
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+  .sm-live-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+  .sm-tile { padding: 12px 6px; font-size: 11.5px; gap: 6px; min-height: 76px; }
+  .sm-tile .app-icon { font-size: 28px; }
+  .sm-drawer-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+}
+
+.start-menu-panel .sm-catalog-hidden { display: none !important; }

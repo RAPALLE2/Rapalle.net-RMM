@@ -2599,8 +2599,20 @@ async def on_screen_start(data):
         _notify_screen_mode(loop, "shell", reason)
         return
 
+    # Läuft bereits ein Stream? Früher wurde hier einfach zurückgekehrt -
+    # dadurch bekam eine NEU gestartete Sitzung KEINE erneute Zustimmungs-
+    # abfrage und hängte sich still an den laufenden Stream. Jetzt beenden wir
+    # den alten Stream und lassen den normalen Ablauf (inkl. Consent) neu
+    # durchlaufen, sodass jede neue Sitzung sauber bestätigt werden muss.
     if _screen_stream["active"]:
-        return  # läuft schon
+        _print("[agent] screen-start bei bereits aktivem Stream -> alten Stream beenden, Consent neu einholen")
+        _screen_stream["active"] = False
+        old = _screen_stream.get("thread")
+        if old and old.is_alive():
+            try:
+                old.join(timeout=2.0)
+            except Exception:
+                pass
 
     # Zustimmung am Gerät einholen (nur physische Geräte; das Backend schickt
     # require_consent entsprechend - und als doppelte Absicherung fragen VMs

@@ -42,8 +42,47 @@ const NAT_W = 240;
 const NAT_H = 88;   // echte 1x1-Bodyhöhe (~150px-Zelle minus Kopf/Padding)
 
 // Rollierende Historie je Widget-Instanz (id -> {ts:[], v:[]}), max N Punkte.
-const _history = new Map();
+// Fleet-Widgets zeigen client-uebergreifende Aggregate - dafuer gibt es keinen
+// Backend-Verlauf. Damit die Graphen nach einem Reload (Strg+F5) trotzdem nicht
+// bei 0 anfangen, wird die Historie LOKAL im Browser (localStorage) gespeichert
+// und beim Start wieder geladen.
 const MAX_POINTS = 120;
+const _HIST_KEY = "rmm_fleet_history";
+const _HIST_MAX_AGE = 6 * 3600 * 1000;   // aelter als 6 h -> verwerfen
+
+function _loadHistory() {
+  try {
+    const raw = localStorage.getItem(_HIST_KEY);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw);
+    const cutoff = Date.now() - _HIST_MAX_AGE;
+    const map = new Map();
+    for (const [id, h] of Object.entries(obj)) {
+      if (!h || !Array.isArray(h.ts) || !Array.isArray(h.v)) continue;
+      const ts = [], v = [];
+      for (let i = 0; i < h.ts.length; i++) {
+        if (h.ts[i] >= cutoff) { ts.push(h.ts[i]); v.push(h.v[i]); }
+      }
+      if (ts.length) map.set(id, { ts, v });
+    }
+    return map;
+  } catch { return new Map(); }
+}
+
+const _history = _loadHistory();
+
+let _histSaveTimer = null;
+function _persistHistory() {
+  if (_histSaveTimer) return;
+  _histSaveTimer = setTimeout(() => {
+    _histSaveTimer = null;
+    try {
+      const obj = {};
+      for (const [id, h] of _history.entries()) obj[id] = h;
+      localStorage.setItem(_HIST_KEY, JSON.stringify(obj));
+    } catch { /* localStorage voll/deaktiviert -> ignorieren */ }
+  }, 1500);
+}
 
 export function pushWidgetHistory(widget) {
   // Alle verlaufbasierten Darstellungen sammeln Historie (nicht nur "line").
@@ -58,6 +97,7 @@ export function pushWidgetHistory(widget) {
   try { h.ts.push(now); h.v.push(p.value(state) || 0); } finally { clearHostScope(); }
   if (h.ts.length > MAX_POINTS) { h.ts.shift(); h.v.shift(); }
   _history.set(widget.id, h);
+  _persistHistory();
 }
 
 export function formatValue(preset, v) {

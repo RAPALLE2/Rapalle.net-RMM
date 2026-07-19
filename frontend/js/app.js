@@ -54,6 +54,7 @@ import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
 import { renderPanelPart } from "./apps/panelpart.js";
 import { renderFleetWidget } from "./apps/fleetwidget.js";
+import { initStartMenu, refreshStartMenu } from "./startmenu.js";
 
 // -----------------------------------------------------------------
 // Content-Router: welcher Renderer gehört zu welchem appId?
@@ -135,10 +136,11 @@ function _appAllowed(appKey) {
 }
 
 function applyAppVisibility() {
-  // Startmenü-Kacheln
+  // Startmenü-Katalog (versteckte Original-Buttons) + Live-Menü aktualisieren.
   document.querySelectorAll("#start-menu [data-app]").forEach((btn) => {
     btn.style.display = _appAllowed(btn.dataset.app) ? "" : "none";
   });
+  try { refreshStartMenu(); } catch {}
   // Benutzermenü: Einstellungen nur für Verwalter/Admin
   const settingsBtn = document.getElementById("btn-open-settings");
   if (settingsBtn) settingsBtn.style.display = _appAllowed("settings") ? "" : "none";
@@ -232,10 +234,15 @@ async function startSession(user) {
     });
   } catch { /* kein org-Standard erreichbar -> eingebauter Standard */ }
 
+  // Effektive Rechte VOR dem ersten Rendern laden: sonst werden bei einem
+  // Seiten-Reload die Aktionen-/Status-Buttons der wiederhergestellten Client-
+  // Auswahl mit leeren Rechten (= unsichtbar) gebaut und erscheinen erst nach
+  // manuellem Neu-Auswählen des Clients. Rechte haengen nicht an Clients/
+  // Hierarchie, koennen also gefahrlos zuerst geladen werden.
+  await reloadPerms();
+
   await refreshAll();
 
-  // Effektive Rechte laden (bestimmt sichtbare Apps/Aktionen im Frontend).
-  await reloadPerms();
   applyAppVisibility();
 
   // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
@@ -415,26 +422,32 @@ function initMenusAndButtons() {
     if (e.key === "Escape") startMenu.classList.add("hidden");
   });
 
-  startMenu.querySelectorAll("[data-app]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const app = btn.dataset.app;
-      startMenu.classList.add("hidden");
-      if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
-      else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
-      else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
-      else if (app === "manage") openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
-      else if (app === "settings") openWindow({ singleton: true, key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
-      else if (app === "permissions") openWindow({ singleton: true, key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
-      else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
-      else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
-      else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
-      else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
-      else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
-      else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
-      else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
-      else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
-    })
-  );
+  // App aus dem Anwendungsmenü öffnen (von startmenu.js aufgerufen).
+  function openAppFromMenu(app) {
+    startMenu.classList.add("hidden");
+    if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
+    else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
+    else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
+    else if (app === "manage") openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+    else if (app === "settings") openWindow({ singleton: true, key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
+    else if (app === "permissions") openWindow({ singleton: true, key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
+    else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
+    else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
+    else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
+    else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
+    else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
+    else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
+    else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
+    else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
+  }
+
+  // Anpassbares Anwendungsmenü (Drag & Drop, Ordner) initialisieren.
+  initStartMenu({
+    root: startMenu,
+    username: state.user?.username,
+    onOpenApp: openAppFromMenu,
+    allowed: _appAllowed,
+  });
 
   // Sidebar: Ein-/Ausklappen, Breite ziehen, Klick-zum-Ausklappen. Details in
   // initSidebarResize() unten (inkl. Persistenz der Breite/Zustand).

@@ -34,6 +34,16 @@ Funktionsaufruf anfühlt.
 import asyncio
 import time
 import uuid
+import json as _json
+
+
+def _json_dumps_safe(obj) -> "str | None":
+    """Metrik-Snapshot als kompaktes JSON (für die Historie). Bei Problemen None,
+    damit das Speichern des Messpunkts nie an einem exotischen Wert scheitert."""
+    try:
+        return _json.dumps(obj, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return None
 
 import socketio
 
@@ -443,6 +453,7 @@ async def on_heartbeat(sid, payload):
                 client_id, cpu, ram,
                 metrics.get("netIn") or 0, metrics.get("netOut") or 0,
                 now_ms,
+                extra=_json_dumps_safe(metrics),
             )
             # Alles außerhalb der Aufbewahrungsdauer wegräumen.
             # 0 (oder negativ) = unbegrenzt aufbewahren -> NIE prunen.

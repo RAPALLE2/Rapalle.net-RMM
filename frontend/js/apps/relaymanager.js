@@ -10,6 +10,20 @@ import { api } from "../api.js";
 import { esc } from "../utils.js";
 import { isAdmin as userIsAdmin, state } from "../state.js";
 
+// Kopieren mit Fallback (identisch zum Explorer): navigator.clipboard braucht
+// einen sicheren Kontext; sonst über ein temporäres Textfeld + execCommand.
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try { document.execCommand("copy") ? resolve() : reject(new Error("Kopieren nicht möglich")); }
+    catch (e) { reject(e); }
+    finally { ta.remove(); }
+  });
+}
+
 export function renderRelayManager(body, win) {
   let clients = [];
   const selected = new Set();   // ausgewählte Client-IDs
@@ -35,39 +49,11 @@ export function renderRelayManager(body, win) {
           ${isAdmin ? "" : '<b style="color:var(--warn,#f5a524)"> Nur Administratoren können umschalten.</b>'}
         </div>
 
-        <details style="margin-top:8px">
+        <details style="margin-top:8px" id="rm-guide">
           <summary style="cursor:pointer;color:var(--accent);font-size:12.5px;user-select:none">
-            📄 Verbindungsanleitung anzeigen (Windows / macOS / Linux)
+            📄 Verbindungsanleitung anzeigen
           </summary>
-          <div style="font-size:12px;line-height:1.65;color:var(--text);margin-top:8px;display:grid;gap:8px">
-            <div>
-              Der Relay stellt die Laufwerke aktiver Clients als
-              <b>WebDAV</b>-Freigabe unter <code>${RM_DAV_URL}</code> bereit.
-              Anmeldung mit deinem <b>RMM-Benutzernamen und -Passwort</b>.
-              Jeder Client mit aktivem Relay erscheint als Ordner, darunter seine Laufwerke.
-            </div>
-            <div>
-              <b>Windows (Explorer):</b> In die Adressleiste eingeben:
-              <code>${RM_WIN_PATH}</code><br/>
-              Oder als Laufwerk verbinden (Eingabeaufforderung):
-              <code>net use R: ${RM_WIN_PATH} /user:DEIN_BENUTZER</code>
-            </div>
-            <div>
-              <b>macOS (Finder):</b> <i>Gehe zu → Mit Server verbinden…</i> (Cmd+K) und
-              <code>${RM_DAV_URL}</code> eintragen.
-            </div>
-            <div>
-              <b>Linux (Dateimanager):</b> Adresse <code>${RM_LINUX_URL}</code> öffnen
-              (Nautilus/Dolphin: „Mit Server verbinden“).<br/>
-              Oder mounten: <code>sudo mount -t davfs ${RM_DAV_URL} /mnt/rmm</code>
-              <span style="color:var(--subtext)">(Paket davfs2 nötig)</span>
-            </div>
-            <div style="color:var(--subtext)">
-              Hinweis: Ohne HTTPS verweigert Windows WebDAV standardmäßig
-              Basic-Anmeldungen – HTTPS wird empfohlen. Esc/Trennen: Laufwerk im
-              Explorer auswerfen bzw. <code>net use R: /delete</code>.
-            </div>
-          </div>
+          <div id="rm-guide-body" style="margin-top:10px"></div>
         </details>
       </div>
 
@@ -104,6 +90,127 @@ export function renderRelayManager(body, win) {
   const countOn = body.querySelector("#rm-count-on");
   const selInfo = body.querySelector("#rm-selinfo");
   const switchBtn = body.querySelector("#rm-switch");
+
+  // ---- Verbindungsanleitung: exakt die Karten-/Copy-Button-Optik aus dem
+  //      Client-Explorer (Adresse, net use, Anmeldung, grafische Anleitung). ----
+  const username = (() => { try { return state.user?.username || ""; } catch { return ""; } })();
+  const scheme = RM_HTTPS ? "https" : "http";
+  const httpRoot = RM_DAV_URL;                    // proto://host[:port]/dav
+  const uncRoot = RM_WIN_PATH;                    // \\host@[SSL@]port\dav
+
+  const guideCard = (inner) =>
+    `<div class="panel" style="padding:14px;margin-bottom:12px">${inner}</div>`;
+  const copyField = (label, value) => `
+    <div style="color:var(--subtext);font-size:13px">${label}</div>
+    <div style="display:flex;gap:6px">
+      <input type="text" readonly value="${esc(value)}" onclick="this.select()" style="flex:1;font-family:monospace" />
+      <button class="taskbar-btn" data-copy="${esc(value)}">Kopieren</button>
+    </div>`;
+
+  function renderGuide() {
+    const gb = body.querySelector("#rm-guide-body");
+    if (!gb || gb.dataset.done) return;   // nur einmal aufbauen
+    gb.dataset.done = "1";
+
+    const address = guideCard(`
+      <div style="font-weight:700;margin-bottom:6px">📍 Ein Netzlaufwerk für alle freigegebenen Clients</div>
+      <div style="color:var(--subtext);font-size:13px;margin-bottom:10px">
+        Du verbindest EINMAL dieses Laufwerk. Darin erscheint pro freigegebenem Client ein
+        Ordner, und darin die Festplatten. Mehrere Clients gleichzeitig, ganz automatisch.
+      </div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center">
+        ${copyField("Windows / macOS / Linux", httpRoot)}
+      </div>
+      <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        In „Netzlaufwerk verbinden" bzw. „Netzwerkadresse hinzufügen" genau diese
+        <b>http://…:Port/dav</b>-Adresse eintragen (mit Doppelpunkt vor dem Port).
+      </div>`);
+
+    const netUse = username ? guideCard(`
+      <div style="font-weight:700;margin-bottom:6px">💽 Als Netzlaufwerk (mit Laufwerksbuchstaben Z:)</div>
+      <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
+        Zuverlässigster Weg für einen echten Laufwerksbuchstaben: in der
+        <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
+        Vorher muss der Dienst „WebClient" laufen (<code>net start webclient</code>).
+      </div>
+      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
+      <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        Statt <code>Z:</code> geht jeder freie Buchstabe. Die Form
+        <code>${esc(uncRoot)}</code> ist die offizielle WebDAV-Schreibweise mit Port –
+        <b>nicht</b> <code>:${esc(RM_PORT)}</code> mit Doppelpunkt (das versucht SMB und
+        endet in Fehler 67 bzw. 0x800704b3).
+      </div>
+      <div style="color:var(--subtext);font-size:12px;margin-top:6px">
+        Trennen später mit: <code>net use Z: /delete</code>
+      </div>`) : "";
+
+    const login = guideCard(`
+      <div style="font-weight:700;margin-bottom:6px">🔑 Anmeldung</div>
+      <div style="color:var(--subtext);font-size:13px;line-height:1.7">
+        Mit deinem <b>normalen Dashboard-Login</b> anmelden:
+        <ul style="margin:6px 0 0;padding-left:18px">
+          <li>Benutzername: <b>${esc(username || "dein Benutzername")}</b></li>
+          <li>Passwort: dein gewohntes Dashboard-Passwort</li>
+        </ul>
+      </div>`);
+
+    const mac = guideCard(`
+      <div style="font-weight:700;margin-bottom:6px">🍎 macOS (Finder)</div>
+      <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
+        <i>Gehe zu → Mit Server verbinden…</i> (Cmd+K), Adresse eintragen und mit dem
+        Dashboard-Login anmelden.
+      </div>
+      ${copyField("Server-Adresse", httpRoot)}`);
+
+    const linux = guideCard(`
+      <div style="font-weight:700;margin-bottom:6px">🐧 Linux</div>
+      <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
+        Im Dateimanager (Nautilus/Dolphin) „Mit Server verbinden" und die Adresse öffnen,
+        oder per <code>davfs2</code> mounten (Paket <code>davfs2</code> nötig).
+      </div>
+      <div style="display:grid;gap:8px">
+        ${copyField("Dateimanager-Adresse", RM_LINUX_URL)}
+        ${copyField("Mount-Befehl", `sudo mount -t davfs ${httpRoot} /mnt/rmm`)}
+      </div>`);
+
+    const guide = guideCard(`
+      <div style="font-weight:700;margin-bottom:6px">🪟 Windows – Netzlaufwerk verbinden (grafisch)</div>
+      <ol style="margin:0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.8">
+        <li>Dienst „WebClient" muss laufen: in <code>cmd</code> (als Admin)
+          <code>net start webclient</code>.</li>
+        <li>Explorer → „Dieser PC" → „Netzlaufwerk verbinden".</li>
+        <li>Laufwerksbuchstaben wählen, als Ordner die <b>http://…:Port/dav</b>-Adresse von oben
+          eintragen (mit Doppelpunkt vor dem Port).</li>
+        <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken → Fertig stellen →
+          Dashboard-Login eingeben.</li>
+      </ol>
+      <div style="color:var(--subtext);font-size:12px;margin-top:8px">
+        Wichtig: <b>niemals</b> die Form <code>\\\\host:Port\\dav</code> mit Doppelpunkt verwenden –
+        damit versucht Windows SMB und meldet Fehler 67 bzw. <code>0x800704b3</code>. Im grafischen
+        Dialog die <code>http://…/dav</code>-Adresse nehmen; in <code>cmd</code> (net use) die
+        WebDAV-Form <code>${esc(uncRoot)}</code> von oben.
+      </div>
+      ${RM_HTTPS ? "" : `<div style="color:var(--warn,#f5a524);font-size:12px;margin-top:8px">
+        Hinweis: Ohne HTTPS verweigert Windows WebDAV-Basic-Anmeldungen teils standardmäßig – HTTPS wird empfohlen.
+      </div>`}`);
+
+    gb.innerHTML = address + netUse + login + guide + mac + linux;
+
+    gb.querySelectorAll("[data-copy]").forEach((b) =>
+      b.addEventListener("click", () =>
+        copyToClipboard(b.dataset.copy).then(
+          () => window.notify?.("Kopiert", "success"),
+          () => {
+            const input = b.parentElement?.querySelector("input");
+            if (input) { input.focus(); input.select(); }
+            window.notify?.("Automatisches Kopieren nicht möglich – Text ist markiert, bitte Strg+C drücken.", "warning");
+          })));
+  }
+
+  // Beim Aufklappen der Anleitung die Karten (einmalig) aufbauen.
+  body.querySelector("#rm-guide")?.addEventListener("toggle", (e) => {
+    if (e.target.open) renderGuide();
+  });
 
   // Tenant/Standort-Namen für den Untertitel auflösen (falls vorhanden).
   function subtitle(c) {

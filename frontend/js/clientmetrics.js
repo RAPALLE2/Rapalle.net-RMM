@@ -15,6 +15,7 @@
 //   text?(client)    -> String (für info, einzeilig)
 
 import { esc, formatBytes, formatUptime } from "./utils.js";
+import { api } from "./api.js";
 import {
   attachHoverTip, scaleToContainer, buildFleetDonut, showFleetTip, hideFleetTip,
   timeSeriesChart,
@@ -349,6 +350,55 @@ export function formatClientValue(preset, v) {
 // -----------------------------------------------------------------
 const _hist = new Map();
 const MAX_POINTS = 120;
+// Welche Presets haben persistierte Backend-Historie? Mapping preset-id ->
+// Feld in der metrics_history-Tabelle (ts, cpu, ram, net_in, net_out).
+const _HIST_FIELD = {
+  "c.cpuLoad": "cpu",
+  "c.ramPct": "ram",
+  "c.netIn": "net_in",
+  "c.netOut": "net_out",
+};
+const _seeded = new Set();            // (client:panel)-Keys, die bereits geseedet wurden
+const _seedInFlight = new Set();
+
+// Verlaufs-Widgets (line/area/spark/stat) einmalig mit der im Backend
+// gespeicherten Historie vorbefuellen, damit sie nach dem Oeffnen/Reload nicht
+// bei 0 starten. Funktioniert fuer JEDE Metrik: pro historischem Messpunkt wird
+// die value()-Funktion des Presets auf die gespeicherte Momentaufnahme (p.m)
+// angewandt - so bekommen auch Ping/Temperatur/Leistung/... eine Historie, nicht
+// nur cpu/ram/net (die zusaetzlich als eigene Felder vorliegen).
+function seedHistoryFromBackend(client, panel, preset, rerender) {
+  const key = `${client.id}:${panel.id}`;
+  if (_seeded.has(key) || _seedInFlight.has(key)) return;
+  if (!preset || typeof preset.value !== "function") return;
+  const directField = _HIST_FIELD[preset.id];   // Schnellpfad fuer cpu/ram/net
+  _seedInFlight.add(key);
+  api.getMetricsHistory(client.id).then((res) => {
+    const pts = (res && res.points) || [];
+    if (pts.length) {
+      const h = { ts: [], v: [] };
+      for (const p of pts) {
+        let val = null;
+        if (directField && p[directField] != null) {
+          val = Number(p[directField]);
+        } else if (p.m) {
+          // Momentaufnahme als "Client" verpacken und die Preset-Wertfunktion
+          // darauf anwenden (identisch zur Live-Darstellung).
+          try { val = preset.value({ metrics: p.m }); } catch { val = null; }
+        }
+        if (val == null || !isFinite(val)) continue;
+        h.ts.push(p.ts); h.v.push(val);
+        if (h.ts.length > MAX_POINTS) { h.ts.shift(); h.v.shift(); }
+      }
+      const cur = _hist.get(key);
+      if (h.ts.length && (!cur || cur.ts.length <= 1)) _hist.set(key, h);
+    }
+    _seeded.add(key);
+    _seedInFlight.delete(key);
+    rerender && rerender();
+  }).catch(() => { _seedInFlight.delete(key); });
+}
+
 function pushHistory(key, v) {
   if (v === null || v === undefined) return _hist.get(key) || { ts: [], v: [] };
   const h = _hist.get(key) || { ts: [], v: [] };
@@ -531,6 +581,11 @@ export function renderClientMetric(target, client, panel) {
   }
 
   if (kind === "line" || kind === "area" || kind === "spark") {
+    // Verlaufs-Widgets: einmalig mit Backend-Historie vorbefuellen (cpu/ram/
+    // net), damit sie nach dem Oeffnen/Reload sofort den Verlauf zeigen statt
+    // bei 0 zu starten. Nach dem Seeden wird neu gerendert.
+    seedHistoryFromBackend(client, panel, preset,
+      () => renderClientMetric(target, client, panel));
     // Getimestampter Verlauf (wie das Netzwerk-Diagramm im Metrics-Panel),
     // füllt die komplette 1x1-Box: Kopfzeile oben, Chart nutzt den Rest.
     const h = pushHistory(`${client.id}:${panel.id}`, v);
@@ -599,6 +654,9 @@ export function renderClientMetric(target, client, panel) {
   }
 
   if (kind === "stat") {
+    // Auch der Stat-Trend nutzt Backend-Historie (z.B. Ping als Stat).
+    seedHistoryFromBackend(client, panel, preset,
+      () => renderClientMetric(target, client, panel));
     const h = pushHistory(`${client.id}:${panel.id}`, v);
     const data = h.v.length ? h.v : [v ?? 0];
     const ts = h.ts.length ? h.ts : [Date.now()];
