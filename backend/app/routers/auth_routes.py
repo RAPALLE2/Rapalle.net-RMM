@@ -153,6 +153,79 @@ async def my_effective_permissions(user: dict = Depends(get_current_user)):
     return effective_permissions(user, all_ids)
 
 
+# ------------------------------------------------------------------
+# Serverseitig gespeicherte UI-Einstellungen (Layouts, Favoriten, Sprache,
+# Icon-Modus, ...). Damit sehen ALLE Browser desselben Benutzers gleich aus -
+# statt dass jede Browser-Installation (Firefox/Edge/...) ihren eigenen
+# localStorage-Stand hat.
+# ------------------------------------------------------------------
+
+class UiPrefsBody(BaseModel):
+    # { "keys": { "<localStorage-Key>": "<Wert als String>" } }
+    keys: dict[str, str] = {}
+
+
+@router.get("/ui-prefs")
+async def get_ui_prefs(user: dict = Depends(get_current_user)):
+    import json as _json
+    raw = db.get_user_ui_prefs(user["id"])
+    if not raw:
+        return {"keys": {}}
+    try:
+        data = _json.loads(raw)
+        return {"keys": data.get("keys", {}) if isinstance(data, dict) else {}}
+    except Exception:
+        return {"keys": {}}
+
+
+@router.put("/ui-prefs")
+async def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)):
+    import json as _json
+    try:
+        db.set_user_ui_prefs(user["id"], _json.dumps({"keys": body.keys}))
+    except ValueError as e:
+        raise HTTPException(413, str(e))
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------
+# Silent-Modus für den Remote-Bildschirm (einmalig): Die NÄCHSTE Sitzung
+# startet ohne Zustimmungs-Dialog am Gerät, danach schaltet sich der Modus
+# automatisch wieder aus. Benötigt das Recht 'screen_silent' (global) oder
+# 'c_screen_silent' auf mindestens einem sichtbaren Client.
+# ------------------------------------------------------------------
+
+def _may_use_silent_screen(user: dict) -> bool:
+    if is_super_admin(user) or user_has_permission(user, "screen_silent"):
+        return True
+    from app.auth import visible_client_ids
+    all_ids = [c["id"] for c in db.list_clients()]
+    for cid in visible_client_ids(user, all_ids):
+        if user_has_permission(user, "c_screen_silent", cid):
+            return True
+    return False
+
+
+class SilentScreenBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/silent-screen")
+async def get_silent_screen(user: dict = Depends(get_current_user)):
+    return {"enabled": bool(user.get("silent_screen")),
+            "allowed": _may_use_silent_screen(user)}
+
+
+@router.put("/silent-screen")
+async def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_current_user)):
+    if body.enabled and not _may_use_silent_screen(user):
+        raise HTTPException(403, "Keine Berechtigung für den Remote-Bildschirm ohne Anfrage")
+    db.set_user_silent_screen(user["id"], body.enabled)
+    db.add_audit_entry(user["username"],
+                       "screen.silent_" + ("armed" if body.enabled else "disarmed"))
+    return {"ok": True, "enabled": body.enabled}
+
+
 @router.put("/profile")
 async def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
     # Anzeigename nur ändern, wenn das Recht 'edit_profile_name' vorliegt.

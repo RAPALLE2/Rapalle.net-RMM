@@ -35,7 +35,11 @@ function load() {
   if (!layout || !Array.isArray(layout.items)) layout = { items: [] };
 }
 function save() {
-  try { localStorage.setItem(userKey, JSON.stringify(layout)); } catch {}
+  try {
+    localStorage.setItem(userKey, JSON.stringify(layout));
+    // Startmenü-Layout zusätzlich serverseitig sichern.
+    import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
+  } catch {}
 }
 
 // Katalog aus den (versteckten) DOM-Buttons in index.html lesen.

@@ -25,7 +25,7 @@ export function renderPermissions(body, win) {
   let subjectKind = "user";      // "user" | "group"
   let subjects = { user: [], group: [] };
   let realms = [];               // AD/LDAP-Realms (für AD-Gruppen-Import)
-  let catalog = { labels: {}, general: [], client: [] };
+  let catalog = { labels: {}, general: [], client: [], implies: {} };
   let selected = null;           // {type, id, name}
   let activeTab = "general";     // "general" | "clients"
   let clientSearch = "";
@@ -44,6 +44,26 @@ export function renderPermissions(body, win) {
     else grants.delete(key);
     dirty = true;
     updateSaveBar();
+  }
+
+  // Implikationen (aus dem Backend-Katalog): Baut ein Recht auf anderen auf
+  // (z.B. edit_source -> see_source, admin_settings -> manage_settings ->
+  // see_settings), werden die Basis-Rechte beim ERLAUBEN automatisch mit auf
+  // "Erlauben" gesetzt (rekursiv). Rückgabe: alle zusätzlich gesetzten Rechte,
+  // damit die betroffenen Tri-State-Controls gezielt neu gezeichnet werden.
+  function allowWithImplied(scope, perm) {
+    const changed = [];
+    const walk = (p) => {
+      for (const dep of (catalog.implies?.[p] || [])) {
+        if (getEffect(scope, dep) !== "allow") {
+          setEffect(scope, dep, "allow");
+          changed.push(dep);
+        }
+        walk(dep);
+      }
+    };
+    walk(perm);
+    return changed;
   }
 
   // ---------------------------------------------------------------
@@ -122,12 +142,26 @@ export function renderPermissions(body, win) {
     const scope = btn.dataset.scope;
     const perm = btn.dataset.perm;
     setEffect(scope, perm, btn.dataset.val);
+    // Beim Erlauben werden Basis-Rechte (Implikationen) automatisch mit auf
+    // "Erlauben" gesetzt, z.B. Source bearbeiten -> Source ansehen.
+    const extra = btn.dataset.val === "allow" ? allowWithImplied(scope, perm) : [];
     // NUR das geklickte Tri-State-Control neu zeichnen. Ein vollständiges
     // drawContent() würde die aufgeklappten Client-Accordions (<details>)
     // wieder zuklappen – daher hier gezielt in-place ersetzen.
     const wrap = btn.closest("span");
     if (wrap) wrap.outerHTML = triState(scope, perm);
     else drawContent();
+    // ...und ebenso die durch Implikationen mitgesetzten Controls (falls
+    // sichtbar) gezielt aktualisieren.
+    for (const dep of extra) {
+      const depBtn = contentEl.querySelector(
+        `.pm-tri[data-scope="${CSS.escape(scope)}"][data-perm="${CSS.escape(dep)}"]`);
+      const depWrap = depBtn?.closest("span");
+      if (depWrap) depWrap.outerHTML = triState(scope, dep);
+    }
+    if (extra.length) {
+      window.notify?.(`${extra.length} Basis-Recht(e) automatisch mit erlaubt`, "info", 3500);
+    }
   });
 
   // ---------------------------------------------------------------

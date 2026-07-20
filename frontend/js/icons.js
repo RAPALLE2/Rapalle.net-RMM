@@ -94,6 +94,8 @@ export function getIconMode() {
 }
 export function setIconMode(mode) {
   localStorage.setItem(KEY, mode === "emoji" ? "emoji" : "svg");
+  // Icon-Modus zusätzlich serverseitig sichern (in jedem Browser gleich).
+  import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
   if (mode === "emoji") { stop(); revertAll(); }
   else { scan(document.body); start(); }
 }

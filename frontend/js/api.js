@@ -59,6 +59,14 @@ export const api = {
     request("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, realm }) }),
   getLoginRealms: () => request("/api/auth/realms"),
   me: () => request("/api/auth/me"),
+  // Serverseitig gespeicherte UI-Einstellungen (in jedem Browser gleich)
+  getUiPrefs: () => request("/api/auth/ui-prefs"),
+  saveUiPrefs: (keys) => request("/api/auth/ui-prefs", {
+    method: "PUT", body: JSON.stringify({ keys }) }),
+  // Einmaliger Silent-Modus für den Remote-Bildschirm
+  getSilentScreen: () => request("/api/auth/silent-screen"),
+  setSilentScreen: (enabled) => request("/api/auth/silent-screen", {
+    method: "PUT", body: JSON.stringify({ enabled: !!enabled }) }),
   changePassword: (current_password, new_password) =>
     request("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
   updateProfile: (data) => request("/api/auth/profile", { method: "PUT", body: JSON.stringify(data) }),
@@ -161,7 +169,8 @@ export const api = {
 
   // --- Agent-Verwaltung ---
   updateAgent: (clientId) => request(`/api/clients/${clientId}/update-agent`, { method: "POST" }),
-  updateAllAgents: () => request("/api/clients/update-all-agents", { method: "POST" }),
+  updateAllAgents: (opts = {}) => request("/api/clients/update-all-agents", {
+    method: "POST", body: JSON.stringify({ include_offline: !!opts.include_offline }) }),
   uninstallAgent: (clientId) => request(`/api/clients/${clientId}/uninstall-agent`, { method: "POST" }),
 
   // --- Effektive Rechte des eingeloggten Benutzers (Frontend-Gating) ---

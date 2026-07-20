@@ -19,6 +19,11 @@ export function renderProfile(body, win) {
   const mayEditName = hasGlobalPerm("edit_profile_name");
   const mayCustomizeDash = hasGlobalPerm("customize_dashboard");
   const mayRestore = hasGlobalPerm("restore_session");
+  // Silent-Modus (Remote-Bildschirm ohne Anfrage): Abschnitt nur anzeigen,
+  // wenn das Recht global, auf mindestens einem Client oder als Admin vorliegt.
+  const maySilent = state.perms?.admin === true
+    || hasGlobalPerm("screen_silent")
+    || Object.values(state.perms?.clients || {}).some((m) => m && m.c_screen_silent);
   body.innerHTML = `
     <div class="settings-section">
       <h3>Profil</h3>
@@ -105,6 +110,23 @@ export function renderProfile(body, win) {
         </label>
       </div>
 
+      <h3 style="margin-top:26px" ${maySilent ? "" : "hidden"}>Remote-Bildschirm</h3>
+      <div class="form-row" style="align-items:center" ${maySilent ? "" : "hidden"}>
+        <label>Silent-Modus</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+          <input type="checkbox" id="pr-silent" disabled />
+          Nächste Remote-Sitzung OHNE Anfrage am Gerät starten (einmalig)
+        </label>
+      </div>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${maySilent ? "" : "hidden"}>
+        Ist der Modus aktiv, wird bei der nächsten Remote-Bildschirm-Sitzung der
+        Zustimmungs-Dialog am Gerät übersprungen. Nach dem Verbindungsaufbau
+        schaltet sich der Modus automatisch wieder aus. Nützlich z.B. wenn jemand
+        angemeldet, aber AFK ist und dringend etwas erledigt werden muss. Jede
+        Nutzung wird im Audit-Log protokolliert.
+      </p>
+      <div id="pr-silent-msg" style="font-size:12px;color:var(--subtext)" ${maySilent ? "" : "hidden"}></div>
+
       <h3 style="margin-top:26px">Passwort ändern</h3>
       ${u.auth_realm ? `
       <p style="color:var(--subtext);font-size:13px;max-width:520px">
@@ -134,6 +156,42 @@ export function renderProfile(body, win) {
     // Offene Dashboard-Fenster über den Umschalter informieren.
     try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
   });
+
+  // ---- Silent-Modus (Remote-Bildschirm ohne Anfrage) ----
+  // Aktuellen Stand vom Server laden, dann Checkbox freischalten. Beim
+  // Umschalten sofort speichern - der Modus gilt nur für die NÄCHSTE Sitzung
+  // und schaltet sich danach serverseitig selbst wieder aus.
+  if (maySilent) {
+    const silentCb = body.querySelector("#pr-silent");
+    const silentMsg = body.querySelector("#pr-silent-msg");
+    (async () => {
+      try {
+        const st = await api.getSilentScreen();
+        if (!document.body.contains(body)) return;
+        silentCb.checked = !!st.enabled;
+        silentCb.disabled = false;
+      } catch (e) {
+        if (silentMsg) silentMsg.textContent = `Status nicht ladbar: ${e.message}`;
+      }
+    })();
+    silentCb?.addEventListener("change", async (e) => {
+      const on = e.target.checked;
+      silentCb.disabled = true;
+      try {
+        await api.setSilentScreen(on);
+        if (silentMsg) silentMsg.textContent = on
+          ? "Aktiv: Die nächste Remote-Sitzung startet ohne Anfrage."
+          : "Silent-Modus deaktiviert.";
+        window.notify?.(on ? "Silent-Modus aktiviert (einmalig)" : "Silent-Modus deaktiviert",
+                        on ? "success" : "info");
+      } catch (err) {
+        e.target.checked = !on;   // zurückrollen
+        if (silentMsg) silentMsg.textContent = `Fehler: ${err.message}`;
+      } finally {
+        silentCb.disabled = false;
+      }
+    });
+  }
   // Umgekehrte Richtung: Wird die Bearbeitung anderswo beendet (z.B. Button
   // "✓ Bearbeiten beenden" in der Client-Toolbar), Haken hier mitziehen.
   const _syncEditCheckbox = () => {

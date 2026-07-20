@@ -1910,7 +1910,7 @@ async def on_fs_list(data):
 
     loop = asyncio.get_event_loop()
     try:
-        entries = await loop.run_in_executor(None, _list_directory, req_path)
+        entries = await loop.run_in_executor(None, _listdir_admin, req_path)
         await sio.emit("fs-result", {"requestId": request_id, "entries": entries}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -1936,7 +1936,7 @@ async def on_fs_read(data):
     path = data.get("path", "")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _read_file_b64, path)
+        result = await loop.run_in_executor(None, _read_file_admin, path)
         await sio.emit("fs-read-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-read-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -1975,6 +1975,178 @@ def _rename_path(src: str, dst: str) -> dict:
     return {"ok": True, "src": src, "dst": dst}
 
 
+# --------------------------------------------------------------
+# Datei-Operationen mit ADMIN-RECHTEN (Web-Explorer + Explorer-Relay)
+# --------------------------------------------------------------
+# Läuft der Agent NICHT bereits als SYSTEM/root, schlagen Dateizugriffe auf
+# geschützte Pfade mit "Zugriff verweigert" fehl (und der Relay-Client zeigt
+# Fehler bzw. bricht die Verbindung ab). Deshalb gilt für ALLES, was über den
+# Web-Explorer oder das Explorer-Relay läuft: Erst der normale (schnelle)
+# Versuch - schlägt der mit Zugriff-verweigert fehl, wird die Operation
+# automatisch ELEVIERT wiederholt:
+#   Windows: Start-Process -Verb RunAs (läuft der Agent als Dienst/SYSTEM,
+#            ist das transparent ohne UAC-Dialog)
+#   Linux:   sudo -n (setzt eine NOPASSWD-Regel für den Agent-Benutzer voraus;
+#            läuft der Agent als root, greift schon der Direktversuch)
+# So werden die Operationen effektiv IMMER mit Admin-Rechten ausgeführt und
+# ein "Datei ohne Rechte editieren" bringt den Relay nicht mehr zum Absturz.
+
+def _is_access_denied(exc: Exception) -> bool:
+    """Erkennt 'Zugriff verweigert'-Fehler plattformübergreifend."""
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError):
+        if getattr(exc, "winerror", None) == 5:          # ERROR_ACCESS_DENIED
+            return True
+        import errno as _errno
+        return exc.errno in (_errno.EACCES, _errno.EPERM)
+    return False
+
+
+# Eigenständiges Mini-Skript, das die Datei-Operation im ELEVIERTEN Prozess
+# ausführt. Austausch über zwei JSON-Dateien (Request/Response), damit keine
+# Kommandozeilen-Quoting-Probleme entstehen.
+_FS_ELEV_SOURCE = r'''
+import base64, json, os, shutil, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    req = json.load(f)
+op = req.get("op"); res = {}
+try:
+    if op == "list":
+        out = []
+        base = req["path"]
+        for name in sorted(os.listdir(base)):
+            full = os.path.join(base, name)
+            try:
+                st = os.stat(full, follow_symlinks=False)
+                is_dir = os.path.isdir(full)
+                out.append({"name": name, "path": full, "isDir": is_dir,
+                            "size": 0 if is_dir else int(st.st_size),
+                            "mtime": int(st.st_mtime * 1000)})
+            except Exception:
+                out.append({"name": name, "path": full, "isDir": False,
+                            "size": 0, "mtime": 0})
+        res = {"entries": out}
+    elif op == "read":
+        with open(req["path"], "rb") as f:
+            data = f.read()
+        res = {"name": os.path.basename(req["path"]),
+               "data": base64.b64encode(data).decode("ascii")}
+    elif op == "write":
+        content = base64.b64decode(req.get("data", ""))
+        os.makedirs(os.path.dirname(req["path"]) or ".", exist_ok=True)
+        with open(req["path"], "wb") as f:
+            f.write(content)
+        res = {"ok": True, "path": req["path"], "size": len(content)}
+    elif op == "mkdir":
+        os.makedirs(req["path"], exist_ok=False)
+        res = {"ok": True, "path": req["path"]}
+    elif op == "delete":
+        p = req["path"]
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
+        res = {"ok": True, "path": p}
+    elif op == "rename":
+        os.rename(req["src"], req["dst"])
+        res = {"ok": True, "src": req["src"], "dst": req["dst"]}
+    else:
+        res = {"error": "Unbekannte Operation: %s" % op}
+except Exception as e:
+    res = {"error": str(e)}
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump(res, f)
+'''
+
+
+def _fs_elevated(op: dict) -> dict:
+    """Führt eine Datei-Operation ELEVIERT (Admin/root) aus. Blockierend -
+    wird wie die Direkt-Varianten im Executor aufgerufen."""
+    import json as _json_mod
+    import shutil as _shutil
+    tmpdir = tempfile.mkdtemp(prefix="rmm-fsadmin-")
+    script = os.path.join(tmpdir, "fsop.py")
+    req_f = os.path.join(tmpdir, "req.json")
+    res_f = os.path.join(tmpdir, "res.json")
+    try:
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(_FS_ELEV_SOURCE)
+        with open(req_f, "w", encoding="utf-8") as f:
+            _json_mod.dump(op, f)
+
+        if IS_WINDOWS:
+            # Gleiches Muster wie _run_elevated_windows: Start-Process -Verb RunAs.
+            inner_exec = f'"{sys.executable}" "{script}" "{req_f}" "{res_f}"'
+            launch_script = (
+                f"$p = Start-Process -FilePath cmd.exe -ArgumentList '/c',{_ps_single_quote(inner_exec)} "
+                f"-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
+            )
+            encoded = base64.b64encode(launch_script.encode("utf-16-le")).decode("ascii")
+            _run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                  "-EncodedCommand", encoded],
+                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        else:
+            # Linux/macOS: sudo ohne Passwort-Abfrage (-n). Ohne passende
+            # sudoers-Regel schlägt das kontrolliert fehl (kein Hänger).
+            _run(["sudo", "-n", sys.executable, script, req_f, res_f],
+                 capture_output=True, timeout=120)
+
+        if not os.path.exists(res_f):
+            raise PermissionError(
+                "Zugriff verweigert - Ausführung mit Admin-Rechten nicht möglich "
+                "(UAC abgelehnt bzw. sudo ohne NOPASSWD-Regel).")
+        with open(res_f, "r", encoding="utf-8") as f:
+            res = _json_mod.load(f)
+        if res.get("error"):
+            raise PermissionError(res["error"])
+        return res
+    finally:
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _fs_with_admin(direct, op: dict):
+    """Direktversuch; bei 'Zugriff verweigert' automatisch eleviert wiederholen."""
+    try:
+        return direct()
+    except Exception as e:
+        if not _is_access_denied(e):
+            raise
+        _print(f"[agent] Datei-Operation '{op.get('op')}' ohne Rechte "
+               f"({e}) -> wiederhole mit Admin-Rechten")
+        return _fs_elevated(op)
+
+
+def _listdir_admin(path: str):
+    # Leerer Pfad = Laufwerks-/Root-Übersicht, braucht nie Elevation.
+    if not path:
+        return _list_directory(path)
+    res = _fs_with_admin(lambda: _list_directory(path), {"op": "list", "path": path})
+    return res["entries"] if isinstance(res, dict) and "entries" in res else res
+
+
+def _read_file_admin(path: str) -> dict:
+    return _fs_with_admin(lambda: _read_file_b64(path), {"op": "read", "path": path})
+
+
+def _write_file_admin(path: str, data_b64: str) -> dict:
+    return _fs_with_admin(lambda: _write_file_b64(path, data_b64),
+                          {"op": "write", "path": path, "data": data_b64})
+
+
+def _mkdir_admin(path: str) -> dict:
+    return _fs_with_admin(lambda: _make_dir(path), {"op": "mkdir", "path": path})
+
+
+def _delete_admin(path: str) -> dict:
+    return _fs_with_admin(lambda: _delete_path(path), {"op": "delete", "path": path})
+
+
+def _rename_admin(src: str, dst: str) -> dict:
+    return _fs_with_admin(lambda: _rename_path(src, dst),
+                          {"op": "rename", "src": src, "dst": dst})
+
+
 @sio.on("fs-write", namespace="/agent")
 async def on_fs_write(data):
     """Datei hochladen oder eine editierte Datei zurückschreiben."""
@@ -1983,7 +2155,7 @@ async def on_fs_write(data):
     payload = data.get("data", "")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _write_file_b64, path, payload)
+        result = await loop.run_in_executor(None, _write_file_admin, path, payload)
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -1994,7 +2166,7 @@ async def on_fs_mkdir(data):
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _make_dir, data.get("path", ""))
+        result = await loop.run_in_executor(None, _mkdir_admin, data.get("path", ""))
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -2005,7 +2177,7 @@ async def on_fs_delete(data):
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _delete_path, data.get("path", ""))
+        result = await loop.run_in_executor(None, _delete_admin, data.get("path", ""))
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -2016,7 +2188,7 @@ async def on_fs_rename(data):
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _rename_path,
+        result = await loop.run_in_executor(None, _rename_admin,
                                              data.get("src", ""), data.get("dst", ""))
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:

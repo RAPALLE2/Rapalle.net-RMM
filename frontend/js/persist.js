@@ -14,6 +14,9 @@
 // hier völlig in Ordnung und der Standardweg für solche UI-Persistenz.
 
 const KEY_PREFIX = "rapalle-ui:";
+// Rechte-Helfer fürs harte Gating des Bearbeiten-Modus (kein Import-Zyklus:
+// state.js importiert selbst nichts).
+import { hasGlobalPerm } from "./state.js";
 let _key = KEY_PREFIX + "anon";
 let _enabled = false;
 let _saveTimer = null;
@@ -44,8 +47,16 @@ export function setClientDashProfile(clientId, name) {
   else delete _clientDashProfiles[clientId];
 }
 export function getClientDashProfileMap() { return _clientDashProfiles; }
-export function getDashEdit() { return _dashEdit; }
-export function setDashEdit(on) { _dashEdit = !!on; }
+// Der Layout-Bearbeiten-Modus (Dashboard + Client-Panel + Startmenü) ist hart
+// an das Recht 'customize_dashboard' gekoppelt: Ohne das Recht liefert
+// getDashEdit() immer false und setDashEdit(true) wird ignoriert - egal, über
+// welchen Weg (Profil-Checkbox, gespeicherter Zustand, Konsole) der Modus
+// aktiviert werden soll. Harte Grenze bleibt trotzdem das Backend.
+export function getDashEdit() { return _dashEdit && hasGlobalPerm("customize_dashboard"); }
+export function setDashEdit(on) {
+  if (on && !hasGlobalPerm("customize_dashboard")) return;
+  _dashEdit = !!on;
+}
 export function getFleetWidgets() { return _fleetWidgets; }
 export function setFleetWidgets(w) { _fleetWidgets = w; }
 // Persönliche Einstellung: VMs/LXCs vollwertig in Flotten-Diagrammen mitzählen?
@@ -85,10 +96,70 @@ export function setRestorePrefs(p) {
 }
 
 export function configurePersistence({ username, getExpanded, setExpanded }) {
-  _key = KEY_PREFIX + (username || "anon");
+  _user = username || "anon";
+  _key = KEY_PREFIX + _user;
   if (getExpanded) _getExpanded = getExpanded;
   if (setExpanded) _setExpanded = setExpanded;
   _enabled = true;
+}
+
+// ------------------------------------------------------------------
+// Server-Sync: Die UI-Einstellungen (Layouts, Favoriten, Startmenü, Sprache,
+// Icon-Modus) werden zusätzlich PRO BENUTZER auf dem Server gespeichert.
+// Dadurch sieht die Oberfläche in JEDEM Browser gleich aus - localStorage
+// bleibt nur der schnelle lokale Cache. Beim Login gewinnt der Server-Stand.
+// ------------------------------------------------------------------
+let _user = "anon";
+let _serverTimer = null;
+let _hydrated = false;
+
+// Welche localStorage-Keys serverseitig synchronisiert werden.
+function _syncedKeys() {
+  return [
+    _key,                        // Fenster/Sidebar/Layouts/Profile (dieser Store)
+    `rmm_appmenu:${_user}`,      // Startmenü-Layout
+    `rapalle-favs:${_user}`,     // Favoriten (Sidebar + Dashboard)
+    "rmm_icon_mode",             // Icon-Darstellung (SVG/Emoji)
+    "rmm_lang",                  // Sprache
+  ];
+}
+
+// Beim Login: Server-Stand holen und in localStorage übernehmen (Server
+// gewinnt). MUSS vor loadState()/initFavorites() laufen.
+export async function hydrateFromServer() {
+  try {
+    const { api } = await import("./api.js");
+    const res = await api.getUiPrefs();
+    const keys = (res && res.keys) || {};
+    for (const k of _syncedKeys()) {
+      if (Object.prototype.hasOwnProperty.call(keys, k)) {
+        try { localStorage.setItem(k, keys[k]); } catch {}
+      }
+    }
+    _hydrated = true;
+  } catch (e) {
+    // Server nicht erreichbar o.ä. -> lokaler Stand bleibt einfach bestehen.
+    console.warn("[persist] Server-UI-Einstellungen nicht ladbar:", e);
+  }
+}
+
+// Gedrosseltes Hochladen des aktuellen Stands (fire-and-forget).
+export function syncToServerSoon() {
+  if (!_enabled) return;
+  clearTimeout(_serverTimer);
+  _serverTimer = setTimeout(async () => {
+    try {
+      const { api } = await import("./api.js");
+      const keys = {};
+      for (const k of _syncedKeys()) {
+        const v = localStorage.getItem(k);
+        if (v !== null) keys[k] = v;
+      }
+      await api.saveUiPrefs(keys);
+    } catch (e) {
+      console.warn("[persist] Server-Sync fehlgeschlagen:", e);
+    }
+  }, 1500);
 }
 
 // --- Speichern (gedrosselt, damit häufige Änderungen nicht spammen) ---
@@ -127,6 +198,9 @@ export function saveNow(state) {
       })),
     };
     localStorage.setItem(_key, JSON.stringify(data));
+    // Zusätzlich (gedrosselt) auf den Server spiegeln, damit andere Browser
+    // desselben Benutzers den gleichen Stand sehen.
+    syncToServerSoon();
   } catch (e) {
     // localStorage kann voll/deaktiviert sein - dann eben keine Persistenz.
     console.warn("[persist] Speichern fehlgeschlagen:", e);

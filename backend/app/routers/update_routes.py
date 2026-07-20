@@ -43,7 +43,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user
+from app.auth import get_current_user, require_perm
 from app.routers.admin_routes import require_admin
 
 router = APIRouter(prefix="/api/admin/update", tags=["update"])
@@ -254,7 +254,7 @@ class RunBody(BaseModel):
 
 @router.get("/info")
 async def update_info(user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "admin_settings")
     loop = asyncio.get_event_loop()
     try:
         gh = await loop.run_in_executor(None, _fetch_github_state)
@@ -272,7 +272,7 @@ async def update_info(user: dict = Depends(get_current_user)):
 
 @router.put("/repo")
 async def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "admin_settings")
     url = body.url.strip()
     _parse_owner_repo(url)   # validiert das Format
     _REPO_FILE.write_text(url + "\n", encoding="utf-8")
@@ -282,7 +282,7 @@ async def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
 
 @router.post("/run")
 async def run_update(body: RunBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "admin_settings")
     try:
         return await _run_update(body.target, body.tag, user["username"])
     except HTTPException:

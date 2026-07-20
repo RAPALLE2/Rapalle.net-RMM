@@ -10,7 +10,7 @@
 // Diagramme mit Hover-Tooltip und Zeitspannen-Dropdown.
 
 import { state, findClient } from "./state.js";
-import { hasClientPerm, hasGlobalPerm } from "./state.js";
+import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
@@ -61,6 +61,12 @@ export function renderMainContent() {
   try { hideFleetTip(); } catch {}
   const el = content();
   if (!state.selection || state.selection.type === "dashboard") {
+    // Ohne das Recht 'see_dashboard' bleibt die Dashboard-Ansicht bewusst eine
+    // leere schwarze Seite (keine Zahlen, Widgets oder Favoriten).
+    if (!isAdmin() && !hasGlobalPerm("see_dashboard")) {
+      el.innerHTML = `<div style="position:absolute;inset:0;background:#000"></div>`;
+      return;
+    }
     renderDashboard(el);
     return;
   }

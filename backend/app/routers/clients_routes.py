@@ -213,7 +213,20 @@ def _with_live_state(c: dict) -> dict:
 async def get_clients(user: dict = Depends(get_current_user)):
     clients = db.list_clients()
     visible = visible_client_ids(user, [c["id"] for c in clients])
-    return [_with_live_state(c) for c in clients if c["id"] in visible]
+    # Hostnamen-Map über ALLE Clients (auch unsichtbare): Eine VM/LXC, deren
+    # physischer Host für den Benutzer nicht sichtbar ist, wird im Frontend in
+    # einem Pseudo-Ordner mit dem Namen des Hosts dargestellt - dafür braucht
+    # das Frontend den Host-Namen, auch wenn der Host selbst gefiltert wird.
+    name_by_id = {c["id"]: c.get("hostname") for c in clients}
+    out = []
+    for c in clients:
+        if c["id"] not in visible:
+            continue
+        item = _with_live_state(c)
+        if c.get("parent_client_id"):
+            item["parent_hostname"] = name_by_id.get(c["parent_client_id"])
+        out.append(item)
+    return out
 
 
 @router.get("/{client_id}")
@@ -461,22 +474,34 @@ async def update_client_agent(client_id: str, user: dict = Depends(get_current_u
     )
 
 
+class UpdateAllBody(BaseModel):
+    # Offline-Clients zum Update vormerken: Sie werden aktualisiert, sobald
+    # sie sich das nächste Mal mit dem Backend verbinden.
+    include_offline: bool = False
+
+
 @router.post("/update-all-agents")
-async def update_all_agents(user: dict = Depends(get_current_user)):
+async def update_all_agents(body: UpdateAllBody | None = None,
+                            user: dict = Depends(get_current_user)):
     """
     Löst ein Agent-Update für ALLE aktuell verbundenen Clients aus, die der
     Benutzer verwalten darf. Bewusst „fire-and-forget": Es wird nicht auf die
     einzelnen Bestätigungen gewartet (das würde bei vielen Clients zu lange
     dauern) – jeder Agent aktualisiert sich selbst und verbindet neu.
 
+    Mit include_offline=true werden Offline-Clients zusätzlich VORGEMERKT
+    (pending_agent_update): Sie bekommen das Update automatisch, sobald sie
+    wieder online sind (siehe sockets.on_register).
+
     Sobald ALLE angestoßenen Clients wieder verbunden sind, bekommen die
     Dashboards automatisch eine Benachrichtigung (Hintergrund-Task).
     """
+    include_offline = bool(body and body.include_offline)
     all_clients = db.list_clients()
     visible = visible_client_ids(user, [c["id"] for c in all_clients])
 
     triggered_ids: list[str] = []
-    offline, no_perm = 0, 0
+    offline, no_perm, queued = 0, 0, 0
     for c in all_clients:
         cid = c["id"]
         if cid not in visible:
@@ -487,6 +512,9 @@ async def update_all_agents(user: dict = Depends(get_current_user)):
             continue
         if not state.is_online(cid):
             offline += 1
+            if include_offline:
+                db.set_pending_agent_update(cid, True)
+                queued += 1
             continue
         # Alte Bestätigung verwerfen, damit wir nur den NEUEN Reconnect erkennen.
         state.update_confirmed.pop(cid, None)
@@ -496,11 +524,15 @@ async def update_all_agents(user: dict = Depends(get_current_user)):
                 triggered_ids.append(cid)
             else:
                 offline += 1
+                if include_offline:
+                    db.set_pending_agent_update(cid, True)
+                    queued += 1
         except Exception:
             offline += 1
 
     db.add_audit_entry(user["username"], "agent.update_all_triggered",
-                       details=f"ausgelöst={len(triggered_ids)}, offline={offline}")
+                       details=f"ausgelöst={len(triggered_ids)}, offline={offline}, "
+                               f"vorgemerkt={queued}")
 
     # Im Hintergrund darauf warten, dass alle angestoßenen Agents wieder
     # verbunden sind, und dann die Dashboards benachrichtigen.
@@ -508,7 +540,7 @@ async def update_all_agents(user: dict = Depends(get_current_user)):
         asyncio.create_task(_await_agents_reconnect(triggered_ids, user["username"]))
 
     return {"ok": True, "triggered": len(triggered_ids), "offline": offline,
-            "skipped_no_permission": no_perm}
+            "queued_offline": queued, "skipped_no_permission": no_perm}
 
 
 async def _await_agents_reconnect(client_ids: list[str], username: str,

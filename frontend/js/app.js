@@ -13,7 +13,7 @@ import { hasGlobalPerm, isAdmin } from "./state.js";
 import { api, saveToken, clearToken } from "./api.js";
 import { dashboardSocket } from "./socket.js";
 import { applyTheme, applyAccent } from "./theme.js";
-import { setLanguage, applyStaticTranslations } from "./i18n_apply.js";
+import { setLanguage, getLanguage, applyStaticTranslations } from "./i18n_apply.js";
 
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
@@ -21,7 +21,7 @@ import { renderTaskbar, initTaskbar } from "./taskbar.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll, closeWindow } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
-import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults, setOrgProfilePresets } from "./persist.js";
+import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults, setOrgProfilePresets, hydrateFromServer } from "./persist.js";
 import { initCrashGuard } from "./crashguard.js";
 
 // notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
@@ -140,9 +140,13 @@ const APP_REQUIRED_PERM = {
 function _appAllowed(appKey) {
   if (isAdmin()) return true;
   // Einstellungen: sichtbar, wenn der Nutzer wenigstens einen Settings-Bereich
-  // bearbeiten darf (SSO oder Branding). Der Rest der Settings ist Admin-only
-  // und wird innerhalb der App zusätzlich gegated.
-  if (appKey === "settings") return hasGlobalPerm("manage_sso") || hasGlobalPerm("manage_branding");
+  // sehen/bearbeiten darf (Einstellungen ansehen, SSO, Branding, Source oder
+  // Benutzer erstellen). Die einzelnen Tabs werden in der App zusätzlich gegated.
+  if (appKey === "settings") {
+    return hasGlobalPerm("see_settings") || hasGlobalPerm("manage_sso") ||
+           hasGlobalPerm("manage_branding") || hasGlobalPerm("see_source") ||
+           hasGlobalPerm("create_users");
+  }
   const perm = APP_REQUIRED_PERM[appKey];
   if (!perm) return true;               // frei zugängliche App
   return hasGlobalPerm(perm);
@@ -223,6 +227,15 @@ async function startSession(user) {
     getExpanded: getExpandedIds,
     setExpanded: setExpandedIds,
   });
+  // Serverseitig gespeicherte UI-Einstellungen holen und in localStorage
+  // übernehmen (Server gewinnt) - VOR initFavorites()/loadState(), damit
+  // Favoriten, Layouts & Co. in jedem Browser identisch sind.
+  await hydrateFromServer();
+  // Sprache ggf. auf den Server-Stand umschalten (rmm_lang wurde hydriert).
+  try {
+    const lang = localStorage.getItem("rmm_lang");
+    if (lang && lang !== getLanguage()) setLanguage(lang);
+  } catch {}
   initFavorites(user.username);   // Favoriten des Benutzers laden
   initSidebarNav();               // Dashboard-Tab + Favoriten-Header verkabeln
 

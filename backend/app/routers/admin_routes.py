@@ -127,6 +127,11 @@ PERM_LABELS = {
     "delete_source": "Source löschen (Datenbank/Explorer)",
     "manage_branding": "Branding ändern",
     "manage_sso": "SSO ändern",
+    "see_settings": "Einstellungen ansehen",
+    "manage_settings": "Standard-Einstellungen ändern",
+    "admin_settings": "Admin-Einstellungen (IP/Port, Server-Update, DB, Neustart)",
+    "screen_silent": "Remote-Bildschirm ohne Anfrage (Silent-Modus)",
+    "c_screen_silent": "Remote-Bildschirm ohne Anfrage",
     "see_permissions": "Rechte & Gruppen sehen",
     "manage_permissions": "Rechte & Gruppen bearbeiten",
     "create_users": "Benutzer erstellen",
@@ -179,6 +184,9 @@ async def permission_catalog(user: dict = Depends(get_current_user)):
         "labels": PERM_LABELS,
         "general": db.GENERAL_PERM_KEYS,
         "client": db.CLIENT_PERM_KEYS,
+        # Implikationen (Quelle -> abgedeckte Rechte): Das Frontend nutzt sie,
+        # um beim Erlauben eines Rechts die Basis-Rechte automatisch mitzusetzen.
+        "implies": db.perm_implies_map(),
     }
 
 
@@ -360,7 +368,7 @@ async def restart_backend(user: dict = Depends(get_current_user)):
     Fällen. Antwortet SOFORT und startet ~1 s später neu, damit die Antwort noch
     beim Client ankommt.
     """
-    require_admin(user)
+    require_perm(user, "admin_settings")
     db.add_audit_entry(user["username"], "backend.restart")
 
     import sys as _sys
@@ -389,7 +397,7 @@ async def stop_backend(user: dict = Depends(get_current_user)):
     Datenbank-Sync ausgeführt (externer DB-Modus). Antwortet SOFORT und
     beendet sich ~1 s später.
     """
-    require_admin(user)
+    require_perm(user, "admin_settings")
     db.add_audit_entry(user["username"], "backend.stop")
 
     import asyncio as _asyncio
@@ -646,21 +654,38 @@ class SettingsBody(BaseModel):
     guacd_port: int | None = None
     # Automatisches Agent-Update ("1" = an, "0" = aus; pro Client übersteuerbar)
     agent_auto_update: str | None = None
+    # Auto-Update auch für Clients, die offline waren, sobald sie sich wieder
+    # verbinden ("1" = an, Standard).
+    agent_auto_update_offline: str | None = None
     # Server-Selbst-Update (Settings -> Update)
     server_auto_update: str | None = None            # "1" | "0"
     server_auto_update_channel: str | None = None    # "commit" | "full" | "any"
 
 
+# Diese Schlüssel gelten als ADMIN-Einstellungen (IP/Port, Server-Update,
+# guacd-Adresse). Alles andere sind "Standard-Einstellungen" (manage_settings).
+ADMIN_SETTING_KEYS = {
+    "server_host", "server_domain", "server_backend_port", "server_frontend_port",
+    "server_url", "server_auto_update", "server_auto_update_channel",
+    "guacd_host", "guacd_port",
+}
+
+
 @router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "see_settings")
     return db.get_all_settings()
 
 
 @router.put("/settings")
 async def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
     changed = body.model_dump(exclude_none=True)
+    # Pro Schlüssel das passende Recht verlangen: Admin-Keys brauchen
+    # 'admin_settings', alle übrigen 'manage_settings'.
+    if any(k in ADMIN_SETTING_KEYS for k in changed):
+        require_perm(user, "admin_settings")
+    if any(k not in ADMIN_SETTING_KEYS for k in changed):
+        require_perm(user, "manage_settings")
     # server_url darf bewusst auf "" gesetzt werden (= wieder automatisch).
     for key, value in changed.items():
         db.set_setting(key, value)

@@ -247,6 +247,8 @@ async def request_fs_op(client_id: str, event: str, data: dict,
 
 _AUTO_UPDATE_COOLDOWN_S = 1800   # 30 min zwischen zwei Auto-Update-Versuchen
 _auto_update_last: dict[str, float] = {}
+# Letzter Heartbeat-basierter Versions-Check pro Client (max. 1x/60s).
+_auto_update_hb_check: dict[str, float] = {}
 
 # Pfad zur ausgelieferten Agent-Version (…/backend/app/sockets.py -> …/agent/version.txt)
 from pathlib import Path as _Path
@@ -352,10 +354,28 @@ async def on_register(sid, payload):
 
     # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
     db.set_agent_version(client_id, payload.get("agent_version"))
-    # Automatisches Agent-Update: Ist der Agent veraltet und Auto-Update für
-    # diesen Client aktiv (pro Client 'on' oder 'global' + Settings-Schalter),
-    # wird das Update direkt beim Verbinden angestoßen.
-    await _maybe_auto_update(client_id, payload.get("agent_version"))
+
+    # "Alle Agenten aktualisieren" mit Offline-Option: War der Client beim
+    # Massen-Update offline und wurde VORGEMERKT (pending_agent_update), wird
+    # das Update jetzt - direkt beim Wiederverbinden - nachgeholt.
+    _pending_client = db.get_client(client_id)
+    if _pending_client and _pending_client.get("pending_agent_update"):
+        db.set_pending_agent_update(client_id, False)
+        if _agent_outdated(payload.get("agent_version") or "", _latest_agent_version()):
+            ok = await send_to_agent(client_id, "update-agent", {})
+            if ok:
+                db.add_audit_entry(None, "agent.pending_update_triggered", target=client_id,
+                                   details=(_pending_client.get("hostname") or client_id))
+                await sio.emit("client:update-started", {"id": client_id, "auto": True},
+                               namespace="/dashboard")
+    else:
+        # Automatisches Agent-Update: Ist der Agent veraltet und Auto-Update für
+        # diesen Client aktiv (pro Client 'on' oder 'global' + Settings-Schalter),
+        # wird das Update direkt beim Verbinden angestoßen. Über das Setting
+        # 'agent_auto_update_offline' ("1" = Standard) lässt sich steuern, ob
+        # Clients, die offline waren, beim Wiederverbinden aktualisiert werden.
+        if db.get_setting("agent_auto_update_offline", "1") == "1":
+            await _maybe_auto_update(client_id, payload.get("agent_version"))
 
     # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
     db.upsert_client(
@@ -432,6 +452,20 @@ async def on_heartbeat(sid, payload):
     if not client_id:
         return
     db.touch_client(client_id)
+
+    # Auto-Update auch für BEREITS verbundene Clients: Wird eine neue
+    # Agent-Version ausgerollt, während der Client online ist, greift der
+    # Register-Check nicht mehr. Deshalb hier ein sparsamer (max. 1x/60s pro
+    # Client) Versions-Check, der ggf. das Auto-Update anstößt.
+    now_check = time.monotonic()
+    if now_check - _auto_update_hb_check.get(client_id, 0.0) >= 60.0:
+        _auto_update_hb_check[client_id] = now_check
+        try:
+            _c = db.get_client(client_id)
+            if _c:
+                await _maybe_auto_update(client_id, _c.get("agent_version"))
+        except Exception:
+            pass
 
     metrics = payload.get("metrics", {})
     now_ms = int(time.time() * 1000)
@@ -720,6 +754,23 @@ async def dashboard_screen_start(sid, data):
     # Anmeldung möglich).
     client = _db.get_client(client_id)
     needs_consent = bool(client) and (client.get("device_type") or "physical") != "lxc"
+
+    # Silent-Modus (einmalig): Hat der Benutzer den Modus im Profil aktiviert
+    # UND das Recht 'screen_silent' (global) bzw. 'c_screen_silent' auf diesem
+    # Client, wird die Zustimmungs-Abfrage am Gerät übersprungen. Direkt beim
+    # Verbindungsaufbau schaltet sich der Modus automatisch wieder AUS, damit
+    # er wirklich nur für DIESE eine Sitzung gilt.
+    _u = _db.get_user_by_username(data.get("username") or "")
+    if needs_consent and _u and _u.get("silent_screen"):
+        from app.auth import is_super_admin as _is_sa
+        if (_is_sa(_u) or user_has_permission(_u, "screen_silent")
+                or user_has_permission(_u, "c_screen_silent", client_id)):
+            needs_consent = False
+            _db.set_user_silent_screen(_u["id"], False)   # einmalig -> wieder aus
+            _db.add_audit_entry(_u["username"], "screen.silent_used", target=client_id,
+                                details=client.get("hostname") if client else client_id)
+            print(f"[screen] Silent-Modus von {_u['username']} genutzt -> keine "
+                  f"Abfrage, Modus wieder deaktiviert")
     print(f"[screen] Start für {client.get('hostname') if client else client_id}: "
           f"device_type={client.get('device_type') if client else '?'} -> require_consent={needs_consent}")
 

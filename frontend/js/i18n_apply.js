@@ -15,6 +15,8 @@ export { t } from "./i18n.js";
 
 export function setLanguage(lang) {
   _setLanguage(lang);
+  // Sprache zusätzlich serverseitig sichern (in jedem Browser gleich).
+  import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
 }
 
 // Übersetzt die statischen Elemente in index.html

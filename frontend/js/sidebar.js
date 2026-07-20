@@ -64,6 +64,8 @@ function _saveFavorites() {
       clients: favorites.clients, tenants: favorites.tenants,
       websites: favorites.websites, expanded: favExpanded,
     }));
+    // Favoriten zusätzlich serverseitig sichern (in jedem Browser gleich).
+    import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
   } catch {}
 }
 
@@ -164,7 +166,11 @@ export function revealClient(clientId) {
   if (client.location_id) expanded.add(client.location_id);
   if (client.folder_id) expanded.add(client.folder_id);
   // Falls es eine VM/CT unter einem Host ist, auch den Host aufklappen
-  if (client.parent_client_id) expanded.add(client.parent_client_id);
+  // (bzw. den Pseudo-Ordner, wenn der Host selbst nicht sichtbar ist).
+  if (client.parent_client_id) {
+    expanded.add(client.parent_client_id);
+    expanded.add(`hostgrp:${client.parent_client_id}`);
+  }
   renderSidebar();
 }
 
@@ -184,12 +190,54 @@ function clientDot(client) {
 }
 
 // Rendert rekursiv die Ordnerstruktur + Clients innerhalb einer Location
+// -----------------------------------------------------------------
+// "Verwaiste" VMs/LXCs: Der Benutzer hat Rechte auf die VM, aber NICHT auf
+// den physischen Host - der Host fehlt dann in state.clients. Solche VMs
+// würden sonst nirgends auftauchen (sie werden normalerweise nur unter ihrem
+// Host gerendert). Sie werden stattdessen an ihrer Position in einem
+// Pseudo-Ordner angezeigt, der wie der physische Host heißt (parent_hostname
+// liefert das Backend mit).
+// -----------------------------------------------------------------
+function isOrphanVm(c) {
+  return !!c.parent_client_id && !state.clients.some((p) => p.id === c.parent_client_id);
+}
+
+// Rendert eine Client-Liste; verwaiste VMs werden dabei nach Host gruppiert
+// und in einem auf-/zuklappbaren Pseudo-Ordner (🖥 Host-Name) dargestellt.
+function renderClientList(clients) {
+  let html = "";
+  const orphanGroups = new Map();   // parent_client_id -> [vms]
+  for (const c of clients) {
+    if (isOrphanVm(c)) {
+      if (!orphanGroups.has(c.parent_client_id)) orphanGroups.set(c.parent_client_id, []);
+      orphanGroups.get(c.parent_client_id).push(c);
+    } else {
+      html += renderClientNode(c);
+    }
+  }
+  for (const [pid, vms] of orphanGroups) {
+    const key = `hostgrp:${pid}`;
+    const isOpen = expanded.has(key);
+    const name = vms[0].parent_hostname || "Host";
+    html += `
+      <div class="tree-node">
+        <div class="tree-row" data-toggle="${esc(key)}" title="Physischer Host (kein Zugriff) - enthält deine VMs/LXCs">
+          <span>${isOpen ? "▾" : "▸"}</span> 🖥️ ${esc(name)}
+        </div>
+        ${isOpen ? `<div class="tree-children">${vms.map(renderClientNode).join("")}</div>` : ""}
+      </div>
+    `;
+  }
+  return html;
+}
+
 function renderFolderChildren(locationId, parentFolderId) {
   const folders = state.hierarchy.folders.filter(
     (f) => f.location_id === locationId && f.parent_folder_id === parentFolderId
   );
   const clients = state.clients.filter(
-    (c) => c.location_id === locationId && c.folder_id === parentFolderId && !c.parent_client_id
+    (c) => c.location_id === locationId && c.folder_id === parentFolderId &&
+           (!c.parent_client_id || isOrphanVm(c))
   );
 
   let html = "";
@@ -208,9 +256,8 @@ function renderFolderChildren(locationId, parentFolderId) {
   }
 
   // Clients in diesem Ordner (bzw. direkt in der Location, wenn parentFolderId null ist)
-  for (const client of clients) {
-    html += renderClientNode(client);
-  }
+  // - inkl. verwaister VMs im Host-Pseudo-Ordner.
+  html += renderClientList(clients);
 
   return html;
 }
@@ -278,9 +325,10 @@ export function renderSidebar() {
       // Clients, die direkt im Tenant liegen (Tenant gesetzt, aber keine Location)
       // - z.B. nach dem Ziehen auf einen Tenant. Damit sie sichtbar bleiben.
       const tenantClients = state.clients.filter(
-        (c) => c.tenant_id === tenant.id && !c.location_id && !c.parent_client_id
+        (c) => c.tenant_id === tenant.id && !c.location_id &&
+               (!c.parent_client_id || isOrphanVm(c))
       );
-      for (const c of tenantClients) html += renderClientNode(c);
+      html += renderClientList(tenantClients);
       html += `</div>`;
     }
 
@@ -288,12 +336,13 @@ export function renderSidebar() {
   }
 
   // Clients, die noch keinem Tenant zugeordnet sind ("nicht zugeordnet")
-  const unassigned = state.clients.filter((c) => !c.tenant_id && !c.parent_client_id);
+  const unassigned = state.clients.filter(
+    (c) => !c.tenant_id && (!c.parent_client_id || isOrphanVm(c)));
   if (unassigned.length) {
     html += `
       <div class="tree-node">
         <div class="tree-row" style="color:var(--subtext)">${t("not_assigned")}</div>
-        <div class="tree-children">${unassigned.map(renderClientNode).join("")}</div>
+        <div class="tree-children">${renderClientList(unassigned)}</div>
       </div>
     `;
   }

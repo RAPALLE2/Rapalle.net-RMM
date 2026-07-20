@@ -28,7 +28,7 @@ import {
 // Zuletzt gerenderter Client (für die Layout-Auflösung in Handlern, die
 // keinen Client-Parameter haben - z.B. placeNew/folderUnder).
 let _activeClientId = null;
-import { state, isAdmin } from "./state.js";
+import { state, isAdmin, hasGlobalPerm } from "./state.js";
 import { api } from "./api.js";
 // GEMEINSAME Raster-Engine (identisch mit dem Dashboard/fleetdash.js).
 import {
@@ -327,7 +327,7 @@ export function renderClientLayout(host, toolbarHost, client) {
           <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
           ${isAdmin() ? `<button data-set-default title="Aktuelles Layout als Standard für ALLE Nutzer speichern">💾 Als Standard für alle</button>` : ""}
           <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="Bearbeiten-Modus verlassen">✓ Bearbeiten beenden</button>
-        </span>` : `<span class="dash-edit-tools" style="opacity:0.9">${profSelect}</span>`;
+        </span>` : `<span class="dash-edit-tools" style="opacity:0.9">${hasGlobalPerm("customize_dashboard") ? profSelect : ""}</span>`;
 
     // Profil für diesen Client wechseln
     toolbarHost.querySelector("[data-prof-select]")?.addEventListener("change", (e) => {

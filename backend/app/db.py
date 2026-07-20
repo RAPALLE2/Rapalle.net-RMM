@@ -424,6 +424,14 @@ def init_db() -> None:
     # Migration: Spalten für VM/LXC-Kennzeichnung nachrüsten, falls die
     # clients-Tabelle noch aus einer älteren Version stammt.
     _migrate_add_column("clients", "device_type", "TEXT DEFAULT 'physical'")  # 'physical' | 'vm' | 'lxc'
+    # "Alle Agents aktualisieren" mit Offline-Option: Flag merkt sich, dass der
+    # Client ein Agent-Update bekommen soll, sobald er wieder online ist.
+    _migrate_add_column("clients", "pending_agent_update", "INTEGER DEFAULT 0")
+    # Silent-Modus für den Remote-Bildschirm (einmalig, siehe sockets.py) und
+    # serverseitig gespeicherte UI-Einstellungen (Layouts, Favoriten, ...),
+    # damit sie in JEDEM Browser gleich sind (nicht pro Browser/localStorage).
+    _migrate_add_column("users", "silent_screen", "INTEGER DEFAULT 0")
+    _migrate_add_column("users", "ui_prefs", "TEXT")
     _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
     # Automatisches Agent-Update pro Client: 'global' = folgt der Einstellung
     # in den Settings, 'on' = immer, 'off' = nie.
@@ -1017,6 +1025,43 @@ def set_agent_version(client_id: str, version: str | None) -> None:
     _conn.commit()
 
 
+def set_pending_agent_update(client_id: str, on: bool) -> None:
+    """
+    Merkt vor (bzw. löscht), dass der Client ein Agent-Update bekommen soll,
+    sobald er sich das nächste Mal verbindet (Offline-Option von
+    "Alle Agenten jetzt aktualisieren").
+    """
+    _conn.execute("UPDATE clients SET pending_agent_update = ? WHERE id = ?",
+                  (1 if on else 0, client_id))
+    _conn.commit()
+
+
+def set_user_silent_screen(user_id: int, on: bool) -> None:
+    """Einmaliger Silent-Modus: Die NÄCHSTE Remote-Bildschirm-Sitzung dieses
+    Benutzers startet ohne Zustimmungs-Dialog am Gerät; danach wird das Flag
+    automatisch wieder gelöscht (siehe sockets.dashboard_screen_start)."""
+    _conn.execute("UPDATE users SET silent_screen = ? WHERE id = ?",
+                  (1 if on else 0, user_id))
+    _conn.commit()
+
+
+_UI_PREFS_MAX_BYTES = 512 * 1024   # 512 KB reichen locker für Layouts & Co.
+
+
+def get_user_ui_prefs(user_id: int) -> str | None:
+    """Serverseitig gespeicherte UI-Einstellungen (JSON-String) des Benutzers."""
+    row = _conn.execute("SELECT ui_prefs FROM users WHERE id = ?", (user_id,)).fetchone()
+    return row["ui_prefs"] if row and row["ui_prefs"] else None
+
+
+def set_user_ui_prefs(user_id: int, prefs_json: str) -> None:
+    """Speichert die UI-Einstellungen (JSON-String, größenbegrenzt)."""
+    if prefs_json and len(prefs_json.encode("utf-8")) > _UI_PREFS_MAX_BYTES:
+        raise ValueError("UI-Einstellungen zu groß (max. 512 KB)")
+    _conn.execute("UPDATE users SET ui_prefs = ? WHERE id = ?", (prefs_json, user_id))
+    _conn.commit()
+
+
 def update_client(client_id: str, fields: dict) -> dict | None:
     """
     Generisches Update für den Edit-Dialog im Frontend.
@@ -1263,6 +1308,9 @@ GLOBAL_PERM_KEYS = [
     "see_source", "edit_source", "delete_source",
     "manage_branding",
     "manage_sso",
+    # Einstellungen: sehen / Standard-Einstellungen ändern / Admin-Einstellungen
+    # (IP/Port, Server-Update von GitHub, Datenbank, Neustart/Stop, guacd).
+    "see_settings", "manage_settings", "admin_settings",
     "see_permissions", "manage_permissions",
     "create_users",
     "network_scan", "port_scan",
@@ -1273,6 +1321,9 @@ GLOBAL_PERM_KEYS = [
     "play_games",
     "manage_favorites",
     "use_relay", "relay_unlimited",
+    # Remote-Bildschirm ohne Anfrage: erlaubt den einmaligen "Silent-Modus"
+    # im Profil (nächste Remote-Sitzung ohne Zustimmungs-Dialog am Gerät).
+    "screen_silent",
 ]
 
 # Pro-Client-Rechte:
@@ -1290,6 +1341,7 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_relay", "c_relay_unlimited",
     "c_notes_view", "c_notes_edit",
     "c_websites_view", "c_websites_edit",
+    "c_screen_silent",      # Remote-Bildschirm ohne Anfrage (pro Client)
 ]
 
 # Alt-Keys (nur noch für Rückwärts-Auflösung gespeicherter Grants).
@@ -1337,7 +1389,22 @@ _PERM_IMPLIES = {
     "delete_source": ["see_source", "edit_source"],
     "relay_unlimited": ["use_relay"],
     "create_scripts": ["use_scripts"],
+    # Einstellungen: Bearbeiten setzt Ansehen voraus, Admin-Einstellungen
+    # decken auch die Standard-Einstellungen ab.
+    "manage_settings": ["see_settings"],
+    "admin_settings": ["manage_settings", "see_settings"],
+    # Dashboard anpassen setzt Dashboard sehen voraus.
+    "customize_dashboard": ["see_dashboard"],
+    # Aufzeichnungen löschen setzt Sehen voraus.
+    "delete_replay": ["see_replay"],
+    # Bildschirm ohne Anfrage setzt das Bildschirm-Recht voraus.
+    "c_screen_silent": ["c_screen"],
 }
+
+
+def perm_implies_map() -> dict:
+    """Implikations-Map (Quelle -> abgedeckte Rechte) fürs Frontend."""
+    return {k: list(v) for k, v in _PERM_IMPLIES.items()}
 
 
 def perms_implied_by(perm: str) -> list[str]:

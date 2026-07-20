@@ -31,12 +31,12 @@ export function renderSettings(body, win) {
     // Welche Reiter darf dieser Benutzer sehen?
     const admin = isAdmin();
     const canTab = {
-      general: admin,
-      users: admin,
+      general: admin || hasGlobalPerm("see_settings"),
+      users: admin || hasGlobalPerm("create_users"),
       sso: admin || hasGlobalPerm("manage_sso"),
       branding: admin || hasGlobalPerm("manage_branding"),
       notifications: admin,
-      source: admin,
+      source: admin || hasGlobalPerm("see_source"),
     };
     const order = ["general", "users", "sso", "branding", "notifications", "source"];
     const allowed = order.filter((k) => canTab[k]);
@@ -159,6 +159,7 @@ export function renderSettings(body, win) {
 
     root.innerHTML = `
       <div class="settings-section">
+        <div data-adminsec>
         <h3>${t("general_server_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">${t("general_server_hint")}</p>
         <div class="form-row">
@@ -189,6 +190,7 @@ export function renderSettings(body, win) {
           Dieser Wert wird in die Agent-Installation eingebaut — sonst bekommt ein Agent die
           interne IP (<code>http://ip:4000</code>), die ein externer Client nicht erreichen kann.
         </p>
+        </div>
 
         <h3 style="margin-top:24px">${t("general_metrics_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">${t("general_metrics_hint")}</p>
@@ -205,6 +207,7 @@ export function renderSettings(body, win) {
           <input type="number" min="1" step="1" id="ge-replay" value="${esc(String(s.replay_retention_days ?? 10))}" />
         </div>
 
+        <div data-adminsec>
         <h3 style="margin-top:24px">Update</h3>
         <p style="color:var(--subtext);font-size:13px">
           Aktualisiert den RMM-Server direkt aus dem GitHub-Repo. Das Backend
@@ -261,7 +264,9 @@ export function renderSettings(body, win) {
             <button class="taskbar-btn" id="up-auto-save">Auto-Update speichern</button>
           </div>
         </div>
+        </div>
 
+        <div data-adminsec>
         <h3 style="margin-top:24px">Datenbank</h3>
         <p style="color:var(--subtext);font-size:13px">
           Speicherort der RMM-Daten: <b>Lokal</b> (SQLite-Datei im Backend) oder
@@ -313,6 +318,7 @@ export function renderSettings(body, win) {
             <button class="btn-primary" id="dbx-to-local" style="width:auto;margin:0">→ Auf lokale Datenbank umschalten</button>
           </div>
         </div>
+        </div>
 
         <h3 style="margin-top:24px">Agent Auto-Update</h3>
         <p style="color:var(--subtext);font-size:13px">
@@ -326,11 +332,28 @@ export function renderSettings(body, win) {
             Automatisches Agent-Update aktiviert (global)
           </label>
         </div>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="ge-autoupdate-offline" ${(s.agent_auto_update_offline ?? "1") === "1" ? "checked" : ""} />
+            Offline-Clients aktualisieren, sobald sie wieder online sind
+          </label>
+        </div>
+        <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
+          Ist der Haken gesetzt, werden veraltete Agents direkt beim Wiederverbinden
+          aktualisiert. Ohne Haken werden nur Clients aktualisiert, die bereits
+          online sind, wenn eine neue Agent-Version bereitsteht.
+        </p>
         <p style="color:var(--subtext);font-size:13px;margin-top:10px">
           Alle Agenten <b>sofort</b> aktualisieren: Es wird für jeden aktuell
           verbundenen Client (den du verwalten darfst) ein Agent-Update ausgelöst.
           Die Agenten aktualisieren sich selbst und verbinden neu.
         </p>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+            <input type="checkbox" id="ge-updateall-offline" />
+            Auch Offline-Clients vormerken (Update, sobald sie wieder online sind)
+          </label>
+        </div>
         <div class="form-row">
           <button class="taskbar-btn" id="ge-updateall">⬆️ Alle Agenten jetzt aktualisieren</button>
           <span id="ge-updateall-msg" style="margin-left:10px;font-size:12px;color:var(--subtext)"></span>
@@ -376,7 +399,8 @@ export function renderSettings(body, win) {
         <div id="ge-error" class="form-error hidden"></div>
         <button class="btn-primary" id="ge-save" style="margin-top:8px">${t("save")}</button>
 
-        <h3 style="margin-top:26px">${t("guac_title")}</h3>
+        <h3 style="margin-top:26px" data-adminsec-h>${t("guac_title")}</h3>
+        <div data-adminsec>
         <p style="color:var(--subtext);font-size:13px">${t("guac_hint")}</p>
         <div style="display:flex;gap:12px">
           <div class="form-row" style="flex:2">
@@ -393,29 +417,53 @@ export function renderSettings(body, win) {
           <button class="btn-primary" id="guacd-save" style="width:auto;margin:0">${t("save")}</button>
           <button class="taskbar-btn" id="guacd-test">${t("guac_test")}</button>
         </div>
+        </div>
       </div>
     `;
+
+    // ---- Rechte-Gating im General-Tab ----
+    // Admin-Sektionen (Server-IP/Ports, GitHub-Update, Datenbank, guacd)
+    // brauchen 'admin_settings'; die Standard-Einstellungen 'manage_settings'.
+    // Mit nur 'see_settings' ist alles sichtbar, aber schreibgeschützt.
+    const mayAdminSet = isAdmin() || hasGlobalPerm("admin_settings");
+    const mayManageSet = isAdmin() || hasGlobalPerm("manage_settings");
+    if (!mayAdminSet) {
+      root.querySelectorAll("[data-adminsec], [data-adminsec-h]").forEach((el) => el.remove());
+    }
+    if (!mayManageSet) {
+      root.querySelectorAll("input, select, button, textarea").forEach((el) => {
+        el.disabled = true;
+        el.title = "Keine Berechtigung (Standard-Einstellungen ändern)";
+      });
+    }
 
     root.querySelector("#ge-save").addEventListener("click", async () => {
       const err = root.querySelector("#ge-error");
       err.classList.add("hidden");
+      // Hilfsfunktionen: Admin-Felder können (ohne 'admin_settings') aus dem
+      // DOM entfernt sein - dann werden sie einfach nicht mitgeschickt.
+      const val = (id) => root.querySelector(`#${id}`)?.value;
+      const has = (id) => !!root.querySelector(`#${id}`);
       const payload = {
-        server_host: root.querySelector("#ge-server-host").value.trim(),
-        server_domain: root.querySelector("#ge-server-domain").value.trim(),
-        server_backend_port: parseInt(root.querySelector("#ge-backend-port").value, 10) || 4000,
-        server_frontend_port: parseInt(root.querySelector("#ge-frontend-port").value, 10) || 4000,
-        server_url: root.querySelector("#ge-server-url").value.trim(),
-        metrics_interval_seconds: parseInt(root.querySelector("#ge-interval").value, 10) || 60,
-        metrics_retention_hours: parseInt(root.querySelector("#ge-retention").value, 10) || 1,
-        replay_retention_days: parseInt(root.querySelector("#ge-replay").value, 10) || 10,
+        metrics_interval_seconds: parseInt(val("ge-interval"), 10) || 60,
+        metrics_retention_hours: parseInt(val("ge-retention"), 10) || 1,
+        replay_retention_days: parseInt(val("ge-replay"), 10) || 10,
         recording_enabled: root.querySelector("#ge-rec-enabled").checked ? "1" : "0",
         agent_auto_update: root.querySelector("#ge-autoupdate").checked ? "1" : "0",
-        screen_record_quality: parseInt(root.querySelector("#ge-screen-q").value, 10) || 40,
-        screen_record_fps: parseInt(root.querySelector("#ge-screen-fps").value, 10) || 5,
-        guac_record_quality: parseInt(root.querySelector("#ge-guac-q").value, 10) || 50,
-        guac_record_fps: parseInt(root.querySelector("#ge-guac-fps").value, 10) || 8,
-        guac_record_scale: parseFloat(root.querySelector("#ge-guac-scale").value) || 0.75,
+        agent_auto_update_offline: root.querySelector("#ge-autoupdate-offline").checked ? "1" : "0",
+        screen_record_quality: parseInt(val("ge-screen-q"), 10) || 40,
+        screen_record_fps: parseInt(val("ge-screen-fps"), 10) || 5,
+        guac_record_quality: parseInt(val("ge-guac-q"), 10) || 50,
+        guac_record_fps: parseInt(val("ge-guac-fps"), 10) || 8,
+        guac_record_scale: parseFloat(val("ge-guac-scale")) || 0.75,
       };
+      if (has("ge-server-host")) {
+        payload.server_host = val("ge-server-host").trim();
+        payload.server_domain = val("ge-server-domain").trim();
+        payload.server_backend_port = parseInt(val("ge-backend-port"), 10) || 4000;
+        payload.server_frontend_port = parseInt(val("ge-frontend-port"), 10) || 4000;
+        payload.server_url = val("ge-server-url").trim();
+      }
       try {
         await api.updateSettings(payload);
         window.notify?.(t("general_saved"), "success");
@@ -427,16 +475,20 @@ export function renderSettings(body, win) {
     root.querySelector("#ge-updateall")?.addEventListener("click", async () => {
       const btn = root.querySelector("#ge-updateall");
       const msg = root.querySelector("#ge-updateall-msg");
+      const includeOffline = !!root.querySelector("#ge-updateall-offline")?.checked;
       const { uiConfirm } = await import("../utils.js");
       if (!(await uiConfirm("Alle Agenten jetzt aktualisieren?", {
-        description: "Für jeden verbundenen Client wird ein Agent-Update ausgelöst.",
+        description: includeOffline
+          ? "Für jeden verbundenen Client wird ein Agent-Update ausgelöst. Offline-Clients werden vorgemerkt und aktualisieren sich, sobald sie wieder online sind."
+          : "Für jeden verbundenen Client wird ein Agent-Update ausgelöst.",
         okText: "Jetzt aktualisieren" }))) return;
       btn.disabled = true;
       if (msg) msg.textContent = "Wird ausgelöst…";
       try {
-        const res = await api.updateAllAgents();
+        const res = await api.updateAllAgents({ include_offline: includeOffline });
         const txt = `Ausgelöst für ${res.triggered} Client(s)` +
-          (res.offline ? `, ${res.offline} offline übersprungen` : "");
+          (res.queued_offline ? `, ${res.queued_offline} offline vorgemerkt` : "") +
+          (res.offline && !res.queued_offline ? `, ${res.offline} offline übersprungen` : "");
         if (msg) msg.textContent = txt + " – Benachrichtigung folgt, sobald alle wieder verbunden sind.";
         window.notify?.(txt + ". Du wirst benachrichtigt, sobald alle Clients wieder verbunden sind.", "info", 8000);
       } catch (e) {
@@ -447,6 +499,9 @@ export function renderSettings(body, win) {
       }
     });
 
+    // ---- Admin-only Verkabelung (Server-Update, Datenbank, guacd): nur wenn
+    // die Sektionen (mit 'admin_settings') überhaupt im DOM sind. ----
+    if (mayAdminSet) {
     // ---- Server-Update (Settings -> Update) ----
     const upPanel = root.querySelector("#up-panel");
     let upInfoLoaded = false;
@@ -632,6 +687,7 @@ export function renderSettings(body, win) {
       btn.disabled = false; btn.textContent = orig;
     });
     refreshGuacStatus();
+    } // Ende Admin-only Verkabelung (mayAdminSet)
   }
 
   // ---------------- USERS ----------------
@@ -911,7 +967,7 @@ export function renderSettings(body, win) {
       root.innerHTML = `
         <div class="settings-section">
           <p style="color:var(--subtext);font-size:13px">${t("sso_intro")}</p>
-          <div style="background:rgba(45,212,191,0.08);border:1px solid var(--accent);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--subtext);margin-bottom:14px">
+          <div style="background: rgba(var(--accent-2-rgb), 0.08);border:1px solid var(--accent);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--subtext);margin-bottom:14px">
             ${t("sso_group_hint")}
           </div>
 
