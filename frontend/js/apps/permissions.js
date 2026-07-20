@@ -18,7 +18,7 @@
 
 import { api } from "../api.js";
 import { state } from "../state.js";
-import { esc, uiConfirm } from "../utils.js";
+import { esc, uiConfirm, uiPrompt } from "../utils.js";
 
 export function renderPermissions(body, win) {
   // ---- lokaler Zustand des Fensters ----
@@ -119,9 +119,15 @@ export function renderPermissions(body, win) {
   contentEl.addEventListener("click", (e) => {
     const btn = e.target.closest(".pm-tri");
     if (!btn) return;
-    setEffect(btn.dataset.scope, btn.dataset.perm, btn.dataset.val);
-    // nur die betroffene Zeile neu zeichnen (leichtgewichtig: ganze Ansicht)
-    drawContent();
+    const scope = btn.dataset.scope;
+    const perm = btn.dataset.perm;
+    setEffect(scope, perm, btn.dataset.val);
+    // NUR das geklickte Tri-State-Control neu zeichnen. Ein vollständiges
+    // drawContent() würde die aufgeklappten Client-Accordions (<details>)
+    // wieder zuklappen – daher hier gezielt in-place ersetzen.
+    const wrap = btn.closest("span");
+    if (wrap) wrap.outerHTML = triState(scope, perm);
+    else drawContent();
   });
 
   // ---------------------------------------------------------------
@@ -180,18 +186,49 @@ export function renderPermissions(body, win) {
         : `${s.name}`.toLowerCase();
       return !q || hay.includes(q);
     });
-    if (!filtered.length) {
-      subjListEl.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:8px">Keine Einträge.</div>`;
-      return;
-    }
-    subjListEl.innerHTML = filtered.map((s) => {
-      const id = subjectKind === "user" ? s.id : s.id;
+
+    const rowHtml = (s) => {
+      const id = s.id;
       const name = subjectKind === "user" ? (s.display_name || s.username) : s.name;
       const active = selected && selected.type === subjectKind && selected.id === id;
       return `<div class="pm-subj" data-id="${esc(id)}" data-name="${esc(name)}"
         style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;margin-bottom:2px;
-        ${active ? "background:var(--accent);color:#0b0f14" : ""}">${subjLabel(s)}</div>`;
-    }).join("");
+        ${active ? "background: rgba(var(--accent-2-rgb), 0.20);color: var(--accent-2)" : ""}">${subjLabel(s)}</div>`;
+    };
+
+    if (subjectKind === "group") {
+      // Verwaltete Gruppen normal; unverwaltete (AD-)Gruppen in einen
+      // standardmäßig eingeklappten Ordner.
+      const managed = filtered.filter((s) => !s.unmanaged);
+      const unmanaged = filtered.filter((s) => s.unmanaged);
+      subjListEl.innerHTML = `
+        <button class="action-btn" id="pm-new-group" style="width:100%;margin-bottom:8px">➕ Neue Gruppe</button>
+        ${managed.length ? managed.map(rowHtml).join("")
+          : '<div style="color:var(--subtext);font-size:12px;padding:4px 8px">Keine verwalteten Gruppen.</div>'}
+        ${unmanaged.length ? `
+          <details style="margin-top:8px">
+            <summary style="cursor:pointer;font-size:12px;color:var(--subtext);padding:4px 8px">📁 AD – unverwaltet (${unmanaged.length})</summary>
+            <div style="margin-top:4px">${unmanaged.map(rowHtml).join("")}</div>
+          </details>` : ""}`;
+      subjListEl.querySelector("#pm-new-group")?.addEventListener("click", async () => {
+        const name = await uiPrompt("Neue Gruppe", { placeholder: "z.B. Auditor", okText: "Anlegen" });
+        if (!name || !name.trim()) return;
+        try {
+          const g = await api.createGroup({ name: name.trim(), permissions: [] });
+          subjects.group = await api.getGroups();
+          drawSubjects();
+          selectSubject("group", g.id, g.name);
+        } catch (e) {
+          window.notify?.("Anlegen fehlgeschlagen: " + e.message, "error");
+        }
+      });
+    } else {
+      if (!filtered.length) {
+        subjListEl.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:8px">Keine Einträge.</div>`;
+        return;
+      }
+      subjListEl.innerHTML = filtered.map(rowHtml).join("");
+    }
     subjListEl.querySelectorAll(".pm-subj").forEach((el) =>
       el.addEventListener("click", () => selectSubject(subjectKind, el.dataset.id, el.dataset.name))
     );
@@ -205,8 +242,48 @@ export function renderPermissions(body, win) {
     activeTab = "general";
     tabsEl.style.display = "flex";
     tabsEl.querySelectorAll("[data-pt]").forEach((b) => b.classList.toggle("active", b.dataset.pt === "general"));
-    headEl.innerHTML = `<div style="font-weight:600">${esc(name)}</div>
+    // Kopf: bei Gruppen zusätzlich AD-Kennzeichnung + „Unverwaltet"-Schalter.
+    let headExtra = "";
+    if (type === "group") {
+      const g = (subjects.group || []).find((x) => x.id === id) || {};
+      const adBadge = g.is_ad_group ? ' <span style="color:var(--accent);font-size:11px">AD</span>' : "";
+      headExtra = `${adBadge}
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;font-size:12px;color:var(--subtext);cursor:pointer">
+          <input type="checkbox" id="pm-unmanaged" ${g.unmanaged ? "checked" : ""} />
+          Unverwaltet (AD-Ordner)
+        </label>
+        <button class="taskbar-btn" id="pm-del-group" style="margin-left:12px;font-size:11px">Gruppe löschen</button>`;
+    }
+    headEl.innerHTML = `<div style="font-weight:600">${esc(name)}${type === "group" ? headExtra : ""}</div>
       <div style="color:var(--subtext);font-size:12px">${type === "user" ? "Benutzer" : "Gruppe"} · Rechte hier gelten zusätzlich zu Gruppen-Rechten (Verbieten gewinnt)</div>`;
+    if (type === "group") {
+      headEl.querySelector("#pm-unmanaged")?.addEventListener("change", async (e) => {
+        try {
+          await api.setGroupUnmanaged(id, e.target.checked);
+          const g2 = (subjects.group || []).find((x) => x.id === id);
+          if (g2) g2.unmanaged = e.target.checked ? 1 : 0;
+          window.notify?.(e.target.checked ? "In AD-Ordner verschoben" : "Aus AD-Ordner geholt", "success");
+          drawSubjects();
+        } catch (err2) {
+          window.notify?.("Fehler: " + err2.message, "error");
+          e.target.checked = !e.target.checked;
+        }
+      });
+      headEl.querySelector("#pm-del-group")?.addEventListener("click", async () => {
+        if (!(await uiConfirm(`Gruppe „${name}" löschen?`, { okText: "Löschen", danger: true }))) return;
+        try {
+          await api.deleteGroup(id);
+          subjects.group = await api.getGroups();
+          selected = null;
+          headEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Wähle links einen Benutzer oder eine Gruppe.</div>`;
+          contentEl.innerHTML = "";
+          tabsEl.style.display = "none";
+          updateSaveBar();
+          drawSubjects();
+          window.notify?.("Gruppe gelöscht", "success");
+        } catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
+      });
+    }
     contentEl.innerHTML = `<div style="color:var(--subtext)">Lade Rechte…</div>`;
     try {
       const res = await api.getGrants(type, id);
@@ -237,9 +314,33 @@ export function renderPermissions(body, win) {
     </div>`;
   }
 
+  // Presets: setzen mehrere globale Grants auf einmal.
+  const VIEW_ONLY_ALLOW = [
+    "login", "see_dashboard", "restore_session", "edit_profile_name",
+    "access_clients", "see_replay", "see_audit", "see_source", "see_permissions",
+  ];
+  function applyPreset(kind) {
+    if (kind === "admin") {
+      // Voller Zugriff: Admin-Wildcard global erlauben.
+      setEffect("global", "admin", "allow");
+    } else if (kind === "view") {
+      // Nur sehen: Lese-Rechte global erlauben, alle übrigen globalen Rechte
+      // (inkl. Admin) entfernen. Client-Rechte bleiben unberührt.
+      for (const p of catalog.general) {
+        setEffect("global", p, VIEW_ONLY_ALLOW.includes(p) ? "allow" : "");
+      }
+    }
+    drawContent();
+  }
+
   function drawGeneral() {
     contentEl.innerHTML = `
       <div style="max-width:640px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--subtext)">Vorlagen:</span>
+          <button class="taskbar-btn" id="pm-preset-admin">👑 Full Admin</button>
+          <button class="taskbar-btn" id="pm-preset-view">👁️ Nur sehen</button>
+        </div>
         <p style="color:var(--subtext);font-size:13px;margin-top:0">
           Globale Rechte. <b>Erlauben</b> = gewähren, <b>Verbieten</b> = hart entziehen
           (schlägt jede Erlaubnis, auch aus Gruppen), <b>—</b> = keine Einstellung.
@@ -247,6 +348,8 @@ export function renderPermissions(body, win) {
         </p>
         ${catalog.general.map((p) => permRow("global", p)).join("")}
       </div>`;
+    contentEl.querySelector("#pm-preset-admin")?.addEventListener("click", () => applyPreset("admin"));
+    contentEl.querySelector("#pm-preset-view")?.addEventListener("click", () => applyPreset("view"));
   }
 
   function drawClients() {

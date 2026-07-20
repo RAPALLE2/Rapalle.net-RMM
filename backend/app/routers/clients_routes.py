@@ -92,6 +92,7 @@ async def get_favorite_websites(user: dict = Depends(get_current_user)):
 async def get_client_websites(client_id: str, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id) or not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
+    _require_client_perm(user, client_id, "c_websites_view")
     return db.list_client_websites(client_id)
 
 
@@ -100,7 +101,7 @@ async def create_client_website(client_id: str, body: WebsiteBody,
                                 user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
         raise HTTPException(404, "Client nicht gefunden")
-    _require_client_perm(user, client_id, "manage_clients")
+    _require_client_perm(user, client_id, "c_websites_edit")
     _validate_website(body.url, body.monitor_notify, body.monitor_interval_seconds)
 
     w = db.create_client_website(
@@ -117,7 +118,7 @@ async def create_client_website(client_id: str, body: WebsiteBody,
 @router.put("/{client_id}/websites/{website_id}")
 async def update_client_website(client_id: str, website_id: str, body: WebsiteUpdateBody,
                                 user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "manage_clients")
+    _require_client_perm(user, client_id, "c_websites_edit")
     site = db.get_client_website(website_id)
     if not site or site["client_id"] != client_id:
         raise HTTPException(404, "Website nicht gefunden")
@@ -137,7 +138,7 @@ async def update_client_website(client_id: str, website_id: str, body: WebsiteUp
 @router.delete("/{client_id}/websites/{website_id}")
 async def delete_client_website(client_id: str, website_id: str,
                                 user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "manage_clients")
+    _require_client_perm(user, client_id, "c_websites_edit")
     site = db.get_client_website(website_id)
     if not site or site["client_id"] != client_id:
         raise HTTPException(404, "Website nicht gefunden")
@@ -247,7 +248,7 @@ async def update_client(client_id: str, body: UpdateClientBody, user: dict = Dep
 
 @router.delete("/{client_id}")
 async def remove_client(client_id: str, user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "manage_clients")
+    _require_client_perm(user, client_id, "c_delete")
     db.delete_client(client_id)
     db.add_audit_entry(user["username"], "client.deleted", target=client_id)
     return {"ok": True}
@@ -255,7 +256,7 @@ async def remove_client(client_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{client_id}/exec")
 async def exec_on_client(client_id: str, body: ExecBody, user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "use_terminal")
+    _require_client_perm(user, client_id, "c_terminal")
     try:
         result = await request_exec(client_id, body.command, session=body.session,
                                     shell=body.shell, elevated=body.elevated)
@@ -275,9 +276,11 @@ async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
     Alle Anfragen laufen parallel (asyncio.gather), das Ergebnis ist eine
     Zuordnung Client-ID -> Ergebnis (oder Fehlermeldung, falls einer offline ist).
     """
-    # Nur Clients, auf die der Benutzer Terminal-Rechte hat (Rest wird verworfen).
+    # Globales Recht für die Bulk-Shell nötig …
+    require_perm(user, "bulk_shell")
+    # … und pro Ziel-Client das Terminal-Recht (Rest wird verworfen).
     allowed_ids = [cid for cid in body.client_ids
-                   if user_has_permission(user, "use_terminal", cid)]
+                   if user_has_permission(user, "c_terminal", cid)]
 
     async def run_one(client_id: str) -> tuple[str, dict]:
         try:
@@ -296,7 +299,7 @@ async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
 
 @router.get("/{client_id}/fs")
 async def list_client_fs(client_id: str, path: str = "", user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "use_explorer")
+    _require_client_perm(user, client_id, "c_explorer_view")
     try:
         entries = await request_fs_list(client_id, path)
     except Exception as e:
@@ -307,7 +310,7 @@ async def list_client_fs(client_id: str, path: str = "", user: dict = Depends(ge
 @router.get("/{client_id}/processes")
 async def list_client_processes(client_id: str, user: dict = Depends(get_current_user)):
     """Liefert die laufende Prozessliste eines Clients (Task-Manager)."""
-    _require_client_perm(user, client_id, "use_taskmanager")
+    _require_client_perm(user, client_id, "c_taskmanager_view")
     try:
         processes = await request_proc_list(client_id)
     except Exception as e:
@@ -322,7 +325,7 @@ class KillBody(BaseModel):
 @router.post("/{client_id}/processes/kill")
 async def kill_client_process(client_id: str, body: KillBody, user: dict = Depends(get_current_user)):
     """Beendet einen Prozess auf einem Client."""
-    _require_client_perm(user, client_id, "use_taskmanager")
+    _require_client_perm(user, client_id, "c_taskmanager_kill")
     try:
         result = await request_proc_kill(client_id, body.pid)
     except Exception as e:
@@ -338,7 +341,7 @@ async def read_client_file(client_id: str, path: str, user: dict = Depends(get_c
     Das Frontend baut daraus einen Download. (Für kleinere Dateien gedacht;
     der Agent begrenzt die Größe auf 25 MB.)
     """
-    _require_client_perm(user, client_id, "use_explorer")
+    _require_client_perm(user, client_id, "c_explorer_view")
     try:
         result = await request_fs_read(client_id, path)
     except Exception as e:
@@ -369,7 +372,7 @@ class FsRenameBody(BaseModel):
 @router.post("/{client_id}/fs/write")
 async def write_client_file(client_id: str, body: FsWriteBody, user: dict = Depends(get_current_user)):
     """Lädt eine Datei hoch oder schreibt eine editierte Datei zurück."""
-    _require_client_perm(user, client_id, "use_explorer")
+    _require_client_perm(user, client_id, "c_explorer_edit")
     try:
         result = await request_fs_op(client_id, "fs-write", {"path": body.path, "data": body.data})
     except Exception as e:
@@ -380,7 +383,7 @@ async def write_client_file(client_id: str, body: FsWriteBody, user: dict = Depe
 
 @router.post("/{client_id}/fs/mkdir")
 async def mkdir_client(client_id: str, body: FsPathBody, user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "use_explorer")
+    _require_client_perm(user, client_id, "c_explorer_edit")
     try:
         result = await request_fs_op(client_id, "fs-mkdir", {"path": body.path})
     except Exception as e:
@@ -391,7 +394,7 @@ async def mkdir_client(client_id: str, body: FsPathBody, user: dict = Depends(ge
 
 @router.post("/{client_id}/fs/delete")
 async def delete_client_path(client_id: str, body: FsPathBody, user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "use_explorer")
+    _require_client_perm(user, client_id, "c_explorer_edit")
     try:
         result = await request_fs_op(client_id, "fs-delete", {"path": body.path})
     except Exception as e:
@@ -402,7 +405,7 @@ async def delete_client_path(client_id: str, body: FsPathBody, user: dict = Depe
 
 @router.post("/{client_id}/fs/rename")
 async def rename_client_path(client_id: str, body: FsRenameBody, user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "use_explorer")
+    _require_client_perm(user, client_id, "c_explorer_edit")
     try:
         result = await request_fs_op(client_id, "fs-rename", {"src": body.src, "dst": body.dst})
     except Exception as e:
@@ -651,7 +654,7 @@ async def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
     client = db.get_client(client_id)
     if not client or not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_screen", client_id)
+    require_perm(user, "c_screen", client_id)
 
     host = client.get("ip")
     if not host:

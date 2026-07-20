@@ -444,6 +444,10 @@ def init_db() -> None:
     # Favorisierter Arbeitsordner pro Client (erscheint im Web-Explorer in der
     # Laufwerks-/Wurzel-Ansicht, z.B. /var/www bei einem Webhost). '' = keiner.
     _migrate_add_column("clients", "fav_dir", "TEXT NOT NULL DEFAULT ''")
+    # AD-Gruppen, die nichts mit dem RMM zu tun haben, können als "unmanaged"
+    # markiert werden: sie landen in einem standardmäßig eingeklappten Ordner
+    # in der Rechte-/Gruppenauswahl und werden AD-Benutzern nicht zugewiesen.
+    _migrate_add_column("groups", "unmanaged", "INTEGER NOT NULL DEFAULT 0")
     _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
     _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
     _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
@@ -1241,26 +1245,105 @@ ALL_PERMISSIONS = [
 # --- Neues, feingranulares Rechte-Vokabular (tri-state Grants) -------------
 # 'admin' ist ein Wildcard (deckt alle anderen Rechte im selben Scope ab).
 # 'access_clients' steuert Sichtbarkeit + Basiszugriff auf Clients.
-# Manche Rechte sind nur global sinnvoll, andere auch pro Client (siehe Tabs im
-# Frontend). Der Resolver in auth.py erlaubt aber jeden Key in jedem Scope.
-PERM_KEYS = [
-    "admin", "login", "use_guacamole", "use_terminal", "use_screen",
-    "use_explorer", "use_taskmanager", "see_audit", "see_replay",
-    "delete_replay", "access_clients", "manage_users", "manage_clients",
-    "manage_agent", "automation",
+# Neben den NEUEN Keys behalten wir die ALTEN Keys gültig, damit bereits
+# gespeicherte Grants weiter auflösen (keine DB-Migration!). Die Zuordnung
+# alt->neu passiert zur Laufzeit über _PERM_IMPLIES (siehe unten).
+
+# Globale (universelle) Rechte:
+GLOBAL_PERM_KEYS = [
+    "admin",
+    "login",
+    "see_dashboard",
+    "customize_dashboard",
+    "restore_session",
+    "edit_profile_name",
+    "access_clients",
+    "see_replay", "delete_replay",
+    "see_audit",
+    "see_source", "edit_source", "delete_source",
+    "manage_branding",
+    "manage_sso",
+    "see_permissions", "manage_permissions",
+    "create_users",
+    "network_scan", "port_scan",
+    "bulk_shell",
+    "use_scripts", "create_scripts",
+    "automation",
+    "manage_hierarchy",
+    "play_games",
+    "manage_favorites",
+    "use_relay", "relay_unlimited",
 ]
 
+# Pro-Client-Rechte:
+CLIENT_ONLY_PERM_KEYS = [
+    "access_clients",
+    "manage_clients",       # bearbeiten
+    "manage_agent",         # aktualisieren (Agent-Update)
+    "c_delete",             # löschen
+    "c_screen", "c_screen_view",
+    "c_terminal", "c_terminal_console",
+    "c_guacamole",
+    "c_power",              # runterfahren/neustarten
+    "c_explorer_view", "c_explorer_edit",
+    "c_taskmanager_view", "c_taskmanager_kill",
+    "c_relay", "c_relay_unlimited",
+    "c_notes_view", "c_notes_edit",
+    "c_websites_view", "c_websites_edit",
+]
+
+# Alt-Keys (nur noch für Rückwärts-Auflösung gespeicherter Grants).
+LEGACY_PERM_KEYS = [
+    "use_guacamole", "use_terminal", "use_screen", "use_explorer",
+    "use_taskmanager", "manage_users",
+]
+
+# Master-Liste gültiger Keys (für set_grants-Validierung + Resolver).
+PERM_KEYS = GLOBAL_PERM_KEYS + [
+    p for p in CLIENT_ONLY_PERM_KEYS if p not in GLOBAL_PERM_KEYS
+] + LEGACY_PERM_KEYS
+
 # Welche Rechte im General-Tab (global) bzw. im Client-Tab angeboten werden.
-GENERAL_PERM_KEYS = [
-    "admin", "login", "access_clients", "use_guacamole", "use_terminal",
-    "use_screen", "use_explorer", "use_taskmanager", "see_audit",
-    "see_replay", "delete_replay", "manage_users", "manage_clients",
-    "manage_agent", "automation",
-]
-CLIENT_PERM_KEYS = [
-    "access_clients", "admin", "use_terminal", "use_screen", "use_explorer",
-    "use_taskmanager", "use_guacamole", "manage_clients", "manage_agent",
-]
+GENERAL_PERM_KEYS = list(GLOBAL_PERM_KEYS)
+CLIENT_PERM_KEYS = list(CLIENT_ONLY_PERM_KEYS)
+
+# ------------------------------------------------------------------
+# Rechte-Implikationen (zur Laufzeit, ohne die DB zu ändern):
+# Ein 'allow' auf dem Quell-Key gilt automatisch auch für alle Ziel-Keys.
+# Deckt (a) alte Keys -> neue Keys und (b) "stärkeres Recht deckt schwächeres"
+# ab (z.B. Vollzugriff impliziert Nur-Ansehen).
+# ------------------------------------------------------------------
+_PERM_IMPLIES = {
+    # --- Alt -> Neu (gespeicherte Grants bleiben unangetastet) ---
+    "use_screen": ["c_screen", "c_screen_view"],
+    "use_terminal": ["c_terminal", "c_terminal_console"],
+    "use_explorer": ["c_explorer_view", "c_explorer_edit"],
+    "use_taskmanager": ["c_taskmanager_view", "c_taskmanager_kill"],
+    "use_guacamole": ["c_guacamole"],
+    "manage_users": ["create_users", "see_permissions", "manage_permissions"],
+    # altes manage_clients deckte auch Notizen/Websites/Löschen/Power ab
+    "manage_clients": ["c_delete", "c_power", "c_notes_view", "c_notes_edit",
+                       "c_websites_view", "c_websites_edit"],
+    # --- Stärkeres Recht deckt schwächeres ab ---
+    "c_screen": ["c_screen_view"],
+    "c_terminal": ["c_terminal_console"],
+    "c_explorer_edit": ["c_explorer_view"],
+    "c_taskmanager_kill": ["c_taskmanager_view"],
+    "c_notes_edit": ["c_notes_view"],
+    "c_websites_edit": ["c_websites_view"],
+    "c_relay_unlimited": ["c_relay"],
+    "manage_permissions": ["see_permissions"],
+    "edit_source": ["see_source"],
+    "delete_source": ["see_source", "edit_source"],
+    "relay_unlimited": ["use_relay"],
+    "create_scripts": ["use_scripts"],
+}
+
+
+def perms_implied_by(perm: str) -> list[str]:
+    """Quell-Keys, deren 'allow' das gefragte Recht 'perm' automatisch erfüllt."""
+    return [src for src, dsts in _PERM_IMPLIES.items() if perm in dsts]
+
 
 # Legacy-Gruppen-Recht -> neuer Perm-Key (für Rückwärtskompatibilität).
 _LEGACY_PERM_MAP = {
@@ -1378,6 +1461,16 @@ def create_group(name: str, permissions: list[str], is_ad_group: bool = False) -
     return get_group(gid)
 
 
+def set_group_unmanaged(group_id: str, unmanaged: bool) -> dict | None:
+    """Markiert eine (AD-)Gruppe als unverwaltet (1) bzw. verwaltet (0). Unverwaltete
+    Gruppen erscheinen in einem eingeklappten Ordner und werden bei der
+    AD-Anmeldung NICHT automatisch zugewiesen."""
+    _conn.execute("UPDATE groups SET unmanaged = ? WHERE id = ?",
+                  (1 if unmanaged else 0, group_id))
+    _conn.commit()
+    return get_group(group_id)
+
+
 def update_group(group_id: str, name: str, permissions: list[str]) -> dict | None:
     _conn.execute(
         "UPDATE groups SET name = ?, permissions = ? WHERE id = ?",
@@ -1471,17 +1564,28 @@ def upsert_ad_user(username: str, display_name: str, realm_id: str) -> dict:
 
 def sync_ad_user_groups(user_id: str, ad_group_names: list[str]) -> None:
     """
-    Ordnet einen AD-Benutzer den RMM-Gruppen zu, deren Name mit einer seiner
-    AD-Gruppen übereinstimmt. So kann ein Admin z.B. eine RMM-Gruppe "RMM-Admins"
-    mit bestimmten Rechten anlegen, und jeder AD-Benutzer in der AD-Gruppe
-    "RMM-Admins" bekommt diese Rechte automatisch.
+    Weist einem AD-Benutzer automatisch seine AD-Gruppen zu:
+      - Für jede AD-Gruppe wird bei Bedarf eine RMM-Gruppe angelegt (is_ad_group=1).
+      - Als "unmanaged" markierte Gruppen werden übersprungen (sie sollen nichts
+        mit dem RMM zu tun haben).
+      - Manuell zugewiesene NICHT-AD-Gruppen (lokale Gruppen) bleiben erhalten.
     """
-    matched_group_ids = []
-    all_groups = list_groups()
-    for g in all_groups:
-        if g["name"] in ad_group_names:
-            matched_group_ids.append(g["id"])
-    set_user_groups(user_id, matched_group_ids)
+    # Bestehende lokale (Nicht-AD-)Mitgliedschaften behalten.
+    keep = []
+    for gid in get_user_group_ids(user_id):
+        g = get_group(gid)
+        if g and not g.get("is_ad_group"):
+            keep.append(gid)
+
+    ad_ids = []
+    for name in ad_group_names:
+        g = upsert_ad_group(name)          # legt AD-Gruppe an, falls neu
+        if g.get("unmanaged"):
+            continue                        # unverwaltete AD-Gruppen nicht zuweisen
+        ad_ids.append(g["id"])
+
+    # Reihenfolge/Duplikate bereinigen und speichern.
+    set_user_groups(user_id, list(dict.fromkeys(keep + ad_ids)))
 
 
 def get_realm(realm_id: str) -> dict | None:

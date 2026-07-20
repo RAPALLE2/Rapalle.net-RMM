@@ -13,7 +13,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_perm
 from app.network_scan import scan_local_network, scan_ports, parse_port_spec
 
 router = APIRouter(prefix="/api/network", tags=["network"])
@@ -26,6 +26,7 @@ _scan_in_progress = False
 @router.get("/scan")
 async def run_scan(subnet: str | None = None, user: dict = Depends(get_current_user)):
     """Startet einen Netzwerk-Scan. Optional ein bestimmtes Subnetz (z.B. '192.168.5.')."""
+    require_perm(user, "network_scan")
     global _scan_in_progress, _last_scan
 
     if _scan_in_progress:
@@ -42,6 +43,7 @@ async def run_scan(subnet: str | None = None, user: dict = Depends(get_current_u
 
 @router.get("/scan/last")
 async def get_last_scan(user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
     return _last_scan
 
 
@@ -58,6 +60,7 @@ async def run_portscan(
       - all:      alle Ports 1-65535 (dauert länger, höhere Nebenläufigkeit)
       - custom:   frei angegebene Ports/Bereiche (Parameter 'ports')
     """
+    require_perm(user, "port_scan")
     mode = (mode or "standard").lower()
     if mode == "all":
         port_list = list(range(1, 65536))

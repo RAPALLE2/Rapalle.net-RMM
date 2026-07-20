@@ -296,6 +296,7 @@ export const api = {
   createGroup: (data) => request("/api/admin/groups", { method: "POST", body: JSON.stringify(data) }),
   updateGroup: (id, data) => request(`/api/admin/groups/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteGroup: (id) => request(`/api/admin/groups/${id}`, { method: "DELETE" }),
+  setGroupUnmanaged: (id, unmanaged) => request(`/api/admin/groups/${id}/unmanaged`, { method: "PUT", body: JSON.stringify({ unmanaged }) }),
   getUserGroups: (uid) => request(`/api/admin/users/${uid}/groups`),
   setUserGroups: (uid, group_ids) => request(`/api/admin/users/${uid}/groups`, { method: "PUT", body: JSON.stringify({ group_ids }) }),
 

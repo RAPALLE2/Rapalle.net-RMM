@@ -14,17 +14,17 @@
 import { api } from "../api.js";
 import { formatBytes, esc, uiConfirm, uiPrompt, uiChoice } from "../utils.js";
 import { BACKEND_URL } from "../config.js";
-import { isAdmin as userIsAdmin, state } from "../state.js";
+import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../state.js";
 import { scheduleSave } from "../persist.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
-const RELAY_AUTOCLOSE_OPTIONS = [
+const RELAY_AUTOCLOSE_BASE = [
   { label: "Nach 10 Minuten", value: 10 },
   { label: "Nach 30 Minuten", value: 30 },
   { label: "Nach 1 Stunde", value: 60 },
   { label: "Nach 2 Stunden", value: 120 },
-  { label: "Nie (dauerhaft offen)", value: 0 },
 ];
+const RELAY_UNLIMITED_OPTION = { label: "Nie (dauerhaft offen)", value: 0 };
 
 const TEXT_EXT = new Set(["txt","log","md","json","xml","yml","yaml","ini","conf","cfg",
   "csv","js","ts","py","sh","bat","ps1","html","css","c","cpp","h","java","go","rs","sql","env"]);
@@ -534,9 +534,11 @@ export function renderExplorer(body, win) {
           // Beim EINSCHALTEN nach der automatischen Schließzeit fragen.
           let autoCloseMin = 0;
           if (!enabled) {
+            const mayUnlimited = hasGlobalPerm("relay_unlimited") || hasClientPerm(clientId, "c_relay_unlimited");
+            const opts = mayUnlimited ? [...RELAY_AUTOCLOSE_BASE, RELAY_UNLIMITED_OPTION] : [...RELAY_AUTOCLOSE_BASE];
             const choice = await uiChoice(
               "Relay automatisch schließen?",
-              RELAY_AUTOCLOSE_OPTIONS,
+              opts,
               { description: "Wann soll die Freigabe dieses Clients automatisch wieder geschlossen werden?" });
             if (choice === null) return;   // abgebrochen
             autoCloseMin = choice;

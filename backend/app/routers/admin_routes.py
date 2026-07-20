@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin, list_realm_groups
+from app.auth import get_current_user, require_admin, require_perm, list_realm_groups
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -42,7 +42,7 @@ async def list_permissions(user: dict = Depends(get_current_user)):
 
 @router.get("/groups")
 async def list_groups(user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "see_permissions")
     groups = db.list_groups()
     for g in groups:
         g["permissions"] = [p for p in (g["permissions"] or "").split(",") if p]
@@ -51,7 +51,7 @@ async def list_groups(user: dict = Depends(get_current_user)):
 
 @router.post("/groups")
 async def create_group(body: GroupBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_permissions")
     g = db.create_group(body.name, body.permissions)
     db.add_audit_entry(user["username"], "group.created", target=g["id"], details=body.name)
     return g
@@ -59,7 +59,7 @@ async def create_group(body: GroupBody, user: dict = Depends(get_current_user)):
 
 @router.put("/groups/{group_id}")
 async def update_group(group_id: str, body: GroupBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_permissions")
     g = db.update_group(group_id, body.name, body.permissions)
     db.add_audit_entry(user["username"], "group.updated", target=group_id, details=body.name)
     return g
@@ -67,10 +67,26 @@ async def update_group(group_id: str, body: GroupBody, user: dict = Depends(get_
 
 @router.delete("/groups/{group_id}")
 async def delete_group(group_id: str, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_permissions")
     db.delete_group(group_id)
     db.add_audit_entry(user["username"], "group.deleted", target=group_id)
     return {"ok": True}
+
+
+class GroupUnmanagedBody(BaseModel):
+    unmanaged: bool = True
+
+
+@router.put("/groups/{group_id}/unmanaged")
+async def set_group_unmanaged(group_id: str, body: GroupUnmanagedBody,
+                              user: dict = Depends(get_current_user)):
+    """(AD-)Gruppe als unverwaltet markieren – landet im eingeklappten Ordner
+    und wird AD-Benutzern nicht mehr automatisch zugewiesen."""
+    require_perm(user, "manage_permissions")
+    g = db.set_group_unmanaged(group_id, body.unmanaged)
+    db.add_audit_entry(user["username"], "group.updated", target=group_id,
+                       details=f"unmanaged={'1' if body.unmanaged else '0'}")
+    return g or {"ok": True}
 
 
 class UserGroupsBody(BaseModel):
@@ -79,14 +95,14 @@ class UserGroupsBody(BaseModel):
 
 @router.put("/users/{user_id}/groups")
 async def set_user_groups(user_id: str, body: UserGroupsBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_permissions")
     db.set_user_groups(user_id, body.group_ids)
     return {"ok": True}
 
 
 @router.get("/users/{user_id}/groups")
 async def get_user_groups(user_id: str, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "see_permissions")
     return {"group_ids": db.get_user_group_ids(user_id)}
 
 
@@ -95,28 +111,70 @@ async def get_user_groups(user_id: str, user: dict = Depends(get_current_user)):
 # ==================================================================
 # Labels für die Frontend-Anzeige. Der Resolver kennt die Semantik.
 PERM_LABELS = {
-    "admin": "Admin (Vollzugriff)",
+    # --- Global / universell ---
+    "admin": "Full Admin (Vollzugriff)",
     "login": "Anmelden",
-    "use_guacamole": "Guacamole nutzen",
-    "use_terminal": "Terminal nutzen",
-    "use_screen": "Remote-Bildschirm",
-    "use_explorer": "Datei-Explorer",
-    "use_taskmanager": "Task-Manager",
-    "see_audit": "Audit-Log sehen",
+    "see_dashboard": "Dashboard sehen",
+    "customize_dashboard": "Dashboard anpassen",
+    "restore_session": "Zuletzt geöffnete Sachen wiederherstellen",
+    "edit_profile_name": "Profilname ändern",
+    "access_clients": "Clients sehen/zugreifen",
     "see_replay": "Aufzeichnungen sehen",
     "delete_replay": "Aufzeichnungen löschen",
-    "access_clients": "Clients sehen/zugreifen",
-    "manage_users": "Benutzer verwalten",
-    "manage_clients": "Clients verwalten",
-    "manage_agent": "Agent update/uninstall",
+    "see_audit": "Audit-Log sehen",
+    "see_source": "Source ansehen",
+    "edit_source": "Source bearbeiten",
+    "delete_source": "Source löschen (Datenbank/Explorer)",
+    "manage_branding": "Branding ändern",
+    "manage_sso": "SSO ändern",
+    "see_permissions": "Rechte & Gruppen sehen",
+    "manage_permissions": "Rechte & Gruppen bearbeiten",
+    "create_users": "Benutzer erstellen",
+    "network_scan": "Netzwerk-Scan",
+    "port_scan": "Port-Scan",
+    "bulk_shell": "Bulk Remote-Shell",
+    "use_scripts": "Skripte benutzen",
+    "create_scripts": "Skripte erstellen",
     "automation": "Automationen",
+    "manage_hierarchy": "Tenants/Locations/Ordner verwalten",
+    "play_games": "Spiele spielen",
+    "manage_favorites": "Favoritenliste bearbeiten",
+    "use_relay": "Relay benutzen",
+    "relay_unlimited": "Relay unbegrenzt (keine Auto-Schließzeit)",
+    # --- Pro Client ---
+    "manage_clients": "Bearbeiten",
+    "manage_agent": "Aktualisieren (Agent-Update)",
+    "c_delete": "Löschen",
+    "c_screen": "Remote-Bildschirm (Steuern)",
+    "c_screen_view": "Remote-Bildschirm (nur ansehen)",
+    "c_terminal": "Terminal",
+    "c_terminal_console": "Terminal (nur Agent-Konsole)",
+    "c_guacamole": "Guacamole",
+    "c_power": "Herunterfahren/Neustarten",
+    "c_explorer_view": "Datei-Explorer sehen",
+    "c_explorer_edit": "Datei-Explorer bearbeiten",
+    "c_taskmanager_view": "Task-Manager sehen",
+    "c_taskmanager_kill": "Prozess beenden",
+    "c_relay": "Relay starten",
+    "c_relay_unlimited": "Relay unbegrenzt",
+    "c_notes_view": "Notizen sehen",
+    "c_notes_edit": "Notizen bearbeiten",
+    "c_websites_view": "Websites sehen",
+    "c_websites_edit": "Websites bearbeiten",
+    # --- Alt-Keys (nur Anzeige bei bereits gespeicherten Grants) ---
+    "use_guacamole": "Guacamole (alt)",
+    "use_terminal": "Terminal (alt)",
+    "use_screen": "Remote-Bildschirm (alt)",
+    "use_explorer": "Datei-Explorer (alt)",
+    "use_taskmanager": "Task-Manager (alt)",
+    "manage_users": "Benutzer verwalten (alt)",
 }
 
 
 @router.get("/permission-catalog")
 async def permission_catalog(user: dict = Depends(get_current_user)):
     """Liefert die Rechte-Schlüssel (global + client) inkl. Labels fürs Frontend."""
-    require_admin(user)
+    require_perm(user, "see_permissions")
     return {
         "labels": PERM_LABELS,
         "general": db.GENERAL_PERM_KEYS,
@@ -145,7 +203,7 @@ def _valid_subject(subject_type: str, subject_id: str) -> bool:
 @router.get("/grants/{subject_type}/{subject_id}")
 async def get_grants(subject_type: str, subject_id: str, user: dict = Depends(get_current_user)):
     """Alle Grants eines Subjekts (Benutzer oder Gruppe)."""
-    require_admin(user)
+    require_perm(user, "see_permissions")
     if subject_type not in ("user", "group"):
         raise HTTPException(400, "subject_type muss 'user' oder 'group' sein")
     if not _valid_subject(subject_type, subject_id):
@@ -157,7 +215,7 @@ async def get_grants(subject_type: str, subject_id: str, user: dict = Depends(ge
 async def put_grants(subject_type: str, subject_id: str, body: GrantsBody,
                      user: dict = Depends(get_current_user)):
     """Ersetzt ALLE Grants eines Subjekts (tri-state; nur allow/deny werden gespeichert)."""
-    require_admin(user)
+    require_perm(user, "manage_permissions")
     if subject_type not in ("user", "group"):
         raise HTTPException(400, "subject_type muss 'user' oder 'group' sein")
     if not _valid_subject(subject_type, subject_id):
@@ -187,7 +245,7 @@ class RealmBody(BaseModel):
 
 @router.get("/realms")
 async def list_realms(user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_sso")
     realms = db.list_realms()
     # Bind-Passwort niemals ans Frontend zurückgeben
     for r in realms:
@@ -197,7 +255,7 @@ async def list_realms(user: dict = Depends(get_current_user)):
 
 @router.post("/realms")
 async def create_realm(body: RealmBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_sso")
     r = db.create_realm(
         body.name, body.server, body.base_dn, body.bind_user, body.bind_password,
         port=body.port, use_ssl=body.use_ssl, user_filter=body.user_filter,
@@ -209,7 +267,7 @@ async def create_realm(body: RealmBody, user: dict = Depends(get_current_user)):
 
 @router.put("/realms/{realm_id}")
 async def update_realm(realm_id: str, body: RealmBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_sso")
     if not db.get_realm(realm_id):
         raise HTTPException(404, "Realm nicht gefunden")
     # exclude_unset: nur die tatsächlich mitgeschickten Felder ändern, damit ein
@@ -227,7 +285,7 @@ async def test_realm(realm_id: str, user: dict = Depends(get_current_user)):
     Prüft die Realm-Konfiguration: verbindet sich mit dem Bind-Account und
     durchsucht das Base DN. Meldet Erfolg oder eine aussagekräftige Fehlermeldung.
     """
-    require_admin(user)
+    require_perm(user, "manage_sso")
     realm = db.get_realm(realm_id)
     if not realm:
         raise HTTPException(404, "Realm nicht gefunden")
@@ -239,7 +297,7 @@ async def test_realm(realm_id: str, user: dict = Depends(get_current_user)):
 
 @router.delete("/realms/{realm_id}")
 async def delete_realm(realm_id: str, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_sso")
     db.delete_realm(realm_id)
     db.add_audit_entry(user["username"], "realm.deleted", target=realm_id)
     return {"ok": True}
@@ -251,7 +309,7 @@ async def get_realm_ad_groups(realm_id: str, user: dict = Depends(get_current_us
     Listet die Gruppen des AD/LDAP-Verzeichnisses auf und markiert, welche davon
     bereits als RMM-Gruppe importiert sind (damit man ihnen Rechte geben kann).
     """
-    require_admin(user)
+    require_perm(user, "manage_sso")
     realm = db.get_realm(realm_id)
     if not realm:
         raise HTTPException(404, "Realm nicht gefunden")
@@ -275,7 +333,7 @@ async def import_realm_ad_groups(realm_id: str, body: ImportAdGroupsBody,
     der Berechtigungen-App Rechte an diese Gruppen vergeben werden. Mitglieder
     der AD-Gruppe erben diese Rechte beim Login automatisch (Match über Namen).
     """
-    require_admin(user)
+    require_perm(user, "manage_sso")
     realm = db.get_realm(realm_id)
     if not realm:
         raise HTTPException(404, "Realm nicht gefunden")
@@ -623,7 +681,7 @@ class AutomationBody(BaseModel):
 
 @router.get("/automations")
 async def list_automations(user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "automation")
     autos = db.list_automations()
     for a in autos:
         a["client_ids"] = [c for c in (a["client_ids"] or "").split(",") if c]
@@ -632,7 +690,7 @@ async def list_automations(user: dict = Depends(get_current_user)):
 
 @router.post("/automations")
 async def create_automation(body: AutomationBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "automation")
     a = db.create_automation(body.name, body.command, body.client_ids, body.interval_seconds)
     db.add_audit_entry(user["username"], "automation.created", target=a["id"], details=body.name)
     return a
@@ -640,7 +698,7 @@ async def create_automation(body: AutomationBody, user: dict = Depends(get_curre
 
 @router.post("/automations/{auto_id}/toggle")
 async def toggle_automation(auto_id: str, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "automation")
     auto = db.get_automation(auto_id)
     if not auto:
         raise HTTPException(404, "Automation nicht gefunden")
@@ -650,7 +708,7 @@ async def toggle_automation(auto_id: str, user: dict = Depends(get_current_user)
 
 @router.delete("/automations/{auto_id}")
 async def delete_automation(auto_id: str, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "automation")
     db.delete_automation(auto_id)
     db.add_audit_entry(user["username"], "automation.deleted", target=auto_id)
     return {"ok": True}
@@ -659,7 +717,7 @@ async def delete_automation(auto_id: str, user: dict = Depends(get_current_user)
 @router.get("/automations/{auto_id}/runs")
 async def get_automation_runs(auto_id: str, user: dict = Depends(get_current_user)):
     """Liefert die letzten Durchläufe einer Automation mit Ergebnis je Client."""
-    require_admin(user)
+    require_perm(user, "automation")
     return {"runs": db.list_automation_runs(auto_id)}
 
 
@@ -709,7 +767,7 @@ _MAX_BRANDING_BYTES = 8 * 1024 * 1024  # 8 MB reichen für jedes Logo/Hintergrun
 @router.get("/branding")
 async def list_branding(user: dict = Depends(get_current_user)):
     """Listet alle austauschbaren Branding-Dateien inkl. Änderungszeit (Cache-Busting)."""
-    require_admin(user)
+    require_perm(user, "manage_branding")
     slots = []
     for name, meta in BRANDING_SLOTS.items():
         f = branding_path(name)
@@ -731,7 +789,7 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
     ins Ziel-Format des Slots (PNG/JPEG/ICO). Nur Whitelist-Dateinamen,
     Größenlimit, atomares Ersetzen - die alte Datei bleibt bei Fehlern intakt.
     """
-    require_admin(user)
+    require_perm(user, "manage_branding")
     slot = BRANDING_SLOTS.get(name)
     if not slot:
         raise HTTPException(404, f"Unbekannter Branding-Slot. Erlaubt: {', '.join(BRANDING_SLOTS)}")

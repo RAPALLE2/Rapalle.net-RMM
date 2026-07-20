@@ -395,15 +395,24 @@ def _aggregate_effect(grants: list[dict], perm: str, scopes: list[str]) -> str |
 
 def _resolve(grants: list[dict], perm: str, client_id: str | None) -> bool:
     scopes = ["global"] + ([client_id] if client_id else [])
-    # 1./3. spezifisches Recht
+    # 1./3. spezifisches Recht. 'deny' auf 'perm' selbst schlägt alles.
     specific = _aggregate_effect(grants, perm, scopes)
     if specific == "deny":
         return False
+    # Implikationen: ein 'allow' auf einem stärkeren/älteren Key erfüllt 'perm'
+    # automatisch (z.B. alt use_screen -> c_screen/c_screen_view).
+    implied_allow = False
+    for src in db.perms_implied_by(perm):
+        if _aggregate_effect(grants, src, scopes) == "allow":
+            implied_allow = True
+            break
     # 2./4. admin-Wildcard
     admin = _aggregate_effect(grants, "admin", scopes)
     if admin == "deny":
         return False
     if specific == "allow":
+        return True
+    if implied_allow:
         return True
     if admin == "allow":
         return True

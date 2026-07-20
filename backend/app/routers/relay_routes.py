@@ -64,13 +64,15 @@ async def relay_health():
 # ------------------------------------------------------------------
 # Verwaltungs-API (normale Dashboard-Auth über JWT). Freigabe ERFOLGT PRO CLIENT.
 # ------------------------------------------------------------------
-from app.auth import get_current_user, require_admin  # noqa: E402
-from fastapi import Depends  # noqa: E402
+from app.auth import get_current_user, require_admin, require_perm, user_has_permission, can_access_client  # noqa: E402
+from fastapi import Depends, HTTPException  # noqa: E402
 
 
 @router.get("/api/relay/status")
 async def relay_status(client_id: str, user: dict = Depends(get_current_user)):
     """Ist der Relay für DIESEN Client freigegeben?"""
+    if not can_access_client(user, client_id):
+        raise HTTPException(403, "Kein Zugriff auf diesen Client")
     return {"enabled": db.is_client_relay_enabled(client_id),
             "client_id": client_id}
 
@@ -78,13 +80,23 @@ async def relay_status(client_id: str, user: dict = Depends(get_current_user)):
 @router.post("/api/relay/toggle")
 async def relay_toggle(client_id: str, auto_close_minutes: int = 0,
                        user: dict = Depends(get_current_user)):
-    """Relay-Freigabe für diesen Client an/aus. Nur Admins.
+    """Relay-Freigabe für diesen Client an/aus.
 
-    auto_close_minutes: Minuten bis zum automatischen Schließen der Freigabe
-    (0 = nie). Wird nur beim EINSCHALTEN ausgewertet.
+    Benötigt das Recht 'Relay starten' (c_relay) für diesen Client. Eine
+    unbegrenzte Freigabe (auto_close_minutes = 0 = "nie") setzt zusätzlich
+    'Relay unbegrenzt' voraus (global relay_unlimited ODER pro Client
+    c_relay_unlimited).
     """
-    require_admin(user)
+    require_perm(user, "c_relay", client_id)
     new_state = not db.is_client_relay_enabled(client_id)
+    # "Nie schließen" nur mit Unbegrenzt-Recht erlauben.
+    if new_state and (not auto_close_minutes or auto_close_minutes <= 0):
+        may_unlimited = (user_has_permission(user, "relay_unlimited")
+                         or user_has_permission(user, "c_relay_unlimited", client_id))
+        if not may_unlimited:
+            raise HTTPException(
+                403, "Unbegrenzte Relay-Freigabe nicht erlaubt – bitte eine "
+                     "automatische Schließzeit wählen.")
     expires_at = 0
     if new_state and auto_close_minutes and auto_close_minutes > 0:
         expires_at = int(time.time() * 1000) + int(auto_close_minutes) * 60_000

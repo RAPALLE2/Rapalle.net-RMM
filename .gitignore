@@ -5,8 +5,7 @@ venv/
 .venv/
 
 # Datenbank & lokale Konfiguration
-*.sqlite
-*.sqlite-*
+*.sqlite*
 .env
 .device-id
 agent.log

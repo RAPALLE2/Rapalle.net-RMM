@@ -51,7 +51,7 @@ async def guac_token(body: GuacTokenBody, user: dict = Depends(get_current_user)
     from fastapi import HTTPException as _HTTPException
     if body.client_id and not can_access_client(user, body.client_id):
         raise _HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_guacamole", body.client_id or None)
+    require_perm(user, "c_guacamole", body.client_id or None)
 
     token = guacamole.create_token(
         protocol, dict(body.params or {}), user.get("username", ""),
@@ -94,7 +94,7 @@ async def get_guac_profile(client_id: str, user: dict = Depends(get_current_user
     if not can_access_client(user, client_id):
         from fastapi import HTTPException
         raise HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_guacamole", client_id)
+    require_perm(user, "c_guacamole", client_id)
     raw = db.get_setting(_guac_profile_key(client_id), "")
     try:
         return {"profile": _json.loads(raw) if raw else None}
@@ -108,7 +108,7 @@ async def save_guac_profile(client_id: str, body: GuacProfileBody, user: dict = 
     if not can_access_client(user, client_id):
         from fastapi import HTTPException
         raise HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_guacamole", client_id)
+    require_perm(user, "c_guacamole", client_id)
     profile = {k: v for k, v in body.model_dump().items() if v not in (None, "")}
     db.set_setting(_guac_profile_key(client_id), _json.dumps(profile))
     db.add_audit_entry(user["username"], "guac.profile_saved", target=client_id)
@@ -173,7 +173,7 @@ async def list_guac_profiles(client_id: str, user: dict = Depends(get_current_us
     """Alle gespeicherten Guacamole-Logins eines Clients (inkl. Passwort)."""
     if not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_guacamole", client_id)
+    require_perm(user, "c_guacamole", client_id)
     return {"profiles": [_with_password(p) for p in _load_profiles(client_id)]}
 
 
@@ -183,7 +183,7 @@ async def add_guac_profile(client_id: str, body: GuacProfileV2Body,
     """Neues Guacamole-Login für einen Client speichern (MIT Passwort)."""
     if not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_guacamole", client_id)
+    require_perm(user, "c_guacamole", client_id)
     data = {k: v for k, v in body.model_dump().items() if v not in (None,)}
     password = data.pop("password", "") or ""
     profile = {
@@ -213,7 +213,7 @@ async def delete_guac_profile(client_id: str, profile_id: str,
     """Ein gespeichertes Guacamole-Login löschen."""
     if not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
-    require_perm(user, "use_guacamole", client_id)
+    require_perm(user, "c_guacamole", client_id)
     profiles = [p for p in _load_profiles(client_id) if p.get("id") != profile_id]
     _save_profiles(client_id, profiles)
     db.add_audit_entry(user["username"], "guac.profile_deleted", target=client_id)

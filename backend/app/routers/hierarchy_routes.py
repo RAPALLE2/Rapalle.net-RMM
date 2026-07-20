@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, require_perm
 
 router = APIRouter(tags=["hierarchy"])
 
@@ -52,7 +52,7 @@ async def get_hierarchy(user: dict = Depends(get_current_user)):
 
 @router.post("/api/tenants")
 async def create_tenant(body: CreateTenantBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_hierarchy")
     tenant = db.create_tenant(body.name, body.color)
     db.add_audit_entry(user["username"], "tenant.created", target=tenant["id"], details=body.name)
     return tenant
@@ -60,7 +60,7 @@ async def create_tenant(body: CreateTenantBody, user: dict = Depends(get_current
 
 @router.post("/api/locations")
 async def create_location(body: CreateLocationBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_hierarchy")
     location = db.create_location(body.tenant_id, body.name)
     db.add_audit_entry(user["username"], "location.created", target=location["id"], details=body.name)
     return location
@@ -68,7 +68,7 @@ async def create_location(body: CreateLocationBody, user: dict = Depends(get_cur
 
 @router.post("/api/folders")
 async def create_folder(body: CreateFolderBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "manage_hierarchy")
     folder = db.create_folder(body.location_id, body.name, body.parent_folder_id)
     db.add_audit_entry(user["username"], "folder.created", target=folder["id"], details=body.name)
     return folder
@@ -80,7 +80,7 @@ async def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
     Löscht einen Ordner samt Unterordnern. Clients darin verlieren nur ihre
     Ordner-Zuordnung, bleiben aber in ihrer Location.
     """
-    require_admin(user)
+    require_perm(user, "manage_hierarchy")
     removed = db.delete_folder(folder_id)
     db.add_audit_entry(user["username"], "folder.deleted", target=folder_id,
                        details=f"removed_folders:{removed}")
@@ -93,7 +93,7 @@ async def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
     Löscht einen Tenant mitsamt Locations/Ordnern. Alle betroffenen Clients
     werden automatisch nach Uncategorized/Default verschoben (nichts geht verloren).
     """
-    require_admin(user)
+    require_perm(user, "manage_hierarchy")
     try:
         result = db.delete_tenant(tenant_id)
     except KeyError:
@@ -111,7 +111,7 @@ async def delete_location(location_id: str, user: dict = Depends(get_current_use
     Löscht eine Location mitsamt Ordnern. Alle betroffenen Clients werden
     automatisch nach Uncategorized/Default verschoben (nichts geht verloren).
     """
-    require_admin(user)
+    require_perm(user, "manage_hierarchy")
     try:
         result = db.delete_location(location_id)
     except KeyError:

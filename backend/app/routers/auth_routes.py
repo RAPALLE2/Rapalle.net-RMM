@@ -155,5 +155,11 @@ async def my_effective_permissions(user: dict = Depends(get_current_user)):
 
 @router.put("/profile")
 async def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
-    db.update_user_profile(user["id"], body.display_name, body.language, body.theme, body.accent)
+    # Anzeigename nur ändern, wenn das Recht 'edit_profile_name' vorliegt.
+    # Sprache/Theme/Akzent sind persönliche Darstellung und bleiben immer erlaubt.
+    new_name = body.display_name
+    if (new_name is not None and new_name != user.get("display_name")
+            and not (is_super_admin(user) or user_has_permission(user, "edit_profile_name"))):
+        new_name = user.get("display_name")
+    db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent)
     return _public_user(db.get_user_by_id(user["id"]))

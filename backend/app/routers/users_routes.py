@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, hash_password, require_admin
+from app.auth import get_current_user, hash_password, require_admin, require_perm
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -39,7 +39,7 @@ def _generate_one_time_password(length: int = 12) -> str:
 
 @router.get("")
 async def get_users(user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "see_permissions")
     users = db.list_users()
     # Passwort-Hashes NIE ans Frontend schicken
     return [{k: v for k, v in u.items() if k != "password_hash"} for u in users]
@@ -47,7 +47,7 @@ async def get_users(user: dict = Depends(get_current_user)):
 
 @router.post("")
 async def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "create_users")
 
     if db.get_user_by_username(body.username):
         raise HTTPException(400, "Benutzername existiert bereits")
@@ -76,7 +76,7 @@ async def create_user(body: CreateUserBody, user: dict = Depends(get_current_use
 
 @router.delete("/{user_id}")
 async def remove_user(user_id: str, user: dict = Depends(get_current_user)):
-    require_admin(user)
+    require_perm(user, "create_users")
     if user_id == user["id"]:
         raise HTTPException(400, "Du kannst dich nicht selbst löschen")
     db.delete_user(user_id)

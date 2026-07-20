@@ -12,7 +12,7 @@
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
 import { t } from "../i18n.js";
-import { isAdmin } from "../state.js";
+import { isAdmin, hasGlobalPerm } from "../state.js";
 import { renderSource } from "./source.js";
 import { registerCleanup } from "../windowmanager.js";
 
@@ -28,16 +28,26 @@ export function renderSettings(body, win) {
   function draw() {
     // Vorherige Source-Shell sauber schließen, bevor neu gezeichnet wird.
     if (sourceCleanup) { try { sourceCleanup(); } catch {} sourceCleanup = null; }
+    // Welche Reiter darf dieser Benutzer sehen?
+    const admin = isAdmin();
+    const canTab = {
+      general: admin,
+      users: admin,
+      sso: admin || hasGlobalPerm("manage_sso"),
+      branding: admin || hasGlobalPerm("manage_branding"),
+      notifications: admin,
+      source: admin,
+    };
+    const order = ["general", "users", "sso", "branding", "notifications", "source"];
+    const allowed = order.filter((k) => canTab[k]);
+    if (!allowed.includes(activeTab)) activeTab = allowed[0] || "sso";
+    const tabLabel = { general: t("tab_general"), users: t("tab_users"),
+      sso: t("tab_sso"), branding: "Branding",
+      notifications: t("tab_notifications"), source: "Source" };
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
         <div class="tab-bar" style="padding:10px 14px;border-bottom:1px solid var(--border);gap:6px">
-          <button class="tab-btn ${activeTab === "general" ? "active" : ""}" data-t="general">${t("tab_general")}</button>
-          <button class="tab-btn ${activeTab === "users" ? "active" : ""}" data-t="users">${t("tab_users")}</button>
-          <button class="tab-btn ${activeTab === "groups" ? "active" : ""}" data-t="groups">${t("tab_groups")}</button>
-          <button class="tab-btn ${activeTab === "sso" ? "active" : ""}" data-t="sso">${t("tab_sso")}</button>
-          <button class="tab-btn ${activeTab === "branding" ? "active" : ""}" data-t="branding">Branding</button>
-          <button class="tab-btn ${activeTab === "notifications" ? "active" : ""}" data-t="notifications">${t("tab_notifications")}</button>
-          ${isAdmin() ? `<button class="tab-btn ${activeTab === "source" ? "active" : ""}" data-t="source">Source</button>` : ""}
+          ${allowed.map((k) => `<button class="tab-btn ${activeTab === k ? "active" : ""}" data-t="${k}">${esc(tabLabel[k])}</button>`).join("")}
         </div>
         <div id="set-content" style="flex:1;overflow:auto"></div>
       </div>
@@ -48,7 +58,6 @@ export function renderSettings(body, win) {
     const content = body.querySelector("#set-content");
     if (activeTab === "general") renderGeneralTab(content);
     else if (activeTab === "users") renderUsersTab(content);
-    else if (activeTab === "groups") renderGroupsTab(content);
     else if (activeTab === "sso") renderSsoTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
     else if (activeTab === "notifications") renderNotifTab(content);
@@ -626,6 +635,70 @@ export function renderSettings(body, win) {
   }
 
   // ---------------- USERS ----------------
+  // Standard-Rechte-Vorlagen beim Benutzer-Anlegen.
+  const VIEW_ONLY_ALLOW = [
+    "login", "see_dashboard", "restore_session", "edit_profile_name",
+    "access_clients", "see_replay", "see_audit", "see_source", "see_permissions",
+  ];
+  function presetGrants(preset) {
+    // Liefert {role, grants} für die gewählte Vorlage.
+    if (preset === "full_admin") return { role: "admin", grants: null };
+    if (preset === "view_only") {
+      return { role: "viewer",
+        grants: VIEW_ONLY_ALLOW.map((p) => ({ scope: "global", perm: p, effect: "allow" })) };
+    }
+    // login_only
+    return { role: "viewer", grants: [{ scope: "global", perm: "login", effect: "allow" }] };
+  }
+
+  // Wiederverwendbarer Gruppen-Auswahl-Dialog (Mehrfachauswahl in EINEM Menü).
+  // Unverwaltete (AD-)Gruppen liegen in einem standardmäßig eingeklappten Ordner.
+  // Gibt ein Array der gewählten Gruppen-IDs zurück oder null bei Abbruch.
+  function pickGroupsModal(groups, currentIds = []) {
+    return new Promise((resolve) => {
+      const cur = new Set(currentIds);
+      const managed = groups.filter((g) => !g.unmanaged);
+      const unmanaged = groups.filter((g) => g.unmanaged);
+      const adBadge = (g) => g.is_ad_group
+        ? ' <span style="color:var(--accent);font-size:10px">AD</span>' : "";
+      const rowHtml = (g) => `
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:13px;cursor:pointer;border-radius:6px">
+          <input type="checkbox" class="gp-chk" value="${esc(g.id)}" ${cur.has(g.id) ? "checked" : ""} />
+          <span>${esc(g.name)}${adBadge(g)}</span>
+        </label>`;
+      const overlay = document.createElement("div");
+      overlay.style.cssText = `position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.5);
+        display:flex;align-items:center;justify-content:center`;
+      overlay.innerHTML = `
+        <div style="background:var(--panel,#131c2b);color:var(--text,#e8eef7);border:1px solid var(--border,#2a3648);
+          border-radius:12px;min-width:340px;max-width:460px;max-height:70vh;display:flex;flex-direction:column;
+          padding:16px;box-shadow:0 16px 48px rgba(0,0,0,0.5)">
+          <div style="font-size:14px;font-weight:600;margin-bottom:10px">Gruppen zuweisen</div>
+          <div style="flex:1;overflow:auto">
+            ${managed.length ? managed.map(rowHtml).join("")
+              : '<div style="color:var(--subtext);font-size:12px">Keine verwalteten Gruppen.</div>'}
+            ${unmanaged.length ? `
+              <details style="margin-top:10px">
+                <summary style="cursor:pointer;font-size:12px;color:var(--subtext)">📁 AD – unverwaltet (${unmanaged.length})</summary>
+                <div style="margin-top:4px">${unmanaged.map(rowHtml).join("")}</div>
+              </details>` : ""}
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+            <button class="taskbar-btn" id="gp-cancel">Abbrechen</button>
+            <button class="btn-primary" id="gp-ok">Übernehmen</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const done = (val) => { overlay.remove(); resolve(val); };
+      overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) done(null); });
+      overlay.querySelector("#gp-cancel").addEventListener("click", () => done(null));
+      overlay.querySelector("#gp-ok").addEventListener("click", () => {
+        const ids = [...overlay.querySelectorAll(".gp-chk")].filter((c) => c.checked).map((c) => c.value);
+        done(ids);
+      });
+    });
+  }
+
   function renderUsersTab(root) {
     root.innerHTML = `
       <div class="settings-section">
@@ -633,10 +706,11 @@ export function renderSettings(body, win) {
         <div class="form-row"><label>Benutzername</label><input type="text" id="su-username" /></div>
         <div class="form-row"><label>Anzeigename</label><input type="text" id="su-display" /></div>
         <div class="form-row">
-          <label>Rolle</label>
+          <label>Standard-Rechte</label>
           <select id="su-role">
-            <option value="admin">Administrator (Vollzugriff)</option>
-            <option value="viewer">Betrachter (Rechte über Gruppen)</option>
+            <option value="full_admin">Full Admin (Vollzugriff)</option>
+            <option value="view_only">View Only (nur ansehen)</option>
+            <option value="login_only">Login Only (nur anmelden)</option>
           </select>
         </div>
         <div class="form-row">
@@ -647,6 +721,13 @@ export function renderSettings(body, win) {
           </select>
         </div>
         <div class="form-row hidden" id="su-pw-row"><label>Passwort</label><input type="text" id="su-password" /></div>
+        <div class="form-row">
+          <label>Gruppen</label>
+          <div style="display:flex;align-items:center;gap:10px">
+            <button class="taskbar-btn" id="su-groups-btn" type="button">➕ Gruppen hinzufügen</button>
+            <span id="su-groups-info" style="color:var(--subtext);font-size:12px">keine ausgewählt</span>
+          </div>
+        </div>
         <div id="su-error" class="form-error hidden"></div>
         <button class="btn-primary" id="su-create" style="margin-top:8px">Benutzer anlegen</button>
         <div id="su-result" style="margin-top:14px"></div>
@@ -662,6 +743,23 @@ export function renderSettings(body, win) {
     const pwMode = root.querySelector("#su-pwmode");
     const pwRow = root.querySelector("#su-pw-row");
     pwMode.addEventListener("change", () => pwRow.classList.toggle("hidden", pwMode.value !== "fixed"));
+
+    // Für "Gruppen hinzufügen" beim Anlegen vorgemerkte Gruppen.
+    let pendingGroups = [];
+    let allGroupsCache = [];
+    api.getGroups().then((g) => { allGroupsCache = g || []; }).catch(() => {});
+    const groupsInfo = root.querySelector("#su-groups-info");
+    root.querySelector("#su-groups-btn").addEventListener("click", async () => {
+      if (!allGroupsCache.length) {
+        try { allGroupsCache = await api.getGroups(); } catch {}
+      }
+      if (!allGroupsCache.length) { window.notify?.("Es gibt noch keine Gruppen.", "warn"); return; }
+      const picked = await pickGroupsModal(allGroupsCache, pendingGroups);
+      if (picked === null) return;
+      pendingGroups = picked;
+      groupsInfo.textContent = picked.length
+        ? `${picked.length} Gruppe(n) ausgewählt` : "keine ausgewählt";
+    });
 
     async function loadUsers() {
       const list = root.querySelector("#su-list");
@@ -694,16 +792,11 @@ export function renderSettings(body, win) {
     }
 
     async function editUserGroups(userId, groups) {
-      if (!groups.length) { window.notify?.("Erst Gruppen im Tab 'Gruppen & Rollen' anlegen.", "warn"); return; }
+      if (!groups.length) { window.notify?.("Es gibt noch keine Gruppen (im Berechtigungen-Menü anlegen).", "warn"); return; }
       const current = await api.getUserGroups(userId).then((r) => r.group_ids).catch(() => []);
-      // Nacheinander pro Gruppe fragen (eigener Dialog statt confirm()).
-      const chosen = [];
-      for (const g of groups) {
-        const yes = await uiConfirm(`Gruppe "${g.name}" zuweisen?`, {
-          description: `Aktuell zugewiesen: ${current.includes(g.id) ? "ja" : "nein"}`,
-          okText: "Zuweisen", cancelText: "Nicht zuweisen" });
-        if (yes) chosen.push(g.id);
-      }
+      // EIN Auswahlmenü statt Gruppe-für-Gruppe abzufragen.
+      const chosen = await pickGroupsModal(groups, current);
+      if (chosen === null) return;   // abgebrochen
       await api.setUserGroups(userId, chosen);
       window.notify?.("Gruppen aktualisiert", "success");
     }
@@ -714,16 +807,24 @@ export function renderSettings(body, win) {
       err.classList.add("hidden");
       const isFixed = pwMode.value === "fixed";
       const username = root.querySelector("#su-username").value.trim();
+      const preset = root.querySelector("#su-role").value;   // full_admin|view_only|login_only
+      const { role, grants } = presetGrants(preset);
       const payload = {
         username,
         display_name: root.querySelector("#su-display").value.trim() || username,
-        role: root.querySelector("#su-role").value,
+        role,
         one_time_password: !isFixed,
         password: isFixed ? root.querySelector("#su-password").value : null,
       };
       if (!payload.username) { err.textContent = "Benutzername fehlt"; err.classList.remove("hidden"); return; }
       try {
         const res = await api.createUser(payload);
+        // Standard-Rechte-Vorlage anwenden (Grants) + vorgemerkte Gruppen zuweisen.
+        const newId = res.id || res.user_id || (res.user && res.user.id);
+        if (newId) {
+          if (grants) { try { await api.setGrants("user", newId, grants); } catch {} }
+          if (pendingGroups.length) { try { await api.setUserGroups(newId, pendingGroups); } catch {} }
+        }
         if (res.generated_password) {
           result.innerHTML = `<div style="background:rgba(45,212,191,0.1);border:1px solid var(--accent);padding:10px;border-radius:6px">
             Einmalpasswort für <b>${esc(res.username)}</b>: <code style="color:var(--accent)">${esc(res.generated_password)}</code><br/>
@@ -733,6 +834,8 @@ export function renderSettings(body, win) {
         }
         root.querySelector("#su-username").value = "";
         root.querySelector("#su-display").value = "";
+        pendingGroups = [];
+        groupsInfo.textContent = "keine ausgewählt";
         loadUsers();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });

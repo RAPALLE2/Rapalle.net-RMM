@@ -211,8 +211,9 @@ export function renderStatusPart(target, client) {
   const box = holder;
   box.innerHTML = `
     <div class="quick-actions" style="flex:none;width:180px;display:flex;flex-direction:column;gap:7px;margin-top:0;flex-wrap:nowrap;justify-content:center;align-self:stretch">
+      ${hasClientPerm(client.id, "c_power") ? `
       <button data-quick="reboot" ${client.online ? "" : "disabled"}>🔄 ${t("reboot")}</button>
-      <button data-quick="shutdown" ${client.online ? "" : "disabled"}>📴 ${t("shutdown")}</button>
+      <button data-quick="shutdown" ${client.online ? "" : "disabled"}>📴 ${t("shutdown")}</button>` : ""}
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
@@ -243,11 +244,11 @@ export function renderActionsPart(target, client) {
   const box = document.createElement("div");
   box.style.cssText = "width:240px;display:flex;flex-direction:column;gap:8px";
   box.innerHTML = `
-    ${hasClientPerm(client.id, "use_explorer") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
-    ${hasClientPerm(client.id, "use_terminal") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
-    ${hasClientPerm(client.id, "use_screen") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}</button>` : ""}
-    ${hasClientPerm(client.id, "use_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
-    ${hasClientPerm(client.id, "use_taskmanager") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}`;
+    ${hasClientPerm(client.id, "c_explorer_view") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
+    ${hasClientPerm(client.id, "c_terminal_console") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
+    ${hasClientPerm(client.id, "c_screen_view") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}${hasClientPerm(client.id, "c_screen") ? "" : " 👁️"}</button>` : ""}
+    ${hasClientPerm(client.id, "c_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
+    ${hasClientPerm(client.id, "c_taskmanager_view") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}`;
   holder.appendChild(box);
   target.appendChild(holder);
   box.querySelectorAll("[data-action]").forEach((btn) =>

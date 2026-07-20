@@ -8,16 +8,24 @@
 
 import { api } from "../api.js";
 import { esc, uiChoice } from "../utils.js";
-import { isAdmin as userIsAdmin, state } from "../state.js";
+import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../state.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
-const RELAY_AUTOCLOSE_OPTIONS = [
+const RELAY_AUTOCLOSE_BASE = [
   { label: "Nach 10 Minuten", value: 10 },
   { label: "Nach 30 Minuten", value: 30 },
   { label: "Nach 1 Stunde", value: 60 },
   { label: "Nach 2 Stunden", value: 120 },
-  { label: "Nie (dauerhaft offen)", value: 0 },
 ];
+const RELAY_UNLIMITED_OPTION = { label: "Nie (dauerhaft offen)", value: 0 };
+
+// „Nie" nur anbieten, wenn der Benutzer unbegrenzte Relays setzen darf
+// (global relay_unlimited ODER c_relay_unlimited auf ALLEN betroffenen Clients).
+function relayOptionsFor(clientIds) {
+  const mayUnlimited = hasGlobalPerm("relay_unlimited")
+    || (clientIds.length > 0 && clientIds.every((id) => hasClientPerm(id, "c_relay_unlimited")));
+  return mayUnlimited ? [...RELAY_AUTOCLOSE_BASE, RELAY_UNLIMITED_OPTION] : [...RELAY_AUTOCLOSE_BASE];
+}
 
 // Kopieren mit Fallback (identisch zum Explorer): navigator.clipboard braucht
 // einen sicheren Kontext; sonst über ein temporäres Textfeld + execCommand.
@@ -302,7 +310,7 @@ export function renderRelayManager(body, win) {
     if (enabling.length) {
       const choice = await uiChoice(
         "Relay automatisch schließen?",
-        RELAY_AUTOCLOSE_OPTIONS,
+        relayOptionsFor(enabling),
         { description: `Wann soll der Relay für ${enabling.length === 1 ? "diesen Client" : `diese ${enabling.length} Clients`} automatisch wieder geschlossen werden?` });
       if (choice === null) return;   // abgebrochen -> nichts umschalten
       autoCloseMin = choice;

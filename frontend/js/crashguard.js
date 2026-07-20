@@ -31,10 +31,15 @@ let _panicking = false;
 const HEARTBEAT_MS = 3000;
 const FREEZE_GAP_MS = 9000;      // so viel Verspätung = „eingefroren"
 const ERROR_WINDOW_MS = 12000;   // Zeitfenster für die Fehlerzählung
-const ERROR_PANIC_COUNT = 6;     // so viele Fehler im Fenster = Panik
-const FREEZE_PANIC_STRIKES = 2;  // so oft Einfrieren = Panik
+const ERROR_PANIC_COUNT = 8;     // so viele Fehler im Fenster = Panik
+const FREEZE_PANIC_STRIKES = 3;  // so oft Einfrieren = Panik
 const MAX_REPORTS_PER_SESSION = 25;
 const REPORT_THROTTLE_MS = 3000;
+// Schutz gegen Reload-SCHLEIFEN (sonst kann ein wiederkehrender Fehler das
+// Dashboard dauerhaft neu laden und den Nutzer aussperren):
+const ARM_DELAY_MS = 30000;        // erst 30s nach Start darf neu geladen werden
+const RELOAD_COOLDOWN_MS = 300000; // höchstens ein Auto-Reload alle 5 Minuten
+let _armedAt = 0;
 
 function _safe(fn) { try { return fn(); } catch { /* niemals crashen */ } }
 
@@ -75,21 +80,21 @@ function _onError(ev) {
   if (_errTimes.length >= ERROR_PANIC_COUNT) _panic("wiederholte Fehler");
 }
 
-// „Panik": offene Apps schließen (damit das Problem nicht sofort wiederkehrt)
-// und die Seite neu laden. Der Crash wird als eigene Aktion protokolliert.
+// „Panik" wurde bewusst ENTSCHÄRFT: Früher wurden hier bei einem Fehler-Sturm
+// die offenen Apps geschlossen, der Session-Zustand (versehentlich leer)
+// gespeichert und die Seite neu geladen. Das konnte den Login blockieren
+// (Reload/blurry) und die Sitzungs-Wiederherstellung aushebeln (Fenster weg).
+// Der Crash-Guard meldet Häufungen jetzt nur noch ins Audit-Log und stört den
+// Betrieb NICHT mehr (kein Reload, kein Schließen, kein Überschreiben).
 function _panic(reason) {
   if (_panicking) return;
   _panicking = true;
-  _report(`Frontend-Neustart ausgelöst (${reason}).`, "frontend.crash");
-  _safe(() => window.notify?.(
-    "Es sind mehrere Fehler aufgetreten. Zur Stabilisierung werden die offenen Apps geschlossen und die Oberfläche neu geladen.",
-    "warning", 6000));
-  // Kurz warten, damit die Meldung/der Report rausgeht, dann aufräumen + reload.
-  setTimeout(() => {
-    _safe(() => _cfg.onPanic && _cfg.onPanic());   // Apps schließen + Zustand sichern
-    _markClean();                                   // sauberer, gewollter Reload
-    _safe(() => location.reload());
-  }, 800);
+  _report(`Fehlerhäufung erkannt (${reason}) – nur protokolliert, kein Eingriff.`, "frontend.crash");
+  _errTimes = [];
+  _freezeStrikes = 0;
+  // Panik-Sperre nach kurzer Zeit wieder lösen, damit weitere Häufungen erneut
+  // (einmalig gedrosselt) protokolliert werden können.
+  setTimeout(() => { _panicking = false; }, 30000);
 }
 
 export function initCrashGuard({ username, onPanic } = {}) {
@@ -110,6 +115,7 @@ export function initCrashGuard({ username, onPanic } = {}) {
   });
 
   // 2) Heartbeat starten und Zustand als „aktiv/nicht sauber" markieren.
+  _armedAt = Date.now();
   _lastTick = Date.now();
   _markAlive();
   clearInterval(_hbTimer);

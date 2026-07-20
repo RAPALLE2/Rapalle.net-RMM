@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user
+from app.auth import get_current_user, require_perm
 
 router = APIRouter(prefix="/api/server-files", tags=["files"])
 IS_WINDOWS = platform.system() == "Windows"
@@ -125,6 +125,7 @@ def _list_windows_drives() -> list[dict]:
 
 @router.get("")
 async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
+    require_perm(user, "see_source")
     # Kein Pfad angegeben -> "Wurzel"-Ansicht zeigen (Laufwerke bzw. / und Home)
     if not path:
         if IS_WINDOWS:
@@ -162,6 +163,7 @@ async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
 @router.get("/read")
 async def read_file(path: str, user: dict = Depends(get_current_user)):
     """Liest eine Datei base64-kodiert (Download, Bild-Vorschau, Editor)."""
+    require_perm(user, "see_source")
     try:
         size = os.path.getsize(path)
         if size > MAX_READ:
@@ -193,6 +195,7 @@ class RenameBody(BaseModel):
 
 @router.post("/write")
 async def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
+    require_perm(user, "edit_source")
     try:
         content = base64.b64decode(body.data)
         os.makedirs(os.path.dirname(body.path) or ".", exist_ok=True)
@@ -206,6 +209,7 @@ async def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
 
 @router.post("/mkdir")
 async def mkdir(body: PathBody, user: dict = Depends(get_current_user)):
+    require_perm(user, "edit_source")
     try:
         os.makedirs(body.path, exist_ok=False)
     except Exception as e:
@@ -216,6 +220,7 @@ async def mkdir(body: PathBody, user: dict = Depends(get_current_user)):
 
 @router.post("/delete")
 async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
+    require_perm(user, "delete_source")
     try:
         if os.path.isdir(body.path) and not os.path.islink(body.path):
             shutil.rmtree(body.path)
@@ -229,6 +234,7 @@ async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
 
 @router.post("/rename")
 async def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
+    require_perm(user, "edit_source")
     try:
         os.rename(body.src, body.dst)
     except Exception as e:

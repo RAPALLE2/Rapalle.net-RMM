@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, require_perm
 
 router = APIRouter(prefix="/api/source", tags=["source"])
 
@@ -54,7 +54,7 @@ def _safe_path(rel: str) -> Path:
 @router.get("/roots")
 async def get_roots(user: dict = Depends(get_current_user)):
     """Schnellzugriff-Ordner + Projekt-Wurzel."""
-    require_admin(user)
+    require_perm(user, "see_source")
     roots = []
     for name in ["backend", "frontend", "agent"]:
         if (PROJECT_ROOT / name).is_dir():
@@ -66,7 +66,7 @@ async def get_roots(user: dict = Depends(get_current_user)):
 @router.get("/list")
 async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
     """Listet den Inhalt eines Ordners (Ordner zuerst, dann Dateien, alphabetisch)."""
-    require_admin(user)
+    require_perm(user, "see_source")
     p = _safe_path(path)
     if not p.exists():
         raise HTTPException(404, "Pfad nicht gefunden")
@@ -93,7 +93,7 @@ async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
 @router.get("/read")
 async def read_file(path: str, user: dict = Depends(get_current_user)):
     """Liest eine Textdatei (bis 2 MB). Binärdateien werden als solche markiert."""
-    require_admin(user)
+    require_perm(user, "see_source")
     p = _safe_path(path)
     if not p.is_file():
         raise HTTPException(404, "Datei nicht gefunden")
@@ -116,7 +116,7 @@ class WriteBody(BaseModel):
 @router.put("/write")
 async def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
     """Speichert Textinhalt in eine Datei (überschreibt)."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     p = _safe_path(body.path)
     if p.is_dir():
         raise HTTPException(400, "Ist ein Ordner")
@@ -141,7 +141,7 @@ class RenameBody(BaseModel):
 @router.post("/mkdir")
 async def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
     """Legt einen (verschachtelten) Ordner an."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     p = _safe_path(body.path)
     if p.exists():
         raise HTTPException(400, "Pfad existiert bereits")
@@ -153,7 +153,7 @@ async def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
 @router.post("/newfile")
 async def new_file(body: PathBody, user: dict = Depends(get_current_user)):
     """Legt eine leere Datei an."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     p = _safe_path(body.path)
     if p.exists():
         raise HTTPException(400, "Datei existiert bereits")
@@ -166,7 +166,7 @@ async def new_file(body: PathBody, user: dict = Depends(get_current_user)):
 @router.post("/delete")
 async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
     """Löscht eine Datei oder einen Ordner (rekursiv). Projekt-Wurzel ist tabu."""
-    require_admin(user)
+    require_perm(user, "delete_source")
     p = _safe_path(body.path)
     if p == PROJECT_ROOT:
         raise HTTPException(400, "Projekt-Wurzel kann nicht gelöscht werden")
@@ -183,7 +183,7 @@ async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
 @router.post("/rename")
 async def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
     """Benennt eine Datei/einen Ordner um bzw. verschiebt sie/ihn."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     src = _safe_path(body.src)
     dst = _safe_path(body.dst)
     if not src.exists():
@@ -204,7 +204,7 @@ async def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
 @router.get("/db/tables")
 async def db_tables(user: dict = Depends(get_current_user)):
     """Alle Tabellen mit Zeilenanzahl."""
-    require_admin(user)
+    require_perm(user, "see_source")
     rows = db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
     ).fetchall()
@@ -223,7 +223,7 @@ async def db_tables(user: dict = Depends(get_current_user)):
 async def db_table(name: str, limit: int = 200, offset: int = 0,
                    user: dict = Depends(get_current_user)):
     """Inhalt einer Tabelle (Spalten + Zeilen, paginiert)."""
-    require_admin(user)
+    require_perm(user, "see_source")
     # Tabellenname validieren (nur bekannte Tabellen).
     valid = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
@@ -293,7 +293,7 @@ async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
     Projekt-ZIPs (mit frontend/backend/agent - auch in einem Wrapper-Ordner)
     landen im Projekt-Root; sonstige ZIPs im aktuell geöffneten Explorer-Ordner.
     """
-    require_admin(user)
+    require_perm(user, "edit_source")
     raw = await file.read()
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
@@ -352,7 +352,7 @@ async def db_query(body: SqlBody, user: dict = Depends(get_current_user)):
     Führt beliebiges SQL aus. Bei SELECT werden Spalten + Zeilen zurückgegeben,
     sonst die betroffene Zeilenanzahl. (Nur Super-Admin.)
     """
-    require_admin(user)
+    require_perm(user, "edit_source")
     sql = (body.sql or "").strip()
     if not sql:
         raise HTTPException(400, "Leeres SQL")
@@ -401,7 +401,7 @@ class CellBody(BaseModel):
 @router.put("/db/cell")
 async def db_update_cell(body: CellBody, user: dict = Depends(get_current_user)):
     """Setzt den Wert einer einzelnen Zelle (value=None -> NULL)."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     t = _valid_table(body.table)
     c = _valid_column(t, body.column)
     cur = db._conn.execute(f'UPDATE "{t}" SET "{c}" = ? WHERE rowid = ?',
@@ -420,7 +420,7 @@ class RowBody(BaseModel):
 @router.post("/db/delete-row")
 async def db_delete_row(body: RowBody, user: dict = Depends(get_current_user)):
     """Löscht eine Zeile anhand ihrer rowid."""
-    require_admin(user)
+    require_perm(user, "delete_source")
     t = _valid_table(body.table)
     cur = db._conn.execute(f'DELETE FROM "{t}" WHERE rowid = ?', (body.rowid,))
     db._conn.commit()
@@ -437,7 +437,7 @@ class InsertRowBody(BaseModel):
 @router.post("/db/insert-row")
 async def db_insert_row(body: InsertRowBody, user: dict = Depends(get_current_user)):
     """Fügt eine neue Zeile ein (nur angegebene Spalten, Rest = Default)."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     t = _valid_table(body.table)
     if body.values:
         cols = [_valid_column(t, c) for c in body.values.keys()]
@@ -459,7 +459,7 @@ class TableBody(BaseModel):
 @router.post("/db/drop-table")
 async def db_drop_table(body: TableBody, user: dict = Depends(get_current_user)):
     """Löscht eine komplette Tabelle. (Die doppelte Nachfrage macht das Frontend.)"""
-    require_admin(user)
+    require_perm(user, "delete_source")
     t = _valid_table(body.table)
     db._conn.execute(f'DROP TABLE "{t}"')
     db._conn.commit()
@@ -475,7 +475,7 @@ class CreateTableBody(BaseModel):
 @router.post("/db/create-table")
 async def db_create_table(body: CreateTableBody, user: dict = Depends(get_current_user)):
     """Legt eine neue Tabelle mit der angegebenen Spalten-Definition an."""
-    require_admin(user)
+    require_perm(user, "edit_source")
     name = (body.name or "").strip()
     if not name or not name.replace("_", "").isalnum():
         raise HTTPException(400, "Ungültiger Tabellenname (nur Buchstaben/Zahlen/_)")
@@ -494,7 +494,7 @@ async def db_create_table(body: CreateTableBody, user: dict = Depends(get_curren
 @router.post("/db/backup")
 async def db_backup(user: dict = Depends(get_current_user)):
     """Erstellt eine konsistente Kopie der Datenbank als data.sqlite.bak."""
-    require_admin(user)
+    require_perm(user, "see_source")
     import sqlite3
     src_path = PROJECT_ROOT / "backend" / "data.sqlite"
     bak_path = PROJECT_ROOT / "backend" / "data.sqlite.bak"

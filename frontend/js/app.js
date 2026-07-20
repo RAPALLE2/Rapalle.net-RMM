@@ -121,16 +121,28 @@ async function reloadPerms() {
 }
 
 // Apps, die ausschließlich dem Super-Admin offenstehen (Backend: require_admin).
-const ADMIN_ONLY_APPS = new Set(["settings", "permissions", "automation", "manage", "relay-manager"]);
-// App-Key -> benötigtes globales Recht (nur relevant, wenn nicht admin-only).
+// App-Key -> benötigtes globales Recht. Nicht gelistete Apps sind frei
+// zugänglich (z.B. Dashboard/Clients, Speedtest). 'settings' ist ein Sonderfall.
 const APP_REQUIRED_PERM = {
   audit: "see_audit",
   recordings: "see_replay",
-  bulk: "use_terminal",
+  bulk: "bulk_shell",
+  network: "network_scan",
+  portscan: "port_scan",
+  scripts: "use_scripts",
+  automation: "automation",
+  permissions: "see_permissions",
+  manage: "manage_hierarchy",
+  "relay-manager": "use_relay",
+  towerdefense: "play_games",
 };
 
 function _appAllowed(appKey) {
-  if (ADMIN_ONLY_APPS.has(appKey)) return isAdmin();
+  if (isAdmin()) return true;
+  // Einstellungen: sichtbar, wenn der Nutzer wenigstens einen Settings-Bereich
+  // bearbeiten darf (SSO oder Branding). Der Rest der Settings ist Admin-only
+  // und wird innerhalb der App zusätzlich gegated.
+  if (appKey === "settings") return hasGlobalPerm("manage_sso") || hasGlobalPerm("manage_branding");
   const perm = APP_REQUIRED_PERM[appKey];
   if (!perm) return true;               // frei zugängliche App
   return hasGlobalPerm(perm);
@@ -142,15 +154,15 @@ function applyAppVisibility() {
     btn.style.display = _appAllowed(btn.dataset.app) ? "" : "none";
   });
   try { refreshStartMenu(); } catch {}
-  // Benutzermenü: Einstellungen nur für Verwalter/Admin
+  // Benutzermenü: Einstellungen nur, wenn erlaubt.
   const settingsBtn = document.getElementById("btn-open-settings");
   if (settingsBtn) settingsBtn.style.display = _appAllowed("settings") ? "" : "none";
-  // Sidebar: Client hinzufügen / Hierarchie verwalten nur für Super-Admins
-  // (die zugehörigen Backend-Routen sind admin-only).
+  // Sidebar: Client hinzufügen (Enrollment) bleibt Admin-only; Hierarchie
+  // verwalten richtet sich nach dem Recht 'manage_hierarchy'.
   const addBtn = document.getElementById("btn-add-client");
   if (addBtn) addBtn.style.display = isAdmin() ? "" : "none";
   const mgmtBtn = document.getElementById("btn-manage-hierarchy");
-  if (mgmtBtn) mgmtBtn.style.display = isAdmin() ? "" : "none";
+  if (mgmtBtn) mgmtBtn.style.display = (isAdmin() || hasGlobalPerm("manage_hierarchy")) ? "" : "none";
 }
 
 async function refreshAll() {
@@ -213,34 +225,54 @@ async function startSession(user) {
   });
   initFavorites(user.username);   // Favoriten des Benutzers laden
   initSidebarNav();               // Dashboard-Tab + Favoriten-Header verkabeln
+
+  // Effektive Rechte ZUERST laden – sie werden sowohl für die Restore-Logik
+  // (Recht 'restore_session') als auch fürs UI-Gating gebraucht. Früher lief
+  // reloadPerms() erst später, wodurch 'restore_session' immer als "fehlt"
+  // galt und NICHTS wiederhergestellt wurde. (Rechte hängen nicht an Clients/
+  // Hierarchie, können also gefahrlos zuerst geladen werden.)
+  await reloadPerms();
+
   const saved = loadState();
   // Persönliche Wiederherstellungs-Einstellungen (Standard: alles wiederherstellen).
-  const restorePrefs = (saved && saved.restorePrefs) || { client: true, folder: true, apps: true };
-  if (saved) {
-    applyExpanded(saved);           // Aufklapp-Zustand + Layouts/Profile
-    // „Offene Ordner" (Sidebar-Baum) nur wiederherstellen, wenn gewünscht.
-    if (!restorePrefs.folder) {
-      try { setExpandedIds([]); } catch {}
-    }
-    // Auswahl: Client vs. Ordner getrennt steuerbar.
-    if (saved.selection) {
-      const selIsClient = saved.selection.type === "client";
-      if ((selIsClient && restorePrefs.client) || (!selIsClient && restorePrefs.folder)) {
-        state.selection = saved.selection;
+  // Zusätzlich durch das globale Recht 'restore_session' gegated: fehlt es, wird
+  // immer sauber vom Dashboard gestartet.
+  const mayRestore = hasGlobalPerm("restore_session");
+  const restorePrefs = mayRestore
+    ? ((saved && saved.restorePrefs) || { client: true, folder: true, apps: true })
+    : { client: false, folder: false, apps: false };
+  // WICHTIG: Restore/Crash-Guard-Init defensiv kapseln. Ein Fehler hier darf den
+  // Login/das Dashboard NIEMALS blockieren (sonst bleibt man im leeren, „blurry"
+  // App-Screen hängen, weil das Login schon ausgeblendet ist).
+  try {
+    if (saved) {
+      applyExpanded(saved);           // Aufklapp-Zustand + Layouts/Profile
+      // „Offene Ordner" (Sidebar-Baum) nur wiederherstellen, wenn gewünscht.
+      if (!restorePrefs.folder) {
+        try { setExpandedIds([]); } catch {}
       }
+      // Auswahl: Client vs. Ordner getrennt steuerbar.
+      if (saved.selection) {
+        const selIsClient = saved.selection.type === "client";
+        if ((selIsClient && restorePrefs.client) || (!selIsClient && restorePrefs.folder)) {
+          state.selection = saved.selection;
+        }
+      }
+      if (restorePrefs.folder && saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
     }
-    if (restorePrefs.folder && saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
-  }
 
-  // Frontend-Crash-Guard: erkennt Abstürze/Einfrieren, protokolliert sie und
-  // startet die Oberfläche im Ernstfall neu (schließt dabei die offenen Apps).
-  initCrashGuard({
-    username: user.username,
-    onPanic: () => {
-      try { for (const w of [...(state.windows || [])]) closeWindow(w.key); } catch {}
-      try { saveNow(state); } catch {}   // ohne offene Fenster sichern -> kein Wiederauftreten
-    },
-  });
+    // Frontend-Crash-Guard: erkennt Abstürze/Einfrieren, protokolliert sie und
+    // startet die Oberfläche im Ernstfall neu (schleifensicher, siehe crashguard.js).
+    initCrashGuard({
+      username: user.username,
+      onPanic: () => {
+        try { for (const w of [...(state.windows || [])]) closeWindow(w.key); } catch {}
+        try { saveNow(state); } catch {}   // ohne offene Fenster sichern
+      },
+    });
+  } catch (e) {
+    try { console.error("[startSession] Restore/CrashGuard-Init fehlgeschlagen:", e); } catch {}
+  }
 
   // Organisationsweite Standard-Layouts laden (vom Admin gesetzt). Werden als
   // Basis für Nutzer OHNE eigenes Layout und beim "Auf Standard zurücksetzen"
@@ -257,27 +289,28 @@ async function startSession(user) {
     });
   } catch { /* kein org-Standard erreichbar -> eingebauter Standard */ }
 
-  // Effektive Rechte VOR dem ersten Rendern laden: sonst werden bei einem
-  // Seiten-Reload die Aktionen-/Status-Buttons der wiederhergestellten Client-
-  // Auswahl mit leeren Rechten (= unsichtbar) gebaut und erscheinen erst nach
-  // manuellem Neu-Auswählen des Clients. Rechte haengen nicht an Clients/
-  // Hierarchie, koennen also gefahrlos zuerst geladen werden.
-  await reloadPerms();
+  // (Effektive Rechte wurden bereits oben – vor der Restore-Logik – geladen.)
+  // AB HIER darf kein Fehler mehr aus startSession herausfliegen: sonst würde der
+  // Login-Handler den App-Screen wieder ausblenden und man käme nicht mehr rein.
+  // Jeder Schritt ist daher einzeln gekapselt – im Zweifel erscheint ein (ggf.
+  // leeres) Dashboard statt einer Login-Sackgasse.
+  try { await refreshAll(); }
+  catch (e) { try { console.error("[startSession] refreshAll fehlgeschlagen:", e); } catch {} }
 
-  await refreshAll();
-
-  applyAppVisibility();
+  try { applyAppVisibility(); } catch (e) { try { console.error(e); } catch {} }
 
   // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
   // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern) – nur wenn
   // der Benutzer „offene Apps wiederherstellen" aktiviert hat.
-  if (saved && restorePrefs.apps) restoreWindows(saved);
+  try { if (saved && restorePrefs.apps) restoreWindows(saved); }
+  catch (e) { try { console.error("[startSession] restoreWindows fehlgeschlagen:", e); } catch {} }
 
   // Ab jetzt jede Fenster-/Baum-Änderung speichern.
-  setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
-  setOnTreeStateChanged(() => scheduleSave(state));
-
-  renderTaskbar();
+  try {
+    setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
+    setOnTreeStateChanged(() => scheduleSave(state));
+    renderTaskbar();
+  } catch (e) { try { console.error(e); } catch {} }
 }
 
 // Öffnet die zuletzt offenen Fenster in ihrer gespeicherten Reihenfolge,
@@ -352,7 +385,13 @@ function initLoginForm() {
       saveToken(res.token);
       await startSession(res.user);
     } catch (err) {
-      errBox.textContent = err.message;
+      // startSession blendet das Login sofort aus und zeigt den App-Screen.
+      // Schlägt danach etwas fehl, MUSS das Login wieder eingeblendet werden –
+      // sonst hängt man im leeren, „blurry" App-Screen fest und kann sich nicht
+      // mehr anmelden. Token verwerfen und Fehler sichtbar anzeigen.
+      try { clearToken(); } catch {}
+      try { showOnly(loginScreen()); } catch {}
+      errBox.textContent = err && err.message ? err.message : "Anmeldung fehlgeschlagen";
       errBox.classList.remove("hidden");
     }
   });

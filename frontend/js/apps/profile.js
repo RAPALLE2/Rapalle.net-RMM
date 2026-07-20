@@ -4,6 +4,7 @@
 // (DE/EN), Theme (Dark/Light) und Passwortänderung.
 
 import { state } from "../state.js";
+import { hasGlobalPerm } from "../state.js";
 import { api } from "../api.js";
 import { esc } from "../utils.js";
 import { applyTheme, applyAccent, ACCENT_PALETTES } from "../theme.js";
@@ -15,12 +16,15 @@ import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePref
 export function renderProfile(body, win) {
   const u = state.user;
   const _rp = getRestorePrefs();
+  const mayEditName = hasGlobalPerm("edit_profile_name");
+  const mayCustomizeDash = hasGlobalPerm("customize_dashboard");
+  const mayRestore = hasGlobalPerm("restore_session");
   body.innerHTML = `
     <div class="settings-section">
       <h3>Profil</h3>
       <div class="form-row">
         <label>Anzeigename</label>
-        <input type="text" id="pr-name" value="${esc(u.display_name)}" />
+        <input type="text" id="pr-name" value="${esc(u.display_name)}" ${mayEditName ? "" : "disabled title=\"Keine Berechtigung\""} />
       </div>
       <div class="form-row">
         <label>Sprache</label>
@@ -60,15 +64,15 @@ export function renderProfile(body, win) {
       </p>
       <button class="btn-primary" id="pr-save" style="margin-top:6px">Profil speichern</button>
 
-      <h3 style="margin-top:26px">Dashboard</h3>
-      <div class="form-row" style="align-items:center">
+      <h3 style="margin-top:26px" ${mayCustomizeDash ? "" : 'hidden'}>Dashboard</h3>
+      <div class="form-row" style="align-items:center" ${mayCustomizeDash ? "" : 'hidden'}>
         <label>Layout-Bearbeitung</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-dashedit" ${getDashEdit() ? "checked" : ""} />
           Ansichten frei verschieben, in Größe ändern & Ordner anpassen
         </label>
       </div>
-      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${mayCustomizeDash ? "" : 'hidden'}>
         Ist die Bearbeitung an, kannst du in der Client-Ansicht Status, Aktionen und
         Übersicht-Ordner per Ziehen anordnen, ihre Breite ziehen, weitere Ordner
         anlegen und Sub-Ansichten (Metrics/Notes/Disk) zwischen Ordnern verschieben.
@@ -77,24 +81,24 @@ export function renderProfile(body, win) {
         die Arbeitsfläche ziehen.
       </p>
 
-      <h3 style="margin-top:26px">Nach dem Anmelden</h3>
-      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+      <h3 style="margin-top:26px" ${mayRestore ? "" : "hidden"}>Nach dem Anmelden</h3>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${mayRestore ? "" : "hidden"}>
         Lege fest, was beim erneuten Anmelden wiederhergestellt wird. Ist ein Punkt
         deaktiviert, startest du an dieser Stelle „sauber" vom Dashboard.
       </p>
-      <div class="form-row" style="align-items:center">
+      <div class="form-row" style="align-items:center" ${mayRestore ? "" : "hidden"}>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-restore-client" ${_rp.client ? "checked" : ""} />
           Zuletzt geöffneten Client wiederherstellen
         </label>
       </div>
-      <div class="form-row" style="align-items:center">
+      <div class="form-row" style="align-items:center" ${mayRestore ? "" : "hidden"}>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-restore-folder" ${_rp.folder ? "checked" : ""} />
           Zuletzt geöffnete Ordner (Seitenleiste) wiederherstellen
         </label>
       </div>
-      <div class="form-row" style="align-items:center">
+      <div class="form-row" style="align-items:center" ${mayRestore ? "" : "hidden"}>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-restore-apps" ${_rp.apps ? "checked" : ""} />
           Zuletzt geöffnete Apps/Fenster wiederherstellen
