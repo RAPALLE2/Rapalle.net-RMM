@@ -639,6 +639,203 @@ export function clientHasWebsites(clientId) {
   return api.getClientWebsites(clientId).then((s) => !!(s && s.length)).catch(() => false);
 }
 
+// =================================================================
+// NOTIZEN mit Sichtbarkeit + Aktivitätsprotokoll
+//   für alle           -> jeder, der den Client sehen darf
+//   nur für mich       -> ausschließlich der Verfasser
+//   für bestimmte      -> Verfasser + ausgewählte Benutzer
+// Ändern/Löschen darf der Verfasser (Admins zum Aufräumen ebenfalls, sehen
+// aber den Inhalt fremder privater Notizen nicht).
+// =================================================================
+const NOTE_VIS = {
+  all: { icon: "🌍", label: "für alle" },
+  private: { icon: "🔒", label: "nur für mich" },
+  custom: { icon: "👥", label: "für bestimmte" },
+};
+
+export function renderNotesPart(target, client) {
+  const mayEdit = isAdmin() || hasClientPerm(client.id, "c_notes_edit");
+  let showLog = false;
+  let users = [];
+  let editingId = null;
+
+  target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
+
+  async function load() {
+    let notes = [];
+    try { notes = await api.getNotes(client.id); }
+    catch (e) {
+      target.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
+      return;
+    }
+    if (!users.length) { try { users = await api.getNotesUsers(client.id); } catch {} }
+    draw(notes);
+  }
+
+  function userName(id) { return (users.find((u) => u.id === id) || {}).username || id; }
+
+  // Formular für neue Notiz bzw. zum Bearbeiten.
+  function formHtml(note) {
+    const v = note?.visibility || "all";
+    return `
+      <div class="note-form" style="border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+        <textarea class="nf-text" rows="3" placeholder="Notiz schreiben…"
+          style="resize:vertical;min-height:56px">${esc(note?.text || "")}</textarea>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <select class="nf-vis" style="flex:1;min-width:150px">
+            ${Object.entries(NOTE_VIS).map(([k, o]) =>
+              `<option value="${k}" ${v === k ? "selected" : ""}>${o.icon} Sichtbar ${o.label}</option>`).join("")}
+          </select>
+          <label style="display:flex;gap:5px;align-items:center;font-size:12px;color:var(--subtext)">
+            <input type="checkbox" class="nf-pin" ${note?.pinned ? "checked" : ""} /> anheften
+          </label>
+        </div>
+        <div class="nf-share" style="${v === "custom" ? "" : "display:none"};max-height:110px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:5px">
+          ${users.map((u) => `
+            <label style="display:flex;gap:6px;align-items:center;font-size:12px;padding:1px 0">
+              <input type="checkbox" class="nf-user" value="${esc(u.id)}"
+                ${(note?.shared_with || []).includes(u.id) ? "checked" : ""} />
+              <span>${esc(u.username)}</span>
+            </label>`).join("") || `<span style="font-size:11.5px;color:var(--subtext)">Keine weiteren Benutzer.</span>`}
+        </div>
+        <div class="nf-error form-error hidden"></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-primary nf-save" style="flex:1;margin:0">${note ? "Speichern" : "+ Notiz anlegen"}</button>
+          ${note ? `<button class="taskbar-btn nf-cancel">Abbrechen</button>` : ""}
+        </div>
+      </div>`;
+  }
+
+  function bindForm(el, note) {
+    const visSel = el.querySelector(".nf-vis");
+    const shareBox = el.querySelector(".nf-share");
+    visSel.addEventListener("change", () => {
+      shareBox.style.display = visSel.value === "custom" ? "" : "none";
+    });
+    el.addEventListener("mousedown", (e) => e.stopPropagation());
+    el.querySelector(".nf-cancel")?.addEventListener("click", () => { editingId = null; load(); });
+    el.querySelector(".nf-save").addEventListener("click", async () => {
+      const err = el.querySelector(".nf-error");
+      err.classList.add("hidden");
+      const text = el.querySelector(".nf-text").value.trim();
+      if (!text) { err.textContent = "Die Notiz ist leer"; err.classList.remove("hidden"); return; }
+      const data = {
+        text,
+        visibility: visSel.value,
+        pinned: el.querySelector(".nf-pin").checked,
+        shared_with: [...el.querySelectorAll(".nf-user:checked")].map((i) => i.value),
+      };
+      if (data.visibility === "custom" && !data.shared_with.length) {
+        err.textContent = "Bitte mindestens einen Benutzer auswählen";
+        err.classList.remove("hidden"); return;
+      }
+      try {
+        if (note) await api.updateNote(client.id, note.id, data);
+        else await api.createNote(client.id, data);
+        editingId = null;
+        load();
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    });
+  }
+
+  function draw(notes) {
+    target.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px;min-height:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <span style="font-size:11.5px;color:var(--subtext)">${notes.length} Notiz${notes.length === 1 ? "" : "en"}</span>
+          <button class="taskbar-btn" id="note-log" style="font-size:11px">🕓 Verlauf</button>
+        </div>
+        <div id="note-logbox" style="display:none"></div>
+        <div id="note-add"></div>
+        <div id="note-list" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>`;
+
+    if (mayEdit && !editingId) {
+      const box = target.querySelector("#note-add");
+      box.innerHTML = formHtml(null);
+      bindForm(box.querySelector(".note-form"), null);
+    }
+
+    const listEl = target.querySelector("#note-list");
+    if (!notes.length) {
+      listEl.innerHTML = `<div style="color:var(--subtext);font-size:12px">Noch keine Notizen.</div>`;
+    } else {
+      listEl.innerHTML = notes.map((n) => {
+        if (editingId === n.id) return `<div class="note-edit" data-edit="${esc(n.id)}"></div>`;
+        const vinfo = NOTE_VIS[n.visibility] || NOTE_VIS.all;
+        const shared = n.visibility === "custom" && (n.shared_with || []).length
+          ? ` (${n.shared_with.map(userName).map(esc).join(", ")})` : "";
+        const when = new Date(n.updated_at || n.created_at).toLocaleString("de-DE");
+        return `
+          <div class="panel" style="padding:7px 9px;${n.pinned ? "border-color:var(--accent)" : ""}">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+              <div style="font-size:11px;color:var(--subtext)">
+                ${n.pinned ? "📌 " : ""}${vinfo.icon} ${esc(vinfo.label)}${shared}
+                · ${esc(n.author_name || "?")} · ${when}
+              </div>
+              ${n.can_edit ? `<div style="display:flex;gap:4px;flex:none">
+                ${n.hidden ? "" : `<button class="taskbar-btn" data-nedit="${esc(n.id)}" style="padding:0 5px;font-size:10px">✏️</button>`}
+                <button class="taskbar-btn" data-ndel="${esc(n.id)}" style="padding:0 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
+              </div>` : ""}
+            </div>
+            <div style="font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:3px">
+              ${n.hidden ? `<i style="color:var(--subtext)">Private Notiz – Inhalt nur für den Verfasser sichtbar.</i>` : esc(n.text)}
+            </div>
+          </div>`;
+      }).join("");
+
+      // Bearbeiten-Formular an der Stelle der Notiz einsetzen
+      const editEl = listEl.querySelector("[data-edit]");
+      if (editEl) {
+        const note = notes.find((x) => x.id === editEl.dataset.edit);
+        editEl.innerHTML = formHtml(note);
+        bindForm(editEl.querySelector(".note-form"), note);
+      }
+      listEl.querySelectorAll("[data-nedit]").forEach((b) =>
+        b.addEventListener("click", () => { editingId = b.dataset.nedit; draw(notes); }));
+      listEl.querySelectorAll("[data-ndel]").forEach((b) =>
+        b.addEventListener("click", async () => {
+          if (!(await uiConfirm("Notiz löschen?", { okText: "Löschen", danger: true }))) return;
+          try { await api.deleteNote(client.id, b.dataset.ndel); load(); }
+          catch (e) { window.notify?.(e.message, "error"); }
+        }));
+    }
+
+    // Aktivitätsprotokoll ein-/ausklappen
+    const logBtn = target.querySelector("#note-log");
+    const logBox = target.querySelector("#note-logbox");
+    logBox.style.display = showLog ? "" : "none";
+    if (showLog) fillLog(logBox);
+    logBtn.addEventListener("click", () => {
+      showLog = !showLog;
+      logBox.style.display = showLog ? "" : "none";
+      if (showLog) fillLog(logBox);
+    });
+  }
+
+  async function fillLog(box) {
+    box.innerHTML = `<div style="color:var(--subtext);font-size:11.5px">Lade Verlauf…</div>`;
+    try {
+      const log = await api.getNotesActivity(client.id);
+      box.innerHTML = log.length ? `
+        <div style="border:1px solid var(--border);border-radius:8px;padding:6px;max-height:160px;overflow:auto">
+          ${log.map((e) => `
+            <div style="font-size:11.5px;padding:2px 0;display:flex;gap:6px">
+              <span style="color:var(--subtext);flex:none">${new Date(e.created_at).toLocaleString("de-DE")}</span>
+              <span style="flex:none"><b>${esc(e.actor_name)}</b></span>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${esc(e.label)}${e.details ? " – " + esc(e.details) : ""}</span>
+            </div>`).join("")}
+        </div>`
+        : `<div style="color:var(--subtext);font-size:11.5px">Noch keine Aktivität.</div>`;
+    } catch (e) {
+      box.innerHTML = `<div style="color:var(--danger);font-size:11.5px">${esc(e.message)}</div>`;
+    }
+  }
+
+  load();
+}
+
 // --- ÜBERSICHT-Part (einzelne Sub-Ansicht: metrics|notes|disk) ---
 // tab wählt die anzuzeigende Sub-Ansicht. rerender() erlaubt Toggles/Zeitspanne.
 export function renderOverviewSub(target, client, tab, rerender) {
@@ -653,18 +850,7 @@ export function renderOverviewSub(target, client, tab, rerender) {
   target.innerHTML = "";
   const m = client.metrics;
 
-  if (tab === "notes") {
-    const ta = document.createElement("textarea");
-    ta.className = "notes-textarea";
-    ta.placeholder = t("notes_placeholder");
-    ta.value = client.notes || "";
-    ta.addEventListener("change", async () => {
-      await api.updateClient(client.id, { notes: ta.value });
-      client.notes = ta.value;
-    });
-    target.appendChild(ta);
-    return;
-  }
+  if (tab === "notes") return renderNotesPart(target, client);
 
   if (!m) { target.innerHTML = `<div style="color:var(--subtext);padding:20px 0">${t("no_live_data")}</div>`; return; }
 

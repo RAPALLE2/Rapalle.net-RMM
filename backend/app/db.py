@@ -532,6 +532,11 @@ def init_db() -> None:
     _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
     # Garantie-Ende pro Client (Unix-ms, NULL = keine Garantie hinterlegt).
     _migrate_add_column("clients", "warranty_until", "INTEGER")
+    # Ticket-Kommentare: Sichtbarkeit wie bei den Notizen ('all' | 'private' |
+    # 'custom') und die Benutzer-ID des Verfassers (bisher nur der Anzeigename).
+    _migrate_add_column("ticket_comments", "visibility", "TEXT DEFAULT 'all'")
+    _migrate_add_column("ticket_comments", "author_id", "TEXT")
+
     # Custom-Webhooks: eigene HTTP-Header (JSON-Objekt als Text) und ein
     # frei definierbares Body-Template mit Platzhaltern ({head}, {body}, ...).
     _migrate_add_column("webhooks", "headers", "TEXT")
@@ -567,6 +572,59 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_chat_messages_conv
             ON chat_messages(conversation_id, created_at);
+
+        -- ----------------------------------------------------------
+        -- Client-Notizen als EINZELNE Einträge mit Sichtbarkeit:
+        --   'all'     -> für alle sichtbar, die den Client sehen dürfen
+        --   'private' -> nur für den Verfasser
+        --   'custom'  -> Verfasser + ausgewählte Benutzer (note_shares)
+        -- Das alte Freitextfeld clients.notes bleibt bestehen und wird
+        -- einmalig als Eintrag mit Sichtbarkeit 'all' übernommen.
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS client_notes (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            author_id TEXT,
+            author_name TEXT NOT NULL DEFAULT '',
+            text TEXT NOT NULL,
+            visibility TEXT NOT NULL DEFAULT 'all',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_client_notes_client
+            ON client_notes(client_id, created_at);
+        CREATE TABLE IF NOT EXISTS note_shares (
+            note_id TEXT NOT NULL REFERENCES client_notes(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            PRIMARY KEY (note_id, user_id)
+        );
+
+        -- Gleiche Sichtbarkeitslogik für Ticket-Kommentare.
+        CREATE TABLE IF NOT EXISTS ticket_comment_shares (
+            comment_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            PRIMARY KEY (comment_id, user_id)
+        );
+
+        -- ----------------------------------------------------------
+        -- Aktivitätsprotokoll für Notizen und Tickets.
+        -- entity_type: 'client_notes' | 'ticket'
+        -- entity_id:   client_id      | ticket_id
+        -- action:      z.B. 'note.created', 'ticket.status', 'comment.created'
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            actor_id TEXT,
+            actor_name TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            details TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_entity
+            ON activity_log(entity_type, entity_id, created_at);
 
         -- Benachrichtigungs-Regeln: "Wenn <trigger> (auf Clients X/Y/Z),
         -- dann <channel> an <target>". params = JSON (z.B. days_before,
@@ -1489,6 +1547,16 @@ PERM_KEYS = GLOBAL_PERM_KEYS + [
     p for p in CLIENT_ONLY_PERM_KEYS if p not in GLOBAL_PERM_KEYS
 ] + LEGACY_PERM_KEYS
 
+# ------------------------------------------------------------------
+# STANDARD-CLIENT ("Default-Client")
+# Ein Pseudo-Client-Scope, dessen Client-Rechte für JEDEN Client gelten.
+# Damit lassen sich Rechte einmal zentral vergeben, statt sie pro Client
+# einzeln zu setzen. Auflösung (siehe auth._resolve): 'deny' schlägt immer
+# 'allow' - ein Verbot auf einem KONKRETEN Client sticht also die Erlaubnis
+# aus dem Standard-Client.
+# ------------------------------------------------------------------
+DEFAULT_CLIENT_SCOPE = "*"
+
 # Welche Rechte im General-Tab (global) bzw. im Client-Tab angeboten werden.
 GENERAL_PERM_KEYS = list(GLOBAL_PERM_KEYS)
 CLIENT_PERM_KEYS = list(CLIENT_ONLY_PERM_KEYS)
@@ -1603,7 +1671,10 @@ def set_grants(subject_type: str, subject_id: str, grants: list[dict]) -> None:
 
 
 def delete_grants_for_client(client_id: str) -> None:
-    """Räumt Client-scoped Grants auf, wenn ein Client gelöscht wird."""
+    """Räumt Client-scoped Grants auf, wenn ein Client gelöscht wird.
+    Der Standard-Client-Scope ('*') bleibt dabei immer erhalten."""
+    if not client_id or client_id == DEFAULT_CLIENT_SCOPE:
+        return
     _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
     _conn.commit()
 

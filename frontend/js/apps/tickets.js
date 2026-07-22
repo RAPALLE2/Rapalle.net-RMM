@@ -29,10 +29,19 @@ const fmtDate = (ms) => ms ? new Date(ms).toLocaleString("de-DE",
   { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
 const fmtDay = (ms) => ms ? new Date(ms).toLocaleDateString("de-DE") : "–";
 
+// Sichtbarkeit von Kommentaren - identisch zu den Client-Notizen.
+const COMMENT_VIS = {
+  all: { icon: "🌍", label: "für alle" },
+  private: { icon: "🔒", label: "nur für mich" },
+  custom: { icon: "👥", label: "für bestimmte" },
+};
+
 export function renderTickets(body, win) {
   const may = (p) => isAdmin() || hasGlobalPerm(p);
   let tickets = [];
   let subjects = { users: [], groups: [] };
+  let ticketUsers = [];          // Auswahl für "für bestimmte Benutzer"
+  const userName = (id) => (ticketUsers.find((u) => u.id === id) || {}).username || id;
   let currentId = null;
   let statusFilter = "active";   // 'active' | 'all' | einzelner Status
 
@@ -178,19 +187,47 @@ export function renderTickets(body, win) {
         </h3>
         <div id="tkd-files" style="display:flex;gap:10px;flex-wrap:wrap"></div>
 
-        <h3 style="margin:16px 0 6px">Kommentare (${t.comments.length})</h3>
+        <h3 style="margin:16px 0 6px">Kommentare (${t.comments.length})
+          <button class="taskbar-btn" id="tkd-activity" style="font-size:11px;margin-left:6px">🕓 Verlauf</button>
+        </h3>
+        <div id="tkd-activity-box" style="display:none;margin-bottom:10px"></div>
         <div style="display:flex;flex-direction:column;gap:8px">
-          ${t.comments.map((c) => `
+          ${t.comments.map((c) => {
+            const v = COMMENT_VIS[c.visibility] || COMMENT_VIS.all;
+            const shared = c.visibility === "custom" && (c.shared_with || []).length
+              ? ` (${c.shared_with.map(userName).map(esc).join(", ")})` : "";
+            return `
             <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px">
-              <div style="font-size:11px;color:var(--subtext);margin-bottom:3px"><b>${esc(c.author)}</b> · ${fmtDate(c.created_at)}</div>
-              <div style="white-space:pre-wrap;word-break:break-word">${esc(c.text)}</div>
-            </div>`).join("") || `<span style="color:var(--subtext);font-size:12px">Noch keine Kommentare</span>`}
+              <div style="font-size:11px;color:var(--subtext);margin-bottom:3px;display:flex;justify-content:space-between;gap:8px">
+                <span><b>${esc(c.author)}</b> · ${fmtDate(c.created_at)}
+                  · <span title="Sichtbarkeit">${v.icon} ${esc(v.label)}${shared}</span></span>
+                ${c.can_edit ? `<button class="taskbar-btn" data-cdel="${esc(c.id)}"
+                  style="padding:0 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>` : ""}
+              </div>
+              <div style="white-space:pre-wrap;word-break:break-word">${c.hidden
+                ? `<i style="color:var(--subtext)">Privater Kommentar – Inhalt nur für den Verfasser sichtbar.</i>`
+                : esc(c.text)}</div>
+            </div>`; }).join("") || `<span style="color:var(--subtext);font-size:12px">Noch keine Kommentare</span>`}
         </div>
         ${may("ticket_comment") ? `
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <textarea id="tkd-comment" rows="2" placeholder="Kommentar schreiben…"
-            style="flex:1;resize:none;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px;font:inherit;font-size:13px"></textarea>
-          <button class="btn-primary" id="tkd-comment-send" style="margin:0;width:auto">Senden</button>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+          <div style="display:flex;gap:8px">
+            <textarea id="tkd-comment" rows="2" placeholder="Kommentar schreiben…"
+              style="flex:1;resize:none;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px;font:inherit;font-size:13px"></textarea>
+            <button class="btn-primary" id="tkd-comment-send" style="margin:0;width:auto">Senden</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select id="tkd-comment-vis" style="max-width:230px">
+              ${Object.entries(COMMENT_VIS).map(([k, o]) =>
+                `<option value="${k}">${o.icon} Sichtbar ${o.label}</option>`).join("")}
+            </select>
+            <div id="tkd-comment-users" style="display:none;flex:1;min-width:180px;max-height:80px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:4px">
+              ${ticketUsers.map((u) => `
+                <label style="display:inline-flex;gap:5px;align-items:center;font-size:12px;margin-right:10px">
+                  <input type="checkbox" class="tkd-cu" value="${esc(u.id)}" /> ${esc(u.username)}
+                </label>`).join("") || `<span style="font-size:11.5px;color:var(--subtext)">Keine weiteren Benutzer.</span>`}
+            </div>
+          </div>
         </div>` : ""}
       </div>
     `;
@@ -211,11 +248,52 @@ export function renderTickets(body, win) {
       } catch (e) { window.notify?.(e.message, "error"); }
     });
     detailEl.querySelector("#tkd-assign")?.addEventListener("click", () => openAssign(t));
+    // Kommentar-Sichtbarkeit: Benutzerauswahl nur bei "für bestimmte" zeigen
+    const visSel = detailEl.querySelector("#tkd-comment-vis");
+    const usersBox = detailEl.querySelector("#tkd-comment-users");
+    visSel?.addEventListener("change", () => {
+      usersBox.style.display = visSel.value === "custom" ? "" : "none";
+    });
     detailEl.querySelector("#tkd-comment-send")?.addEventListener("click", async () => {
       const ta = detailEl.querySelector("#tkd-comment");
       if (!ta.value.trim()) return;
-      try { drawDetail(await api.addTicketComment(t.id, ta.value)); }
+      const visibility = visSel?.value || "all";
+      const shared = [...detailEl.querySelectorAll(".tkd-cu:checked")].map((i) => i.value);
+      if (visibility === "custom" && !shared.length) {
+        window.notify?.("Bitte mindestens einen Benutzer auswählen", "warn"); return;
+      }
+      try { drawDetail(await api.addTicketComment(t.id, ta.value, visibility, shared)); }
       catch (e) { window.notify?.(e.message, "error"); }
+    });
+    detailEl.querySelectorAll("[data-cdel]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        if (!(await uiConfirm("Kommentar löschen?", { okText: "Löschen", danger: true }))) return;
+        try { drawDetail(await api.deleteTicketComment(t.id, b.dataset.cdel)); }
+        catch (e) { window.notify?.(e.message, "error"); }
+      }));
+
+    // Aktivitätsprotokoll des Tickets
+    const actBtn = detailEl.querySelector("#tkd-activity");
+    const actBox = detailEl.querySelector("#tkd-activity-box");
+    actBtn?.addEventListener("click", async () => {
+      const open = actBox.style.display === "none";
+      actBox.style.display = open ? "" : "none";
+      if (!open) return;
+      actBox.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lade Verlauf…</div>`;
+      try {
+        const log = await api.getTicketActivity(t.id);
+        actBox.innerHTML = log.length ? `
+          <div style="border:1px solid var(--border);border-radius:8px;padding:6px;max-height:200px;overflow:auto">
+            ${log.map((e) => `
+              <div style="font-size:12px;padding:2px 0;display:flex;gap:8px">
+                <span style="color:var(--subtext);flex:none">${fmtDate(e.created_at)}</span>
+                <span style="flex:none"><b>${esc(e.actor_name)}</b></span>
+                <span style="flex:1;min-width:0">${esc(e.label)}${e.details ? " – " + esc(e.details) : ""}</span>
+              </div>`).join("")}
+          </div>` : `<div style="color:var(--subtext);font-size:12px">Noch keine Aktivität.</div>`;
+      } catch (e) {
+        actBox.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
+      }
     });
 
     // ---- Upload ----
@@ -379,12 +457,14 @@ export function renderTickets(body, win) {
   // ---------------- Laden ----------------
   async function load(selectFirst = true) {
     try {
-      const [rows, subj] = await Promise.all([
+      const [rows, subj, tusers] = await Promise.all([
         api.tickets(),
         api.ticketSubjects().catch(() => ({ users: [], groups: [] })),
+        api.getTicketUsers().catch(() => []),
       ]);
       tickets = rows;
       subjects = subj;
+      ticketUsers = tusers;
       drawList();
       if (selectFirst && !currentId && tickets.length) selectTicket(tickets[0].id);
       if (!tickets.length) {

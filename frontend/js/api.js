@@ -99,8 +99,10 @@ export const api = {
     method: "PUT", body: JSON.stringify({ assignees }) }),
   setTicketStatus: (id, status) => request(`/api/tickets/${id}/status`, {
     method: "PUT", body: JSON.stringify({ status }) }),
-  addTicketComment: (id, text) => request(`/api/tickets/${id}/comments`, {
-    method: "POST", body: JSON.stringify({ text }) }),
+  addTicketComment: (id, text, visibility = "all", sharedWith = []) =>
+    request(`/api/tickets/${id}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ text, visibility, shared_with: sharedWith }) }),
   ticketSubjects: () => request("/api/tickets/meta/subjects"),
   // Datei-Upload als roher Body (kein multipart) - Dateiname als Query-Param.
   uploadTicketFile: async (id, file) => {
@@ -175,7 +177,27 @@ export const api = {
   listServerFs: (path) => request(`/api/server-files?path=${encodeURIComponent(path)}`),
 
   // --- Netzwerk-Scan ---
+  // --- Client-Notizen (Sichtbarkeit + Aktivitätsprotokoll) ---
+  getNotes: (clientId) => request(`/api/clients/${clientId}/notes`),
+  getNotesActivity: (clientId) => request(`/api/clients/${clientId}/notes/activity`),
+  getNotesUsers: (clientId) => request(`/api/clients/${clientId}/notes/users`),
+  createNote: (clientId, data) => request(`/api/clients/${clientId}/notes`, { method: "POST", body: JSON.stringify(data) }),
+  updateNote: (clientId, noteId, data) => request(`/api/clients/${clientId}/notes/${noteId}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteNote: (clientId, noteId) => request(`/api/clients/${clientId}/notes/${noteId}`, { method: "DELETE" }),
+
+  // --- Tickets: Protokoll, Kommentar-Sichtbarkeit ---
+  getTicketActivity: (ticketId) => request(`/api/tickets/${ticketId}/activity`),
+  getTicketUsers: () => request("/api/tickets/meta/users"),
+  deleteTicketComment: (ticketId, commentId) => request(`/api/tickets/${ticketId}/comments/${commentId}`, { method: "DELETE" }),
+
   scanNetwork: (subnet) => request(`/api/network/scan${subnet ? `?subnet=${encodeURIComponent(subnet)}` : ""}`),
+  // Job-basierter Scan (große Netze wie 10.10 = /16, mit Fortschritt + Speed-Up)
+  scanPreview: (target) => request(`/api/network/scan/preview${target ? `?target=${encodeURIComponent(target)}` : ""}`),
+  scanStart: (target, speed) => request(
+    `/api/network/scan/start?speed=${encodeURIComponent(speed || "normal")}${target ? `&target=${encodeURIComponent(target)}` : ""}`,
+    { method: "POST" }),
+  scanJob: (jobId) => request(`/api/network/scan/job/${jobId}`),
+  scanCancel: (jobId) => request(`/api/network/scan/job/${jobId}/cancel`, { method: "POST" }),
   lastScan: () => request("/api/network/scan/last"),
   portScan: (ip, mode = "standard", ports = "") => {
     const q = new URLSearchParams({ ip, mode });

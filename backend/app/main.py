@@ -50,6 +50,7 @@ from app.routers import (
     games_routes,
     chat_routes,
     notify_routes,
+    notes_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -103,6 +104,7 @@ api.include_router(tickets_routes.router)     # Ticket-System
 api.include_router(games_routes.router)       # Gaming-Hub-Scoreboard
 api.include_router(chat_routes.router)        # Chat (DMs + Gruppen)
 api.include_router(notify_routes.router)      # Benachrichtigungs-Regeln + SMTP
+api.include_router(notes_routes.router)       # Client-Notizen (Sichtbarkeit + Protokoll)
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
