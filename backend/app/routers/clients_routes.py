@@ -253,10 +253,18 @@ async def get_client(client_id: str, user: dict = Depends(get_current_user)):
 async def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
         raise HTTPException(404, "Client nicht gefunden")
-    _require_client_perm(user, client_id, "manage_clients")
 
     # Nur die tatsächlich mitgeschickten Felder übernehmen
     fields = body.model_dump(exclude_unset=True)
+
+    # Rechte: Das Garantie-Datum hat ein EIGENES Recht ('set_warranty'), damit
+    # es z.B. der Einkauf/das Lager pflegen kann, ohne den Client sonst
+    # bearbeiten zu dürfen. Alle übrigen Felder brauchen weiterhin
+    # 'manage_clients' (das 'set_warranty' automatisch mit abdeckt).
+    if "warranty_until" in fields:
+        _require_client_perm(user, client_id, "set_warranty")
+    if any(k != "warranty_until" for k in fields):
+        _require_client_perm(user, client_id, "manage_clients")
     if "active" in fields:
         fields["active"] = int(fields["active"])  # SQLite kennt kein echtes Bool
     if "device_type" in fields and fields["device_type"] not in ("physical", "vm", "lxc", None):

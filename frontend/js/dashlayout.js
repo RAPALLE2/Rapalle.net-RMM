@@ -28,7 +28,7 @@ import {
 // Zuletzt gerenderter Client (für die Layout-Auflösung in Handlern, die
 // keinen Client-Parameter haben - z.B. placeNew/folderUnder).
 let _activeClientId = null;
-import { state, isAdmin, hasGlobalPerm } from "./state.js";
+import { state, isAdmin, hasGlobalPerm, hasClientPerm } from "./state.js";
 import { api } from "./api.js";
 // GEMEINSAME Raster-Engine (identisch mit dem Dashboard/fleetdash.js).
 import {
@@ -651,7 +651,9 @@ function renderTextPanel(bodyEl, panel, client, ctx) {
 // Umweg über "Client bearbeiten".
 function renderWarrantyPart(bodyEl, panel, client, ctx) {
   const edit = !!(ctx && ctx.edit);
-  const mayEdit = isAdmin() || hasGlobalPerm("manage_clients");
+  // Garantie ändern braucht das EIGENE Client-Recht 'set_warranty'
+  // (manage_clients deckt es serverseitig automatisch mit ab).
+  const mayEdit = isAdmin() || hasClientPerm(client.id, "set_warranty");
   const info = warrantyInfo(client.warranty_until);
 
   const wrap = document.createElement("div");
@@ -685,8 +687,8 @@ function renderWarrantyPart(bodyEl, panel, client, ctx) {
     const hint = document.createElement("div");
     hint.style.cssText = "font-size:11.5px;color:var(--subtext)";
     hint.textContent = mayEdit
-      ? "Im Bearbeiten-Modus oder unter „Client bearbeiten“ setzen."
-      : "Kein Garantie-Datum hinterlegt.";
+      ? "Im Bearbeiten-Modus dieses Dashboards setzen."
+      : "Kein Garantie-Datum hinterlegt (Recht „Garantie-Datum setzen“ fehlt).";
     wrap.appendChild(hint);
   }
   bodyEl.appendChild(wrap);

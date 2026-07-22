@@ -110,15 +110,6 @@ export function renderEditClient(body, win) {
       </div>
 
       <div class="form-row">
-        <label>Garantie läuft bis (optional)</label>
-        <input type="date" id="ec-warranty"
-               value="${client.warranty_until ? new Date(client.warranty_until).toISOString().slice(0, 10) : ""}" />
-        <div style="font-size:11.5px;color:var(--subtext);margin-top:3px">
-          Grundlage für die Garantie-Benachrichtigungen und die Garantie-Übersicht im Dashboard.
-        </div>
-      </div>
-
-      <div class="form-row">
         <label>Automatisches Agent-Update</label>
         <select id="ec-autoupdate">
           <option value="global" ${(client.auto_update || "global") === "global" ? "selected" : ""}>Globale Einstellung verwenden</option>
@@ -237,10 +228,6 @@ export function renderEditClient(body, win) {
         active: body.querySelector("#ec-active").checked,
         device_type: devTypeSel.value,
         auto_update: body.querySelector("#ec-autoupdate").value,
-        // Garantie-Ende: Ende des gewählten Tages (23:59:59), leer = keine Garantie
-        warranty_until: body.querySelector("#ec-warranty").value
-          ? new Date(body.querySelector("#ec-warranty").value + "T23:59:59").getTime()
-          : null,
         // Host nur setzen, wenn VM/LXC — sonst kein Parent
         parent_client_id: (devTypeSel.value === "vm" || devTypeSel.value === "lxc")
           ? (body.querySelector("#ec-host").value || null)

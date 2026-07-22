@@ -1475,6 +1475,7 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_notes_view", "c_notes_edit",
     "c_websites_view", "c_websites_edit",
     "c_screen_silent",      # Remote-Bildschirm ohne Anfrage (pro Client)
+    "set_warranty",         # Garantie-Datum dieses Clients setzen/ändern
 ]
 
 # Alt-Keys (nur noch für Rückwärts-Auflösung gespeicherter Grants).
@@ -1508,7 +1509,7 @@ _PERM_IMPLIES = {
     "manage_users": ["create_users", "see_permissions", "manage_permissions"],
     # altes manage_clients deckte auch Notizen/Websites/Löschen/Power ab
     "manage_clients": ["c_delete", "c_power", "c_notes_view", "c_notes_edit",
-                       "c_websites_view", "c_websites_edit"],
+                       "c_websites_view", "c_websites_edit", "set_warranty"],
     # --- Stärkeres Recht deckt schwächeres ab ---
     "c_screen": ["c_screen_view"],
     "c_terminal": ["c_terminal_console"],

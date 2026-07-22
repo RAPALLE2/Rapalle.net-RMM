@@ -132,6 +132,7 @@ PERM_LABELS = {
     "admin_settings": "Admin-Einstellungen (IP/Port, Server-Update, DB, Neustart)",
     "screen_silent": "Remote-Bildschirm ohne Anfrage (Silent-Modus)",
     "c_screen_silent": "Remote-Bildschirm ohne Anfrage",
+    "set_warranty": "Garantie-Datum setzen",
     "ticket_read": "Tickets lesen",
     "ticket_create": "Tickets erstellen",
     "ticket_edit": "Tickets bearbeiten",
