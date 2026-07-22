@@ -491,10 +491,13 @@ function renderFavorites() {
         </div>`;
     }
     for (const w of favSites) {
-      const meta = { name: w.name, url: w.url, clientId: w.clientId, clientHostname: w.clientHostname };
+      const meta = { name: w.name, url: w.url, clientId: w.clientId,
+                     clientHostname: w.clientHostname, open_mode: w.open_mode };
       h += `
-        <div class="tree-row row-anim fav-row" data-fav-web="${esc(w.url || "")}" title="${esc(w.url || "")}">
-          <span>🔗</span> <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name || w.url || "")}</span>
+        <div class="tree-row row-anim fav-row" data-fav-web="${esc(w.url || "")}"
+             data-fav-mode="${esc(w.open_mode || "external")}" data-fav-name="${esc(w.name || "")}"
+             title="${esc(w.url || "")}">
+          <span>${w.open_mode === "internal" ? "🪟" : "🔗"}</span> <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name || w.url || "")}</span>
           ${favStarHtml("websites", w.id, meta)}
         </div>`;
     }
@@ -510,12 +513,16 @@ function renderFavorites() {
       select(type, id);
     })
   );
-  // Website-Favorit anklicken -> im neuen Tab öffnen.
+  // Website-Favorit anklicken -> je nach open_mode im internen Browser-Fenster
+  // oder als externer Tab öffnen.
   box.querySelectorAll("[data-fav-web]").forEach((el) =>
     el.addEventListener("click", (e) => {
       if (e.target.closest("[data-fav]")) return;
       const url = el.dataset.favWeb;
-      if (url) window.open(url, "_blank", "noopener");
+      if (!url) return;
+      import("./apps/webbrowser.js").then((m) => m.openWebsiteEntry({
+        url, name: el.dataset.favName || url, open_mode: el.dataset.favMode,
+      })).catch(() => window.open(url, "_blank", "noopener"));
     })
   );
 }

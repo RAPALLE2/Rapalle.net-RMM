@@ -357,7 +357,17 @@ export function renderVnc(body, win) {
       statusEl.textContent = "Verbinde...";
       statusEl.style.color = "var(--subtext)";
       dashboardSocket.emit("screen-start", { clientId, username: state.user?.username || "unbekannt" });
+      _announceSessionStart(clientId);
     });
+  }
+
+  // Lokales Signal "Remote-Session gestartet": Das Profil (falls offen) schaltet
+  // den einmaligen Silent-Modus-Toggle damit SOFORT wieder aus - unabhängig
+  // davon, ob das Backend-Event ankommt.
+  function _announceSessionStart(cid) {
+    try {
+      window.dispatchEvent(new CustomEvent("screen-session-started", { detail: { clientId: cid } }));
+    } catch {}
   }
 
   dashboardSocket.on("screen-frame", onFrame);
@@ -366,6 +376,7 @@ export function renderVnc(body, win) {
 
   // Agent anweisen, mit dem Streaming zu beginnen (Username für die Aufnahme)
   dashboardSocket.emit("screen-start", { clientId, username: state.user?.username || "unbekannt" });
+  _announceSessionStart(clientId);
 
   // --- Koordinaten vom angezeigten Bild auf die echte Auflösung umrechnen ---
   function mapCoords(clientX, clientY) {

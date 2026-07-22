@@ -31,6 +31,7 @@ import hashlib
 import logging
 import os
 import time
+import uuid as _uuid
 import xml.sax.saxutils as _xml
 from datetime import datetime, timezone
 from email.utils import formatdate
@@ -587,7 +588,7 @@ async def dav_root_probe(request: Request):
     if request.method.upper() == "OPTIONS":
         return Response(status_code=200, headers={
             "DAV": "1, 2",
-            "Allow": "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE",
+            "Allow": "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE, PROPPATCH, LOCK, UNLOCK",
             "MS-Author-Via": "DAV",
         })
     # PROPFIND auf "/": minimale Antwort - Wurzel als Ordner, darin "dav".
@@ -613,7 +614,7 @@ async def dav(request: Request, full_path: str = ""):
     if method == "OPTIONS":
         return Response(status_code=200, headers={
             "DAV": "1, 2",
-            "Allow": "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE",
+            "Allow": "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE, PROPPATCH, LOCK, UNLOCK",
             "MS-Author-Via": "DAV",
         })
 
@@ -715,17 +716,24 @@ async def dav(request: Request, full_path: str = ""):
                         e.get("size", 0), e.get("mtime", 0)))
             return _multistatus(responses)
 
-        # Datei: Metadaten über das Parent-Listing holen
+        # Datei: Metadaten über das Parent-Listing holen. Existiert die Datei
+        # dort NICHT, muss ein 404 zurückgehen - Windows fragt beim Erstellen
+        # neuer Dateien den Zielnamen per PROPFIND ab und erwartet "gibt es
+        # noch nicht". Ein Fake-207 (wie früher) bringt den Ablauf durcheinander.
         parent_real = real_path.rsplit("\\", 1)[0] if "\\" in real_path else real_path.rsplit("/", 1)[0]
         name = real_path.rsplit("\\", 1)[-1] if "\\" in real_path else real_path.rsplit("/", 1)[-1]
         size, mtime = 0, 0
+        found = False
         try:
             for e in await request_fs_list(client_id, parent_real):
                 if e["name"] == name:
                     size, mtime = e.get("size", 0), e.get("mtime", 0)
+                    found = True
                     break
         except Exception:
             pass
+        if not found:
+            return Response(status_code=404)
         return _multistatus([_propfind_response(href_self, name, False, size, mtime)])
 
     # ---------------- GET / HEAD (Datei herunterladen / Ordner browsen) ----------------
@@ -834,8 +842,54 @@ async def dav(request: Request, full_path: str = ""):
                            details=f"{real_path} -> {dreal}")
         return Response(status_code=201)
 
-    # LOCK/UNLOCK/PROPPATCH: höflich mit Erfolg antworten (viele Clients brauchen das)
-    if method in ("LOCK", "UNLOCK", "PROPPATCH"):
-        return Response(status_code=200)
+    # ---------------- LOCK / UNLOCK / PROPPATCH ----------------
+    # WICHTIG für Windows: Beim ERSTELLEN einer Datei sperrt der Windows-
+    # WebClient sie zuerst per LOCK und erwartet zwingend eine korrekte
+    # Antwort mit <D:lockdiscovery>-XML und einem Lock-Token-Header. Eine
+    # leere 200-Antwort (wie früher) bringt den Windows-Explorer beim
+    # "Neue Datei erstellen" zum Absturz. Wir vergeben deshalb ein echtes
+    # (nicht weiter geprüftes) Token - der Relay ist ohnehin Single-Writer
+    # pro Operation, echtes Lock-Management ist hier nicht nötig.
+    if method == "LOCK":
+        token = "opaquelocktoken:" + _uuid.uuid4().hex
+        timeout = request.headers.get("timeout") or "Second-3600"
+        # Bei Lock-Refresh (If-Header mit altem Token) das alte Token weiterverwenden.
+        if_hdr = request.headers.get("if") or ""
+        if "opaquelocktoken:" in if_hdr:
+            try:
+                token = "opaquelocktoken:" + if_hdr.split("opaquelocktoken:")[1].split(">")[0].strip()
+            except Exception:
+                pass
+        href_lock = "/dav/" + "/".join(_up.quote(s) for s in segments)
+        lock_xml = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>\n'
+            '<D:locktype><D:write/></D:locktype>\n'
+            '<D:lockscope><D:exclusive/></D:lockscope>\n'
+            '<D:depth>infinity</D:depth>\n'
+            f'<D:timeout>{_xml.escape(timeout)}</D:timeout>\n'
+            f'<D:locktoken><D:href>{token}</D:href></D:locktoken>\n'
+            f'<D:lockroot><D:href>{_xml.escape(href_lock)}</D:href></D:lockroot>\n'
+            '</D:activelock></D:lockdiscovery></D:prop>')
+        return Response(content=lock_xml, status_code=200,
+                        media_type="application/xml; charset=utf-8",
+                        headers={"Lock-Token": f"<{token}>"})
+
+    if method == "UNLOCK":
+        # Erfolgreiches Entsperren = 204 No Content (leere 200 verwirrt Clients).
+        return Response(status_code=204)
+
+    if method == "PROPPATCH":
+        # Eigenschaften (Zeitstempel etc.) nehmen wir "erfolgreich" an -
+        # korrekt als 207 Multi-Status mit 200-Propstat, nicht als leere 200.
+        href_pp = "/dav/" + "/".join(_up.quote(s) for s in segments)
+        pp_xml = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<D:multistatus xmlns:D="DAV:"><D:response>\n'
+            f'<D:href>{_xml.escape(href_pp)}</D:href>\n'
+            '<D:propstat><D:prop/><D:status>HTTP/1.1 200 OK</D:status></D:propstat>\n'
+            '</D:response></D:multistatus>')
+        return Response(content=pp_xml, status_code=207,
+                        media_type="application/xml; charset=utf-8")
 
     return PlainTextResponse("Nicht unterstützt", status_code=405)

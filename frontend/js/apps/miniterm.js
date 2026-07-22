@@ -69,9 +69,21 @@ export class MiniTerm {
     //   - Text markiert  -> Rechtsklick KOPIERT die Auswahl (und hebt sie auf)
     //   - nichts markiert -> Rechtsklick FÜGT die Zwischenablage EIN
     // Das native Browser-Kontextmenü wird dafür unterdrückt.
+    // Rechtsklick-Verhalten - umschaltbar im Profil ("Terminal"-Abschnitt):
+    //   "direct" (Standard, PuTTY-Stil):
+    //     - Text markiert  -> Rechtsklick KOPIERT die Auswahl (und hebt sie auf)
+    //     - nichts markiert -> Rechtsklick FÜGT die Zwischenablage EIN
+    //   "menu": Rechtsklick öffnet ein Kontextmenü (Kopieren/Einfügen/...)
+    // Die Einstellung wird bei JEDEM Rechtsklick frisch gelesen, damit sie
+    // ohne Terminal-Neustart wirkt (localStorage-Key, serverseitig gesynct).
     this.screen.addEventListener("contextmenu", (e) => {
       e.preventDefault();
+      const mode = (localStorage.getItem("rmm_term_rightclick") || "direct");
       const sel = window.getSelection?.().toString() || "";
+      if (mode === "menu") {
+        this._showCtxMenu(e.clientX, e.clientY, sel);
+        return;
+      }
       if (sel) {
         this._copy(sel);
         try { window.getSelection().removeAllRanges(); } catch {}
@@ -294,6 +306,17 @@ export class MiniTerm {
       this._paste();
       return;
     }
+    // Klassiker: Strg+Einfg = Kopieren, Shift+Einfg = Einfügen.
+    if (k === "Insert" && e.ctrlKey && sel) {
+      e.preventDefault();
+      this._copy(sel);
+      return;
+    }
+    if (k === "Insert" && e.shiftKey) {
+      e.preventDefault();
+      this._paste();
+      return;
+    }
 
     let seq = null;
     if (k === "Enter") seq = "\r";
@@ -331,6 +354,61 @@ export class MiniTerm {
         document.execCommand("copy"); ta.remove();
       } catch {}
     }
+  }
+
+  // Kleines Kontextmenü fürs Terminal (Modus "menu").
+  _showCtxMenu(x, y, sel) {
+    this._closeCtxMenu();
+    const menu = document.createElement("div");
+    this._ctxMenu = menu;
+    menu.style.cssText =
+      "position:fixed;z-index:9999;background:var(--panel);border:1px solid var(--border);" +
+      "border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px;min-width:190px;font-size:13px";
+    const items = [
+      { label: "📋  Kopieren", hint: "Strg+Shift+C", disabled: !sel, fn: () => {
+          this._copy(sel);
+          try { window.getSelection().removeAllRanges(); } catch {}
+        } },
+      { label: "📥  Einfügen", hint: "Strg+V", fn: () => this._paste() },
+      { label: "🔎  Alles kopieren", fn: () => this._copy(this._allText()) },
+      { label: "✖  Auswahl aufheben", disabled: !sel, fn: () => {
+          try { window.getSelection().removeAllRanges(); } catch {}
+        } },
+    ];
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:14px;justify-content:space-between;padding:6px 12px;" +
+        `border-radius:6px;white-space:nowrap;${it.disabled ? "opacity:.45" : "cursor:pointer"}`;
+      row.innerHTML = `<span>${it.label}</span>` +
+        (it.hint ? `<span style="color:var(--subtext);font-size:11px">${it.hint}</span>` : "");
+      if (!it.disabled) {
+        row.addEventListener("mouseenter", () => { row.style.background = "var(--panel-2)"; });
+        row.addEventListener("mouseleave", () => { row.style.background = "transparent"; });
+        row.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this._closeCtxMenu();
+          it.fn();
+          setTimeout(() => this.input.focus(), 0);
+        });
+      }
+      menu.appendChild(row);
+    }
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+    this._ctxCloser = () => this._closeCtxMenu();
+    setTimeout(() => document.addEventListener("click", this._ctxCloser, { once: true }), 0);
+  }
+  _closeCtxMenu() {
+    if (this._ctxMenu) { this._ctxMenu.remove(); this._ctxMenu = null; }
+    if (this._ctxCloser) { document.removeEventListener("click", this._ctxCloser); this._ctxCloser = null; }
+  }
+  // Kompletter sichtbarer Puffer als Text (für "Alles kopieren").
+  _allText() {
+    try {
+      return this.buffer.map((row) => row.map((c) => c?.ch || " ").join("").replace(/\s+$/, "")).join("\n");
+    } catch { return ""; }
   }
 
   async _paste() {

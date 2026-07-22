@@ -771,6 +771,12 @@ async def dashboard_screen_start(sid, data):
                                 details=client.get("hostname") if client else client_id)
             print(f"[screen] Silent-Modus von {_u['username']} genutzt -> keine "
                   f"Abfrage, Modus wieder deaktiviert")
+            # Alle Dashboards informieren: Das Profil (falls offen) schaltet den
+            # Toggle dann sofort sichtbar wieder AUS.
+            await sio.emit("silent-screen:consumed",
+                           {"username": _u["username"],
+                            "client": client.get("hostname") if client else client_id},
+                           namespace="/dashboard")
     print(f"[screen] Start für {client.get('hostname') if client else client_id}: "
           f"device_type={client.get('device_type') if client else '?'} -> require_consent={needs_consent}")
 

@@ -67,6 +67,61 @@ export const api = {
   getSilentScreen: () => request("/api/auth/silent-screen"),
   setSilentScreen: (enabled) => request("/api/auth/silent-screen", {
     method: "PUT", body: JSON.stringify({ enabled: !!enabled }) }),
+
+  // ---- Spotify ----
+  getSpotifyConfig: () => request("/api/auth/spotify-config"),
+
+  // ---- AI-Chat ----
+  aiConnections: () => request("/api/ai/connections"),
+  aiCreateConnection: (body) => request("/api/ai/connections", {
+    method: "POST", body: JSON.stringify(body) }),
+  aiUpdateConnection: (id, body) => request(`/api/ai/connections/${id}`, {
+    method: "PUT", body: JSON.stringify(body) }),
+  aiDeleteConnection: (id) => request(`/api/ai/connections/${id}`, { method: "DELETE" }),
+  aiShareSubjects: () => request("/api/ai/share-subjects"),
+  aiChat: (connectionId, messages) => request("/api/ai/chat", {
+    method: "POST", body: JSON.stringify({ connection_id: connectionId, messages }) }),
+
+  // ---- Gaming-Hub-Scoreboard ----
+  gameScores: () => request("/api/games/scores"),
+  submitGameScore: (game, score) => request("/api/games/scores", {
+    method: "POST", body: JSON.stringify({ game, score }) }),
+
+  // ---- Tickets ----
+  tickets: () => request("/api/tickets"),
+  ticket: (id) => request(`/api/tickets/${id}`),
+  createTicket: (body) => request("/api/tickets", {
+    method: "POST", body: JSON.stringify(body) }),
+  updateTicket: (id, body) => request(`/api/tickets/${id}`, {
+    method: "PUT", body: JSON.stringify(body) }),
+  deleteTicket: (id) => request(`/api/tickets/${id}`, { method: "DELETE" }),
+  setTicketAssignees: (id, assignees) => request(`/api/tickets/${id}/assignees`, {
+    method: "PUT", body: JSON.stringify({ assignees }) }),
+  setTicketStatus: (id, status) => request(`/api/tickets/${id}/status`, {
+    method: "PUT", body: JSON.stringify({ status }) }),
+  addTicketComment: (id, text) => request(`/api/tickets/${id}/comments`, {
+    method: "POST", body: JSON.stringify({ text }) }),
+  ticketSubjects: () => request("/api/tickets/meta/subjects"),
+  // Datei-Upload als roher Body (kein multipart) - Dateiname als Query-Param.
+  uploadTicketFile: async (id, file) => {
+    const token = localStorage.getItem("rmm_token");
+    const res = await fetch(`/api/tickets/${id}/files?filename=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Upload fehlgeschlagen (${res.status})`);
+    return res.json();
+  },
+  // Anhang mit Auth-Header laden und als Blob-URL zurückgeben (für <img>/Download).
+  fetchTicketFile: async (id, fileId) => {
+    const token = localStorage.getItem("rmm_token");
+    const res = await fetch(`/api/tickets/${id}/files/${fileId}`, {
+      headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Download fehlgeschlagen (${res.status})`);
+    return URL.createObjectURL(await res.blob());
+  },
+  deleteTicketFile: (id, fileId) => request(`/api/tickets/${id}/files/${fileId}`, { method: "DELETE" }),
   changePassword: (current_password, new_password) =>
     request("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
   updateProfile: (data) => request("/api/auth/profile", { method: "PUT", body: JSON.stringify(data) }),

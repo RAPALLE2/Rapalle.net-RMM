@@ -417,6 +417,75 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_metrics_history_client_ts
             ON metrics_history (client_id, ts);
+
+        -- ----------------------------------------------------------
+        -- AI-Chat: gespeicherte API-Verbindungen (URL/Key/Modell).
+        -- visibility: 'private' (nur Ersteller), 'all' (alle Benutzer),
+        -- 'shared' (nur die in ai_connection_shares gelisteten User/Gruppen).
+        -- Der API-Key wird NIE an Nicht-Eigentümer ausgeliefert - der Chat
+        -- läuft immer als Proxy über das Backend.
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS ai_connections (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            api_url TEXT NOT NULL,
+            api_key TEXT NOT NULL,
+            model TEXT NOT NULL,
+            visibility TEXT NOT NULL DEFAULT 'private',  -- 'private' | 'all' | 'shared'
+            owner_user_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ai_connection_shares (
+            connection_id TEXT NOT NULL,
+            subject_type TEXT NOT NULL,   -- 'user' | 'group'
+            subject_id TEXT NOT NULL,
+            PRIMARY KEY (connection_id, subject_type, subject_id)
+        );
+
+        -- ----------------------------------------------------------
+        -- Ticket-System. Sichtbar sind Tickets nur für Admins, den Ersteller,
+        -- direkt zugewiesene Benutzer und Mitglieder zugewiesener Gruppen.
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS tickets (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',      -- 'open' | 'in_progress' | 'resolved' | 'closed'
+            priority TEXT NOT NULL DEFAULT 'normal',  -- 'low' | 'normal' | 'high' | 'critical'
+            created_by TEXT NOT NULL,                 -- username
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            due_date INTEGER,                         -- Fälligkeit (ms) oder NULL
+            resolved_at INTEGER,
+            resolved_by TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ticket_assignees (
+            ticket_id TEXT NOT NULL,
+            subject_type TEXT NOT NULL,   -- 'user' | 'group'
+            subject_id TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, subject_type, subject_id)
+        );
+        CREATE TABLE IF NOT EXISTS ticket_clients (
+            ticket_id TEXT NOT NULL,
+            client_id TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, client_id)
+        );
+        CREATE TABLE IF NOT EXISTS ticket_comments (
+            id TEXT PRIMARY KEY,
+            ticket_id TEXT NOT NULL,
+            author TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ticket_files (
+            id TEXT PRIMARY KEY,
+            ticket_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            size INTEGER NOT NULL DEFAULT 0,
+            mime TEXT,
+            uploaded_by TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
         """
     )
     _conn.commit()
@@ -432,6 +501,8 @@ def init_db() -> None:
     # damit sie in JEDEM Browser gleich sind (nicht pro Browser/localStorage).
     _migrate_add_column("users", "silent_screen", "INTEGER DEFAULT 0")
     _migrate_add_column("users", "ui_prefs", "TEXT")
+    # Client-Websites: Öffnen im internen Browser-Fenster oder externen Tab.
+    _migrate_add_column("client_websites", "open_mode", "TEXT DEFAULT 'external'")
     _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
     # Automatisches Agent-Update pro Client: 'global' = folgt der Einstellung
     # in den Settings, 'on' = immer, 'off' = nie.
@@ -1324,6 +1395,10 @@ GLOBAL_PERM_KEYS = [
     # Remote-Bildschirm ohne Anfrage: erlaubt den einmaligen "Silent-Modus"
     # im Profil (nächste Remote-Sitzung ohne Zustimmungs-Dialog am Gerät).
     "screen_silent",
+    # Ticket-System (Sichtbarkeit einzelner Tickets zusätzlich auf
+    # Admins/Ersteller/Zugewiesene begrenzt, siehe tickets_routes.py).
+    "ticket_read", "ticket_create", "ticket_edit", "ticket_comment",
+    "ticket_assign", "ticket_resolve", "ticket_delete",
 ]
 
 # Pro-Client-Rechte:
@@ -1399,6 +1474,13 @@ _PERM_IMPLIES = {
     "delete_replay": ["see_replay"],
     # Bildschirm ohne Anfrage setzt das Bildschirm-Recht voraus.
     "c_screen_silent": ["c_screen"],
+    # Ticket-Rechte setzen das Lese-Recht voraus.
+    "ticket_create": ["ticket_read"],
+    "ticket_edit": ["ticket_read"],
+    "ticket_comment": ["ticket_read"],
+    "ticket_assign": ["ticket_read"],
+    "ticket_resolve": ["ticket_read"],
+    "ticket_delete": ["ticket_read"],
 }
 
 
@@ -1912,15 +1994,16 @@ def get_client_website(website_id: str) -> dict | None:
 
 def create_client_website(client_id: str, name: str, url: str, favorite: bool = False,
                           monitor_enabled: bool = False, monitor_notify: str = "down",
-                          monitor_interval_seconds: int = 300) -> dict:
+                          monitor_interval_seconds: int = 300,
+                          open_mode: str = "external") -> dict:
     wid = _new_id()
     _conn.execute(
         """INSERT INTO client_websites
            (id, client_id, name, url, favorite, monitor_enabled, monitor_notify,
-            monitor_interval_seconds, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            monitor_interval_seconds, open_mode, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (wid, client_id, name, url, int(favorite), int(monitor_enabled),
-         monitor_notify, int(monitor_interval_seconds), _now_ms()),
+         monitor_notify, int(monitor_interval_seconds), open_mode, _now_ms()),
     )
     _conn.commit()
     return get_client_website(wid)
@@ -1929,7 +2012,7 @@ def create_client_website(client_id: str, name: str, url: str, favorite: bool = 
 def update_client_website(website_id: str, fields: dict) -> dict | None:
     """Aktualisiert nur die übergebenen Felder (analog update_client)."""
     allowed = {"name", "url", "favorite", "monitor_enabled", "monitor_notify",
-               "monitor_interval_seconds"}
+               "monitor_interval_seconds", "open_mode"}
     fields = {k: v for k, v in fields.items() if k in allowed}
     if fields:
         sets = ", ".join(f"{k} = ?" for k in fields)

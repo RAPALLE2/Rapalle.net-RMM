@@ -78,12 +78,12 @@ export function renderDashboard(target) {
       </div>`).join("");
 
     const siteCards = favSites.map((w) => {
-      const meta = { name: w.name, url: w.url, clientId: w.clientId, clientHostname: w.clientHostname };
+      const meta = { name: w.name, url: w.url, clientId: w.clientId, clientHostname: w.clientHostname, open_mode: w.open_mode };
       return `
       <div class="panel" style="display:flex;align-items:center;gap:8px;padding:8px 12px">
-        <a href="${esc(w.url || "")}" target="_blank" rel="noopener noreferrer"
-           title="${esc(w.url || "")}" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)">
-          <span>🔗</span><span style="font-weight:600">${esc(w.name || w.url || "")}</span>
+        <a href="${esc(w.url || "")}" data-dash-web="${esc(w.id)}"
+           title="${esc(w.url || "")}" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text);cursor:pointer">
+          <span>${w.open_mode === "internal" ? "🪟" : "🔗"}</span><span style="font-weight:600">${esc(w.name || w.url || "")}</span>
           <span style="font-size:11px;color:var(--subtext)">${esc(w.clientHostname || "")}</span>
         </a>
         ${favStarHtml("websites", w.id, meta)}
@@ -93,6 +93,14 @@ export function renderDashboard(target) {
     box.innerHTML = `
       <h3 style="margin:0 0 8px;font-size:14px;color:var(--subtext)">★ Angeheftet</h3>
       <div style="display:flex;flex-wrap:wrap;gap:8px">${clientCards}${siteCards}</div>`;
+    // Website-Favoriten nach open_mode öffnen (intern/extern).
+    box.querySelectorAll("[data-dash-web]").forEach((a) =>
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        const w = favSites.find((x) => String(x.id) === a.dataset.dashWeb);
+        if (w) import("./webbrowser.js").then((m) => m.openWebsiteEntry(w));
+      })
+    );
 
     box.querySelectorAll("[data-dashfav-client]").forEach((el) =>
       el.addEventListener("click", (e) => {

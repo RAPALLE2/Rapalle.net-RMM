@@ -115,6 +115,25 @@ export function initStartMenu({ root, username, onOpenApp, allowed }) {
 // Recht aus, ohne das Layout zu verändern).
 export function refreshStartMenu() { render(); }
 
+// Dynamische Katalog-Einträge (z.B. gespeicherte Web-Apps aus dem internen
+// Browser): fügen eine App zur Laufzeit ins Startmenü ein bzw. entfernen sie.
+export function addCatalogEntry(id, icon, label) {
+  const existed = !!CATALOG[id];
+  CATALOG[id] = { id, icon: icon || "🌐", iconText: icon || "🌐", label: label || id };
+  if (!existed) CATALOG_ORDER.push(id);
+  reconcile();   // hängt neue Apps automatisch ans Layout an
+  save();
+  render();
+}
+export function removeCatalogEntry(id) {
+  if (!CATALOG[id]) return;
+  delete CATALOG[id];
+  CATALOG_ORDER = CATALOG_ORDER.filter((x) => x !== id);
+  reconcile();   // entfernt tote Referenzen aus dem Layout
+  save();
+  render();
+}
+
 // -------------------------------------------------------------
 // Gerüst (Header mit Bearbeiten-Button + Grid-Container)
 // -------------------------------------------------------------

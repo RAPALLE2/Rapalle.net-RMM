@@ -132,6 +132,13 @@ PERM_LABELS = {
     "admin_settings": "Admin-Einstellungen (IP/Port, Server-Update, DB, Neustart)",
     "screen_silent": "Remote-Bildschirm ohne Anfrage (Silent-Modus)",
     "c_screen_silent": "Remote-Bildschirm ohne Anfrage",
+    "ticket_read": "Tickets lesen",
+    "ticket_create": "Tickets erstellen",
+    "ticket_edit": "Tickets bearbeiten",
+    "ticket_comment": "Tickets kommentieren",
+    "ticket_assign": "Tickets zuweisen",
+    "ticket_resolve": "Tickets als gelöst markieren",
+    "ticket_delete": "Tickets löschen",
     "see_permissions": "Rechte & Gruppen sehen",
     "manage_permissions": "Rechte & Gruppen bearbeiten",
     "create_users": "Benutzer erstellen",
@@ -657,6 +664,10 @@ class SettingsBody(BaseModel):
     # Auto-Update auch für Clients, die offline waren, sobald sie sich wieder
     # verbinden ("1" = an, Standard).
     agent_auto_update_offline: str | None = None
+    # Spotify-Integration: Client-ID einer (vom Admin registrierten) Spotify-App.
+    # Damit können sich Benutzer im Audio Player per OAuth (PKCE, ohne Secret)
+    # anmelden und mit Premium volle Titel abspielen.
+    spotify_client_id: str | None = None
     # Server-Selbst-Update (Settings -> Update)
     server_auto_update: str | None = None            # "1" | "0"
     server_auto_update_channel: str | None = None    # "commit" | "full" | "any"

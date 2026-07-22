@@ -1,0 +1,372 @@
+"""
+routers/tickets_routes.py
+-------------------------
+Ticket-System mit Zuweisungen, Status, Fälligkeit, Client-Verknüpfung,
+Kommentaren und Datei-Anhängen (Screenshots etc.).
+
+Sichtbarkeit einzelner Tickets: NUR Admins, der Ersteller, direkt zugewiesene
+Benutzer und Mitglieder zugewiesener Gruppen sehen ein Ticket. Zusätzlich
+gelten die globalen Rechte:
+  ticket_read     -> Ticket-App/Liste sehen (Basis für alle anderen)
+  ticket_create   -> Tickets erstellen
+  ticket_edit     -> Titel/Beschreibung/Priorität/Fälligkeit/Clients ändern
+  ticket_comment  -> kommentieren
+  ticket_assign   -> Benutzer/Gruppen zuweisen
+  ticket_resolve  -> als gelöst markieren / wieder öffnen / Status ändern
+  ticket_delete   -> Tickets löschen
+
+Datei-Anhänge werden als ROHER Request-Body hochgeladen (kein multipart,
+gleiches Muster wie Branding/Recordings) und unter backend/ticket_files/
+abgelegt.
+"""
+
+import pathlib
+import time
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from app import db
+from app.auth import get_current_user, is_super_admin, require_perm, user_has_permission
+
+router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+# Ablage der Anhänge: backend/ticket_files/<ticket_id>/<file_id>
+FILES_DIR = pathlib.Path(__file__).resolve().parent.parent.parent / "ticket_files"
+MAX_FILE_BYTES = 25 * 1024 * 1024   # 25 MB pro Anhang
+
+VALID_STATUS = ("open", "in_progress", "resolved", "closed")
+VALID_PRIO = ("low", "normal", "high", "critical")
+
+
+def _conn():
+    return db._conn
+
+
+def _now() -> int:
+    return int(time.time() * 1000)
+
+
+# ------------------------------------------------------------------
+# Sichtbarkeit
+# ------------------------------------------------------------------
+
+def _assignees_of(ticket_id: str) -> list[dict]:
+    rows = _conn().execute(
+        "SELECT subject_type, subject_id FROM ticket_assignees WHERE ticket_id = ?",
+        (ticket_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _clients_of(ticket_id: str) -> list[str]:
+    rows = _conn().execute(
+        "SELECT client_id FROM ticket_clients WHERE ticket_id = ?", (ticket_id,)).fetchall()
+    return [r["client_id"] for r in rows]
+
+
+def _user_may_see(user: dict, ticket: dict) -> bool:
+    """Admin, Ersteller, zugewiesener Benutzer oder Mitglied zugewiesener Gruppe."""
+    if is_super_admin(user):
+        return True
+    if ticket["created_by"] == user["username"]:
+        return True
+    group_ids = set(db.get_user_group_ids(user["id"]))
+    for a in _assignees_of(ticket["id"]):
+        if a["subject_type"] == "user" and a["subject_id"] == user["id"]:
+            return True
+        if a["subject_type"] == "group" and a["subject_id"] in group_ids:
+            return True
+    return False
+
+
+def _get_visible_ticket(user: dict, ticket_id: str) -> dict:
+    row = _conn().execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Ticket nicht gefunden")
+    t = dict(row)
+    if not _user_may_see(user, t):
+        raise HTTPException(403, "Kein Zugriff auf dieses Ticket")
+    return t
+
+
+def _full(t: dict) -> dict:
+    """Ticket inkl. Zuweisungen, Clients, Kommentaren und Datei-Liste."""
+    out = dict(t)
+    out["assignees"] = _assignees_of(t["id"])
+    out["clients"] = _clients_of(t["id"])
+    out["comments"] = [dict(r) for r in _conn().execute(
+        "SELECT * FROM ticket_comments WHERE ticket_id = ? ORDER BY created_at",
+        (t["id"],)).fetchall()]
+    out["files"] = [dict(r) for r in _conn().execute(
+        "SELECT id, filename, size, mime, uploaded_by, created_at FROM ticket_files "
+        "WHERE ticket_id = ? ORDER BY created_at", (t["id"],)).fetchall()]
+    return out
+
+
+def _touch(ticket_id: str):
+    _conn().execute("UPDATE tickets SET updated_at = ? WHERE id = ?", (_now(), ticket_id))
+    _conn().commit()
+
+
+# ------------------------------------------------------------------
+# Liste + Detail
+# ------------------------------------------------------------------
+
+@router.get("")
+async def list_tickets(user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_read")
+    rows = [dict(r) for r in _conn().execute(
+        "SELECT * FROM tickets ORDER BY created_at DESC").fetchall()]
+    out = []
+    for t in rows:
+        if _user_may_see(user, t):
+            t["assignees"] = _assignees_of(t["id"])
+            t["clients"] = _clients_of(t["id"])
+            out.append(t)
+    return out
+
+
+@router.get("/{ticket_id}")
+async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_read")
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+# ------------------------------------------------------------------
+# Erstellen / Bearbeiten / Löschen
+# ------------------------------------------------------------------
+
+class AssigneeEntry(BaseModel):
+    subject_type: str   # 'user' | 'group'
+    subject_id: str
+
+
+class TicketBody(BaseModel):
+    title: str
+    description: str = ""
+    priority: str = "normal"
+    due_date: int | None = None            # ms oder None
+    clients: list[str] = []
+    assignees: list[AssigneeEntry] = []
+
+
+def _save_assignees(ticket_id: str, assignees: list[AssigneeEntry]):
+    c = _conn()
+    c.execute("DELETE FROM ticket_assignees WHERE ticket_id = ?", (ticket_id,))
+    for a in assignees:
+        if a.subject_type in ("user", "group") and a.subject_id:
+            c.execute("INSERT OR IGNORE INTO ticket_assignees (ticket_id, subject_type, subject_id) "
+                      "VALUES (?, ?, ?)", (ticket_id, a.subject_type, a.subject_id))
+    c.commit()
+
+
+def _save_clients(ticket_id: str, clients: list[str]):
+    c = _conn()
+    c.execute("DELETE FROM ticket_clients WHERE ticket_id = ?", (ticket_id,))
+    for cid in clients:
+        if cid:
+            c.execute("INSERT OR IGNORE INTO ticket_clients (ticket_id, client_id) VALUES (?, ?)",
+                      (ticket_id, cid))
+    c.commit()
+
+
+@router.post("")
+async def create_ticket(body: TicketBody, user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_create")
+    if not body.title.strip():
+        raise HTTPException(400, "Titel fehlt")
+    if body.priority not in VALID_PRIO:
+        raise HTTPException(400, "Ungültige Priorität")
+    tid = uuid.uuid4().hex
+    now = _now()
+    _conn().execute(
+        "INSERT INTO tickets (id, title, description, status, priority, created_by, "
+        "created_at, updated_at, due_date) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+        (tid, body.title.strip(), body.description, body.priority,
+         user["username"], now, now, body.due_date))
+    _conn().commit()
+    _save_clients(tid, body.clients)
+    # Zuweisen direkt beim Erstellen nur mit ticket_assign - sonst still leer.
+    if body.assignees and user_has_permission(user, "ticket_assign"):
+        _save_assignees(tid, body.assignees)
+    db.add_audit_entry(user["username"], "ticket.created", target=tid,
+                       details=body.title.strip())
+    return _full(dict(_conn().execute("SELECT * FROM tickets WHERE id = ?", (tid,)).fetchone()))
+
+
+@router.put("/{ticket_id}")
+async def update_ticket(ticket_id: str, body: TicketBody,
+                        user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_edit")
+    t = _get_visible_ticket(user, ticket_id)
+    if not body.title.strip():
+        raise HTTPException(400, "Titel fehlt")
+    if body.priority not in VALID_PRIO:
+        raise HTTPException(400, "Ungültige Priorität")
+    _conn().execute(
+        "UPDATE tickets SET title=?, description=?, priority=?, due_date=?, updated_at=? WHERE id=?",
+        (body.title.strip(), body.description, body.priority, body.due_date, _now(), ticket_id))
+    _conn().commit()
+    _save_clients(ticket_id, body.clients)
+    if user_has_permission(user, "ticket_assign"):
+        _save_assignees(ticket_id, body.assignees)
+    db.add_audit_entry(user["username"], "ticket.updated", target=ticket_id,
+                       details=t["title"])
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+@router.delete("/{ticket_id}")
+async def delete_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_delete")
+    t = _get_visible_ticket(user, ticket_id)
+    c = _conn()
+    for table in ("ticket_assignees", "ticket_clients", "ticket_comments", "ticket_files"):
+        c.execute(f"DELETE FROM {table} WHERE ticket_id = ?", (ticket_id,))
+    c.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
+    c.commit()
+    # Anhänge von der Platte löschen (best effort).
+    import shutil
+    shutil.rmtree(FILES_DIR / ticket_id, ignore_errors=True)
+    db.add_audit_entry(user["username"], "ticket.deleted", target=ticket_id,
+                       details=t["title"])
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------
+# Zuweisen / Status / Kommentare
+# ------------------------------------------------------------------
+
+class AssignBody(BaseModel):
+    assignees: list[AssigneeEntry]
+
+
+@router.put("/{ticket_id}/assignees")
+async def set_assignees(ticket_id: str, body: AssignBody,
+                        user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_assign")
+    t = _get_visible_ticket(user, ticket_id)
+    _save_assignees(ticket_id, body.assignees)
+    _touch(ticket_id)
+    db.add_audit_entry(user["username"], "ticket.assigned", target=ticket_id,
+                       details=f"{t['title']}: {len(body.assignees)} Zuweisung(en)")
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+class StatusBody(BaseModel):
+    status: str
+
+
+@router.put("/{ticket_id}/status")
+async def set_status(ticket_id: str, body: StatusBody,
+                     user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_resolve")
+    t = _get_visible_ticket(user, ticket_id)
+    if body.status not in VALID_STATUS:
+        raise HTTPException(400, "Ungültiger Status")
+    resolved_at, resolved_by = t["resolved_at"], t["resolved_by"]
+    if body.status == "resolved" and t["status"] != "resolved":
+        resolved_at, resolved_by = _now(), user["username"]
+    if body.status in ("open", "in_progress"):
+        resolved_at, resolved_by = None, None
+    _conn().execute(
+        "UPDATE tickets SET status=?, resolved_at=?, resolved_by=?, updated_at=? WHERE id=?",
+        (body.status, resolved_at, resolved_by, _now(), ticket_id))
+    _conn().commit()
+    db.add_audit_entry(user["username"], f"ticket.status_{body.status}", target=ticket_id,
+                       details=t["title"])
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+class CommentBody(BaseModel):
+    text: str
+
+
+@router.post("/{ticket_id}/comments")
+async def add_comment(ticket_id: str, body: CommentBody,
+                      user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_comment")
+    _get_visible_ticket(user, ticket_id)
+    if not body.text.strip():
+        raise HTTPException(400, "Kommentar ist leer")
+    _conn().execute(
+        "INSERT INTO ticket_comments (id, ticket_id, author, text, created_at) VALUES (?, ?, ?, ?, ?)",
+        (uuid.uuid4().hex, ticket_id, user["username"], body.text.strip(), _now()))
+    _conn().commit()
+    _touch(ticket_id)
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+# ------------------------------------------------------------------
+# Datei-Anhänge (Screenshots etc.) - Upload als roher Body (kein multipart).
+# ------------------------------------------------------------------
+
+@router.post("/{ticket_id}/files")
+async def upload_file(ticket_id: str, request: Request, filename: str = "datei",
+                      user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_comment")
+    _get_visible_ticket(user, ticket_id)
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "Leerer Upload")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(413, "Datei zu groß (max. 25 MB)")
+    # Dateinamen entschärfen (nur Basename, keine Pfade).
+    safe_name = pathlib.Path(filename).name or "datei"
+    fid = uuid.uuid4().hex
+    target_dir = FILES_DIR / ticket_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / fid).write_bytes(data)
+    _conn().execute(
+        "INSERT INTO ticket_files (id, ticket_id, filename, size, mime, uploaded_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (fid, ticket_id, safe_name, len(data),
+         request.headers.get("content-type") or "application/octet-stream",
+         user["username"], _now()))
+    _conn().commit()
+    _touch(ticket_id)
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+@router.get("/{ticket_id}/files/{file_id}")
+async def download_file(ticket_id: str, file_id: str,
+                        user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_read")
+    _get_visible_ticket(user, ticket_id)
+    row = _conn().execute(
+        "SELECT * FROM ticket_files WHERE id = ? AND ticket_id = ?",
+        (file_id, ticket_id)).fetchone()
+    if not row:
+        raise HTTPException(404, "Datei nicht gefunden")
+    path = FILES_DIR / ticket_id / file_id
+    if not path.exists():
+        raise HTTPException(404, "Datei fehlt auf dem Server")
+    return FileResponse(path, media_type=row["mime"] or "application/octet-stream",
+                        filename=row["filename"])
+
+
+@router.delete("/{ticket_id}/files/{file_id}")
+async def delete_file(ticket_id: str, file_id: str,
+                      user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_edit")
+    _get_visible_ticket(user, ticket_id)
+    _conn().execute("DELETE FROM ticket_files WHERE id = ? AND ticket_id = ?",
+                    (file_id, ticket_id))
+    _conn().commit()
+    try:
+        (FILES_DIR / ticket_id / file_id).unlink()
+    except OSError:
+        pass
+    _touch(ticket_id)
+    return _full(_get_visible_ticket(user, ticket_id))
+
+
+# Auswahl-Listen für den Zuweisungs-Dialog.
+@router.get("/meta/subjects")
+async def assign_subjects(user: dict = Depends(get_current_user)):
+    require_perm(user, "ticket_read")
+    users = [{"id": u["id"], "label": u.get("display_name") or u["username"]}
+             for u in db.list_users()]
+    groups = [{"id": g["id"], "label": g["name"]} for g in db.list_groups()]
+    return {"users": users, "groups": groups}

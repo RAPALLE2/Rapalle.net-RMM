@@ -58,6 +58,7 @@ class WebsiteBody(BaseModel):
     monitor_enabled: bool = False
     monitor_notify: str = "down"              # 'up' | 'down' | 'always'
     monitor_interval_seconds: int = 300       # Delay zwischen den Scans
+    open_mode: str = "external"               # 'external' Tab | 'internal' Browser-Fenster
 
 
 class WebsiteUpdateBody(BaseModel):
@@ -67,6 +68,7 @@ class WebsiteUpdateBody(BaseModel):
     monitor_enabled: bool | None = None
     monitor_notify: str | None = None
     monitor_interval_seconds: int | None = None
+    open_mode: str | None = None
 
 
 def _validate_website(url: str | None, notify: str | None, interval: int | None) -> None:
@@ -76,6 +78,11 @@ def _validate_website(url: str | None, notify: str | None, interval: int | None)
         raise HTTPException(400, "monitor_notify muss 'up', 'down' oder 'always' sein")
     if interval is not None and interval < 10:
         raise HTTPException(400, "Das Scan-Intervall muss mindestens 10 Sekunden betragen")
+
+
+def _validate_open_mode(mode: str | None) -> None:
+    if mode is not None and mode not in ("external", "internal"):
+        raise HTTPException(400, "open_mode muss 'external' oder 'internal' sein")
 
 
 # Wichtig: Literal-Route VOR den /{client_id}/...-Routen definieren.
@@ -103,12 +110,14 @@ async def create_client_website(client_id: str, body: WebsiteBody,
         raise HTTPException(404, "Client nicht gefunden")
     _require_client_perm(user, client_id, "c_websites_edit")
     _validate_website(body.url, body.monitor_notify, body.monitor_interval_seconds)
+    _validate_open_mode(body.open_mode)
 
     w = db.create_client_website(
         client_id, body.name.strip(), body.url.strip(),
         favorite=body.favorite, monitor_enabled=body.monitor_enabled,
         monitor_notify=body.monitor_notify,
         monitor_interval_seconds=body.monitor_interval_seconds,
+        open_mode=body.open_mode,
     )
     db.add_audit_entry(user["username"], "website.created", target=client_id,
                        details=f"{body.name} ({body.url})")
@@ -126,6 +135,7 @@ async def update_client_website(client_id: str, website_id: str, body: WebsiteUp
     fields = body.model_dump(exclude_unset=True)
     _validate_website(fields.get("url"), fields.get("monitor_notify"),
                       fields.get("monitor_interval_seconds"))
+    _validate_open_mode(fields.get("open_mode"))
     for key in ("favorite", "monitor_enabled"):
         if key in fields:
             fields[key] = int(fields[key])

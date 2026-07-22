@@ -111,12 +111,25 @@ export function renderProfile(body, win) {
       </div>
 
       <h3 style="margin-top:26px" ${maySilent ? "" : "hidden"}>Remote-Bildschirm</h3>
+      <style>
+        /* Toggle-Schalter für den Silent-Modus */
+        .pr-toggle { position:relative;display:inline-block;width:46px;height:24px;flex:none }
+        .pr-toggle input { opacity:0;width:0;height:0 }
+        .pr-toggle .knob { position:absolute;inset:0;background:#33405a;border-radius:24px;
+          transition:background .15s;cursor:pointer }
+        .pr-toggle .knob::before { content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;
+          border-radius:50%;background:#fff;transition:transform .15s }
+        .pr-toggle input:checked + .knob { background:#3ecf8e }
+        .pr-toggle input:checked + .knob::before { transform:translateX(22px) }
+        .pr-toggle input:disabled + .knob { opacity:.45;cursor:not-allowed }
+      </style>
       <div class="form-row" style="align-items:center" ${maySilent ? "" : "hidden"}>
         <label>Silent-Modus</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+        <label class="pr-toggle" title="Nächste Remote-Sitzung ohne Anfrage am Gerät (einmalig)">
           <input type="checkbox" id="pr-silent" disabled />
-          Nächste Remote-Sitzung OHNE Anfrage am Gerät starten (einmalig)
+          <span class="knob"></span>
         </label>
+        <span id="pr-silent-state" style="font-size:13px;color:var(--subtext)">…</span>
       </div>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${maySilent ? "" : "hidden"}>
         Ist der Modus aktiv, wird bei der nächsten Remote-Bildschirm-Sitzung der
@@ -126,6 +139,20 @@ export function renderProfile(body, win) {
         Nutzung wird im Audit-Log protokolliert.
       </p>
       <div id="pr-silent-msg" style="font-size:12px;color:var(--subtext)" ${maySilent ? "" : "hidden"}></div>
+
+      <h3 style="margin-top:26px">Terminal</h3>
+      <div class="form-row" style="align-items:center">
+        <label>Rechtsklick</label>
+        <select id="pr-term-rc" style="max-width:340px">
+          <option value="direct">Direkt: markiert = Kopieren, sonst Einfügen (PuTTY-Stil)</option>
+          <option value="menu">Kontextmenü: Kopieren / Einfügen / Alles kopieren</option>
+        </select>
+      </div>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+        Shortcuts funktionieren immer: <b>Strg+Shift+C</b> kopieren (bzw. Strg+C
+        bei Markierung), <b>Strg+V</b> einfügen, <b>Strg+Einfg</b>/<b>Shift+Einfg</b>
+        klassisch. Die Einstellung wirkt sofort, auch in offenen Terminals.
+      </p>
 
       <h3 style="margin-top:26px">Passwort ändern</h3>
       ${u.auth_realm ? `
@@ -148,6 +175,19 @@ export function renderProfile(body, win) {
     </div>
   `;
 
+  // ---- Terminal: Rechtsklick-Verhalten (sofort wirksam, serverseitig gesynct) ----
+  const termRc = body.querySelector("#pr-term-rc");
+  if (termRc) {
+    termRc.value = localStorage.getItem("rmm_term_rightclick") || "direct";
+    termRc.addEventListener("change", () => {
+      try { localStorage.setItem("rmm_term_rightclick", termRc.value); } catch {}
+      import("../persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
+      window.notify?.(termRc.value === "menu"
+        ? "Terminal-Rechtsklick: Kontextmenü"
+        : "Terminal-Rechtsklick: direkt Kopieren/Einfügen", "success", 2500);
+    });
+  }
+
   // Dashboard-Bearbeitung an/aus (sofort wirksam; pro Benutzer gespeichert)
   body.querySelector("#pr-dashedit")?.addEventListener("change", (e) => {
     setDashEdit(e.target.checked);
@@ -164,21 +204,76 @@ export function renderProfile(body, win) {
   if (maySilent) {
     const silentCb = body.querySelector("#pr-silent");
     const silentMsg = body.querySelector("#pr-silent-msg");
-    (async () => {
+    const silentState = body.querySelector("#pr-silent-state");
+    const setStateText = (on) => {
+      if (silentState) silentState.textContent = on
+        ? "AN - nächste Sitzung ohne Anfrage (einmalig)"
+        : "AUS - Sitzungen fragen normal am Gerät an";
+    };
+    const refresh = async () => {
       try {
         const st = await api.getSilentScreen();
         if (!document.body.contains(body)) return;
         silentCb.checked = !!st.enabled;
-        silentCb.disabled = false;
+        setStateText(silentCb.checked);
+        // Server-Antwort ist die Wahrheit: Nur freischalten, wenn das Recht
+        // auch serverseitig vorliegt (deckt veralteten Rechte-Cache ab).
+        silentCb.disabled = st.allowed === false;
+        if (st.allowed === false && silentMsg) {
+          silentMsg.textContent = "Dir fehlt das Recht 'Remote-Bildschirm ohne Anfrage'.";
+        }
       } catch (e) {
-        if (silentMsg) silentMsg.textContent = `Status nicht ladbar: ${e.message}`;
+        if (silentMsg) silentMsg.textContent =
+          `Status nicht ladbar: ${e.message} - läuft das Backend mit der aktuellen Version (auth_routes.py/sockets.py)?`;
       }
-    })();
+    };
+    refresh();
+
+    // Wird der Silent-Modus durch den Start einer Remote-Sitzung VERBRAUCHT,
+    // meldet das Backend das live -> Toggle geht sichtbar wieder AUS.
+    const onConsumed = (e) => {
+      if (!document.body.contains(body)) {
+        window.removeEventListener("silent-screen-consumed", onConsumed);
+        return;
+      }
+      if (e.detail?.username && e.detail.username !== state.user?.username) return;
+      silentCb.checked = false;
+      setStateText(false);
+      if (silentMsg) silentMsg.textContent =
+        `Silent-Modus wurde für die Sitzung${e.detail?.client ? ` auf "${e.detail.client}"` : ""} genutzt und ist wieder AUS.`;
+    };
+    window.addEventListener("silent-screen-consumed", onConsumed);
+
+    // Zusätzlich LOKAL: Sobald DIESER Browser eine Remote-Session startet
+    // (vnc.js feuert "screen-session-started"), geht der Toggle sofort aus -
+    // ohne auf das Backend-Event warten zu müssen. Kurz danach wird der echte
+    // Stand vom Server nachgeladen (falls der Modus z.B. mangels Recht gar
+    // nicht verbraucht wurde, springt der Toggle korrekt wieder an).
+    const onSessionStart = () => {
+      if (!document.body.contains(body)) {
+        window.removeEventListener("screen-session-started", onSessionStart);
+        return;
+      }
+      if (silentCb.checked) {
+        silentCb.checked = false;
+        setStateText(false);
+        if (silentMsg) silentMsg.textContent =
+          "Remote-Sitzung gestartet - Silent-Modus ist wieder AUS.";
+      }
+      setTimeout(refresh, 1200);   // Server-Wahrheit nachziehen
+    };
+    window.addEventListener("screen-session-started", onSessionStart);
+
+    // Fallback ohne Live-Verbindung: Beim Zurückkehren ins Fenster neu laden.
+    window.addEventListener("focus", () => {
+      if (document.body.contains(body)) refresh();
+    });
     silentCb?.addEventListener("change", async (e) => {
       const on = e.target.checked;
       silentCb.disabled = true;
       try {
         await api.setSilentScreen(on);
+        setStateText(on);
         if (silentMsg) silentMsg.textContent = on
           ? "Aktiv: Die nächste Remote-Sitzung startet ohne Anfrage."
           : "Silent-Modus deaktiviert.";
@@ -186,6 +281,7 @@ export function renderProfile(body, win) {
                         on ? "success" : "info");
       } catch (err) {
         e.target.checked = !on;   // zurückrollen
+        setStateText(!on);
         if (silentMsg) silentMsg.textContent = `Fehler: ${err.message}`;
       } finally {
         silentCb.disabled = false;

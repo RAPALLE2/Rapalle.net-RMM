@@ -216,6 +216,18 @@ async def get_silent_screen(user: dict = Depends(get_current_user)):
             "allowed": _may_use_silent_screen(user)}
 
 
+# ------------------------------------------------------------------
+# Spotify-Integration: Jeder eingeloggte Benutzer darf die Client-ID der
+# (vom Admin in den Einstellungen hinterlegten) Spotify-App lesen - sie ist
+# kein Geheimnis (steht in jeder OAuth-URL). Der Login läuft komplett im
+# Browser per Authorization Code + PKCE, es gibt KEIN Client-Secret.
+# ------------------------------------------------------------------
+
+@router.get("/spotify-config")
+async def spotify_config(user: dict = Depends(get_current_user)):
+    return {"client_id": db.get_setting("spotify_client_id", "") or ""}
+
+
 @router.put("/silent-screen")
 async def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_current_user)):
     if body.enabled and not _may_use_silent_screen(user):

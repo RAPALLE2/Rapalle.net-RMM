@@ -298,12 +298,12 @@ export function renderWebsitesPart(target, client) {
         const dotColor = !w.monitor_enabled ? "var(--subtext)"
           : w.last_status === "up" ? "var(--online, #3ecf8e)"
           : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
-        const favMeta = { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname };
+        const favMeta = { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname, open_mode: w.open_mode };
         return `
           <div class="action-btn" data-ws="${esc(w.id)}" style="display:flex;align-items:center;gap:8px;padding-right:8px">
-            <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer"
-               style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit">
-              <span style="color:${dotColor}">●</span><span>${esc(w.name)}</span>
+            <a href="${esc(w.url)}" data-ws-openlink="${esc(w.id)}"
+               style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit;cursor:pointer">
+              <span style="color:${dotColor}">●</span><span>${esc(w.name)}${w.open_mode === "internal" ? " 🪟" : ""}</span>
             </a>
             ${favStarHtml("websites", w.id, favMeta)}
             <button class="taskbar-btn" data-ws-del="${esc(w.id)}" data-ws-name="${esc(w.name)}"
@@ -311,6 +311,15 @@ export function renderWebsitesPart(target, client) {
               style="padding:1px 6px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
           </div>`;
       }).join("");
+      // Öffnen nach open_mode: 'internal' -> internes Browser-Fenster,
+      // sonst normaler externer Tab.
+      target.querySelectorAll("[data-ws-openlink]").forEach((a) =>
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          const s2 = sites.find((x) => x.id === a.dataset.wsOpenlink);
+          if (s2) import("./apps/webbrowser.js").then((m) => m.openWebsiteEntry(s2));
+        })
+      );
       // BUGFIX: Der Favoriten-Stern im Website-WIDGET reagierte nicht auf
       // Klicks (weder öffnen noch favorisieren). Deshalb wird der Stern hier
       // zusätzlich DIREKT verkabelt. Kein Doppel-Toggle möglich: Greift der

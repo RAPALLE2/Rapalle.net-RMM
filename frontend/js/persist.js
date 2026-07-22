@@ -121,6 +121,8 @@ function _syncedKeys() {
     `rapalle-favs:${_user}`,     // Favoriten (Sidebar + Dashboard)
     "rmm_icon_mode",             // Icon-Darstellung (SVG/Emoji)
     "rmm_lang",                  // Sprache
+    "rmm_term_rightclick",       // Terminal: Rechtsklick direkt vs. Kontextmenü
+    `rmm_webapps:${_user}`,      // interner Browser: gespeicherte Web-Apps
   ];
 }
 

@@ -399,6 +399,20 @@ export function renderSettings(body, win) {
         <div id="ge-error" class="form-error hidden"></div>
         <button class="btn-primary" id="ge-save" style="margin-top:8px">${t("save")}</button>
 
+        <h3 style="margin-top:24px">Spotify</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Client-ID einer eigenen Spotify-App (developer.spotify.com → Dashboard →
+          App erstellen). Benutzer können sich dann im 🎵 Audio Player mit ihrem
+          Spotify-Konto anmelden; mit Premium spielt der Player volle Titel mit
+          eigenen Controls. Wichtig: Im Spotify-Dashboard als Redirect-URI die
+          Adresse dieser Webconsole mit abschließendem <code>/</code> eintragen
+          (z.B. <code id="ge-spotify-uri"></code>).
+        </p>
+        <div class="form-row">
+          <label>Client-ID</label>
+          <input id="ge-spotify-id" value="${esc(s.spotify_client_id ?? "")}" placeholder="z.B. 8a3f…" style="max-width:420px" />
+        </div>
+
         <h3 style="margin-top:26px" data-adminsec-h>${t("guac_title")}</h3>
         <div data-adminsec>
         <p style="color:var(--subtext);font-size:13px">${t("guac_hint")}</p>
@@ -425,6 +439,9 @@ export function renderSettings(body, win) {
     // Admin-Sektionen (Server-IP/Ports, GitHub-Update, Datenbank, guacd)
     // brauchen 'admin_settings'; die Standard-Einstellungen 'manage_settings'.
     // Mit nur 'see_settings' ist alles sichtbar, aber schreibgeschützt.
+    // Spotify-Redirect-URI-Beispiel mit der echten Adresse füllen
+    const spUri = root.querySelector("#ge-spotify-uri");
+    if (spUri) spUri.textContent = window.location.origin + "/";
     const mayAdminSet = isAdmin() || hasGlobalPerm("admin_settings");
     const mayManageSet = isAdmin() || hasGlobalPerm("manage_settings");
     if (!mayAdminSet) {
@@ -456,6 +473,7 @@ export function renderSettings(body, win) {
         guac_record_quality: parseInt(val("ge-guac-q"), 10) || 50,
         guac_record_fps: parseInt(val("ge-guac-fps"), 10) || 8,
         guac_record_scale: parseFloat(val("ge-guac-scale")) || 0.75,
+        spotify_client_id: (val("ge-spotify-id") || "").trim(),
       };
       if (has("ge-server-host")) {
         payload.server_host = val("ge-server-host").trim();

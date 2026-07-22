@@ -45,6 +45,9 @@ from app.routers import (
     source_routes,
     relay_routes,
     speedtest_routes,
+    ai_routes,
+    tickets_routes,
+    games_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -93,6 +96,9 @@ api.include_router(guac_routes.router)
 api.include_router(source_routes.router)
 api.include_router(relay_routes.router)
 api.include_router(speedtest_routes.router)
+api.include_router(ai_routes.router)          # AI-Chat (Verbindungen + Proxy)
+api.include_router(tickets_routes.router)     # Ticket-System
+api.include_router(games_routes.router)       # Gaming-Hub-Scoreboard
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.

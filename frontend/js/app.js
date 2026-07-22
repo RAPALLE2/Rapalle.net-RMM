@@ -41,6 +41,13 @@ import { renderRecordings } from "./apps/recordings.js";
 import { renderScripts } from "./apps/scripts.js";
 import { renderBulk } from "./apps/bulk.js";
 import { renderTowerDefense } from "./apps/towerdefense.js";
+import { renderGamingHub } from "./apps/gaminghub.js";
+import { renderAiChat } from "./apps/aichat.js";
+import { renderTickets } from "./apps/tickets.js";
+import { renderAudioPlayer } from "./apps/audioplayer.js";
+import { handleSpotifyCallback } from "./spotify.js";
+import { renderWebBrowser, renderWebApp, getWebApps } from "./apps/webbrowser.js";
+import { addCatalogEntry } from "./startmenu.js";
 import { renderAutomation } from "./apps/automation.js";
 import { renderRelayManager } from "./apps/relaymanager.js";
 import { renderSpeedtest } from "./apps/speedtest.js";
@@ -72,7 +79,13 @@ const APP_RENDERERS = {
   recordings: renderRecordings,
   scripts: renderScripts,
   bulk: renderBulk,
-  towerdefense: renderTowerDefense,
+  towerdefense: renderTowerDefense,   // bleibt für wiederhergestellte Fenster
+  gaminghub: renderGamingHub,
+  aichat: renderAiChat,
+  tickets: renderTickets,
+  audioplayer: renderAudioPlayer,
+  webbrowser: renderWebBrowser,
+  webapp: renderWebApp,           // gespeicherte Web-Apps (props: {url,name,icon})
   automation: renderAutomation,
   "relay-manager": renderRelayManager,
   "speedtest": renderSpeedtest,
@@ -135,6 +148,8 @@ const APP_REQUIRED_PERM = {
   manage: "manage_hierarchy",
   "relay-manager": "use_relay",
   towerdefense: "play_games",
+  gaminghub: "play_games",
+  tickets: "ticket_read",
 };
 
 function _appAllowed(appKey) {
@@ -147,6 +162,7 @@ function _appAllowed(appKey) {
            hasGlobalPerm("manage_branding") || hasGlobalPerm("see_source") ||
            hasGlobalPerm("create_users");
   }
+  if (appKey === "webbrowser" || appKey.startsWith("webapp:")) return true;
   const perm = APP_REQUIRED_PERM[appKey];
   if (!perm) return true;               // frei zugängliche App
   return hasGlobalPerm(perm);
@@ -511,6 +527,17 @@ function initMenusAndButtons() {
     else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
     else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
     else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
+    else if (app === "gaminghub") openWindow({ singleton: true, key: "gaminghub", appId: "gaminghub", title: "Gaming Hub", w: 820, h: 640 });
+    else if (app === "aichat") openWindow({ key: "aichat", appId: "aichat", title: "AI Chat", w: 860, h: 620 });
+    else if (app === "audioplayer") openWindow({ singleton: true, key: "audioplayer", appId: "audioplayer", title: "Audio Player", w: 900, h: 680 });
+    else if (app === "webbrowser") openWindow({ key: "webbrowser", appId: "webbrowser", title: "Browser", w: 1020, h: 720 });
+    else if (app.startsWith("webapp:")) {
+      // Gespeicherte Web-App: Seite direkt in eigenem Fenster öffnen.
+      const wa = getWebApps().find((a) => `webapp:${a.id}` === app);
+      if (wa) openWindow({ key: app, appId: "webapp", title: `${wa.icon} ${wa.name}`,
+                           props: { url: wa.url, name: wa.name, icon: wa.icon }, w: 1020, h: 720 });
+    }
+    else if (app === "tickets") openWindow({ singleton: true, key: "tickets", appId: "tickets", title: "Tickets", w: 960, h: 660 });
     else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
     else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
     else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
@@ -524,6 +551,9 @@ function initMenusAndButtons() {
     onOpenApp: openAppFromMenu,
     allowed: _appAllowed,
   });
+  // Gespeicherte Web-Apps (interner Browser, ⭐ "Als App speichern") als
+  // eigene Startmenü-Einträge registrieren.
+  for (const wa of getWebApps()) addCatalogEntry(`webapp:${wa.id}`, wa.icon, wa.name);
 
   // Sidebar: Ein-/Ausklappen, Breite ziehen, Klick-zum-Ausklappen. Details in
   // initSidebarResize() unten (inkl. Persistenz der Breite/Zustand).
@@ -752,6 +782,9 @@ function initDesktopDrop() {
 }
 
 async function main() {
+  // Rückkehr vom Spotify-OAuth-Login (?code&state=rmm-spotify:...) verarbeiten
+  // und die URL säubern - unabhängig vom RMM-Login-Status.
+  try { await handleSpotifyCallback(); } catch {}
   // Renderer für Fenster-Inhalte registrieren
   setContentRenderer(renderWindowContent);
   // (setOnWindowsChanged wird in startSession gesetzt - inkl. Zustand-Speichern)

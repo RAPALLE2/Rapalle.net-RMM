@@ -277,6 +277,109 @@ export function renderExplorer(body, win) {
     catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
   }
 
+  // ---------------- Rechtsklick-Kontextmenü ----------------
+  // Wie im Windows-Explorer: Rechtsklick auf einen Eintrag zeigt Öffnen/
+  // Bearbeiten/Umbenennen/Löschen/Download/Pfad kopieren/Eigenschaften;
+  // Rechtsklick auf die freie Fläche zeigt Neuer Ordner/Upload/Aktualisieren.
+  let ctxMenuEl = null;
+  function closeCtxMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
+  document.addEventListener("click", closeCtxMenu);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCtxMenu(); });
+
+  function showCtxMenu(x, y, items) {
+    closeCtxMenu();
+    ctxMenuEl = document.createElement("div");
+    ctxMenuEl.style.cssText =
+      "position:fixed;z-index:9999;background:var(--panel);border:1px solid var(--border);" +
+      "border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px;min-width:200px;font-size:13px";
+    for (const it of items) {
+      if (it === "-") {
+        const hr = document.createElement("div");
+        hr.style.cssText = "height:1px;background:var(--border);margin:4px 6px";
+        ctxMenuEl.appendChild(hr);
+        continue;
+      }
+      const row = document.createElement("div");
+      row.textContent = `${it.icon}  ${it.label}`;
+      row.style.cssText = "padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap" +
+        (it.danger ? ";color:var(--danger)" : "");
+      row.addEventListener("mouseenter", () => { row.style.background = "var(--panel-2)"; });
+      row.addEventListener("mouseleave", () => { row.style.background = "transparent"; });
+      row.addEventListener("click", (e) => { e.stopPropagation(); closeCtxMenu(); it.fn(); });
+      ctxMenuEl.appendChild(row);
+    }
+    document.body.appendChild(ctxMenuEl);
+    // Nicht aus dem Fenster laufen lassen
+    const r = ctxMenuEl.getBoundingClientRect();
+    ctxMenuEl.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+    ctxMenuEl.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+  }
+
+  function showProperties(entry) {
+    const rows = [
+      ["Name", entry.name],
+      ["Pfad", entry.path],
+      ["Typ", entry.isDir ? "Ordner" : "Datei"],
+      ["Größe", entry.isDir ? "-" : formatBytes(entry.size)],
+      ["Geändert", entry.mtime ? new Date(entry.mtime).toLocaleString("de-DE") : "-"],
+      ["Rechte", (entry.perms || "-") + (entry.mode ? `  (${entry.mode})` : "")],
+      ["Besitzer", entry.owner || "-"],
+      ["Gruppe", entry.group || "-"],
+    ];
+    openOverlay(`
+      <div style="min-width:340px">
+        <h3 style="margin:0 0 10px">🔐 Eigenschaften</h3>
+        <table style="width:100%;font-size:13px;border-collapse:collapse">
+          ${rows.map(([k, v]) => `
+            <tr>
+              <td style="color:var(--subtext);padding:4px 12px 4px 0;white-space:nowrap;vertical-align:top">${k}</td>
+              <td style="padding:4px 0;word-break:break-all;font-family:${k === "Pfad" || k === "Rechte" ? "monospace" : "inherit"}">${esc(String(v))}</td>
+            </tr>`).join("")}
+        </table>
+        <p style="color:var(--subtext);font-size:11px;margin:10px 0 0">
+          Rechte/Besitzer werden vom Agenten geliefert (Linux: rwx-Modus, Windows: Attribute).
+        </p>
+      </div>`);
+  }
+
+  function entryMenuItems(entry) {
+    const isImg = !entry.isDir && IMAGE_EXT.has(extOf(entry.name));
+    const isTxt = !entry.isDir && TEXT_EXT.has(extOf(entry.name));
+    const items = [];
+    if (entry.isDir) {
+      items.push({ icon: "📂", label: "Öffnen", fn: () => { history.push(entry.path); load(entry.path); } });
+    } else {
+      if (isImg) items.push({ icon: "👁", label: "Ansehen", fn: () => viewImage(entry) });
+      if (isTxt) items.push({ icon: "✏️", label: "Bearbeiten", fn: () => editFile(entry) });
+      items.push({ icon: "⬇", label: "Herunterladen", fn: () => downloadFile(entry) });
+    }
+    if (currentPath && !entry._fav) {
+      items.push("-");
+      items.push({ icon: "✏", label: "Umbenennen", fn: () => doRename(entry) });
+      items.push({ icon: "🗑", label: "Löschen", danger: true, fn: () => doDelete(entry) });
+    }
+    items.push("-");
+    items.push({ icon: "📋", label: "Pfad kopieren", fn: async () => {
+      try { await navigator.clipboard.writeText(entry.path); window.notify?.("Pfad kopiert", "success", 2000); }
+      catch { window.notify?.("Kopieren blockiert (Browser)", "warn"); }
+    }});
+    items.push({ icon: "🔐", label: "Eigenschaften / Berechtigungen", fn: () => showProperties(entry) });
+    return items;
+  }
+
+  function backgroundMenuItems() {
+    return [
+      { icon: "📁", label: "Neuer Ordner", fn: doMkdir },
+      { icon: "⬆️", label: "Datei hochladen…", fn: () => body.querySelector(`#exp-file-${win.key}`)?.click() },
+      "-",
+      { icon: "🔄", label: "Aktualisieren", fn: () => load(currentPath) },
+      ...(currentPath ? [{ icon: "📋", label: "Aktuellen Pfad kopieren", fn: async () => {
+        try { await navigator.clipboard.writeText(currentPath); window.notify?.("Pfad kopiert", "success", 2000); }
+        catch { window.notify?.("Kopieren blockiert (Browser)", "warn"); }
+      }}] : []),
+    ];
+  }
+
   async function load(path) {
     currentPath = path;
     // Offenen Ordner in den Fenster-Props merken (Wiederherstellung beim Login).
@@ -341,7 +444,23 @@ export function renderExplorer(body, win) {
           actionsTd.appendChild(mkBtn("✏", "Umbenennen", () => doRename(entry)));
           actionsTd.appendChild(mkBtn("🗑", "Löschen", () => doDelete(entry)));
         }
+        // Rechtsklick-Menü auf dem Eintrag (wie im Windows-Explorer)
+        tr.addEventListener("contextmenu", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          showCtxMenu(ev.clientX, ev.clientY, entryMenuItems(entry));
+        });
         tbody.appendChild(tr);
+      }
+      // Rechtsklick auf die freie Fläche: Neuer Ordner / Upload / Aktualisieren
+      // (nur EINMAL registrieren, nicht bei jedem load erneut)
+      if (!tbody.parentElement._ctxWired) {
+        tbody.parentElement._ctxWired = true;
+        tbody.parentElement.addEventListener("contextmenu", (ev) => {
+          if (ev.target.closest("tr") && ev.target.closest("tbody") === tbody) return;
+          ev.preventDefault();
+          showCtxMenu(ev.clientX, ev.clientY, backgroundMenuItems());
+        });
       }
     } catch (e) {
       tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">${esc(e.message)}</td></tr>`;

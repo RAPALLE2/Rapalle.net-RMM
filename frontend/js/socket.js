@@ -53,3 +53,13 @@ dashboardSocket.on("relay-changed", (detail = {}) => {
       "info", 6000, { source: "webhook" });
   }
 });
+
+// --- Silent-Modus verbraucht -------------------------------------------
+// Der einmalige Remote-Bildschirm-Silent-Modus wurde beim Sitzungsstart
+// genutzt und serverseitig wieder deaktiviert. Aufs Fenster-Event spiegeln,
+// damit der Toggle im Profil (falls offen) sofort wieder AUS geht.
+dashboardSocket.on("silent-screen:consumed", (detail = {}) => {
+  try {
+    window.dispatchEvent(new CustomEvent("silent-screen-consumed", { detail }));
+  } catch {}
+});

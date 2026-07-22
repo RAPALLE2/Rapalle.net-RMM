@@ -144,6 +144,13 @@ export function renderEditClient(body, win) {
           <input type="text" id="ec-ws-url" value="${esc(client.ip ? `http://${client.ip}:80/` : "")}" placeholder="https://..." />
         </div>
         <div class="form-row">
+          <label>Öffnen in</label>
+          <select id="ec-ws-openmode">
+            <option value="external" selected>Externem Browser-Tab</option>
+            <option value="internal">Internem Browser (eigenes Fenster)</option>
+          </select>
+        </div>
+        <div class="form-row">
           <label style="color:var(--subtext);font-size:12px">Favoriten setzt du nach dem Anlegen über den Stern in der Liste (☆ → Seitenleiste → Dashboard → beide).</label>
         </div>
         <div class="form-row">
@@ -216,19 +223,39 @@ export function renderEditClient(body, win) {
           <div style="min-width:0">
             <div style="display:flex;align-items:center;gap:6px">
               ${dot}
-              <a href="${esc(w.url)}" target="_blank" rel="noopener noreferrer" style="font-weight:600">${esc(w.name)}</a>
+              <a href="${esc(w.url)}" data-ws-open="${w.id}" style="font-weight:600;cursor:pointer">${esc(w.name)}${w.open_mode === "internal" ? " 🪟" : ""}</a>
             </div>
             <div style="font-size:11px;color:var(--subtext);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.url)}</div>
             ${monitorInfo}
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
-            ${favStarHtml("websites", w.id, { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname })}
+            ${favStarHtml("websites", w.id, { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname, open_mode: w.open_mode })}
+            <button class="taskbar-btn" data-ws-openmode="${w.id}" title="Öffnet aktuell im ${w.open_mode === "internal" ? "internen Browser - Klick: externer Tab" : "externen Tab - Klick: interner Browser"}">${w.open_mode === "internal" ? "🪟 intern" : "🔗 extern"}</button>
             <button class="taskbar-btn" data-ws-mon="${w.id}" title="Monitoring ${w.monitor_enabled ? "ausschalten" : "einschalten"}">${w.monitor_enabled ? "📡 an" : "📡 aus"}</button>
             <button class="taskbar-btn" data-ws-del="${w.id}">🗑</button>
           </div>
         </div>`;
       }).join("");
 
+      listEl.querySelectorAll("[data-ws-open]").forEach((a) =>
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          const s2 = sites.find((x) => x.id === a.dataset.wsOpen);
+          if (s2) import("./webbrowser.js").then((m) => m.openWebsiteEntry(s2));
+        })
+      );
+      listEl.querySelectorAll("[data-ws-openmode]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          try {
+            const s2 = sites.find((x) => x.id === btn.dataset.wsOpenmode);
+            await api.updateClientWebsite(client.id, s2.id,
+              { open_mode: s2.open_mode === "internal" ? "external" : "internal" });
+          } catch (e) {
+            window.notify?.("Ändern fehlgeschlagen: " + e.message, "error");
+          }
+          loadWebsites();
+        })
+      );
       listEl.querySelectorAll("[data-ws-mon]").forEach((btn) =>
         btn.addEventListener("click", async () => {
           try {
@@ -273,6 +300,7 @@ export function renderEditClient(body, win) {
     try {
       await api.createClientWebsite(client.id, {
         name, url,
+        open_mode: body.querySelector("#ec-ws-openmode").value,
         monitor_enabled: wsMonitorCheck.checked,
         monitor_notify: body.querySelector("#ec-ws-notify").value,
         monitor_interval_seconds: parseInt(body.querySelector("#ec-ws-interval").value, 10),
