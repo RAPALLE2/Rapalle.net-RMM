@@ -55,6 +55,15 @@ REALM = db.RELAY_REALM
 _nonces: dict[str, float] = {}
 _NONCE_TTL = 300  # Sekunden
 
+# Deko-/Metadateien, die Windows-Explorer und macOS-Finder in jedem Ordner
+# automatisch anfragen. Werden ohne Agent-Roundtrip mit 404 beantwortet.
+# (Echte Dateien mit diesen Namen sind über das Relay dann nicht sichtbar -
+# bewusster Tradeoff, verhält sich wie IIS/gängige WebDAV-Server.)
+_EXPLORER_JUNK = {
+    "folder.jpg", "folder.gif", "folder.ico", "thumbs.db",
+    "desktop.ini", "autorun.inf", ".ds_store", "._.ds_store",
+}
+
 
 @router.get("/relay-health")
 async def relay_health():
@@ -170,17 +179,24 @@ def _check_digest(header: str, method: str) -> tuple[dict | None, str]:
         return None, "kein hinterlegtes Passwort (bitte einmal am Dashboard anmelden)"
 
     # HA1 exakt mit dem vom Client gesendeten Benutzernamen + Realm bilden.
-    ha1 = hashlib.md5(f"{sent_user}:{d.get('realm','')}:{password}".encode()).hexdigest()
+    # Windows hasht Digest-Credentials in Latin-1/CP1252, wir speichern UTF-8.
+    # Bei Passwörtern/Benutzernamen mit Umlauten unterscheiden sich die Bytes,
+    # deshalb probieren wir beide Kodierungen durch.
     ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
-    if d.get("qop"):
-        resp = hashlib.md5(
-            f"{ha1}:{nonce}:{d.get('nc','')}:{d.get('cnonce','')}:{d.get('qop')}:{ha2}".encode()
-        ).hexdigest()
-    else:
-        resp = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
-
-    if resp == d.get("response"):
-        return user, "ok (digest)"
+    a1 = f"{sent_user}:{d.get('realm','')}:{password}"
+    for enc in ("utf-8", "cp1252", "latin-1"):
+        try:
+            ha1 = hashlib.md5(a1.encode(enc)).hexdigest()
+        except UnicodeEncodeError:
+            continue
+        if d.get("qop"):
+            resp = hashlib.md5(
+                f"{ha1}:{nonce}:{d.get('nc','')}:{d.get('cnonce','')}:{d.get('qop')}:{ha2}".encode()
+            ).hexdigest()
+        else:
+            resp = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+        if resp == d.get("response"):
+            return user, f"ok (digest/{enc})"
     return None, "Digest-Antwort falsch (Passwort?)"
 
 
@@ -668,6 +684,15 @@ async def dav(request: Request, full_path: str = ""):
     sub = walk.get("rest", [])
     if not can_access_client(user, client_id):
         return PlainTextResponse("Kein Zugriff auf diesen Client", status_code=403)
+
+    # Windows-Explorer probt in JEDEM Ordner Deko-/Metadateien (folder.jpg,
+    # Thumbs.db, desktop.ini, ...). Jede dieser Anfragen würde ein volles
+    # fs_list beim Agent auslösen - und bei geschützten Ordnern sogar eine
+    # Elevation. Wir beantworten sie sofort mit 404, OHNE den Agent zu fragen.
+    if (sub and method in ("PROPFIND", "GET", "HEAD")
+            and sub[-1].lower() in _EXPLORER_JUNK):
+        return Response(status_code=404)
+
     if not state.is_online(client_id):
         return PlainTextResponse("Client ist offline", status_code=503)
 

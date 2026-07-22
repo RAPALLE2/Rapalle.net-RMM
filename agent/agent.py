@@ -2105,16 +2105,65 @@ def _fs_elevated(op: dict) -> dict:
         _shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# ------------------------------------------------------------------
+# Elevation-Bremse: Explorer-Relay-Browsing kann pro Ordner DUTZENDE
+# "Zugriff verweigert"-Fälle auslösen (folder.jpg, Thumbs.db, System-
+# Junctions, ...). Ohne Bremse würde für jeden einzelnen ein RunAs-
+# PowerShell-Prozess gestartet (bis 120s Timeout) - das hat den Agent
+# in der Vergangenheit destabilisiert (harter Prozess-Tod 0x80000003).
+#   - _ELEV_LOCK:     nie mehr als EINE Elevation gleichzeitig
+#   - _elev_failed:   pro Pfad 10min Sperre nach fehlgeschlagener Elevation
+#   - _elev_last_fail: nach JEDEM Fehlschlag 60s globale Pause
+#   - System-Junctions (Documents and Settings, $Recycle.Bin, ...) werden
+#     bei "list" gar nicht erst eleviert - dort hilft Elevation ohnehin nicht.
+# ------------------------------------------------------------------
+_ELEV_LOCK = threading.Lock()
+_elev_failed: dict[str, float] = {}
+_elev_last_fail = 0.0
+_ELEV_PATH_COOLDOWN = 600.0   # Sekunden pro Pfad
+_ELEV_GLOBAL_COOLDOWN = 60.0  # Sekunden nach beliebigem Fehlschlag
+_WIN_SYSTEM_JUNCTIONS = {
+    "documents and settings", "$recycle.bin", "system volume information",
+    "recovery", "config.msi", "dfsrprivate", "perflogs",
+}
+
+
+def _elev_key(op: dict) -> str:
+    return f"{op.get('op')}::{op.get('path') or op.get('src') or ''}".lower()
+
+
 def _fs_with_admin(direct, op: dict):
-    """Direktversuch; bei 'Zugriff verweigert' automatisch eleviert wiederholen."""
+    """Direktversuch; bei 'Zugriff verweigert' automatisch eleviert wiederholen.
+    Mit Drossel, damit Explorer-Relay-Browsing keinen Elevation-Sturm auslöst."""
+    global _elev_last_fail
     try:
         return direct()
     except Exception as e:
         if not _is_access_denied(e):
             raise
+        # Bekannte System-Junctions: Elevation bringt beim Auflisten nichts.
+        if op.get("op") == "list":
+            base = os.path.basename((op.get("path") or "").rstrip("\\/")).lower()
+            if base in _WIN_SYSTEM_JUNCTIONS:
+                raise
+        now = time.time()
+        key = _elev_key(op)
+        ts = _elev_failed.get(key)
+        if ts and now - ts < _ELEV_PATH_COOLDOWN:
+            raise  # gleicher Pfad ist erst kürzlich gescheitert
+        if now - _elev_last_fail < _ELEV_GLOBAL_COOLDOWN:
+            raise  # globale Schonfrist nach letztem Fehlschlag
         _print(f"[agent] Datei-Operation '{op.get('op')}' ohne Rechte "
                f"({e}) -> wiederhole mit Admin-Rechten")
-        return _fs_elevated(op)
+        with _ELEV_LOCK:
+            try:
+                res = _fs_elevated(op)
+                _elev_failed.pop(key, None)
+                return res
+            except Exception:
+                _elev_failed[key] = time.time()
+                _elev_last_fail = time.time()
+                raise
 
 
 def _listdir_admin(path: str):
