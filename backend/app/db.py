@@ -530,6 +530,62 @@ def init_db() -> None:
     _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
     _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
     _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
+    # Garantie-Ende pro Client (Unix-ms, NULL = keine Garantie hinterlegt).
+    _migrate_add_column("clients", "warranty_until", "INTEGER")
+    # Custom-Webhooks: eigene HTTP-Header (JSON-Objekt als Text) und ein
+    # frei definierbares Body-Template mit Platzhaltern ({head}, {body}, ...).
+    _migrate_add_column("webhooks", "headers", "TEXT")
+    _migrate_add_column("webhooks", "body_template", "TEXT")
+
+    # ------------------------------------------------------------------
+    # Chat (WhatsApp-artig): Direktnachrichten + Gruppen mit Gruppen-Admins.
+    # Benachrichtigungs-Regeln: welcher Trigger löst welchen Kanal aus.
+    # ------------------------------------------------------------------
+    _conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL DEFAULT 'dm',        -- 'dm' | 'group'
+            name TEXT,                              -- Gruppenname (bei dm NULL)
+            created_by TEXT,                        -- user_id des Erstellers
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS chat_members (
+            conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,    -- Gruppen-Admin (bei dm irrelevant)
+            joined_at INTEGER NOT NULL,
+            last_read_at INTEGER NOT NULL DEFAULT 0,-- für Ungelesen-Zähler
+            PRIMARY KEY (conversation_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+            sender_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_conv
+            ON chat_messages(conversation_id, created_at);
+
+        -- Benachrichtigungs-Regeln: "Wenn <trigger> (auf Clients X/Y/Z),
+        -- dann <channel> an <target>". params = JSON (z.B. days_before,
+        -- threshold). last_fired = JSON {key: ts} fuer Cooldown/Dedupe.
+        CREATE TABLE IF NOT EXISTS notification_rules (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            trigger TEXT NOT NULL,
+            client_ids TEXT NOT NULL DEFAULT '',    -- kommagetrennt, '' = alle Clients
+            channel TEXT NOT NULL,                  -- 'email' | 'webhook' | 'dashboard'
+            target TEXT NOT NULL DEFAULT '',        -- E-Mail-Adresse(n) bzw. webhook_id
+            params TEXT NOT NULL DEFAULT '{}',
+            last_fired TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL
+        );
+        """
+    )
+    _conn.commit()
 
     # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
     # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
@@ -1142,7 +1198,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
-        "device_type_ack", "fav_dir",
+        "device_type_ack", "fav_dir", "warranty_until",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -1392,6 +1448,8 @@ GLOBAL_PERM_KEYS = [
     "play_games",
     "manage_favorites",
     "use_relay", "relay_unlimited",
+    # Chat-App (Direktnachrichten & Gruppen)
+    "use_chat",
     # Remote-Bildschirm ohne Anfrage: erlaubt den einmaligen "Silent-Modus"
     # im Profil (nächste Remote-Sitzung ohne Zustimmungs-Dialog am Gerät).
     "screen_silent",
@@ -1837,6 +1895,13 @@ DEFAULT_SETTINGS = {
     # beim Verbinden selbst (Clients mit auto_update='global' folgen dieser
     # Einstellung; 'on'/'off' pro Client hat Vorrang). Default aus.
     "agent_auto_update": "0",
+    # --- SMTP (E-Mail-Benachrichtigungen) ---
+    "smtp_host": "",
+    "smtp_port": "587",
+    "smtp_user": "",
+    "smtp_password": "",
+    "smtp_from": "",
+    "smtp_security": "starttls",   # 'starttls' | 'ssl' | 'none'
 }
 
 
@@ -2055,11 +2120,25 @@ def get_webhook(webhook_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def create_webhook(name, url, wtype) -> dict:
+def update_webhook(webhook_id: str, fields: dict) -> dict | None:
+    """Aktualisiert nur die übergebenen Felder eines Webhooks."""
+    allowed = {"name", "url", "type", "enabled", "headers", "body_template"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        _conn.execute(f"UPDATE webhooks SET {set_clause} WHERE id = ?",
+                      (*updates.values(), webhook_id))
+        _conn.commit()
+    return get_webhook(webhook_id)
+
+
+def create_webhook(name, url, wtype, headers: str | None = None,
+                   body_template: str | None = None) -> dict:
     wid = _new_id()
     _conn.execute(
-        "INSERT INTO webhooks (id, name, url, type, created_at) VALUES (?, ?, ?, ?, ?)",
-        (wid, name, url, wtype, _now_ms()),
+        "INSERT INTO webhooks (id, name, url, type, headers, body_template, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (wid, name, url, wtype, headers, body_template, _now_ms()),
     )
     _conn.commit()
     return get_webhook(wid)

@@ -48,6 +48,8 @@ from app.routers import (
     ai_routes,
     tickets_routes,
     games_routes,
+    chat_routes,
+    notify_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -99,6 +101,8 @@ api.include_router(speedtest_routes.router)
 api.include_router(ai_routes.router)          # AI-Chat (Verbindungen + Proxy)
 api.include_router(tickets_routes.router)     # Ticket-System
 api.include_router(games_routes.router)       # Gaming-Hub-Scoreboard
+api.include_router(chat_routes.router)        # Chat (DMs + Gruppen)
+api.include_router(notify_routes.router)      # Benachrichtigungs-Regeln + SMTP
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
@@ -352,6 +356,16 @@ async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
     db.add_audit_entry("system", "website.uptime", target=site["client_id"],
                        details=f"{site['name']} -> {'UP' if ok else 'DOWN'}")
 
+    # 3) Benachrichtigungs-Regeln (website_up / website_down)
+    try:
+        from app import notifier as _notifier
+        await _notifier.fire_event("website_up" if ok else "website_down",
+                                   client_id=site["client_id"],
+                                   notification=notification,
+                                   dedupe_key=f"{site['id']}:{'up' if ok else 'down'}")
+    except Exception as e:
+        print(f"[uptime] Regel-Dispatch fehlgeschlagen: {e}")
+
 
 async def _uptime_monitor_engine():
     while True:
@@ -406,6 +420,9 @@ async def _start_background_tasks():
         print(f"[startup] Crash-Recovery-Audit fehlgeschlagen: {e}")
     _asyncio.create_task(_automation_engine())
     _asyncio.create_task(_uptime_monitor_engine())
+    # Garantie-Prüfschleife (Benachrichtigungs-Regeln warranty_expiring/expired)
+    from app import notifier as _notifier
+    _asyncio.create_task(_notifier.warranty_loop())
     _asyncio.create_task(_server_auto_update_engine())
     _asyncio.create_task(_db_sync_engine())
     _asyncio.create_task(_relay_expiry_engine())

@@ -263,6 +263,90 @@ export function renderActionsPart(target, client) {
 }
 
 // --- WEBSITES-Part (Quick-Access) ---
+// =================================================================
+// WEBSITES-WIDGET (vollständig)
+// Enthält ALLES, was früher unter "Client bearbeiten" stand:
+// anlegen (Name, URL, Öffnen-in, Monitoring + Modus + Intervall),
+// bearbeiten, Öffnungsart umschalten, Monitoring an/aus, Favoriten-Stern,
+// Status-Ampel mit Tooltip und Löschen.
+// =================================================================
+const WS_NOTIFY_LABELS = { down: "bei DOWN", up: "bei UP", always: "immer" };
+const WS_INTERVALS = [
+  [30, "30 Sekunden"], [60, "1 Minute"], [300, "5 Minuten"],
+  [900, "15 Minuten"], [1800, "30 Minuten"], [3600, "1 Stunde"],
+];
+function wsIntervalLabel(sec) {
+  if (!sec) return "–";
+  if (sec >= 3600) return `${Math.round(sec / 3600)} h`;
+  if (sec >= 60) return `${Math.round(sec / 60)} min`;
+  return `${sec} s`;
+}
+
+// Formular für Anlegen (w = null) bzw. Bearbeiten (w = Website-Objekt).
+function wsFormHtml(w, client) {
+  const v = w || { name: "", url: client.ip ? `http://${client.ip}:80/` : "",
+                   open_mode: "external", monitor_enabled: 0,
+                   monitor_notify: "down", monitor_interval_seconds: 300 };
+  return `
+    <div class="ws-form" style="border:1px solid var(--border);border-radius:8px;padding:8px;margin:6px 0;display:flex;flex-direction:column;gap:6px">
+      <input class="ws-f-name" type="text" placeholder="Name (z.B. Proxmox Web-UI)" value="${esc(v.name)}" />
+      <input class="ws-f-url" type="text" placeholder="https://…" value="${esc(v.url)}" />
+      <select class="ws-f-openmode">
+        <option value="external" ${v.open_mode !== "internal" ? "selected" : ""}>Öffnen: externer Browser-Tab</option>
+        <option value="internal" ${v.open_mode === "internal" ? "selected" : ""}>Öffnen: interner Browser (eigenes Fenster)</option>
+      </select>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px">
+        <input class="ws-f-mon" type="checkbox" ${v.monitor_enabled ? "checked" : ""} /> Uptime-Monitoring aktivieren
+      </label>
+      <div class="ws-f-monopts" style="${v.monitor_enabled ? "" : "display:none"};display:flex;flex-direction:column;gap:6px">
+        <select class="ws-f-notify">
+          <option value="down" ${v.monitor_notify === "down" ? "selected" : ""}>Benachrichtigen: wenn DOWN</option>
+          <option value="up" ${v.monitor_notify === "up" ? "selected" : ""}>Benachrichtigen: wenn UP</option>
+          <option value="always" ${v.monitor_notify === "always" ? "selected" : ""}>Benachrichtigen: immer (jeder Scan)</option>
+        </select>
+        <select class="ws-f-interval">
+          ${WS_INTERVALS.map(([sec, lbl]) =>
+            `<option value="${sec}" ${Number(v.monitor_interval_seconds) === sec ? "selected" : ""}>Scan alle ${lbl}</option>`).join("")}
+        </select>
+        <div style="font-size:11px;color:var(--subtext)">
+          Bei „DOWN“/„UP“ wird nur beim Statuswechsel benachrichtigt, „immer“ nach jedem Scan.
+        </div>
+      </div>
+      <div class="ws-f-error form-error hidden"></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-primary ws-f-save" style="flex:1;margin:0">${w ? "Speichern" : "+ Hinzufügen"}</button>
+        <button class="taskbar-btn ws-f-cancel">Abbrechen</button>
+      </div>
+    </div>`;
+}
+
+// Verkabelt ein Formular. onDone(fields) bekommt die eingegebenen Werte.
+function bindWsForm(formEl, onDone, onCancel) {
+  const monCb = formEl.querySelector(".ws-f-mon");
+  const opts = formEl.querySelector(".ws-f-monopts");
+  monCb.addEventListener("change", () => { opts.style.display = monCb.checked ? "flex" : "none"; });
+  // Klicks im Formular dürfen das Panel weder ziehen noch aufklappen.
+  formEl.addEventListener("mousedown", (e) => e.stopPropagation());
+  formEl.addEventListener("click", (e) => e.stopPropagation());
+  formEl.querySelector(".ws-f-cancel").addEventListener("click", onCancel);
+  formEl.querySelector(".ws-f-save").addEventListener("click", async () => {
+    const err = formEl.querySelector(".ws-f-error");
+    err.classList.add("hidden");
+    const name = formEl.querySelector(".ws-f-name").value.trim();
+    const url = formEl.querySelector(".ws-f-url").value.trim();
+    if (!name || !url) { err.textContent = "Name und URL erforderlich"; err.classList.remove("hidden"); return; }
+    try {
+      await onDone({
+        name, url,
+        open_mode: formEl.querySelector(".ws-f-openmode").value,
+        monitor_enabled: monCb.checked,
+        monitor_notify: formEl.querySelector(".ws-f-notify").value,
+        monitor_interval_seconds: parseInt(formEl.querySelector(".ws-f-interval").value, 10),
+      });
+    } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+  });
+}
+
 export function renderWebsitesPart(target, client) {
   // Bei Favoriten-Änderung (Stern-Klick, auch anderswo) neu rendern, damit
   // Favoriten sofort nach oben rutschen. Listener nur EINMAL pro Ziel binden.
@@ -276,6 +360,9 @@ export function renderWebsitesPart(target, client) {
     };
     window.addEventListener("favorites-changed", target._wsFavListener);
   }
+  const mayEdit = isAdmin() || hasClientPerm(client.id, "c_websites_edit");
+  const reload = () => renderWebsitesPart(target, client);
+
   target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
   api.getClientWebsites(client.id).then((sites) => {
     target.innerHTML = "";
@@ -284,14 +371,13 @@ export function renderWebsitesPart(target, client) {
     } else {
       // Favoriten-Hierarchie im Widget: goldene Sterne (Seitenleiste+Dashboard)
       // ganz oben, dann Akzent 1 (Seitenleiste), dann Akzent 2 (Dashboard),
-      // ganz unten Websites ohne Stern. Innerhalb der Gruppen bleibt die
-      // Reihenfolge stabil.
+      // ganz unten Websites ohne Stern.
       const favRank = (w) => {
         const f = favState("websites", w.id);
-        if (f.s && f.d) return 0;   // ★ gold  = beide
-        if (f.s) return 1;          // ★ Akzent 1 = Seitenleiste
-        if (f.d) return 2;          // ★ Akzent 2 = Dashboard
-        return 3;                   // ☆ kein Favorit
+        if (f.s && f.d) return 0;
+        if (f.s) return 1;
+        if (f.d) return 2;
+        return 3;
       };
       sites = [...sites].sort((a, b) => favRank(a) - favRank(b));
       target.innerHTML = sites.map((w) => {
@@ -302,15 +388,27 @@ export function renderWebsitesPart(target, client) {
         return `
           <div class="action-btn" data-ws="${esc(w.id)}" style="display:flex;align-items:center;gap:8px;padding-right:8px">
             <a href="${esc(w.url)}" data-ws-openlink="${esc(w.id)}"
-               style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;color:inherit;cursor:pointer">
-              <span style="color:${dotColor}">●</span><span>${esc(w.name)}${w.open_mode === "internal" ? " 🪟" : ""}</span>
+               style="display:flex;align-items:center;gap:8px;text-decoration:none;flex:1;min-width:0;color:inherit;cursor:pointer">
+              <span style="color:${dotColor}">●</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name)}${w.open_mode === "internal" ? " 🪟" : ""}</span>
             </a>
             ${favStarHtml("websites", w.id, favMeta)}
-            <button class="taskbar-btn" data-ws-del="${esc(w.id)}" data-ws-name="${esc(w.name)}"
-              title="Website-Verknüpfung löschen"
-              style="padding:1px 6px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
-          </div>`;
+            ${mayEdit ? `
+              <button class="taskbar-btn" data-ws-openmode="${esc(w.id)}"
+                title="Öffnet aktuell ${w.open_mode === "internal" ? "im internen Browser – Klick: externer Tab" : "im externen Tab – Klick: interner Browser"}"
+                style="padding:1px 6px;font-size:10px">${w.open_mode === "internal" ? "🪟" : "🔗"}</button>
+              <button class="taskbar-btn" data-ws-mon="${esc(w.id)}"
+                title="Monitoring ${w.monitor_enabled ? `an (alle ${wsIntervalLabel(w.monitor_interval_seconds)}, ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}) – Klick: aus` : "aus – Klick: an"}"
+                style="padding:1px 6px;font-size:10px;${w.monitor_enabled ? "" : "opacity:.55"}">📡</button>
+              <button class="taskbar-btn" data-ws-edit="${esc(w.id)}" title="Bearbeiten"
+                style="padding:1px 6px;font-size:10px">✏️</button>
+              <button class="taskbar-btn" data-ws-del="${esc(w.id)}" data-ws-name="${esc(w.name)}"
+                title="Website-Verknüpfung löschen"
+                style="padding:1px 6px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>` : ""}
+          </div>
+          <div class="ws-editbox" data-ws-editbox="${esc(w.id)}" style="display:none"></div>`;
       }).join("");
+
       // Öffnen nach open_mode: 'internal' -> internes Browser-Fenster,
       // sonst normaler externer Tab.
       target.querySelectorAll("[data-ws-openlink]").forEach((a) =>
@@ -321,10 +419,7 @@ export function renderWebsitesPart(target, client) {
         })
       );
       // BUGFIX: Der Favoriten-Stern im Website-WIDGET reagierte nicht auf
-      // Klicks (weder öffnen noch favorisieren). Deshalb wird der Stern hier
-      // zusätzlich DIREKT verkabelt. Kein Doppel-Toggle möglich: Greift der
-      // globale, delegierte Capture-Handler (sidebar.js), stoppt der die
-      // Propagation und dieser Listener feuert gar nicht erst.
+      // Klicks. Deshalb wird der Stern hier zusätzlich DIREKT verkabelt.
       target.querySelectorAll(".fav-star[data-fav]").forEach((star) => {
         star.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
         star.addEventListener("click", (e) => {
@@ -332,75 +427,211 @@ export function renderWebsitesPart(target, client) {
           const [kind, id] = star.dataset.fav.split(":");
           let meta;
           if (star.dataset.favMeta) { try { meta = JSON.parse(star.dataset.favMeta); } catch {} }
-          // Stern-Pop-Animation abspielen, dann umschalten.
-          // cycleFav feuert "favorites-changed" -> das Widget rendert sich
-          // (inkl. neuer Sortierung) über den Listener oben selbst neu.
+          star.classList.remove("fav-pop");
+          void star.offsetWidth;
           star.classList.add("fav-pop");
-          setTimeout(() => cycleFav(kind, id, meta), 120);
+          cycleFav(kind, id, meta);
         });
       });
-      // Hover PRO Website: Tooltip mit Name, vollständiger URL und dem
-      // Monitoring-Status GENAU DIESER Website (statt nur des Panel-Namens).
+
+      // Öffnungsart umschalten
+      target.querySelectorAll("[data-ws-openmode]").forEach((b) =>
+        b.addEventListener("click", async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const w = sites.find((x) => x.id === b.dataset.wsOpenmode);
+          try {
+            await api.updateClientWebsite(client.id, w.id,
+              { open_mode: w.open_mode === "internal" ? "external" : "internal" });
+            reload();
+          } catch (err) { window.notify?.("Ändern fehlgeschlagen: " + err.message, "error"); }
+        }));
+
+      // Monitoring an/aus
+      target.querySelectorAll("[data-ws-mon]").forEach((b) =>
+        b.addEventListener("click", async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const w = sites.find((x) => x.id === b.dataset.wsMon);
+          try {
+            await api.updateClientWebsite(client.id, w.id, { monitor_enabled: !w.monitor_enabled });
+            reload();
+          } catch (err) { window.notify?.("Ändern fehlgeschlagen: " + err.message, "error"); }
+        }));
+
+      // Bearbeiten (Formular direkt unter der Zeile aufklappen)
+      target.querySelectorAll("[data-ws-edit]").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const w = sites.find((x) => x.id === b.dataset.wsEdit);
+          const box = target.querySelector(`[data-ws-editbox="${w.id}"]`);
+          if (box.style.display !== "none") { box.style.display = "none"; box.innerHTML = ""; return; }
+          box.style.display = "";
+          box.innerHTML = wsFormHtml(w, client);
+          bindWsForm(box.querySelector(".ws-form"),
+            async (fields) => {
+              await api.updateClientWebsite(client.id, w.id, fields);
+              window.notify?.("Website gespeichert", "success");
+              reload();
+            },
+            () => { box.style.display = "none"; box.innerHTML = ""; });
+        }));
+
+      // Status-Tooltip pro Zeile
       target.querySelectorAll("[data-ws]").forEach((rowEl) => {
-        const w = sites.find((s) => String(s.id) === rowEl.dataset.ws);
+        const w = sites.find((x) => x.id === rowEl.dataset.ws);
         if (!w) return;
         const statusTxt = !w.monitor_enabled ? "kein Monitoring"
-          : w.last_status === "up" ? "online (up)"
-          : w.last_status === "down" ? `DOWN${w.last_error ? ": " + w.last_error : ""}`
+          : w.last_status === "up" ? "erreichbar"
+          : w.last_status === "down" ? `nicht erreichbar${w.last_error ? ": " + w.last_error : ""}`
           : "noch nicht geprüft";
         const color = !w.monitor_enabled ? "var(--subtext)"
           : w.last_status === "up" ? "var(--online, #3ecf8e)"
           : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
+        const tipHtml = () => `<b>${esc(w.name)}</b><br><span style="color:var(--subtext)">${esc(w.url)}</span>`
+          + `<br><span style="color:${color}">●</span> ${esc(statusTxt)}`
+          + (w.monitor_enabled ? `<br><span style="color:var(--subtext)">Scan alle ${wsIntervalLabel(w.monitor_interval_seconds)}, benachrichtigen ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}</span>` : "")
+          + (w.last_checked ? `<br><span style="color:var(--subtext)">zuletzt geprüft: ${new Date(w.last_checked).toLocaleString("de-DE")}</span>` : "");
         rowEl.addEventListener("mouseenter", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
         rowEl.addEventListener("mousemove", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
         rowEl.addEventListener("mouseleave", () => hideFleetTip());
-        function tipHtml() {
-          return `<b>${esc(w.name)}</b><br><span style="color:var(--subtext)">${esc(w.url)}</span><br><span style="color:${color}">●</span> ${esc(statusTxt)}`;
-        }
       });
+
+      // Löschen
+      target.querySelectorAll("[data-ws-del]").forEach((b) =>
+        b.addEventListener("click", async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (!(await uiConfirm(`Website "${b.dataset.wsName}" entfernen?`, {
+            okText: "Entfernen", danger: true }))) return;
+          try {
+            await api.deleteClientWebsite(client.id, b.dataset.wsDel);
+            window.notify?.("Website entfernt.", "success");
+            reload();
+          } catch (err) { window.notify?.("Löschen fehlgeschlagen: " + err.message, "error"); }
+        }));
     }
 
-    // "+ Website hinzufügen" direkt im Widget (kein Umweg mehr über
-    // "Client bearbeiten"). Anlegen/Löschen aktualisiert nur dieses Panel.
+    // "+ Website hinzufügen": klappt das vollständige Formular direkt im
+    // Widget auf (Name, URL, Öffnen-in, Monitoring + Modus + Intervall).
+    if (!mayEdit) return;
+    const addBox = document.createElement("div");
     const addBtn = document.createElement("button");
     addBtn.className = "action-btn";
     addBtn.style.cssText = "width:100%;justify-content:center;color:var(--accent);margin-top:4px";
     addBtn.textContent = "+ Website hinzufügen";
-    addBtn.addEventListener("click", async () => {
-      const name = await uiPrompt("Website hinzufügen", {
-        description: `Anzeigename der Website für "${client.hostname}":`,
-        placeholder: "z.B. Web-Interface" });
-      if (name === null || !name.trim()) return;
-      const url = await uiPrompt("Website hinzufügen", {
-        description: "Vollständige URL (inkl. http(s)://):",
-        value: client.ip ? `http://${client.ip}:80/` : "",
-        placeholder: "https://192.168.1.10:8006" });
-      if (url === null || !url.trim()) return;
-      const monitor = await uiConfirm("Uptime-Monitoring aktivieren?", {
-        description: "Ja: Die Website wird regelmäßig geprüft und der Status farbig angezeigt.\nNein: nur als Schnellzugriff-Link speichern.",
-        okText: "Mit Monitoring", cancelText: "Ohne Monitoring" });
-      try {
-        await api.createClientWebsite(client.id, {
-          name: name.trim(), url: url.trim(), monitor_enabled: !!monitor,
-        });
-        window.notify?.(`Website "${name.trim()}" verknüpft.`, "success");
-        renderWebsitesPart(target, client);   // nur dieses Panel neu laden
-      } catch (e) { window.notify?.("Anlegen fehlgeschlagen: " + e.message, "error"); }
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (addBox.innerHTML) { addBox.innerHTML = ""; return; }
+      addBox.innerHTML = wsFormHtml(null, client);
+      bindWsForm(addBox.querySelector(".ws-form"),
+        async (fields) => {
+          await api.createClientWebsite(client.id, fields);
+          window.notify?.(`Website "${fields.name}" verknüpft.`, "success");
+          reload();
+        },
+        () => { addBox.innerHTML = ""; });
     });
     target.appendChild(addBtn);
-
-    target.querySelectorAll("[data-ws-del]").forEach((b) =>
-      b.addEventListener("click", async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        if (!(await uiConfirm(`Website "${b.dataset.wsName}" entfernen?`, {
-          okText: "Entfernen", danger: true }))) return;
-        try {
-          await api.deleteClientWebsite(client.id, b.dataset.wsDel);
-          window.notify?.("Website entfernt.", "success");
-          renderWebsitesPart(target, client);
-        } catch (err) { window.notify?.("Löschen fehlgeschlagen: " + err.message, "error"); }
-      }));
+    target.appendChild(addBox);
   }).catch(() => { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Websites.</div>`; });
+}
+
+
+// =================================================================
+// CHILDREN-WIDGET: VMs und LXC-Container, die auf DIESEM Client laufen
+// (clients mit parent_client_id === client.id). Pro Eintrag:
+//   - Status-Ampel (online/offline) + Typ-Icon (🖥️ VM / 📦 LXC)
+//   - Kurzinfo (CPU/RAM, sofern online)
+//   - Button "Öffnen": wählt den Client in der Seitenleiste aus
+//   - Button "Fenster": öffnet ihn als eigenes Fenster (wie Desktop-Drop)
+// =================================================================
+export function childClientsOf(clientId) {
+  return (state.clients || []).filter((c) => c.parent_client_id === clientId);
+}
+
+export function renderChildrenPart(target, client) {
+  // Live mitlaufen: kommen neue Metriken für einen der Gäste (oder ändert sich
+  // die Client-Liste), das Panel neu zeichnen. Listener nur EINMAL pro Ziel.
+  if (!target._kidsListener) {
+    target._kidsListener = (e) => {
+      if (!document.body.contains(target)) {
+        window.removeEventListener("metrics-updated", target._kidsListener);
+        return;
+      }
+      const id = e?.detail?.id;
+      if (!id || childClientsOf(client.id).some((c) => c.id === id)) {
+        renderChildrenPart(target, client);
+      }
+    };
+    window.addEventListener("metrics-updated", target._kidsListener);
+  }
+  target.innerHTML = "";
+  const kids = childClientsOf(client.id)
+    .sort((a, b) => (b.online - a.online) || String(a.hostname || "").localeCompare(String(b.hostname || "")));
+
+  if (!kids.length) {
+    target.innerHTML = `<div style="color:var(--subtext);font-size:12px">
+      Keine VMs oder LXC-Container zugeordnet.<br>
+      Zuordnung unter „Client bearbeiten“ → Gerätetyp VM/LXC + Host.</div>`;
+    return;
+  }
+
+  const head = document.createElement("div");
+  head.style.cssText = "font-size:11.5px;color:var(--subtext);margin-bottom:4px";
+  const onlineCount = kids.filter((c) => c.online).length;
+  head.textContent = `${kids.length} Gast${kids.length === 1 ? "" : "-Systeme"} · ${onlineCount} online`;
+  target.appendChild(head);
+
+  for (const kid of kids) {
+    const isLxc = (kid.device_type || "") === "lxc";
+    const dot = kid.online ? "var(--online, #3ecf8e)" : "var(--subtext)";
+    const cpu = kid.metrics?.cpuLoad;
+    const memPct = kid.metrics?.memTotal
+      ? Math.round((kid.metrics.memUsed || 0) / kid.metrics.memTotal * 100) : null;
+    const info = kid.online && (cpu != null || memPct != null)
+      ? `${cpu != null ? `CPU ${Math.round(cpu)}%` : ""}${cpu != null && memPct != null ? " · " : ""}${memPct != null ? `RAM ${memPct}%` : ""}`
+      : (kid.online ? "online" : "offline");
+
+    const row = document.createElement("div");
+    row.className = "action-btn";
+    row.style.cssText = "display:flex;align-items:center;gap:8px;padding-right:8px";
+    row.innerHTML = `
+      <span style="color:${dot};flex:none">●</span>
+      <span style="flex:none">${isLxc ? "📦" : "🖥️"}</span>
+      <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2;text-align:left">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(kid.hostname || kid.id)}</span>
+        <span style="font-size:10.5px;color:var(--subtext)">${esc(info)}</span>
+      </span>
+      <button class="taskbar-btn" data-kid-open="${esc(kid.id)}" title="In der Seitenleiste auswählen"
+        style="padding:1px 7px;font-size:10px">Öffnen</button>
+      <button class="taskbar-btn" data-kid-win="${esc(kid.id)}" title="Als eigenes Fenster öffnen"
+        style="padding:1px 6px;font-size:10px">↗️</button>`;
+    target.appendChild(row);
+  }
+
+  // "Öffnen": Client in der Seitenleiste auswählen (Hauptansicht wechselt).
+  target.querySelectorAll("[data-kid-open]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const id = b.dataset.kidOpen;
+      import("./sidebar.js").then((m) => {
+        try { m.selectClientExternal(id); }
+        catch { state.selection = { type: "client", id }; }
+      }).catch(() => { state.selection = { type: "client", id }; });
+    }));
+
+  // "↗️": als eigenes Fenster öffnen (gleiche Ansicht wie beim Desktop-Drop).
+  target.querySelectorAll("[data-kid-win]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const kid = findClient(b.dataset.kidWin);
+      if (!kid) return;
+      openWindow({
+        singleton: true,
+        key: `panelpart-${kid.id}-client-x`, appId: "panelpart",
+        title: kid.hostname,
+        props: { clientId: kid.id, part: "client" },
+        clientColor: kid.color, w: 900, h: 620,
+      });
+    }));
 }
 
 // Ob ein Client überhaupt verknüpfte Websites hat (für Auto-Ausblenden im Default-Layout).

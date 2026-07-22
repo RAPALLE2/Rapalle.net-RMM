@@ -173,6 +173,7 @@ function renderWidgetInner(target, widget, preset) {
     case "list": renderList(out, widget, preset); break;
     case "overview": renderOverview(out, widget, preset); break;
     case "fleetdonut": renderFleetDonut(out, widget, preset); break;
+    case "warrantylist": renderWarrantyList(out, widget, preset); break;
     default: out.innerHTML = `<div style="color:var(--subtext)">${esc(widget.kind)}?</div>`; return;
   }
   // Proportional skalieren (1x1-optimierter Inhalt wächst mit der Zelle mit).
@@ -271,6 +272,83 @@ function renderText(target, widget) {
   div.className = "widget-text";
   div.innerHTML = esc(widget.text || "Text…").replace(/\n/g, "<br>");
   target.appendChild(div);
+}
+
+// Garantie-Restlaufzeit als Text + Ampelfarbe. Gemeinsam genutzt vom
+// Client-Panel (dashlayout.js) und vom herausgelösten Panel (panelpart.js).
+// Farbe: grün > 90 Tage, gelb ab 90, orange ab 30, rot = abgelaufen.
+export function warrantyInfo(untilMs) {
+  if (!untilMs) return { known: false, text: "kein Datum", sub: "unter „Client bearbeiten“ setzen", color: "var(--subtext)", days: null };
+  const days = Math.floor((untilMs - Date.now()) / 86400000);
+  const dateTxt = new Date(untilMs).toLocaleDateString("de-DE");
+  if (days < 0) {
+    return { known: true, days, color: "#ff4d6d",
+             text: `seit ${Math.abs(days)} Tagen abgelaufen`, sub: `Ende: ${dateTxt}` };
+  }
+  const color = days > 90 ? "#3ecf8e" : days > 30 ? "#f5a524" : "#ff8b3d";
+  const years = Math.floor(days / 365), rest = days % 365, months = Math.floor(rest / 30);
+  let human = `noch ${days} Tage`;
+  if (years >= 1) human = `noch ${years} J. ${months} Mon.`;
+  else if (days > 60) human = `noch ${Math.floor(days / 30)} Monate`;
+  return { known: true, days, color, text: human, sub: `Garantie bis ${dateTxt}` };
+}
+
+
+// Garantie-Übersicht ALLER Clients: kompakte Liste mit Ampel-Punkt,
+// Restlaufzeit und Ablaufdatum. Oben steht, was zuerst ausläuft.
+// Kopfzeile fasst zusammen, wie viele Garantien abgelaufen bzw. bald fällig
+// sind - so sieht man den Handlungsbedarf ohne Scrollen.
+function renderWarrantyList(target, widget, preset) {
+  const all = preset.rows ? preset.rows(state) : [];
+  const expired = all.filter((r) => r.days != null && r.days < 0).length;
+  const soon = all.filter((r) => r.days != null && r.days >= 0 && r.days <= 30).length;
+  const none = all.filter((r) => r.days == null).length;
+
+  const wrap = document.createElement("div");
+  wrap.dataset.stretch = "fill";
+  wrap.style.cssText = "width:100%;height:100%;display:flex;flex-direction:column;box-sizing:border-box;padding:2px 8px;min-width:0;min-height:0;overflow:hidden";
+
+  const head = document.createElement("div");
+  head.style.cssText = "display:flex;gap:8px;flex:none;font-size:11.5px;padding:1px 2px 4px;color:var(--subtext);white-space:nowrap;overflow:hidden";
+  head.innerHTML = all.length
+    ? `<span style="color:#ff4d6d;font-weight:700">${expired} abgelaufen</span>
+       <span style="color:#ff8b3d;font-weight:700">${soon} ≤ 30 T.</span>
+       <span>${all.length - expired - soon - none} ok</span>
+       ${none ? `<span>${none} ohne Datum</span>` : ""}`
+    : "";
+  wrap.appendChild(head);
+
+  const list = document.createElement("div");
+  list.style.cssText = "flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:2px";
+  list.innerHTML = all.map((r, i) => `
+    <div class="wwar-row" data-i="${i}" style="display:grid;grid-template-columns:.62em minmax(0,1fr) max-content;gap:7px;align-items:center;border-radius:6px;padding:1px 3px">
+      <span style="width:.62em;height:.62em;border-radius:.2em;background:${r.color}"></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.kind === "virt" ? "📦 " : ""}${esc(r.label)}</span>
+      <span style="font-weight:700;color:${r.color};white-space:nowrap">${esc(r.status)}</span>
+    </div>`).join("") || `<span style="color:var(--subtext);font-size:13px">Keine Clients.</span>`;
+  wrap.appendChild(list);
+  target.appendChild(wrap);
+
+  // Zeilen-Hover: Datum + Restlaufzeit als Tooltip.
+  list.querySelectorAll(".wwar-row").forEach((el) => {
+    const r = all[+el.dataset.i];
+    if (!r) return;
+    bindRowHover(el, () => `<b>${esc(r.label)}</b><br>${esc(r.status)}`
+      + (r.until ? `<br><span style="color:var(--subtext)">Garantie bis ${esc(r.until)}</span>` : ""));
+  });
+
+  // Schriftgröße an die Widget-Höhe anpassen (wie bei Liste/Tabelle).
+  const applySize = () => {
+    if (!wrap.isConnected) { ro.disconnect(); return; }
+    const h = Math.max(32, wrap.clientHeight || NAT_H);
+    const w = Math.max(120, wrap.clientWidth || NAT_W);
+    const fs = Math.max(10, Math.min(17, Math.floor(h / 9), Math.floor(w / 24)));
+    list.style.fontSize = fs + "px";
+    head.style.fontSize = Math.max(9.5, fs - 2) + "px";
+  };
+  const ro = new ResizeObserver(applySize);
+  ro.observe(wrap);
+  requestAnimationFrame(applySize);
 }
 
 function renderNumber(target, widget, preset) {
@@ -601,7 +679,7 @@ function renderList(target, widget, preset) {
   wrap.innerHTML = rows.map((row, i) => `
     <div class="wlist-row" data-i="${i}" style="display:grid;grid-template-columns:2.1em minmax(0,1fr) max-content;gap:8px;align-items:center;border-radius:6px;min-width:0">
       <span style="color:var(--subtext);text-align:right;font-variant-numeric:tabular-nums">${i + 1}.</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.label)}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${row.color ? `<span style="display:inline-block;width:.6em;height:.6em;border-radius:.2em;background:${row.color};margin-right:.42em"></span>` : ""}${esc(row.label)}</span>
       <span style="font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(row.raw != null ? row.raw : String(row.value))}</span>
     </div>`).join("") || `<span style="color:var(--subtext);font-size:14px">Keine Daten</span>`;
   target.appendChild(wrap);
@@ -765,7 +843,7 @@ function renderTable(target, widget, preset) {
   tbl.style.cssText = "width:100%;border-collapse:collapse;table-layout:fixed;line-height:1.12";
   tbl.innerHTML = `
     <thead><tr><th style="font-size:.66em;letter-spacing:.04em;text-align:left;padding:.15em .45em;color:var(--subtext);text-transform:uppercase">Client</th><th style="font-size:.66em;letter-spacing:.04em;text-align:right;padding:.15em .45em;color:var(--subtext);text-transform:uppercase">${esc(preset.label.replace(/ je Client$/, ""))}</th></tr></thead>
-    <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td style="padding:.18em .45em;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.label)}</td><td style="padding:.18em .45em;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.raw != null ? r.raw : String(r.value))}</td></tr>`).join("") || `<tr><td colspan="2" style="color:var(--subtext);padding:.35em .45em">Keine Daten</td></tr>`}</tbody>`;
+    <tbody>${rows.map((r, i) => `<tr data-i="${i}"><td style="padding:.18em .45em;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.color ? `<span style="display:inline-block;width:.6em;height:.6em;border-radius:.2em;background:${r.color};margin-right:.42em;vertical-align:baseline"></span>` : ""}${esc(r.label)}</td><td style="padding:.18em .45em;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.raw != null ? r.raw : String(r.value))}</td></tr>`).join("") || `<tr><td colspan="2" style="color:var(--subtext);padding:.35em .45em">Keine Daten</td></tr>`}</tbody>`;
   box.appendChild(tbl);
   target.appendChild(box);
   const applySize = () => {

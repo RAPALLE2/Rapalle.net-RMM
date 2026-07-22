@@ -374,8 +374,34 @@ export const api = {
   // --- Webhooks / Benachrichtigungen ---
   getWebhooks: () => request("/api/admin/webhooks"),
   createWebhook: (data) => request("/api/admin/webhooks", { method: "POST", body: JSON.stringify(data) }),
+  updateWebhook: (id, data) => request(`/api/admin/webhooks/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   testWebhook: (id) => request(`/api/admin/webhooks/${id}/test`, { method: "POST" }),
   deleteWebhook: (id) => request(`/api/admin/webhooks/${id}`, { method: "DELETE" }),
+
+  // --- Benachrichtigungs-Regeln + SMTP (Notification-Rework) ---
+  getNotifyCatalog: () => request("/api/notify/catalog"),
+  getNotifyRules: () => request("/api/notify/rules"),
+  createNotifyRule: (data) => request("/api/notify/rules", { method: "POST", body: JSON.stringify(data) }),
+  updateNotifyRule: (id, data) => request(`/api/notify/rules/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteNotifyRule: (id) => request(`/api/notify/rules/${id}`, { method: "DELETE" }),
+  testNotifyRule: (id) => request(`/api/notify/rules/${id}/test`, { method: "POST" }),
+  getSmtp: () => request("/api/notify/smtp"),
+  setSmtp: (data) => request("/api/notify/smtp", { method: "POST", body: JSON.stringify(data) }),
+  testSmtp: (to) => request("/api/notify/smtp/test", { method: "POST", body: JSON.stringify({ to }) }),
+
+  // --- Chat (DMs + Gruppen) ---
+  chatUsers: () => request("/api/chat/users"),
+  chatConversations: () => request("/api/chat/conversations"),
+  chatUnread: () => request("/api/chat/unread"),
+  chatCreate: (data) => request("/api/chat/conversations", { method: "POST", body: JSON.stringify(data) }),
+  chatMessages: (id, before) => request(`/api/chat/conversations/${id}/messages${before ? `?before=${before}` : ""}`),
+  chatSend: (id, text) => request(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
+  chatRead: (id) => request(`/api/chat/conversations/${id}/read`, { method: "POST" }),
+  chatRename: (id, name) => request(`/api/chat/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  chatAddMember: (id, userId) => request(`/api/chat/conversations/${id}/members`, { method: "POST", body: JSON.stringify({ user_id: userId }) }),
+  chatRemoveMember: (id, userId) => request(`/api/chat/conversations/${id}/members/${userId}`, { method: "DELETE" }),
+  chatSetAdmin: (id, userId, isAdmin) => request(`/api/chat/conversations/${id}/admins`, { method: "POST", body: JSON.stringify({ user_id: userId, is_admin: isAdmin }) }),
+  chatDelete: (id) => request(`/api/chat/conversations/${id}`, { method: "DELETE" }),
 
   // --- Automationen ---
   getAutomations: () => request("/api/admin/automations"),

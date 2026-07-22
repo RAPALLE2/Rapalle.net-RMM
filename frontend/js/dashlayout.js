@@ -14,7 +14,7 @@ import { t } from "./i18n.js";
 import { esc, uiPrompt, uiConfirm } from "./utils.js";
 import {
   renderStatusPart, renderActionsPart, renderWebsitesPart, clientHasWebsites,
-  renderOverviewSub, OVERVIEW_SUBS,
+  renderOverviewSub, OVERVIEW_SUBS, renderChildrenPart,
 } from "./panel.js";
 import { openWindow } from "./windowmanager.js";
 import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable, availableClientKinds } from "./clientmetrics.js";
@@ -35,6 +35,9 @@ import {
   COLS, BASE_ROWS, ROW_H, GAP, clamp, overlap, compact, neededRows,
   findFreeSpot, cellSize, applyGridPos, growHostIfNeeded,
 } from "./gridengine.js";
+// Gemeinsame Garantie-Berechnung (Restlaufzeit + Ampelfarbe) - identisch mit
+// dem Garantie-Widget im Flotten-Dashboard.
+import { warrantyInfo } from "./dashwidgets.js";
 
 let _uid = 0;
 const nid = () => `p-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
@@ -49,13 +52,15 @@ const LEAF_LABEL = {
   notes: () => (OVERVIEW_SUBS.notes ? OVERVIEW_SUBS.notes() : "Notes"),
   disk: () => (OVERVIEW_SUBS.disk ? OVERVIEW_SUBS.disk() : "Disk"),
   text: () => "Text",
+  warranty: () => "🛡️ Garantie",
+  children: () => "🖥️ VMs & Container",
 };
 
 // Standard-Größe (in Rasterzellen) je Panel-Typ.
 const DEFAULT_SIZE = {
   status: [1, 2], actions: [1, 2], websites: [1, 2],
   metrics: [3, 3], notes: [2, 2], disk: [2, 2],
-  text: [1, 1], folder: [2, 3], cmetric: [2, 2],
+  text: [1, 1], folder: [2, 3], cmetric: [2, 2], warranty: [1, 2], children: [1, 2],
 };
 function defaultSizeFor(panel) {
   if (panel.type === "cmetric") {
@@ -76,6 +81,8 @@ const ADDABLE = [
     { type: "status", label: "Status" },
     { type: "actions", label: "Aktionen" },
     { type: "websites", label: "Websites" },
+    { type: "warranty", label: "🛡️ Garantie" },
+    { type: "children", label: "🖥️ VMs & Container (Gäste)" },
   ]],
   ["Container", [
     { type: "folder", label: "Ordner (Tabs)" },
@@ -608,6 +615,8 @@ function fillPanelBody(bodyEl, panel, client, ctx) {
     return renderOverviewSub(bodyEl, client, panel.type, () => fillPanelBody(bodyEl, panel, client, ctx));
   }
   if (panel.type === "text") return renderTextPanel(bodyEl, panel, client, ctx);
+  if (panel.type === "warranty") return renderWarrantyPart(bodyEl, panel, client, ctx);
+  if (panel.type === "children") { bodyEl.classList.add("actions-panel"); return renderChildrenPart(bodyEl, client); }
   if (panel.type === "cmetric") return renderCMetric(bodyEl, panel, client, ctx);
   if (panel.type === "folder") return renderFolder(bodyEl, panel, client, ctx);
 }
@@ -633,6 +642,54 @@ function renderTextPanel(bodyEl, panel, client, ctx) {
       });
     });
   }
+}
+
+// ---------------- GARANTIE (pro Client) ----------------
+// Zeigt die Restlaufzeit der Garantie DIESES Clients. Das Datum kommt aus
+// client.warranty_until (serverseitig gespeichert, also für alle Benutzer
+// gleich) und lässt sich im Bearbeiten-Modus direkt hier setzen - ohne den
+// Umweg über "Client bearbeiten".
+function renderWarrantyPart(bodyEl, panel, client, ctx) {
+  const edit = !!(ctx && ctx.edit);
+  const mayEdit = isAdmin() || hasGlobalPerm("manage_clients");
+  const info = warrantyInfo(client.warranty_until);
+
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "display:flex;flex-direction:column;justify-content:center;gap:6px;padding:6px 10px;height:100%;box-sizing:border-box";
+  wrap.innerHTML = `
+    <div style="font-size:20px;font-weight:800;color:${info.color};line-height:1.15;overflow-wrap:anywhere">${esc(info.text)}</div>
+    <div style="font-size:12px;color:var(--subtext)">${esc(info.sub)}</div>`;
+
+  if (edit && mayEdit) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:6px;align-items:center;margin-top:2px";
+    const inp = document.createElement("input");
+    inp.type = "date";
+    inp.style.cssText = "flex:1;min-width:0;font-size:12px";
+    if (client.warranty_until) inp.value = new Date(client.warranty_until).toISOString().slice(0, 10);
+    inp.addEventListener("mousedown", (e) => e.stopPropagation());   // Drag des Panels verhindern
+    inp.addEventListener("change", async () => {
+      const until = inp.value ? new Date(inp.value + "T23:59:59").getTime() : null;
+      try {
+        await api.updateClient(client.id, { warranty_until: until });
+        client.warranty_until = until;                 // lokalen Stand mitziehen
+        const inState = (state.clients || []).find((c) => c.id === client.id);
+        if (inState) inState.warranty_until = until;
+        window.notify?.("Garantie-Datum gespeichert", "success");
+        fillPanelBody(bodyEl, panel, client, ctx);
+      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+    });
+    row.appendChild(inp);
+    wrap.appendChild(row);
+  } else if (!client.warranty_until) {
+    const hint = document.createElement("div");
+    hint.style.cssText = "font-size:11.5px;color:var(--subtext)";
+    hint.textContent = mayEdit
+      ? "Im Bearbeiten-Modus oder unter „Client bearbeiten“ setzen."
+      : "Kein Garantie-Datum hinterlegt.";
+    wrap.appendChild(hint);
+  }
+  bodyEl.appendChild(wrap);
 }
 
 // ---------------- cmetric ----------------

@@ -208,6 +208,8 @@ class UpdateClientBody(BaseModel):
     device_type_ack: int | None = None
     # Favorisierter Arbeitsordner (erscheint im Web-Explorer in der Wurzelansicht)
     fav_dir: str | None = None
+    # Garantie-Ende (Unix-ms). 0/None = keine Garantie hinterlegt.
+    warranty_until: int | None = None
 
 
 def _with_live_state(c: dict) -> dict:

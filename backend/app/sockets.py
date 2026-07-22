@@ -249,6 +249,8 @@ _AUTO_UPDATE_COOLDOWN_S = 1800   # 30 min zwischen zwei Auto-Update-Versuchen
 _auto_update_last: dict[str, float] = {}
 # Letzter Heartbeat-basierter Versions-Check pro Client (max. 1x/60s).
 _auto_update_hb_check: dict[str, float] = {}
+# Drossel für die Metrik-Schwellwert-Prüfung (Benachrichtigungs-Regeln).
+_threshold_check: dict[str, float] = {}
 
 # Pfad zur ausgelieferten Agent-Version (…/backend/app/sockets.py -> …/agent/version.txt)
 from pathlib import Path as _Path
@@ -351,6 +353,19 @@ async def on_register(sid, payload):
         import time as _time
         state.update_confirmed[client_id] = _time.monotonic()
         await sio.emit("client:updated", {"id": client_id}, namespace="/dashboard")
+        # Benachrichtigungs-Regel: Agent wurde aktualisiert
+        try:
+            from app import notifier
+            from app.routers.admin_routes import build_notification
+            _host = payload.get("hostname") or client_id
+            await notifier.fire_event("agent_update", client_id=client_id,
+                notification=build_notification(
+                    f"Agent auf {_host} wurde auf Version "
+                    f"{payload.get('agent_version') or '?'} aktualisiert.",
+                    head=f"⬆️ Agent aktualisiert – {_host}",
+                    client=_host, service="Agent-Update", level="success"))
+        except Exception:
+            pass
 
     # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
     db.set_agent_version(client_id, payload.get("agent_version"))
@@ -376,6 +391,10 @@ async def on_register(sid, payload):
         # Clients, die offline waren, beim Wiederverbinden aktualisiert werden.
         if db.get_setting("agent_auto_update_offline", "1") == "1":
             await _maybe_auto_update(client_id, payload.get("agent_version"))
+
+    # Merken, ob der Client vor dem Upsert schon existierte (für den
+    # "Neuer Client registriert"-Trigger der Benachrichtigungs-Regeln).
+    _was_known = db.get_client(client_id) is not None
 
     # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
     db.upsert_client(
@@ -444,6 +463,25 @@ async def on_register(sid, payload):
     await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
     await sio.emit("clients:changed", namespace="/dashboard")
 
+    # Benachrichtigungs-Regeln: "Client kommt online" / "Neuer Client".
+    try:
+        from app import notifier
+        from app.routers.admin_routes import build_notification
+        _host = hostname or client_id
+        await notifier.fire_event("client_online", client_id=client_id,
+            notification=build_notification(
+                f"{_host} ist jetzt online.",
+                head=f"🟢 Client online – {_host}",
+                client=_host, service="Status", level="success"))
+        if not _was_known:
+            await notifier.fire_event("client_new", client_id=client_id,
+                notification=build_notification(
+                    f"Neuer Client {_host} wurde registriert.",
+                    head=f"✨ Neuer Client – {_host}",
+                    client=_host, service="Onboarding", level="info"))
+    except Exception as _e:
+        print(f"[notify] online-Event fehlgeschlagen: {_e}")
+
 
 @sio.on("heartbeat", namespace="/agent")
 async def on_heartbeat(sid, payload):
@@ -499,6 +537,20 @@ async def on_heartbeat(sid, payload):
         print(f"[metrics] Konnte Messpunkt nicht speichern: {e}")
 
     await sio.emit("client:metrics", {"id": client_id, "metrics": metrics}, namespace="/dashboard")
+
+    # Benachrichtigungs-Regeln: Metrik-Schwellwerte (CPU/RAM/Disk/Temp).
+    # Höchstens alle 30 s pro Client prüfen - den eigentlichen Alarm-Cooldown
+    # (kein Spam) übernimmt die Regel selbst (notifier._cooled_down).
+    now_check2 = time.monotonic()
+    if now_check2 - _threshold_check.get(client_id, 0.0) >= 30.0:
+        _threshold_check[client_id] = now_check2
+        try:
+            from app import notifier
+            _c = db.get_client(client_id)
+            if _c:
+                await notifier.check_metric_thresholds(_c, metrics)
+        except Exception as e:
+            print(f"[notify] Schwellwert-Prüfung fehlgeschlagen: {e}")
 
 
 @sio.on("exec-result", namespace="/agent")
@@ -669,6 +721,19 @@ async def disconnect(sid):
         state.live_metrics.pop(client_id, None)
         await sio.emit("client:offline", {"id": client_id}, namespace="/dashboard")
         await sio.emit("clients:changed", namespace="/dashboard")
+        # Benachrichtigungs-Regeln: "Client geht offline".
+        try:
+            from app import notifier
+            from app.routers.admin_routes import build_notification
+            _c = db.get_client(client_id)
+            _host = (_c or {}).get("hostname") or client_id
+            await notifier.fire_event("client_offline", client_id=client_id,
+                notification=build_notification(
+                    f"{_host} ist offline gegangen.",
+                    head=f"🔴 Client offline – {_host}",
+                    client=_host, service="Status", level="warn"))
+        except Exception as _e:
+            print(f"[notify] offline-Event fehlgeschlagen: {_e}")
 
 
 async def send_to_agent(client_id: str, event: str, data: dict) -> bool:

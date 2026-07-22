@@ -94,6 +94,18 @@ async def login(body: LoginBody):
 
     if not user:
         db.add_audit_entry(body.username, "login.failed", details=f"realm:{body.realm}")
+        # Benachrichtigungs-Regel: fehlgeschlagene Anmeldung
+        try:
+            from app import notifier
+            from app.routers.admin_routes import build_notification
+            await notifier.fire_event("login_failed",
+                notification=build_notification(
+                    f"Fehlgeschlagene Anmeldung für '{body.username}'.",
+                    head="🚫 Fehlgeschlagene Anmeldung",
+                    service="Auth", level="warn"),
+                dedupe_key=f"login_failed:{body.username}")
+        except Exception:
+            pass
         raise HTTPException(401, "Benutzername oder Passwort falsch")
 
     # Rechteprüfung: wer nicht das Recht 'login' hat (und kein Super-Admin ist),
@@ -103,6 +115,18 @@ async def login(body: LoginBody):
         raise HTTPException(403, "Keine Berechtigung zur Anmeldung an diesem System")
 
     db.add_audit_entry(user["username"], "login.success", details=f"realm:{body.realm}")
+    # Benachrichtigungs-Regel: Benutzer-Anmeldung
+    try:
+        from app import notifier
+        from app.routers.admin_routes import build_notification
+        await notifier.fire_event("user_login",
+            notification=build_notification(
+                f"{user['username']} hat sich am Dashboard angemeldet.",
+                head=f"🔑 Anmeldung – {user['username']}",
+                service="Auth", level="info"),
+            dedupe_key=f"user_login:{user['username']}")
+    except Exception:
+        pass
     # HA1 fürs Netzlaufwerk (Digest) aus dem Klartext-Passwort ableiten und ablegen,
     # damit sich der Nutzer am Relay mit seinem normalen Passwort anmelden kann.
     try:

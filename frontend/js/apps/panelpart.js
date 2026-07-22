@@ -14,8 +14,20 @@ import { registerCleanup } from "../windowmanager.js";
 import { dashboardSocket } from "../socket.js";
 import {
   renderStatusPart, renderActionsPart, renderWebsitesPart,
-  renderOverviewSub, OVERVIEW_SUBS,
+  renderOverviewSub, OVERVIEW_SUBS, renderChildrenPart,
 } from "../panel.js";
+import { warrantyInfo } from "../dashwidgets.js";
+
+// Herausgelöstes Garantie-Panel (nur Anzeige - geändert wird das Datum im
+// Dashboard-Bearbeiten-Modus bzw. unter "Client bearbeiten").
+function renderWarrantyView(target, client) {
+  const info = warrantyInfo(client.warranty_until);
+  target.innerHTML = `
+    <div style="padding:14px;display:flex;flex-direction:column;gap:6px">
+      <div style="font-size:26px;font-weight:800;color:${info.color};line-height:1.15">${esc(info.text)}</div>
+      <div style="font-size:13px;color:var(--subtext)">${esc(info.sub)}</div>
+    </div>`;
+}
 
 export function renderPanelPart(body, win) {
   const { clientId, part } = win.props;
@@ -41,6 +53,8 @@ export function renderPanelPart(body, win) {
     if (type === "actions")       return renderActionsPart(target, client);
     if (type === "websites")      return renderWebsitesPart(target, client);
     if (type === "status")        { target.innerHTML = ""; return renderStatusPart(target, client); }
+    if (type === "warranty")      { target.innerHTML = ""; return renderWarrantyView(target, client); }
+    if (type === "children")      { target.innerHTML = ""; return renderChildrenPart(target, client); }
     const rr = () => renderOverviewSub(target, client, type, rr);
     rr();
   }
@@ -82,7 +96,7 @@ export function renderPanelPart(body, win) {
           <div class="tab-bar panelpart-tabs">
             ${subs.map((s) => `<button class="tab-btn ${s === activeSub ? "active" : ""}" data-sub="${esc(s)}">${OVERVIEW_SUBS[s] ? OVERVIEW_SUBS[s]() : esc(s)}</button>`).join("")}
           </div>` : ""}
-        <div class="panelpart-body ${part === "actions" || part === "websites" ? "actions-panel" : ""} ${part === "folder" ? "overview-content" : ""}"></div>
+        <div class="panelpart-body ${part === "actions" || part === "websites" || part === "children" ? "actions-panel" : ""} ${part === "folder" ? "overview-content" : ""}"></div>
       </div>
     `;
 
@@ -90,6 +104,8 @@ export function renderPanelPart(body, win) {
     if (part === "status") renderStatusPart(target, client);
     else if (part === "actions") renderActionsPart(target, client);
     else if (part === "websites") renderWebsitesPart(target, client);
+    else if (part === "warranty") renderWarrantyView(target, client);
+    else if (part === "children") renderChildrenPart(target, client);
     else if (part === "cmetric") {
       import("../clientmetrics.js").then(({ renderClientMetric }) =>
         renderClientMetric(target, client, { id: win.key, metric: win.props.metric, kind: win.props.kind }));

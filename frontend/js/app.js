@@ -44,6 +44,7 @@ import { renderTowerDefense } from "./apps/towerdefense.js";
 import { renderGamingHub } from "./apps/gaminghub.js";
 import { renderAiChat } from "./apps/aichat.js";
 import { renderTickets } from "./apps/tickets.js";
+import { renderChat } from "./apps/chat.js";
 import { renderAudioPlayer } from "./apps/audioplayer.js";
 import { handleSpotifyCallback } from "./spotify.js";
 import { renderWebBrowser, renderWebApp, getWebApps } from "./apps/webbrowser.js";
@@ -83,6 +84,7 @@ const APP_RENDERERS = {
   gaminghub: renderGamingHub,
   aichat: renderAiChat,
   tickets: renderTickets,
+  chat: renderChat,
   audioplayer: renderAudioPlayer,
   webbrowser: renderWebBrowser,
   webapp: renderWebApp,           // gespeicherte Web-Apps (props: {url,name,icon})
@@ -150,6 +152,7 @@ const APP_REQUIRED_PERM = {
   towerdefense: "play_games",
   gaminghub: "play_games",
   tickets: "ticket_read",
+  chat: "use_chat",
 };
 
 function _appAllowed(appKey) {
@@ -340,6 +343,23 @@ async function startSession(user) {
     setOnTreeStateChanged(() => scheduleSave(state));
     renderTaskbar();
   } catch (e) { try { console.error(e); } catch {} }
+
+  // Ungelesene Chat-Nachrichten beim Login als Notification anzeigen
+  // (nur mit Recht 'use_chat'; Fehler hier sind unkritisch).
+  try {
+    if (isAdmin() || hasGlobalPerm("use_chat")) {
+      const unread = await api.chatUnread();
+      if (unread && unread.total > 0) {
+        const lines = (unread.conversations || []).slice(0, 5)
+          .map((c) => `• ${c.name}: ${c.unread} neu`).join("\n");
+        const more = unread.conversations.length > 5
+          ? `\n… und ${unread.conversations.length - 5} weitere` : "";
+        window.notify?.(
+          `💬 ${unread.total} ungelesene Chat-Nachricht${unread.total === 1 ? "" : "en"}\n${lines}${more}`,
+          "info", 12000, { source: "chat" });
+      }
+    }
+  } catch (e) { try { console.error("[chat] Ungelesen-Check fehlgeschlagen:", e); } catch {} }
 }
 
 // Öffnet die zuletzt offenen Fenster in ihrer gespeicherten Reihenfolge,
@@ -538,6 +558,7 @@ function initMenusAndButtons() {
                            props: { url: wa.url, name: wa.name, icon: wa.icon }, w: 1020, h: 720 });
     }
     else if (app === "tickets") openWindow({ singleton: true, key: "tickets", appId: "tickets", title: "Tickets", w: 960, h: 660 });
+    else if (app === "chat") openWindow({ singleton: true, key: "chat", appId: "chat", title: "Chat", w: 900, h: 620 });
     else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
     else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
     else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
@@ -730,6 +751,31 @@ function initLiveUpdates() {
     // Flackern/Springen der Client-Zeilen) - nur wenn sich der Online-Status
     // sichtbar geändert hat (offline -> online).
     if (!wasOnline) renderSidebar();
+  });
+
+  // Chat: neue Nachricht -> Toast, wenn ich Mitglied bin und nicht selbst
+  // der Absender. (Die Chat-App selbst aktualisiert sich über dasselbe Event.)
+  dashboardSocket.on("chat:message", (d) => {
+    try {
+      const me = state.user?.id;
+      if (!me || d.sender_id === me) return;
+      if (!(d.member_ids || []).includes(me)) return;
+      window.notify?.(
+        `💬 ${d.conversation_type === "group"
+          ? `${d.sender_name} in „${d.conversation_name}“` : d.sender_name}:\n${d.preview || ""}`,
+        "info", 8000, { source: "chat", tag: `chat:${d.conversation_id}` });
+    } catch {}
+  });
+
+  // Benachrichtigungs-Regeln mit Kanal "Dashboard": Server pusht fertige
+  // Notifications (head/body/level) an alle verbundenen Dashboards.
+  dashboardSocket.on("notify:push", (n) => {
+    try {
+      const level = ["info", "success", "warn", "error"].includes(n.level) ? n.level
+        : (n.level === "warning" ? "warn" : (n.level === "danger" ? "error" : "info"));
+      window.notify?.(`${n.head || ""}\n${n.body || n.message || ""}`.trim(),
+        level, 10000, { source: "regel" });
+    } catch {}
   });
 
   dashboardSocket.on("client:offline", ({ id }) => {

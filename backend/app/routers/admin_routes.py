@@ -152,6 +152,7 @@ PERM_LABELS = {
     "play_games": "Spiele spielen",
     "manage_favorites": "Favoritenliste bearbeiten",
     "use_relay": "Relay benutzen",
+    "use_chat": "Chat benutzen",
     "relay_unlimited": "Relay unbegrenzt (keine Auto-Schließzeit)",
     # --- Pro Client ---
     "manage_clients": "Bearbeiten",
@@ -431,6 +432,20 @@ class WebhookBody(BaseModel):
     name: str
     url: str
     type: str = "custom"   # "discord" | "custom"
+    # Custom-Webhooks: eigene HTTP-Header (JSON-Objekt als String) und ein
+    # Body-Template mit Platzhaltern {head} {body} {message} {client} {tenant}
+    # {location} {service} {level} {timestamp}. Leer = Standard-JSON.
+    headers: str | None = None
+    body_template: str | None = None
+
+
+class WebhookUpdateBody(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    type: str | None = None
+    enabled: bool | None = None
+    headers: str | None = None
+    body_template: str | None = None
 
 
 # ------------------------------------------------------------------
@@ -558,6 +573,38 @@ def send_webhook(webhook: dict, notification: dict | str) -> None:
     if isinstance(notification, str):
         notification = build_notification(notification)
 
+    # Eigene HTTP-Header des Webhooks (JSON-Objekt als Text in der DB).
+    extra_headers = {}
+    try:
+        parsed = json.loads(webhook.get("headers") or "{}")
+        if isinstance(parsed, dict):
+            extra_headers = {str(k): str(v) for k, v in parsed.items()}
+    except Exception:
+        pass
+
+    # Eigenes Body-Template: Platzhalter {head} {body} {message} {client}
+    # {tenant} {location} {service} {level} {timestamp} werden ersetzt.
+    template = (webhook.get("body_template") or "").strip()
+    if webhook["type"] != "discord" and template:
+        out = template
+        for key in ("head", "body", "message", "client", "tenant",
+                    "location", "service", "level", "timestamp"):
+            val = str(notification.get(key, ""))
+            # In JSON-Templates müssen Sonderzeichen escaped werden - wir
+            # escapen wie ein JSON-String OHNE die umschließenden Quotes,
+            # damit "text": "{body}" gültig bleibt.
+            out = out.replace("{" + key + "}", json.dumps(val)[1:-1])
+        data = out.encode("utf-8")
+        content_type = extra_headers.pop("Content-Type", None) \
+            or extra_headers.pop("content-type", None) or "application/json"
+        req = urllib.request.Request(
+            webhook["url"], data=data,
+            headers={"Content-Type": content_type, "User-Agent": "Mozilla/5.0",
+                     "Accept": "application/json", **extra_headers},
+            method="POST")
+        urllib.request.urlopen(req, timeout=10)
+        return
+
     if webhook["type"] == "discord":
         payload = _discord_payload(notification)
     else:
@@ -582,6 +629,7 @@ def send_webhook(webhook: dict, notification: dict | str) -> None:
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0",
             "Accept": "application/json",
+            **extra_headers,
         },
         method="POST",
     )
@@ -597,9 +645,31 @@ async def list_webhooks(user: dict = Depends(get_current_user)):
 @router.post("/webhooks")
 async def create_webhook(body: WebhookBody, user: dict = Depends(get_current_user)):
     require_admin(user)
-    w = db.create_webhook(body.name, body.url, body.type)
+    w = db.create_webhook(body.name, body.url, body.type,
+                          headers=body.headers, body_template=body.body_template)
     db.add_audit_entry(user["username"], "webhook.created", target=w["id"], details=body.name)
     return w
+
+
+@router.patch("/webhooks/{webhook_id}")
+async def update_webhook(webhook_id: str, body: WebhookUpdateBody,
+                         user: dict = Depends(get_current_user)):
+    require_admin(user)
+    if not db.get_webhook(webhook_id):
+        raise HTTPException(404, "Webhook nicht gefunden")
+    fields = body.model_dump(exclude_unset=True)
+    if "enabled" in fields:
+        fields["enabled"] = int(fields["enabled"])
+    if fields.get("headers"):
+        try:
+            parsed = json.loads(fields["headers"])
+            if not isinstance(parsed, dict):
+                raise ValueError()
+        except Exception:
+            raise HTTPException(400, 'Header müssen ein JSON-Objekt sein, z.B. {"X-Api-Key": "..."}')
+    updated = db.update_webhook(webhook_id, fields)
+    db.add_audit_entry(user["username"], "webhook.updated", target=webhook_id)
+    return updated
 
 
 @router.post("/webhooks/{webhook_id}/test")

@@ -100,6 +100,23 @@ function widgets() {
     }
     setFleetWidgets(w); save();
   }
+  // Das frühere FREI einstellbare Garantie-Widget (eigenes Datum im Widget)
+  // gibt es nicht mehr: Im Dashboard zählen die Garantien der CLIENTS.
+  // Bereits angelegte Widgets werden deshalb einmalig auf die Garantie-
+  // Übersicht umgestellt (Position bleibt erhalten).
+  let convertedWarranty = false;
+  for (const x of w) {
+    if (x.kind === "warranty") {
+      x.preset = "fleet.warrantyOverview";
+      x.kind = "warrantylist";
+      delete x.until; delete x.since; delete x.label;
+      if ((x.gw || 1) < 2) x.gw = 2;
+      if ((x.gh || 1) < 2) x.gh = 2;
+      convertedWarranty = true;
+    }
+  }
+  if (convertedWarranty) { setFleetWidgets(w); save(); }
+
   for (const x of w) {
     if (!x.id) x.id = nid();
   }
@@ -278,17 +295,20 @@ function buildWidget(wdg, ctx) {
     sel.addEventListener("change", () => { wdg.kind = sel.value; save(); renderWidgetBody(body, wdg); });
     tools.appendChild(sel);
 
-    // Pro-Widget: alle Geräte oder nur physische zählen (ersetzt die frühere
-    // globale Profil-Einstellung). Wirkt nur auf Flotten-Aggregate.
+    // Pro-Widget: alle Geräte, nur physische oder nur VMs & LXCs zählen
+    // (ersetzt die frühere globale Profil-Einstellung). Wirkt nur auf
+    // Flotten-Aggregate.
     const scopeSel = document.createElement("select");
     scopeSel.className = "dash-w-kind";
     scopeSel.title = "Welche Geräte zählt dieses Widget?";
     scopeSel.innerHTML = `
       <option value="all" ${(wdg.scope || "all") === "all" ? "selected" : ""}>alle Geräte</option>
-      <option value="physical" ${wdg.scope === "physical" ? "selected" : ""}>nur physische</option>`;
+      <option value="physical" ${wdg.scope === "physical" ? "selected" : ""}>nur physische</option>
+      <option value="virtual" ${wdg.scope === "virtual" ? "selected" : ""}>nur VMs &amp; LXCs</option>`;
     scopeSel.addEventListener("change", () => { wdg.scope = scopeSel.value; save(); renderWidgetBody(body, wdg); });
     tools.appendChild(scopeSel);
   }
+
 
   const pop = document.createElement("button");
   pop.className = "dash-w-btn"; pop.title = "Als Fenster herauslösen"; pop.textContent = "↗️";
@@ -419,7 +439,11 @@ function openAddDialog(host, toolbar, atCell) {
       const arr = widgets();
       const w = b.dataset.textWidget
         ? { id: nid(), kind: "text", text: "Neuer Text – im Bearbeiten-Modus anklicken zum Ändern.", gw: 1, gh: 1 }
-        : { id: nid(), preset: b.dataset.preset, kind: b.dataset.kind, gw: 1, gh: 1 };
+        : { id: nid(), preset: b.dataset.preset, kind: b.dataset.kind,
+            // Listen-/Tabellen-artige Darstellungen brauchen von Anfang an
+            // mehr Platz, sonst sieht man nur zwei Zeilen.
+            gw: b.dataset.kind === "warrantylist" ? 2 : 1,
+            gh: b.dataset.kind === "warrantylist" ? 2 : 1 };
       // Platzieren EXAKT wie im Client-Panel (placeNew in dashlayout.js):
       // an der angeklickten Rasterzelle einfügen (hart ins Raster geklemmt),
       // sonst erste freie Stelle; vorhandene ggf. nach unten stapeln.

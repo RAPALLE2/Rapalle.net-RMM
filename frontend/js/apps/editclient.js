@@ -7,8 +7,7 @@
 import { state, findClient } from "../state.js";
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
-import { closeWindow } from "../windowmanager.js";
-import { favStarHtml } from "../sidebar.js";
+import { closeWindow, openWindow } from "../windowmanager.js";
 
 // Wird von app.js gesetzt, um nach Änderungen alles neu zu laden
 let onChanged = null;
@@ -111,6 +110,15 @@ export function renderEditClient(body, win) {
       </div>
 
       <div class="form-row">
+        <label>Garantie läuft bis (optional)</label>
+        <input type="date" id="ec-warranty"
+               value="${client.warranty_until ? new Date(client.warranty_until).toISOString().slice(0, 10) : ""}" />
+        <div style="font-size:11.5px;color:var(--subtext);margin-top:3px">
+          Grundlage für die Garantie-Benachrichtigungen und die Garantie-Übersicht im Dashboard.
+        </div>
+      </div>
+
+      <div class="form-row">
         <label>Automatisches Agent-Update</label>
         <select id="ec-autoupdate">
           <option value="global" ${(client.auto_update || "global") === "global" ? "selected" : ""}>Globale Einstellung verwenden</option>
@@ -126,196 +134,30 @@ export function renderEditClient(body, win) {
         <button class="action-btn" id="ec-delete" style="border-color:var(--danger);color:var(--danger)">Löschen</button>
       </div>
 
-      <h3 style="margin-top:22px">🔗 Verknüpfte Websites (Quick Access)</h3>
+      <h3 style="margin-top:22px">🔗 Verknüpfte Websites</h3>
       <p style="color:var(--subtext);font-size:12px;margin:4px 0 10px">
-        Binde Websites an diesen Client (z.B. Web-Interfaces, Portale). Favoriten (★)
-        werden zusätzlich im Dashboard angeheftet. Optional prüft der Uptime-Monitor
-        die URL regelmäßig und benachrichtigt per Webhook und In-App-Notification.
+        Websites werden jetzt komplett im <b>Websites-Widget</b> der Client-Ansicht
+        verwaltet – dort legst du sie an, änderst Name/URL, die Öffnungsart
+        (interner oder externer Browser) und das Uptime-Monitoring inkl.
+        Benachrichtigungs-Modus und Scan-Intervall.
       </p>
-      <div id="ec-websites-list" style="margin-bottom:10px"></div>
-
-      <div class="panel" style="padding:10px">
-        <div class="form-row">
-          <label>Name</label>
-          <input type="text" id="ec-ws-name" placeholder="z.B. Proxmox Web-UI" />
-        </div>
-        <div class="form-row">
-          <label>URL</label>
-          <input type="text" id="ec-ws-url" value="${esc(client.ip ? `http://${client.ip}:80/` : "")}" placeholder="https://..." />
-        </div>
-        <div class="form-row">
-          <label>Öffnen in</label>
-          <select id="ec-ws-openmode">
-            <option value="external" selected>Externem Browser-Tab</option>
-            <option value="internal">Internem Browser (eigenes Fenster)</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label style="color:var(--subtext);font-size:12px">Favoriten setzt du nach dem Anlegen über den Stern in der Liste (☆ → Seitenleiste → Dashboard → beide).</label>
-        </div>
-        <div class="form-row">
-          <label><input type="checkbox" id="ec-ws-monitor" /> Uptime-Monitoring aktivieren</label>
-        </div>
-        <div id="ec-ws-monitor-opts" style="display:none">
-          <div class="form-row">
-            <label>Benachrichtigen…</label>
-            <select id="ec-ws-notify">
-              <option value="down" selected>…wenn der Scan fehlgeschlagen ist (Website DOWN)</option>
-              <option value="up">…wenn der Scan erfolgreich war (Website UP)</option>
-              <option value="always">…immer (nach jedem Scan)</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>Delay zwischen den Scans</label>
-            <select id="ec-ws-interval">
-              <option value="30">30 Sekunden</option>
-              <option value="60">1 Minute</option>
-              <option value="300" selected>5 Minuten</option>
-              <option value="900">15 Minuten</option>
-              <option value="1800">30 Minuten</option>
-              <option value="3600">1 Stunde</option>
-            </select>
-          </div>
-          <p style="color:var(--subtext);font-size:11px;margin:2px 0 6px">
-            Hinweis: Bei „DOWN" / „UP" wird nur beim Statuswechsel benachrichtigt (kein Spam).
-            „Immer" sendet nach jedem einzelnen Scan.
-          </p>
-        </div>
-        <div id="ec-ws-error" class="form-error hidden"></div>
-        <button class="btn-primary" id="ec-ws-add" style="margin-top:4px">+ Website hinzufügen</button>
-      </div>
+      <button class="action-btn" id="ec-ws-goto" style="width:auto">🔗 Websites-Widget öffnen</button>
 
     </div>
   `;
 
-  // -----------------------------------------------------------------
-  // Verknüpfte Websites: Liste laden/rendern, hinzufügen, ändern, löschen
-  // -----------------------------------------------------------------
-  const NOTIFY_LABELS = { down: "bei DOWN", up: "bei UP", always: "immer" };
-
-  function intervalLabel(sec) {
-    if (sec >= 3600) return `${Math.round(sec / 3600)} h`;
-    if (sec >= 60) return `${Math.round(sec / 60)} min`;
-    return `${sec} s`;
-  }
-
-  async function loadWebsites() {
-    const listEl = body.querySelector("#ec-websites-list");
-    if (!listEl) return;
-    try {
-      const sites = await api.getClientWebsites(client.id);
-      if (!sites.length) {
-        listEl.innerHTML = `<div style="color:var(--subtext);font-size:12px">Noch keine Websites verknüpft.</div>`;
-        return;
-      }
-      listEl.innerHTML = sites.map((w) => {
-        const dot = !w.monitor_enabled ? "" :
-          w.last_status === "up"
-            ? `<span title="Erreichbar" style="color:var(--online,#3ecf8e)">●</span>`
-            : w.last_status === "down"
-              ? `<span title="Nicht erreichbar${w.last_error ? ": " + esc(w.last_error) : ""}" style="color:var(--danger,#ff4d6d)">●</span>`
-              : `<span title="Noch nicht geprüft" style="color:var(--subtext)">●</span>`;
-        const monitorInfo = w.monitor_enabled
-          ? `<span style="font-size:11px;color:var(--subtext)">Monitoring: alle ${intervalLabel(w.monitor_interval_seconds)}, ${NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}</span>`
-          : `<span style="font-size:11px;color:var(--subtext)">kein Monitoring</span>`;
-        return `
-        <div class="panel" style="margin-bottom:6px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <div style="min-width:0">
-            <div style="display:flex;align-items:center;gap:6px">
-              ${dot}
-              <a href="${esc(w.url)}" data-ws-open="${w.id}" style="font-weight:600;cursor:pointer">${esc(w.name)}${w.open_mode === "internal" ? " 🪟" : ""}</a>
-            </div>
-            <div style="font-size:11px;color:var(--subtext);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.url)}</div>
-            ${monitorInfo}
-          </div>
-          <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
-            ${favStarHtml("websites", w.id, { name: w.name, url: w.url, clientId: client.id, clientHostname: client.hostname, open_mode: w.open_mode })}
-            <button class="taskbar-btn" data-ws-openmode="${w.id}" title="Öffnet aktuell im ${w.open_mode === "internal" ? "internen Browser - Klick: externer Tab" : "externen Tab - Klick: interner Browser"}">${w.open_mode === "internal" ? "🪟 intern" : "🔗 extern"}</button>
-            <button class="taskbar-btn" data-ws-mon="${w.id}" title="Monitoring ${w.monitor_enabled ? "ausschalten" : "einschalten"}">${w.monitor_enabled ? "📡 an" : "📡 aus"}</button>
-            <button class="taskbar-btn" data-ws-del="${w.id}">🗑</button>
-          </div>
-        </div>`;
-      }).join("");
-
-      listEl.querySelectorAll("[data-ws-open]").forEach((a) =>
-        a.addEventListener("click", (e) => {
-          e.preventDefault();
-          const s2 = sites.find((x) => x.id === a.dataset.wsOpen);
-          if (s2) import("./webbrowser.js").then((m) => m.openWebsiteEntry(s2));
-        })
-      );
-      listEl.querySelectorAll("[data-ws-openmode]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          try {
-            const s2 = sites.find((x) => x.id === btn.dataset.wsOpenmode);
-            await api.updateClientWebsite(client.id, s2.id,
-              { open_mode: s2.open_mode === "internal" ? "external" : "internal" });
-          } catch (e) {
-            window.notify?.("Ändern fehlgeschlagen: " + e.message, "error");
-          }
-          loadWebsites();
-        })
-      );
-      listEl.querySelectorAll("[data-ws-mon]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          try {
-            const s = sites.find((x) => x.id === btn.dataset.wsMon);
-            await api.updateClientWebsite(client.id, s.id, { monitor_enabled: !s.monitor_enabled });
-          } catch (e) {
-            window.notify?.("Ändern fehlgeschlagen: " + e.message, "error");
-          }
-          loadWebsites();
-        })
-      );
-      listEl.querySelectorAll("[data-ws-del]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          if (!(await uiConfirm("Website-Verknüpfung löschen?", { okText: "Löschen", danger: true }))) return;
-          try {
-            await api.deleteClientWebsite(client.id, btn.dataset.wsDel);
-          } catch (e) {
-            window.notify?.("Löschen fehlgeschlagen: " + e.message, "error");
-          }
-          loadWebsites();
-        })
-      );
-    } catch (e) {
-      listEl.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
-    }
-  }
-
-  // Monitoring-Optionen nur zeigen, wenn Monitoring aktiviert ist
-  const wsMonitorCheck = body.querySelector("#ec-ws-monitor");
-  wsMonitorCheck.addEventListener("change", () => {
-    body.querySelector("#ec-ws-monitor-opts").style.display = wsMonitorCheck.checked ? "" : "none";
+  // Websites: komplette Verwaltung liegt im Websites-Widget (panel.js).
+  // Hier nur noch ein Sprung dorthin - als eigenes Fenster, damit man den
+  // Bearbeiten-Dialog nicht verliert.
+  body.querySelector("#ec-ws-goto")?.addEventListener("click", () => {
+    openWindow({
+      singleton: true,
+      key: `panelpart-${client.id}-websites-edit`, appId: "panelpart",
+      title: `🔗 Websites — ${client.hostname}`,
+      props: { clientId: client.id, part: "websites" },
+      clientColor: client.color, w: 460, h: 520,
+    });
   });
-
-  body.querySelector("#ec-ws-add").addEventListener("click", async () => {
-    const err = body.querySelector("#ec-ws-error");
-    err.classList.add("hidden");
-    const name = body.querySelector("#ec-ws-name").value.trim();
-    const url = body.querySelector("#ec-ws-url").value.trim();
-    if (!name || !url) {
-      err.textContent = "Name und URL erforderlich"; err.classList.remove("hidden"); return;
-    }
-    try {
-      await api.createClientWebsite(client.id, {
-        name, url,
-        open_mode: body.querySelector("#ec-ws-openmode").value,
-        monitor_enabled: wsMonitorCheck.checked,
-        monitor_notify: body.querySelector("#ec-ws-notify").value,
-        monitor_interval_seconds: parseInt(body.querySelector("#ec-ws-interval").value, 10),
-      });
-      body.querySelector("#ec-ws-name").value = "";
-      // Wieder die Standard-URL (Client-IP) vorbelegen statt leer.
-      body.querySelector("#ec-ws-url").value = client.ip ? `http://${client.ip}:80/` : "";
-      window.notify?.("Website verknüpft", "success");
-      loadWebsites();
-    } catch (e) {
-      err.textContent = e.message; err.classList.remove("hidden");
-    }
-  });
-
-  loadWebsites();
 
   const tenantSel = body.querySelector("#ec-tenant");
   // Live-Refresh der Tenant-Liste bei Hierarchie-Änderungen (Auswahl bleibt).
@@ -395,6 +237,10 @@ export function renderEditClient(body, win) {
         active: body.querySelector("#ec-active").checked,
         device_type: devTypeSel.value,
         auto_update: body.querySelector("#ec-autoupdate").value,
+        // Garantie-Ende: Ende des gewählten Tages (23:59:59), leer = keine Garantie
+        warranty_until: body.querySelector("#ec-warranty").value
+          ? new Date(body.querySelector("#ec-warranty").value + "T23:59:59").getTime()
+          : null,
         // Host nur setzen, wenn VM/LXC — sonst kein Parent
         parent_client_id: (devTypeSel.value === "vm" || devTypeSel.value === "lxc")
           ? (body.querySelector("#ec-host").value || null)
