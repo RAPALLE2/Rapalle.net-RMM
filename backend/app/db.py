@@ -626,6 +626,31 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_activity_entity
             ON activity_log(entity_type, entity_id, created_at);
 
+        -- ----------------------------------------------------------
+        -- Medien-Bibliothek des Audio-Players (Media-Hub):
+        --   kind 'local'   -> hochgeladene MP3/MP4 (Datei unter media_files/)
+        --   kind 'youtube' -> gemerkter YouTube-Link (Video oder Playlist)
+        --   kind 'spotify' -> gemerkter Spotify-Link
+        --   kind 'radio'   -> eigener Stream/Sender
+        -- shared = 1: für alle Benutzer sichtbar, sonst nur für den Besitzer.
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS media_items (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT,
+            owner_name TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            subtitle TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL DEFAULT '',
+            filename TEXT,
+            size INTEGER NOT NULL DEFAULT 0,
+            mime TEXT,
+            shared INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_owner
+            ON media_items(owner_id, kind, created_at);
+
         -- Benachrichtigungs-Regeln: "Wenn <trigger> (auf Clients X/Y/Z),
         -- dann <channel> an <target>". params = JSON (z.B. days_before,
         -- threshold). last_fired = JSON {key: ts} fuer Cooldown/Dedupe.
@@ -1504,10 +1529,18 @@ GLOBAL_PERM_KEYS = [
     "automation",
     "manage_hierarchy",
     "play_games",
+    # Audio-Player / Media-Hub (eigene Bibliothek, Uploads)
+    "use_media",
     "manage_favorites",
     "use_relay", "relay_unlimited",
     # Chat-App (Direktnachrichten & Gruppen)
     "use_chat",
+    # Voll-Administrator: deckt JEDES andere Recht ab (wie Rolle 'admin').
+    # Damit lässt sich Super-Admin auch über die Rechte-Verwaltung vergeben,
+    # ohne die Rolle des Benutzers zu ändern.
+    "super_admin",
+    # Neue Clients aufnehmen (Enrollment-Token erzeugen, Agent-Installer holen)
+    "add_client",
     # Remote-Bildschirm ohne Anfrage: erlaubt den einmaligen "Silent-Modus"
     # im Profil (nächste Remote-Sitzung ohne Zustimmungs-Dialog am Gerät).
     "screen_silent",

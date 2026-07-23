@@ -153,6 +153,7 @@ const APP_REQUIRED_PERM = {
   gaminghub: "play_games",
   tickets: "ticket_read",
   chat: "use_chat",
+  audioplayer: "use_media",
 };
 
 function _appAllowed(appKey) {
@@ -180,12 +181,51 @@ function applyAppVisibility() {
   // Benutzermenü: Einstellungen nur, wenn erlaubt.
   const settingsBtn = document.getElementById("btn-open-settings");
   if (settingsBtn) settingsBtn.style.display = _appAllowed("settings") ? "" : "none";
-  // Sidebar: Client hinzufügen (Enrollment) bleibt Admin-only; Hierarchie
-  // verwalten richtet sich nach dem Recht 'manage_hierarchy'.
+  // Sidebar: "Client hinzufügen" (Enrollment) hängt am Recht 'add_client',
+  // "Hierarchie verwalten" an 'manage_hierarchy'.
   const addBtn = document.getElementById("btn-add-client");
-  if (addBtn) addBtn.style.display = isAdmin() ? "" : "none";
+  if (addBtn) addBtn.style.display = (isAdmin() || hasGlobalPerm("add_client")) ? "" : "none";
   const mgmtBtn = document.getElementById("btn-manage-hierarchy");
   if (mgmtBtn) mgmtBtn.style.display = (isAdmin() || hasGlobalPerm("manage_hierarchy")) ? "" : "none";
+}
+
+// Name im Benutzermenü - mit ADMIN-Tag, wenn Vollzugriff besteht. Das gilt
+// sowohl für die Rolle 'admin' als auch für das Recht 'super_admin'
+// (admin_via === "permission" wird mit * gekennzeichnet).
+function drawUserMenuName(user) {
+  const nameEl = document.getElementById("user-menu-name");
+  if (!nameEl || !user) return;
+  nameEl.textContent = user.display_name;
+  if (!user.is_admin) return;
+  const tag = document.createElement("span");
+  tag.textContent = user.admin_via === "permission" ? "ADMIN*" : "ADMIN";
+  tag.title = user.admin_via === "permission"
+    ? "Vollzugriff über das Recht super_admin" : "Rolle admin";
+  tag.style.cssText = "color:var(--warn,#f5a524);font-size:10px;font-weight:700;margin-left:5px";
+  nameEl.appendChild(tag);
+}
+
+/**
+ * Lädt Benutzer-Infos UND effektive Rechte neu und zeichnet alles nach, was
+ * davon abhängt (ADMIN-Tag, Startmenü, Sidebar-Buttons, Hauptbereich).
+ * Wird nach dem Speichern in der Rechte-Verwaltung aufgerufen, damit
+ * Änderungen sofort sichtbar sind - ohne Strg+F5.
+ */
+export async function refreshPermissionsUi() {
+  try {
+    const [me, perms] = await Promise.all([
+      api.me().catch(() => state.user),
+      api.getEffectivePermissions().catch(() => state.perms),
+    ]);
+    if (me) state.user = me;
+    if (perms) state.perms = perms;
+    drawUserMenuName(state.user);
+    applyAppVisibility();
+    try { renderSidebar(); } catch {}
+    try { renderMainContent(); } catch {}
+  } catch (e) {
+    try { console.error("[perms] Aktualisieren fehlgeschlagen:", e); } catch {}
+  }
 }
 
 async function refreshAll() {
@@ -237,7 +277,7 @@ async function startSession(user) {
   }
 
   showOnly(appScreen());
-  document.getElementById("user-menu-name").textContent = user.display_name;
+  drawUserMenuName(user);
 
   // Persistenz einrichten (pro Benutzer). Aufgeklappte Sidebar-Knoten müssen
   // VOR dem ersten Render gesetzt werden, damit der Baum sofort korrekt aussieht.
@@ -549,7 +589,7 @@ function initMenusAndButtons() {
     else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
     else if (app === "gaminghub") openWindow({ singleton: true, key: "gaminghub", appId: "gaminghub", title: "Gaming Hub", w: 820, h: 640 });
     else if (app === "aichat") openWindow({ key: "aichat", appId: "aichat", title: "AI Chat", w: 860, h: 620 });
-    else if (app === "audioplayer") openWindow({ singleton: true, key: "audioplayer", appId: "audioplayer", title: "Audio Player", w: 900, h: 680 });
+    else if (app === "audioplayer") openWindow({ singleton: true, key: "audioplayer", appId: "audioplayer", title: "Audio Player", w: 1120, h: 700 });
     else if (app === "webbrowser") openWindow({ key: "webbrowser", appId: "webbrowser", title: "Browser", w: 1020, h: 720 });
     else if (app.startsWith("webapp:")) {
       // Gespeicherte Web-App: Seite direkt in eigenem Fenster öffnen.

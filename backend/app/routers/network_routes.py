@@ -14,7 +14,10 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user, require_perm
-from app.network_scan import scan_local_network, scan_ports, parse_port_spec
+from app.network_scan import (
+    scan_local_network, scan_ports, parse_port_spec,
+    start_scan_job, get_scan_job, cancel_scan_job, parse_scan_target, SCAN_SPEEDS,
+)
 
 router = APIRouter(prefix="/api/network", tags=["network"])
 
@@ -39,6 +42,59 @@ async def run_scan(subnet: str | None = None, user: dict = Depends(get_current_u
         return _last_scan
     finally:
         _scan_in_progress = False
+
+
+# ------------------------------------------------------------------
+# Job-basierter Scan (große Netze wie 10.10 = /16, mit Fortschritt)
+# ------------------------------------------------------------------
+
+@router.get("/scan/preview")
+async def scan_preview(target: str | None = None, user: dict = Depends(get_current_user)):
+    """Prüft die Ziel-Angabe und meldet, wie groß der Scan würde."""
+    require_perm(user, "network_scan")
+    try:
+        prefixes, label = parse_scan_target(target)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"label": label, "subnets": len(prefixes), "hosts": len(prefixes) * 254,
+            "speeds": {k: {"workers": v[0], "per_subnet": v[1]} for k, v in SCAN_SPEEDS.items()}}
+
+
+@router.post("/scan/start")
+async def scan_start(target: str | None = None, speed: str = "normal",
+                     user: dict = Depends(get_current_user)):
+    """
+    Startet einen Scan im Hintergrund und liefert sofort die Job-ID.
+      target: "192.168.1.", "10.10" (= /16), "10.10.0.0/16", leer = eigenes Netz
+      speed:  normal | fast | turbo  (Speed-Up verteilt die /24-Blöcke auf
+              mehrere parallele Worker)
+    """
+    require_perm(user, "network_scan")
+    if speed not in SCAN_SPEEDS:
+        raise HTTPException(400, f"Unbekannte Geschwindigkeit (erlaubt: {', '.join(SCAN_SPEEDS)})")
+    try:
+        job_id = start_scan_job(target, speed)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"job_id": job_id}
+
+
+@router.get("/scan/job/{job_id}")
+async def scan_job_status(job_id: str, user: dict = Depends(get_current_user)):
+    """Fortschritt + (bei Abschluss) gefundene Geräte."""
+    require_perm(user, "network_scan")
+    job = get_scan_job(job_id)
+    if not job:
+        raise HTTPException(404, "Scan-Job nicht gefunden (evtl. abgelaufen)")
+    return {k: v for k, v in job.items() if k != "cancel"}
+
+
+@router.post("/scan/job/{job_id}/cancel")
+async def scan_job_cancel(job_id: str, user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    if not cancel_scan_job(job_id):
+        raise HTTPException(404, "Kein laufender Scan mit dieser ID")
+    return {"ok": True}
 
 
 @router.get("/scan/last")

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, hash_password, require_admin, require_perm
+from app.auth import get_current_user, hash_password, require_admin, require_perm, is_super_admin
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -41,8 +41,17 @@ def _generate_one_time_password(length: int = 12) -> str:
 async def get_users(user: dict = Depends(get_current_user)):
     require_perm(user, "see_permissions")
     users = db.list_users()
-    # Passwort-Hashes NIE ans Frontend schicken
-    return [{k: v for k, v in u.items() if k != "password_hash"} for u in users]
+    out = []
+    for u in users:
+        row = {k: v for k, v in u.items() if k != "password_hash"}
+        # EFFEKTIVER Admin-Status: Rolle 'admin' ODER das Recht 'super_admin'
+        # (auch über eine Gruppe geerbt). Das Frontend zeigt danach den
+        # ADMIN-Tag - super_admin ist damit gleichwertig zur Rolle.
+        row["is_admin"] = is_super_admin(u)
+        row["admin_via"] = ("role" if u.get("role") == "admin"
+                            else ("permission" if row["is_admin"] else None))
+        out.append(row)
+    return out
 
 
 @router.post("")

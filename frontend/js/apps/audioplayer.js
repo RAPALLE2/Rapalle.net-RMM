@@ -5,10 +5,11 @@
 // Spotify-Links als offizielles Embed (Spotify erlaubt externe Steuerung
 // nur mit Premium-OAuth - daher steuert man dort im Widget selbst),
 // Internet-Radio (Presets + eigene Stream-URL) über <audio> mit Visualizer.
-import { esc } from "../utils.js";
+import { esc, uiConfirm, uiPrompt } from "../utils.js";
 import { registerCleanup } from "../windowmanager.js";
+import { api } from "../api.js";
 import { getSpotifyClientId, spotifyLogin, spotifyLoggedIn, spotifyLogout,
-         getSpotifyToken, spotifyApi } from "../spotify.js";
+         getSpotifyToken, spotifyApi, spotifyDiagnostics } from "../spotify.js";
 
 // ---- Spotify Web Playback SDK (einmal global laden) ----
 let _spSdkPromise = null;
@@ -33,11 +34,23 @@ function loadSpotifySdk() {
 // und lässt sich nicht mehr anhalten.
 let _activePlayerStop = null;
 
+// Kategorien des Bibliotheks-Menüs (linke Schublade).
+const LIB_TABS = [
+  { key: "radio",   icon: "📻", label: "Radio" },
+  { key: "spotify", icon: "🟢", label: "Spotify" },
+  { key: "youtube", icon: "▶️", label: "YouTube" },
+  { key: "local",   icon: "💾", label: "Lokal" },
+];
+
 const RADIO_STATIONS = [
   { name: "Radio Paradise", genre: "Eclectic Rock", url: "https://stream.radioparadise.com/aac-320", emoji: "🌴" },
   { name: "SomaFM Groove Salad", genre: "Chill / Ambient", url: "https://ice1.somafm.com/groovesalad-128-mp3", emoji: "🥗" },
   { name: "SomaFM DEF CON", genre: "Hacker Electro", url: "https://ice1.somafm.com/defcon-128-mp3", emoji: "💻" },
   { name: "Deutschlandfunk", genre: "Nachrichten", url: "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3", emoji: "🗞️" },
+  { name: "SomaFM Drone Zone", genre: "Ambient / Space", url: "https://ice1.somafm.com/dronezone-128-mp3", emoji: "🚀" },
+  { name: "SomaFM Lush", genre: "Vocal / Downtempo", url: "https://ice1.somafm.com/lush-128-mp3", emoji: "🌸" },
+  { name: "BBC World Service", genre: "News (EN)", url: "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service", emoji: "🌍" },
+  { name: "FluxFM", genre: "Alternative", url: "https://streams.fluxfm.de/live/mp3-320/audio/", emoji: "🎸" },
 ];
 
 // ---- YouTube IFrame API (einmal global laden) ----
@@ -123,15 +136,30 @@ export function renderAudioPlayer(body, win) {
       </style>
 
       <div style="display:flex;gap:8px;padding:12px 14px;align-items:center">
+        <button class="ap-btn" id="ap-menu" title="Bibliothek ein-/ausblenden"
+          style="width:38px;height:38px;border-radius:11px;font-size:16px;flex:none">☰</button>
         <span style="font-size:20px">🎵</span>
         <input id="ap-url" placeholder="YouTube-Video/-Playlist, Spotify-Link oder Stream-URL einfügen…"
           style="flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:20px;
           color:#e8eefc;padding:9px 16px;font-size:13px;outline:none" />
         <button class="btn-primary" id="ap-load" style="margin:0;width:auto;border-radius:20px">Laden</button>
+        <button class="taskbar-btn" id="ap-save" style="border-radius:20px;display:none;white-space:nowrap"
+          title="Aktuelle Quelle in der Bibliothek merken">⭐ Merken</button>
         <button class="taskbar-btn" id="ap-spotify" style="border-radius:20px;display:none;white-space:nowrap"></button>
       </div>
 
-      <div id="ap-stage" style="flex:1;display:flex;align-items:center;justify-content:center;padding:0 14px;min-height:0"></div>
+      <!-- Bibliothek (links) + Bühne (rechts). Die Bibliothek lebt in einem
+           EIGENEN Container und wird beim Umschalten der Kategorie neu
+           gezeichnet - die Bühne bleibt dabei unangetastet, deshalb läuft die
+           Wiedergabe beim Stöbern einfach weiter. -->
+      <div style="flex:1;display:flex;min-height:0;gap:0">
+        <div id="ap-lib" style="width:290px;flex:none;display:flex;flex-direction:column;min-height:0;
+             border-right:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.18)">
+          <div id="ap-lib-tabs" style="display:flex;gap:4px;padding:8px 8px 6px;flex:none;flex-wrap:wrap"></div>
+          <div id="ap-lib-body" style="flex:1;overflow:auto;padding:0 8px 10px;min-height:0"></div>
+        </div>
+        <div id="ap-stage" style="flex:1;display:flex;align-items:center;justify-content:center;padding:0 14px;min-height:0;overflow:auto"></div>
+      </div>
 
       <div id="ap-nowplaying" style="text-align:center;padding:6px 20px 0;min-height:22px">
         <span id="ap-title" style="font-weight:700;font-size:14px"></span>
@@ -168,35 +196,312 @@ export function renderAudioPlayer(body, win) {
   const playBtn = body.querySelector("#ap-play");
   const shuffleBtn = body.querySelector("#ap-shuffle");
   const volEl = body.querySelector("#ap-vol");
+  const saveBtn = body.querySelector("#ap-save");
+  // Beschreibt die gerade laufende Quelle - Grundlage für "⭐ Merken".
+  let currentSource = null;      // {kind, title, subtitle, url}
 
-  // ---------------- Start-Ansicht (Radio-Presets) ----------------
+  // =================================================================
+  // BIBLIOTHEK (linke Schublade)
+  // Wichtig: Das Menü lebt in #ap-lib und ist von der Bühne (#ap-stage)
+  // GETRENNT. Kategorie wechseln, stöbern oder das Menü auf-/zuklappen
+  // rührt die laufende Wiedergabe deshalb nicht an - es wird nur dann etwas
+  // gestartet, wenn man einen Eintrag wirklich anklickt.
+  // =================================================================
+  let libTab = "radio";
+  let libOpen = true;
+  let libItems = [];            // gespeicherte Einträge vom Server
+  let localQueue = [];          // lokal gewählte Dateien (ohne Upload)
+  let localIndex = -1;
+
+  const libEl = body.querySelector("#ap-lib");
+  const libTabsEl = body.querySelector("#ap-lib-tabs");
+  const libBodyEl = body.querySelector("#ap-lib-body");
+
+  function toggleLib(force) {
+    libOpen = force != null ? force : !libOpen;
+    libEl.style.display = libOpen ? "flex" : "none";
+  }
+  body.querySelector("#ap-menu").addEventListener("click", () => toggleLib());
+
+  function drawLibTabs() {
+    libTabsEl.innerHTML = LIB_TABS.map((t) => `
+      <button class="ap-chip" data-libtab="${t.key}" style="padding:5px 9px;border-radius:9px;font-size:12px;
+        ${libTab === t.key ? "background:rgba(77,166,255,.3);border-color:#4da6ff" : ""}">
+        ${t.icon} ${esc(t.label)}
+      </button>`).join("");
+    libTabsEl.querySelectorAll("[data-libtab]").forEach((b) =>
+      b.addEventListener("click", () => { libTab = b.dataset.libtab; drawLib(); }));
+  }
+
+  const libRow = (icon, title, sub, actions = "") => `
+    <div class="ap-chip lib-row" style="display:flex;align-items:center;gap:8px;padding:7px 9px;margin-bottom:5px">
+      <span style="font-size:17px;flex:none">${icon}</span>
+      <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25">
+        <span style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</span>
+        <span style="font-size:10.5px;color:#8ea2c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub || "")}</span>
+      </span>
+      ${actions}
+    </div>`;
+
+  const delBtn = (id) => `<button class="ap-btn" data-libdel="${esc(id)}" title="Aus der Bibliothek entfernen"
+    style="width:24px;height:24px;font-size:11px;flex:none">🗑</button>`;
+
+  // Eigene Einträge lassen sich für alle Benutzer freigeben (oder wieder
+  // privat schalten). Fremde Einträge zeigen den Schalter nicht.
+  const shareBtn = (it) => `<button class="ap-btn" data-libshare="${esc(it.id)}"
+    title="${it.shared ? "Für alle freigegeben – Klick: wieder privat" : "Nur für mich – Klick: für alle freigeben"}"
+    style="width:24px;height:24px;font-size:11px;flex:none;${it.shared ? "background:rgba(62,207,142,.28);border-color:#3ecf8e" : ""}">
+    ${it.shared ? "🌍" : "🔒"}</button>`;
+
+  // Aktions-Buttons eines Bibliotheks-Eintrags (nur für den Besitzer).
+  const itemActions = (it) => (it.can_edit ? shareBtn(it) + delBtn(it.id) : "");
+
+  async function loadLibItems() {
+    try { libItems = await api.getMedia(); } catch { libItems = []; }
+  }
+
+  function itemsOf(kind) { return libItems.filter((i) => i.kind === kind); }
+
+  async function drawLib() {
+    drawLibTabs();
+    libBodyEl.innerHTML = `<div style="color:#8ea2c6;font-size:12px;padding:8px">Lädt…</div>`;
+    if (libTab === "radio") return drawRadioTab();
+    if (libTab === "spotify") return drawSpotifyTab();
+    if (libTab === "youtube") return drawYouTubeTab();
+    if (libTab === "local") return drawLocalTab();
+  }
+
+  // ---- 📻 Radio -----------------------------------------------------
+  function drawRadioTab() {
+    const own = itemsOf("radio");
+    libBodyEl.innerHTML = `
+      <div style="font-size:11px;color:#8ea2c6;margin:4px 2px">Sender</div>
+      ${RADIO_STATIONS.map((r, i) =>
+        `<div data-radio="${i}">${libRow(r.emoji, r.name, r.genre)}</div>`).join("")}
+      <div style="font-size:11px;color:#8ea2c6;margin:10px 2px 4px">Eigene Streams</div>
+      ${own.map((it) => `<div data-play="${esc(it.id)}">${libRow("🎶", it.title, it.subtitle || it.url,
+        itemActions(it))}</div>`).join("")
+        || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Noch keine eigenen Streams.</div>`}
+      <button class="ap-chip" id="ap-add-radio" style="width:100%;text-align:center;margin-top:8px;font-size:12px">
+        ＋ Stream-URL merken</button>`;
+
+    libBodyEl.querySelectorAll("[data-radio]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const r = RADIO_STATIONS[+el.dataset.radio];
+        playStream(r.url, `📻 ${r.name}`, r.genre);
+      }));
+    libBodyEl.querySelectorAll("[data-play]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-libdel],[data-libshare]")) return;
+        const it = libItems.find((x) => x.id === el.dataset.play);
+        if (it) playStream(it.url, `📻 ${it.title}`, it.subtitle || it.url);
+      }));
+    bindDelete();
+    libBodyEl.querySelector("#ap-add-radio").addEventListener("click", async () => {
+      const url = await uiPrompt("Stream-URL merken", { placeholder: "https://…/stream.mp3" });
+      if (!url || !url.trim()) return;
+      const name = await uiPrompt("Name des Senders", { value: "Mein Stream" });
+      if (name === null) return;
+      try {
+        await api.addMedia({ kind: "radio", title: (name || "Stream").trim(), url: url.trim() });
+        await loadLibItems(); drawLib();
+      } catch (e) { window.notify?.(e.message, "error"); }
+    });
+  }
+
+  // ---- 🟢 Spotify ---------------------------------------------------
+  async function drawSpotifyTab() {
+    if (!spotifyLoggedIn()) {
+      libBodyEl.innerHTML = `
+        <div style="font-size:12px;color:#8ea2c6;padding:8px 4px;line-height:1.5">
+          Nicht mit Spotify verbunden.<br>
+          Melde dich oben rechts an, dann erscheinen hier deine
+          <b>Playlists</b>, <b>gespeicherten Songs</b> und <b>Alben</b>.
+        </div>`;
+      return;
+    }
+    try {
+      const [pl, tracks, albums] = await Promise.all([
+        spotifyApi("/me/playlists?limit=50").catch(() => null),
+        spotifyApi("/me/tracks?limit=50").catch(() => null),
+        spotifyApi("/me/albums?limit=50").catch(() => null),
+      ]);
+      const plItems = (pl?.items || []).filter(Boolean);
+      const trItems = (tracks?.items || []).map((i) => i.track).filter(Boolean);
+      const alItems = (albums?.items || []).map((i) => i.album).filter(Boolean);
+      libBodyEl.innerHTML = `
+        <div style="font-size:11px;color:#8ea2c6;margin:4px 2px">Playlists (${plItems.length})</div>
+        ${plItems.map((p) => `<div data-sp="playlist:${esc(p.id)}">${libRow("🎧", p.name,
+          `${p.tracks?.total ?? "?"} Titel · ${p.owner?.display_name || ""}`)}</div>`).join("")
+          || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Keine Playlists.</div>`}
+        <div style="font-size:11px;color:#8ea2c6;margin:10px 2px 4px">Gespeicherte Songs (${trItems.length})</div>
+        ${trItems.map((t) => `<div data-sp="track:${esc(t.id)}">${libRow("🎵", t.name,
+          (t.artists || []).map((a) => a.name).join(", "))}</div>`).join("")
+          || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Keine gespeicherten Songs.</div>`}
+        <div style="font-size:11px;color:#8ea2c6;margin:10px 2px 4px">Alben (${alItems.length})</div>
+        ${alItems.map((a) => `<div data-sp="album:${esc(a.id)}">${libRow("💿", a.name,
+          (a.artists || []).map((x) => x.name).join(", "))}</div>`).join("")
+          || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Keine Alben.</div>`}`;
+      libBodyEl.querySelectorAll("[data-sp]").forEach((el) =>
+        el.addEventListener("click", () => {
+          const [type, id] = el.dataset.sp.split(":");
+          playSpotify({ kind: "spotify", type, id });
+        }));
+    } catch (e) {
+      libBodyEl.innerHTML = `<div style="font-size:12px;color:#ff8ba0;padding:8px 4px">
+        Spotify-Bibliothek nicht abrufbar: ${esc(e.message)}<br>
+        <span style="color:#8ea2c6">Tipp: einmal ab- und wieder anmelden – die Berechtigung
+        für die Bibliothek ist neu hinzugekommen.</span></div>`;
+    }
+  }
+
+  // ---- ▶️ YouTube ---------------------------------------------------
+  function drawYouTubeTab() {
+    const own = itemsOf("youtube");
+    libBodyEl.innerHTML = `
+      <div style="font-size:11px;color:#8ea2c6;margin:4px 2px">Gemerkte Videos & Playlists</div>
+      ${own.map((it) => `<div data-play="${esc(it.id)}">${libRow(
+        it.subtitle === "Playlist" ? "📃" : "▶️", it.title,
+        `${it.subtitle || "YouTube"}${it.shared ? " · geteilt" : ""} · ${it.owner_name}`,
+        itemActions(it))}</div>`).join("")
+        || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">
+             Noch nichts gemerkt. Lade oben einen YouTube-Link und klicke „⭐ Merken“.</div>`}
+      <button class="ap-chip" id="ap-add-yt" style="width:100%;text-align:center;margin-top:8px;font-size:12px">
+        ＋ YouTube-Link merken</button>`;
+    libBodyEl.querySelectorAll("[data-play]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-libdel],[data-libshare]")) return;
+        const it = libItems.find((x) => x.id === el.dataset.play);
+        const src = it && parseSource(it.url);
+        if (src?.kind === "youtube") playYouTube(src);
+      }));
+    bindDelete();
+    libBodyEl.querySelector("#ap-add-yt").addEventListener("click", async () => {
+      const url = await uiPrompt("YouTube-Link merken", { placeholder: "https://www.youtube.com/watch?v=… oder …?list=…" });
+      if (!url || !url.trim()) return;
+      const src = parseSource(url);
+      if (src?.kind !== "youtube") { window.notify?.("Kein gültiger YouTube-Link", "warn"); return; }
+      const name = await uiPrompt("Name", { value: src.list ? "Playlist" : "Video" });
+      if (name === null) return;
+      try {
+        await api.addMedia({ kind: "youtube", title: (name || "YouTube").trim(),
+                             subtitle: src.list ? "Playlist" : "Video", url: url.trim() });
+        await loadLibItems(); drawLib();
+      } catch (e) { window.notify?.(e.message, "error"); }
+    });
+  }
+
+  // ---- 💾 Lokale Dateien --------------------------------------------
+  function drawLocalTab() {
+    const own = itemsOf("local");
+    libBodyEl.innerHTML = `
+      <div style="font-size:11px;color:#8ea2c6;margin:4px 2px">Vom Server (hochgeladen)</div>
+      ${own.map((it) => `<div data-playfile="${esc(it.id)}">${libRow(
+        (it.mime || "").startsWith("video") ? "🎬" : "🎵", it.title,
+        `${(it.size / 1048576).toFixed(1)} MB${it.shared ? " · geteilt" : ""} · ${it.owner_name}`,
+        itemActions(it))}</div>`).join("")
+        || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Noch nichts hochgeladen.</div>`}
+
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="ap-chip" id="ap-upload" style="flex:1;text-align:center;font-size:12px">⬆️ Hochladen</button>
+        <button class="ap-chip" id="ap-openlocal" style="flex:1;text-align:center;font-size:12px">📂 Öffnen</button>
+      </div>
+      <div id="ap-up-progress" style="display:none;height:5px;border-radius:3px;background:rgba(255,255,255,.15);margin-top:6px">
+        <div id="ap-up-bar" style="height:100%;width:0%;background:#3ecf8e;border-radius:3px"></div>
+      </div>
+      <div style="font-size:10.5px;color:#8ea2c6;margin-top:4px">
+        „Öffnen“ spielt Dateien direkt von diesem Rechner – ohne Upload.
+      </div>
+
+      ${localQueue.length ? `
+        <div style="font-size:11px;color:#8ea2c6;margin:10px 2px 4px">Aktuelle Wiedergabeliste (${localQueue.length})</div>
+        ${localQueue.map((f, i) => `<div data-localq="${i}">${libRow(
+          f.type.startsWith("video") ? "🎬" : "🎵", f.name,
+          `${(f.size / 1048576).toFixed(1)} MB${i === localIndex ? " · läuft" : ""}`)}</div>`).join("")}` : ""}
+      <input type="file" id="ap-file" accept="audio/*,video/*" multiple hidden />
+      <input type="file" id="ap-file-up" accept="audio/*,video/*" hidden />`;
+
+    libBodyEl.querySelectorAll("[data-playfile]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-libdel],[data-libshare]")) return;
+        const it = libItems.find((x) => x.id === el.dataset.playfile);
+        if (it) playServerFile(it);
+      }));
+    libBodyEl.querySelectorAll("[data-localq]").forEach((el) =>
+      el.addEventListener("click", () => playLocalIndex(+el.dataset.localq)));
+    bindDelete();
+
+    const fileIn = libBodyEl.querySelector("#ap-file");
+    libBodyEl.querySelector("#ap-openlocal").addEventListener("click", () => fileIn.click());
+    fileIn.addEventListener("change", () => {
+      const files = [...fileIn.files];
+      if (!files.length) return;
+      localQueue = files;
+      drawLib();
+      playLocalIndex(0);
+    });
+
+    const upIn = libBodyEl.querySelector("#ap-file-up");
+    libBodyEl.querySelector("#ap-upload").addEventListener("click", () => upIn.click());
+    upIn.addEventListener("change", async () => {
+      const f = upIn.files[0];
+      if (!f) return;
+      const box = libBodyEl.querySelector("#ap-up-progress");
+      const bar = libBodyEl.querySelector("#ap-up-bar");
+      box.style.display = "";
+      try {
+        await api.uploadMedia(f, false, (p) => { bar.style.width = (p * 100).toFixed(0) + "%"; });
+        window.notify?.(`„${f.name}“ hochgeladen`, "success");
+        await loadLibItems(); drawLib();
+      } catch (e) {
+        window.notify?.("Upload fehlgeschlagen: " + e.message, "error");
+        box.style.display = "none";
+      }
+    });
+  }
+
+  function bindDelete() {
+    libBodyEl.querySelectorAll("[data-libshare]").forEach((b) =>
+      b.addEventListener("click", async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const it = libItems.find((x) => x.id === b.dataset.libshare);
+        if (!it) return;
+        try {
+          await api.updateMedia(it.id, { shared: !it.shared });
+          window.notify?.(!it.shared ? "Für alle freigegeben" : "Wieder privat", "success", 2500);
+          await loadLibItems(); drawLib();
+        } catch (err) { window.notify?.(err.message, "error"); }
+      }));
+    libBodyEl.querySelectorAll("[data-libdel]").forEach((b) =>
+      b.addEventListener("click", async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (!(await uiConfirm("Eintrag aus der Bibliothek entfernen?",
+              { okText: "Entfernen", danger: true }))) return;
+        try { await api.deleteMedia(b.dataset.libdel); await loadLibItems(); drawLib(); }
+        catch (err) { window.notify?.(err.message, "error"); }
+      }));
+  }
+
+  // ---------------- Start-Ansicht der BÜHNE ----------------
+  // (nur die Bühne - die Bibliothek bleibt stehen)
   function showHome() {
     cleanup();
     currentKind = null;
     titleEl.textContent = ""; subEl.textContent = "";
     controls.style.display = "none";
     progressRow.style.display = "none";
+    saveBtn.style.display = "none";
     stage.innerHTML = `
-      <div style="max-width:560px;width:100%;text-align:center">
+      <div style="max-width:520px;width:100%;text-align:center">
         <div style="font-size:56px;margin-bottom:4px">🎧</div>
         <div style="font-weight:800;font-size:18px;margin-bottom:2px">Was möchtest du hören?</div>
-        <div style="color:#8ea2c6;font-size:12px;margin-bottom:16px">
-          Oben einen YouTube- oder Spotify-Link einfügen - oder direkt Radio hören:
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
-          ${RADIO_STATIONS.map((r, i) => `
-            <button class="ap-chip" data-radio="${i}">
-              <div style="font-size:22px">${r.emoji}</div>
-              <div style="font-weight:700;margin:2px 0">📻 ${esc(r.name)}</div>
-              <div style="color:#8ea2c6;font-size:11px">${esc(r.genre)}</div>
-            </button>`).join("")}
+        <div style="color:#8ea2c6;font-size:12.5px;line-height:1.6">
+          Links in der <b>Bibliothek</b> stöbern – Radio, deine Spotify-Playlists,
+          gemerkte YouTube-Links und lokale Dateien.<br>
+          Oder oben einen Link einfügen. Das Menü kannst du jederzeit mit ☰
+          ein- und ausblenden, auch während etwas läuft.
         </div>
       </div>`;
-    stage.querySelectorAll("[data-radio]").forEach((b) =>
-      b.addEventListener("click", () => {
-        const r = RADIO_STATIONS[+b.dataset.radio];
-        playStream(r.url, `📻 ${r.name}`, r.genre);
-      }));
   }
 
   function cleanup() {
@@ -212,6 +517,14 @@ export function renderAudioPlayer(body, win) {
       try { audio.remove(); } catch {}
       audio = null;
     }
+    if (mediaEl) {
+      try { mediaEl.pause(); } catch {}
+      // Blob-URLs wieder freigeben, sonst bleibt die Datei im Speicher.
+      try { if (mediaEl.src.startsWith("blob:")) URL.revokeObjectURL(mediaEl.src); } catch {}
+      try { mediaEl.src = ""; mediaEl.load(); } catch {}
+      try { mediaEl.remove(); } catch {}
+      mediaEl = null;
+    }
     clearInterval(spProgressTimer); spProgressTimer = null;
     if (spPlayer) {
       // Nur pausieren + trennen; die Instanz wird beim nächsten Spotify-Start
@@ -223,6 +536,9 @@ export function renderAudioPlayer(body, win) {
     shuffleOn = false; spShuffle = false;
     shuffleBtn.classList.remove("active");
     playBtn.textContent = "▶";
+    // "Merken" gilt immer nur für die GERADE laufende Quelle.
+    currentSource = null;
+    saveBtn.style.display = "none";
   }
   // Diese Instanz ist ab jetzt die "aktive" - eine später gerenderte Instanz
   // ruft diesen Stopper auf, bevor sie selbst loslegt.
@@ -416,6 +732,83 @@ export function renderAudioPlayer(body, win) {
     audio.addEventListener("error", () => { subEl.textContent = "⚠ Stream nicht erreichbar"; });
   }
 
+  // ---------------- Lokale Dateien (MP3/MP4) ----------------
+  // Audio bekommt eine Plattenoptik, Video ein echtes <video>-Element.
+  // Der Fortschrittsbalken funktioniert hier ganz normal (Spulen inklusive).
+  let mediaEl = null;            // <audio> oder <video> für lokale Wiedergabe
+
+  function playMedia(url, title, sub, isVideo, onEnded) {
+    cleanup();
+    currentKind = "local";
+    if (isVideo) {
+      stage.innerHTML = `<video id="ap-video" style="width:100%;max-width:860px;max-height:100%;
+        border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.55);background:#000" controls></video>`;
+      mediaEl = stage.querySelector("#ap-video");
+      mediaEl.controls = false;         // wir steuern über die eigenen Buttons
+    } else {
+      stage.innerHTML = `
+        <div style="text-align:center">
+          <div style="width:190px;height:190px;border-radius:50%;margin:0 auto 16px;display:flex;align-items:center;
+            justify-content:center;font-size:66px;background:conic-gradient(#c77dff,#4da6ff,#3ecf8e,#c77dff);
+            box-shadow:0 0 60px #4da6ff44;animation:apSpin 16s linear infinite">
+            <div style="width:170px;height:170px;border-radius:50%;background:#0a1420;display:flex;align-items:center;justify-content:center">🎵</div>
+          </div>
+          <style>@keyframes apSpin { to { transform:rotate(360deg) } }</style>
+          <div class="ap-eq" id="ap-eq" style="justify-content:center">
+            ${[0,1,2,3,4,5,6].map((i) => `<span style="height:${10 + (i % 4) * 11}px;animation-delay:${i * 0.12}s"></span>`).join("")}
+          </div>
+        </div>`;
+      mediaEl = document.createElement("audio");
+    }
+    mediaEl.src = url;
+    mediaEl.volume = (+volEl.value) / 100;
+    mediaEl.play().catch((e) => { subEl.textContent = "⚠ " + e.message; });
+    titleEl.textContent = title;
+    subEl.textContent = sub || "";
+    controls.style.display = "flex";
+    progressRow.style.display = "flex";
+    playBtn.textContent = "⏸";
+    mediaEl.addEventListener("play", () => {
+      playBtn.textContent = "⏸";
+      stage.querySelector("#ap-eq")?.classList.remove("paused");
+    });
+    mediaEl.addEventListener("pause", () => {
+      playBtn.textContent = "▶";
+      stage.querySelector("#ap-eq")?.classList.add("paused");
+    });
+    mediaEl.addEventListener("timeupdate", () => {
+      if (seeking || !mediaEl?.duration) return;
+      progressEl.value = Math.round((mediaEl.currentTime / mediaEl.duration) * 1000);
+      curEl.textContent = fmtTime(mediaEl.currentTime);
+      durEl.textContent = fmtTime(mediaEl.duration);
+    });
+    mediaEl.addEventListener("ended", () => onEnded?.());
+    mediaEl.addEventListener("error", () => { subEl.textContent = "⚠ Datei nicht abspielbar"; });
+  }
+
+  // Datei vom eigenen Rechner (kein Upload) - Blob-URL, Playlist-fähig.
+  function playLocalIndex(i) {
+    if (i < 0 || i >= localQueue.length) return;
+    localIndex = i;
+    const f = localQueue[i];
+    const url = URL.createObjectURL(f);
+    playMedia(url, f.name, `Lokale Datei · ${i + 1}/${localQueue.length}`,
+      (f.type || "").startsWith("video"),
+      () => playLocalIndex(shuffleOn
+        ? Math.floor(Math.random() * localQueue.length) : localIndex + 1));
+    currentSource = null;            // lokale Datei lässt sich nicht "merken"
+    saveBtn.style.display = "none";
+    if (libTab === "local") drawLib();
+  }
+
+  // Datei aus der Server-Bibliothek (mit Range-Support -> Spulen klappt).
+  function playServerFile(item) {
+    playMedia(api.mediaFileUrl(item.id), item.title,
+      `Bibliothek · ${item.owner_name}`, (item.mime || "").startsWith("video"));
+    currentSource = null;
+    saveBtn.style.display = "none";
+  }
+
   // ---------------- Fortschritt (YouTube) ----------------
   let seeking = false;
   function startProgress() {
@@ -436,6 +829,8 @@ export function renderAudioPlayer(body, win) {
     } else if (currentKind === "spotify-full" && spPlayer) {
       const st = await spPlayer.getCurrentState().catch(() => null);
       if (st?.duration) spPlayer.seek((progressEl.value / 1000) * st.duration);
+    } else if (currentKind === "local" && mediaEl?.duration) {
+      mediaEl.currentTime = (progressEl.value / 1000) * mediaEl.duration;
     }
     seeking = false;
   });
@@ -446,6 +841,8 @@ export function renderAudioPlayer(body, win) {
       yt.getPlayerState() === 1 ? yt.pauseVideo() : yt.playVideo();
     } else if (currentKind === "spotify-full" && spPlayer) {
       spPlayer.togglePlay();
+    } else if (currentKind === "local" && mediaEl) {
+      mediaEl.paused ? mediaEl.play() : mediaEl.pause();
     } else if (audio) {
       audio.paused ? audio.play() : audio.pause();
     }
@@ -453,15 +850,26 @@ export function renderAudioPlayer(body, win) {
   body.querySelector("#ap-next").addEventListener("click", () => {
     if (currentKind === "youtube") yt?.nextVideo?.();
     else if (currentKind === "spotify-full") spPlayer?.nextTrack?.();
+    else if (currentKind === "local" && localQueue.length) {
+      playLocalIndex(shuffleOn ? Math.floor(Math.random() * localQueue.length)
+                               : (localIndex + 1) % localQueue.length);
+    }
   });
   body.querySelector("#ap-prev").addEventListener("click", () => {
     if (currentKind === "youtube") yt?.previousVideo?.();
     else if (currentKind === "spotify-full") spPlayer?.previousTrack?.();
+    else if (currentKind === "local" && localQueue.length) {
+      playLocalIndex((localIndex - 1 + localQueue.length) % localQueue.length);
+    }
   });
   shuffleBtn.addEventListener("click", async () => {
     if (currentKind === "youtube" && yt?.setShuffle) {
       shuffleOn = !shuffleOn;
       yt.setShuffle(shuffleOn);
+      shuffleBtn.classList.toggle("active", shuffleOn);
+      window.notify?.(shuffleOn ? "🔀 Shuffle an" : "Shuffle aus", "info", 2000);
+    } else if (currentKind === "local") {
+      shuffleOn = !shuffleOn;
       shuffleBtn.classList.toggle("active", shuffleOn);
       window.notify?.(shuffleOn ? "🔀 Shuffle an" : "Shuffle aus", "info", 2000);
     } else if (currentKind === "spotify-full") {
@@ -476,17 +884,48 @@ export function renderAudioPlayer(body, win) {
   volEl.addEventListener("input", () => {
     if (yt?.setVolume) yt.setVolume(+volEl.value);
     if (audio) audio.volume = (+volEl.value) / 100;
+    if (mediaEl) mediaEl.volume = (+volEl.value) / 100;
     if (spPlayer) spPlayer.setVolume((+volEl.value) / 100).catch(() => {});
   });
 
   // ---------------- Laden ----------------
   function loadFromInput() {
-    const src = parseSource(body.querySelector("#ap-url").value);
+    const raw = body.querySelector("#ap-url").value.trim();
+    const src = parseSource(raw);
     if (!src) { window.notify?.("Link nicht erkannt - YouTube-, Spotify- oder Stream-URL einfügen", "warn"); return; }
-    if (src.kind === "youtube") playYouTube(src);
-    else if (src.kind === "spotify") playSpotify(src);
-    else playStream(src.url, "🎶 Stream", src.url);
+    if (src.kind === "youtube") {
+      playYouTube(src);
+      setSource({ kind: "youtube", title: src.list ? "YouTube-Playlist" : "YouTube-Video",
+                  subtitle: src.list ? "Playlist" : "Video", url: raw });
+    } else if (src.kind === "spotify") {
+      playSpotify(src);
+      setSource({ kind: "spotify", title: `Spotify-${src.type}`, subtitle: src.type, url: raw });
+    } else {
+      playStream(src.url, "🎶 Stream", src.url);
+      setSource({ kind: "radio", title: "Stream", subtitle: "", url: src.url });
+    }
   }
+
+  // Merkt sich die laufende Quelle und blendet "⭐ Merken" ein.
+  function setSource(src) {
+    currentSource = src;
+    saveBtn.style.display = src ? "inline-block" : "none";
+  }
+  saveBtn.addEventListener("click", async () => {
+    if (!currentSource) return;
+    const name = await uiPrompt("In der Bibliothek merken", {
+      description: "Unter welchem Namen soll der Eintrag gespeichert werden?",
+      value: titleEl.textContent || currentSource.title });
+    if (name === null) return;
+    try {
+      await api.addMedia({ ...currentSource, title: (name || currentSource.title).trim() });
+      window.notify?.("In der Bibliothek gespeichert", "success");
+      await loadLibItems();
+      libTab = currentSource.kind === "spotify" ? "spotify" : currentSource.kind;
+      if (libTab === "spotify") libTab = "youtube";   // Spotify-Tab zeigt das Konto
+      toggleLib(true); drawLib();
+    } catch (e) { window.notify?.(e.message, "error"); }
+  });
   body.querySelector("#ap-load").addEventListener("click", loadFromInput);
   body.querySelector("#ap-url").addEventListener("keydown", (e) => {
     if (e.key === "Enter") loadFromInput();
@@ -514,17 +953,108 @@ export function renderAudioPlayer(body, win) {
     if (spotifyLoggedIn()) {
       spotifyLogout();
       if (currentKind === "spotify-full") showHome();
-      refreshSpotifyChip();
+      // Zeigt die komplette Einrichtung auf der Bühne - mit der EXAKTEN URI, die
+  // im Spotify-Dashboard stehen muss, und Kopier-Button. Das ist deutlich
+  // hilfreicher als ein kurzer Toast, der wieder verschwindet.
+  function showSpotifySetup(diag) {
+    cleanup();
+    currentKind = null;
+    controls.style.display = "none";
+    progressRow.style.display = "none";
+    titleEl.textContent = "Spotify einrichten"; subEl.textContent = "";
+    const uri = diag.redirectUri || (window.location.origin + "/");
+    const problem = diag.uriError
+      ? esc(diag.uriError)
+      : !diag.schemeOk
+        ? `Spotify akzeptiert <code>${esc(uri)}</code> nicht. Erlaubt sind nur
+           <b>https://…</b> oder die Loopback-Adresse <code>http://127.0.0.1:PORT/</code>.`
+        : "";
+    stage.innerHTML = `
+      <div style="max-width:620px;width:100%;font-size:13px;line-height:1.6">
+        <div style="font-size:34px;text-align:center">🎧</div>
+        <div style="font-weight:800;font-size:16px;text-align:center;margin-bottom:10px">
+          Spotify-Login einrichten</div>
+        ${problem ? `<div style="background:rgba(255,77,109,.14);border:1px solid #ff4d6d;
+          border-radius:10px;padding:9px 12px;margin-bottom:12px">⚠ ${problem}</div>` : ""}
+        <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);
+             border-radius:10px;padding:10px 12px;margin-bottom:12px">
+          <div style="color:#8ea2c6;font-size:11.5px;margin-bottom:4px">
+            Diese Redirect-URI wird gesendet
+            (${diag.fromSetting ? "aus „Vollständige URL“" : "aktuelle Adresse dieser Seite"}):</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <code id="ap-sp-uri" style="flex:1;padding:5px 8px;background:rgba(0,0,0,.35);
+              border-radius:6px;overflow-wrap:anywhere">${esc(uri)}</code>
+            <button class="ap-btn" id="ap-sp-copy" title="Kopieren"
+              style="width:30px;height:30px;font-size:13px;flex:none">📋</button>
+          </div>
+          ${diag.altUri ? `
+          <div style="color:#8ea2c6;font-size:11.5px;margin:8px 0 4px">
+            Trage im Dashboard am besten <b>beide</b> Schreibweisen ein – Spotify
+            vergleicht zeichengenau, und der Schrägstrich am Ende ist die häufigste
+            Fehlerquelle:</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <code style="flex:1;padding:5px 8px;background:rgba(0,0,0,.35);
+              border-radius:6px;overflow-wrap:anywhere">${esc(diag.altUri)}</code>
+            <button class="ap-btn" id="ap-sp-copy2" title="Kopieren"
+              style="width:30px;height:30px;font-size:13px;flex:none">📋</button>
+          </div>` : ""}
+        </div>
+        <ol style="margin:0 0 12px 18px;padding:0;color:#c9d6ee">
+          <li>Auf <b>developer.spotify.com/dashboard</b> deine App öffnen (oder neu anlegen).</li>
+          <li><b>Settings</b> → <b>Redirect URIs</b>: obige URI(s) einfügen, jeweils auf
+              <b>Add</b> klicken und unten <b>Save</b> nicht vergessen – ohne Speichern
+              meldet Spotify „No redirect URI configured“.</li>
+          <li>Schreibweise <b>exakt</b> vergleichen: Groß-/Kleinschreibung, jeder Buchstabe
+              im Hostnamen, Port und Schrägstrich. Schon ein Zeichen Unterschied ergibt
+              „redirect_uri: Not matching configuration“.</li>
+          <li>Unter <b>APIs used</b> muss <b>Web API</b> (und für den Vollplayer
+              <b>Web Playback SDK</b>) aktiviert sein.</li>
+          <li>Die <b>Client ID</b> aus der App in
+              <b>Einstellungen → Allgemein → Spotify</b> eintragen.</li>
+        </ol>
+        <div style="color:#8ea2c6;font-size:12px">
+          Die Redirect-URI wird aus <b>Einstellungen → Allgemein → „Vollständige URL“</b>
+          gebildet. Läuft das Dashboard nur über HTTP im LAN, öffne es über
+          <code>http://127.0.0.1:PORT/</code> – Spotify lässt HTTP sonst nicht zu.
+        </div>
+        <div style="text-align:center;margin-top:14px">
+          <button class="btn-primary" id="ap-sp-retry" style="width:auto;margin:0;border-radius:20px">
+            Erneut versuchen</button>
+        </div>
+      </div>`;
+    const copyTo = async (text) => {
+      try { await navigator.clipboard.writeText(text); window.notify?.("URI kopiert", "success", 2000); }
+      catch { window.notify?.("Bitte manuell kopieren: " + text, "info", 8000); }
+    };
+    stage.querySelector("#ap-sp-copy").addEventListener("click", () => copyTo(uri));
+    stage.querySelector("#ap-sp-copy2")?.addEventListener("click", () => copyTo(diag.altUri));
+    stage.querySelector("#ap-sp-retry").addEventListener("click", async () => {
+      const d2 = await spotifyDiagnostics();
+      if (d2.uriError || !d2.schemeOk) { showSpotifySetup(d2); return; }
+      try { await spotifyLogin(); } catch (e) { window.notify?.(e.message, "error", 8000); }
+    });
+  }
+
+  refreshSpotifyChip();
       window.notify?.("Spotify getrennt", "info");
       return;
     }
     await refreshSpotifyChip();   // Stand frisch holen (Backend evtl. inzwischen aktualisiert)
     if (spState.clientId) {
+      // Vor dem Weiterleiten prüfen, ob die Redirect-URI überhaupt zu Spotify
+      // passt - sonst landet man auf einer kryptischen Spotify-Fehlerseite
+      // ("No redirect URI configured" / "Not matching configuration").
+      const diag = await spotifyDiagnostics();
+      if (diag.uriError || !diag.schemeOk) { showSpotifySetup(diag); return; }
+      // Vor der Weiterleitung merken, damit wir nach einem Fehlschlag von
+      // Spotify direkt die Anleitung mit der gesendeten URI zeigen können.
+      try { sessionStorage.setItem("ap_sp_pending", "1"); } catch {}
       try { await spotifyLogin(); }   // leitet den Browser zu Spotify um
-      catch (e) { window.notify?.(e.message, "error", 6000); }
+      catch (e) { window.notify?.(e.message, "error", 8000); }
       return;
     }
-    // Noch nicht eingerichtet -> erklären, was fehlt (statt unsichtbarem Button).
+    // Noch nicht eingerichtet -> vollständige Anleitung auf der Bühne zeigen.
+    if (!spState.error) { showSpotifySetup(await spotifyDiagnostics()); return; }
     if (spState.error) {
       window.notify?.(
         "Spotify-Login: Backend-Endpunkt fehlt (/api/auth/spotify-config). " +
@@ -533,12 +1063,31 @@ export function renderAudioPlayer(body, win) {
     } else {
       window.notify?.(
         "Spotify-Login einrichten: 1) Auf developer.spotify.com eine App anlegen, " +
-        "2) dort als Redirect-URI \"" + window.location.origin + "/\" eintragen, " +
+        "2) dort als Redirect-URI \"" + (spState.redirectUri || window.location.origin + "/") +
+        "\" eintragen (zeichengenau, mit / am Ende), " +
         "3) die Client-ID in Einstellungen → Allgemein → Spotify speichern. " +
         "Danach erscheint hier \"Mit Spotify anmelden\".", "info", 14000);
     }
   });
   refreshSpotifyChip();
+
+  // Kam der Browser gerade von einem FEHLGESCHLAGENEN Spotify-Login zurück
+  // (Spotify hängt ?error=… an), zeigen wir sofort die Anleitung statt nur
+  // einer Fehlermeldung, die man leicht übersieht.
+  (async () => {
+    let pending = false;
+    try { pending = sessionStorage.getItem("ap_sp_pending") === "1"; } catch {}
+    const err = new URLSearchParams(window.location.search).get("error");
+    if (!pending && !err) return;
+    try { sessionStorage.removeItem("ap_sp_pending"); } catch {}
+    if (err && !spotifyLoggedIn()) {
+      window.notify?.("Spotify meldete: " + err, "error", 9000);
+      showSpotifySetup(await spotifyDiagnostics());
+    }
+  })();
+
+  // Bibliothek initial laden und zeichnen (unabhängig von der Bühne).
+  loadLibItems().then(drawLib);
 
   // Beim Schließen des Fensters die Wiedergabe stoppen.
   if (win?.key) registerCleanup(win.key, () => {

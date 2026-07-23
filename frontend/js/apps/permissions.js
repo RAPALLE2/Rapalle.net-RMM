@@ -14,7 +14,10 @@
 //   - global admin + 'access_clients' deny auf Client Y -> Y ist versteckt
 //
 // Es gibt zwei Tabs: "Allgemein" (globale Rechte) und "Clients" (pro Client,
-// mit Suchleiste).
+// mit Suchleiste). Im Clients-Tab steht ganz oben der STANDARD-CLIENT
+// (Scope "*"): Rechte, die dort erlaubt sind, gelten automatisch auf JEDEM
+// Client - auch auf neu hinzugekommenen. Ein 'deny' bei einem konkreten
+// Client sticht diese Erlaubnis (deny gewinnt immer).
 
 import { api } from "../api.js";
 import { state } from "../state.js";
@@ -25,7 +28,7 @@ export function renderPermissions(body, win) {
   let subjectKind = "user";      // "user" | "group"
   let subjects = { user: [], group: [] };
   let realms = [];               // AD/LDAP-Realms (für AD-Gruppen-Import)
-  let catalog = { labels: {}, general: [], client: [], implies: {} };
+  let catalog = { labels: {}, general: [], client: [], implies: {}, default_client_scope: "*" };
   let selected = null;           // {type, id, name}
   let activeTab = "general";     // "general" | "clients"
   let clientSearch = "";
@@ -170,7 +173,15 @@ export function renderPermissions(body, win) {
   function subjLabel(s) {
     if (subjectKind === "user") {
       const ad = s.auth_realm ? ' <span style="color:var(--accent);font-size:10px">AD</span>' : "";
-      const role = s.role === "admin" ? ' <span style="color:var(--warn);font-size:10px">ADMIN</span>' : "";
+      // ADMIN-Tag bei Rolle 'admin' UND beim Recht 'super_admin' (gleichwertig).
+      // is_admin kommt vom Server; bei Rechte-Vergabe steht dort admin_via
+      // = "permission", damit man die Herkunft erkennt.
+      const isAdm = s.is_admin ?? (s.role === "admin");
+      const role = isAdm
+        ? ` <span style="color:var(--warn);font-size:10px"
+             title="${s.admin_via === "permission" ? "Vollzugriff über das Recht super_admin" : "Rolle admin"}"
+             >ADMIN${s.admin_via === "permission" ? "*" : ""}</span>`
+        : "";
       return `${esc(s.display_name || s.username)} <span style="color:var(--subtext);font-size:11px">@${esc(s.username)}</span>${ad}${role}`;
     }
     const ad = s.is_ad_group ? ' <span style="color:var(--accent);font-size:10px">AD</span>' : "";
@@ -270,7 +281,9 @@ export function renderPermissions(body, win) {
 
   async function selectSubject(type, id, name) {
     if (dirty && !(await uiConfirm("Ungespeicherte Änderungen verwerfen?", { okText: "Verwerfen", danger: true }))) return;
-    selected = { type, id, name };
+    // Rolle mitführen, damit der Hinweis "hat bereits Rolle admin" greifen kann.
+    const subj = (subjects[type] || []).find((x) => x.id === id) || {};
+    selected = { type, id, name, role: subj.role, is_admin: subj.is_admin };
     grants = new Map();
     dirty = false;
     activeTab = "general";
@@ -340,10 +353,18 @@ export function renderPermissions(body, win) {
     else drawClients();
   }
 
+  // Rechte, die faktisch Vollzugriff bedeuten - deutlich hervorheben, damit
+  // sie nicht versehentlich vergeben werden.
+  const CRITICAL_PERMS = new Set(["super_admin", "admin"]);
+
   function permRow(scope, perm) {
-    return `<div style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--border)">
+    const critical = CRITICAL_PERMS.has(perm);
+    return `<div style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--border);
+         ${critical ? "background:rgba(245,165,36,.10);border-left:3px solid #f5a524;padding-left:8px;margin:2px 0;border-radius:4px" : ""}">
       <div style="flex:1;font-size:13px">${esc(catalog.labels[perm] || perm)}
-        <span style="color:var(--subtext);font-size:11px">(${esc(perm)})</span></div>
+        <span style="color:var(--subtext);font-size:11px">(${esc(perm)})</span>
+        ${critical ? `<div style="color:#f5a524;font-size:11px;margin-top:1px">
+          Achtung: schaltet ALLE Rechte frei – auch auf jedem Client.</div>` : ""}</div>
       ${triState(scope, perm)}
     </div>`;
   }
@@ -378,8 +399,16 @@ export function renderPermissions(body, win) {
         <p style="color:var(--subtext);font-size:13px;margin-top:0">
           Globale Rechte. <b>Erlauben</b> = gewähren, <b>Verbieten</b> = hart entziehen
           (schlägt jede Erlaubnis, auch aus Gruppen), <b>—</b> = keine Einstellung.
-          <br>Das Recht <b>Admin</b> ist ein Voll-Zugriff (Wildcard).
+          <br>Die Rechte <b>Admin</b> und <b>⭐ Super-Admin</b> sind Voll-Zugriff
+          (Wildcard) – <b>Super-Admin</b> entspricht dabei genau der Einstellung
+          „admin“ beim Anlegen eines Benutzers und zeigt denselben ADMIN-Tag am Namen.
         </p>
+        ${selected?.role === "admin" ? `
+          <div style="background:rgba(245,165,36,.12);border:1px solid #f5a524;border-radius:8px;
+               padding:8px 11px;font-size:12.5px;margin-bottom:10px">
+            👑 Dieser Benutzer hat bereits die <b>Rolle „admin“</b> und damit ohnehin alle
+            Rechte – Einstellungen hier wirken sich erst aus, wenn die Rolle geändert wird.
+          </div>` : ""}
         ${catalog.general.map((p) => permRow("global", p)).join("")}
       </div>`;
     contentEl.querySelector("#pm-preset-admin")?.addEventListener("click", () => applyPreset("admin"));
@@ -392,6 +421,13 @@ export function renderPermissions(body, win) {
     const filtered = clients.filter((c) =>
       !q || `${c.hostname} ${c.ip || ""}`.toLowerCase().includes(q));
 
+    const DEF = catalog.default_client_scope || "*";
+    const defRows = (catalog.client || []).map((p) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:3px 0">
+        <div style="flex:1;font-size:12px;color:var(--text)">${esc(catalog.labels[p] || p)}</div>
+        ${triState(DEF, p)}
+      </div>`).join("");
+
     contentEl.innerHTML = `
       <div>
         <p style="color:var(--subtext);font-size:13px;margin-top:0">
@@ -399,6 +435,21 @@ export function renderPermissions(body, win) {
           Sichtbarkeit — ohne dieses Recht (bzw. bei <b>Verbieten</b>) ist der
           Client für das Subjekt versteckt und dort ist nichts möglich.
         </p>
+
+        <details class="panel" style="margin-bottom:12px;padding:8px 12px;border-color:var(--accent)" open>
+          <summary style="cursor:pointer;font-size:13px;font-weight:700;list-style:none">
+            ⭐ Standard-Client <span style="color:var(--subtext);font-weight:400;font-size:11px">
+              — gilt für ALLE Clients</span>
+          </summary>
+          <p style="color:var(--subtext);font-size:12px;margin:6px 0 8px">
+            Was hier auf <b>Erlauben</b> steht, gilt automatisch auf jedem Client –
+            auch auf neu hinzugefügten. Ein <b>Verbieten</b> bei einem einzelnen
+            Client weiter unten sticht diese Erlaubnis immer aus.
+          </p>
+          <div>${defRows}</div>
+        </details>
+
+        <div style="font-size:12.5px;font-weight:600;margin:0 0 6px">Einzelne Clients</div>
         <input type="text" id="pm-client-search" placeholder="Client suchen…" value="${esc(clientSearch)}"
           style="width:100%;max-width:360px;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px;margin-bottom:10px" />
         <div id="pm-client-list"></div>
@@ -460,6 +511,31 @@ export function renderPermissions(body, win) {
       dirty = false;
       updateSaveBar();
       window.notify?.("Rechte gespeichert", "success");
+
+      // Sofort nachziehen, statt auf einen Neuladen (Strg+F5) zu warten:
+      // 1) Subjektliste neu holen - dort steckt der effektive ADMIN-Status
+      //    (is_admin / admin_via), der sich durch 'super_admin' ändern kann.
+      try {
+        // Je nach Art die passende Liste neu holen (Gruppen-Rechte können den
+        // Admin-Status der MITGLIEDER ändern, deshalb dort beides).
+        if (selected.type === "group") {
+          [subjects.group, subjects.user] = await Promise.all([api.getGroups(), api.getUsers()]);
+        } else {
+          subjects.user = await api.getUsers();
+        }
+        const subj = (subjects[selected.type] || []).find((x) => x.id === selected.id);
+        if (subj) { selected.role = subj.role; selected.is_admin = subj.is_admin; }
+        drawSubjects();
+        drawContent();
+      } catch {}
+      // 2) Hat sich das eigene Konto geändert (direkt oder über eine Gruppe),
+      //    auch Benutzermenü, Startmenü und Sidebar aktualisieren.
+      //    Dynamischer Import: app.js lädt diese Datei bereits - ein statischer
+      //    Import wäre ein Zirkelbezug.
+      try {
+        const { refreshPermissionsUi } = await import("../app.js");
+        await refreshPermissionsUi();
+      } catch (e) { try { console.error("[perms] UI-Refresh:", e); } catch {} }
     } catch (e) {
       window.notify?.("Speichern fehlgeschlagen: " + e.message, "error");
     }

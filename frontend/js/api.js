@@ -177,6 +177,33 @@ export const api = {
   listServerFs: (path) => request(`/api/server-files?path=${encodeURIComponent(path)}`),
 
   // --- Netzwerk-Scan ---
+  // --- Medien-Bibliothek (Audio-Player / Media-Hub) ---
+  getMedia: (kind) => request(`/api/media${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
+  addMedia: (data) => request("/api/media", { method: "POST", body: JSON.stringify(data) }),
+  updateMedia: (id, data) => request(`/api/media/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteMedia: (id) => request(`/api/media/${id}`, { method: "DELETE" }),
+  mediaFileUrl: (id) => `/api/media/${id}/file?token=${encodeURIComponent(localStorage.getItem("rmm_token") || "")}`,
+  uploadMedia: async (file, shared = false, onProgress) => {
+    const token = localStorage.getItem("rmm_token");
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `/api/media/upload?filename=${encodeURIComponent(file.name)}&shared=${shared}`);
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        let data = null;
+        try { data = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new Error(data?.detail || `Upload fehlgeschlagen (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error("Upload fehlgeschlagen (Netzwerk)"));
+      xhr.send(file);
+    });
+  },
+
   // --- Client-Notizen (Sichtbarkeit + Aktivitätsprotokoll) ---
   getNotes: (clientId) => request(`/api/clients/${clientId}/notes`),
   getNotesActivity: (clientId) => request(`/api/clients/${clientId}/notes/activity`),

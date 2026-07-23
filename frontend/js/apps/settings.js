@@ -405,13 +405,30 @@ export function renderSettings(body, win) {
           Client-ID einer eigenen Spotify-App (developer.spotify.com → Dashboard →
           App erstellen). Benutzer können sich dann im 🎵 Audio Player mit ihrem
           Spotify-Konto anmelden; mit Premium spielt der Player volle Titel mit
-          eigenen Controls. Wichtig: Im Spotify-Dashboard als Redirect-URI die
-          Adresse dieser Webconsole mit abschließendem <code>/</code> eintragen
-          (z.B. <code id="ge-spotify-uri"></code>).
+          eigenen Controls.
         </p>
         <div class="form-row">
           <label>Client-ID</label>
           <input id="ge-spotify-id" value="${esc(s.spotify_client_id ?? "")}" placeholder="z.B. 8a3f…" style="max-width:420px" />
+        </div>
+        <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+                    padding:8px 10px;font-size:12px;color:var(--subtext);max-width:640px;line-height:1.55">
+          <b style="color:var(--text)">Redirect-URI (im Spotify-Dashboard eintragen):</b>
+          <div style="display:flex;gap:6px;align-items:center;margin:5px 0">
+            <code id="ge-spotify-uri" style="flex:1;padding:4px 7px;background:var(--panel);
+                  border:1px solid var(--border);border-radius:6px;overflow-wrap:anywhere"></code>
+            <button class="taskbar-btn" id="ge-spotify-copy" type="button"
+                    title="Redirect-URI kopieren" style="flex:none">📋</button>
+          </div>
+          Sie wird automatisch aus der <b>Vollständigen URL</b> oben übernommen – es gibt
+          also kein separates Feld. Ist dort nichts eingetragen, wird die Adresse
+          verwendet, unter der du das Dashboard gerade geöffnet hast.<br>
+          <b style="color:var(--text)">Tipp:</b> Trage im Spotify-Dashboard sicherheitshalber
+          <b>beide</b> Schreibweisen ein – mit und ohne Schrägstrich am Ende
+          (<code id="ge-spotify-alt"></code>). Spotify vergleicht zeichengenau.<br>
+          <span id="ge-spotify-warn"></span>
+          Der Eintrag im Spotify-Dashboard muss <b>zeichengenau</b> übereinstimmen –
+          inklusive Port und abschließendem <code>/</code>.
         </div>
 
         <h3 style="margin-top:26px" data-adminsec-h>${t("guac_title")}</h3>
@@ -441,8 +458,45 @@ export function renderSettings(body, win) {
     // brauchen 'admin_settings'; die Standard-Einstellungen 'manage_settings'.
     // Mit nur 'see_settings' ist alles sichtbar, aber schreibgeschützt.
     // Spotify-Redirect-URI-Beispiel mit der echten Adresse füllen
+    // Redirect-URI = "Vollständige URL" (server_url) mit / am Ende.
+    // Kein eigenes Feld: Sie folgt live dem Eingabefeld darüber, damit man
+    // sofort sieht, was im Spotify-Dashboard stehen muss.
     const spUri = root.querySelector("#ge-spotify-uri");
-    if (spUri) spUri.textContent = window.location.origin + "/";
+    const spWarn = root.querySelector("#ge-spotify-warn");
+    const urlInput = root.querySelector("#ge-server-url");
+    // Exakt die eingetragene URL (Spotify vergleicht zeichengenau) - nur
+    // mehrfache Schrägstriche am Ende werden auf einen reduziert.
+    const effRedirect = () => {
+      const base = (urlInput?.value ?? s.server_url ?? "").trim();
+      if (!base) return window.location.origin + "/";
+      return base.endsWith("/") ? base.replace(/\/+$/, "") + "/" : base;
+    };
+    function refreshRedirect() {
+      const uri = effRedirect();
+      if (spUri) spUri.textContent = uri;
+      const altEl = root.querySelector("#ge-spotify-alt");
+      if (altEl) altEl.textContent = uri.endsWith("/") ? uri.slice(0, -1) : uri + "/";
+      if (!spWarn) return;
+      // Spotify erlaubt nur https:// oder die Loopback-Adresse 127.0.0.1.
+      const loopback = /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/.test(uri);
+      spWarn.innerHTML = (uri.startsWith("http://") && !loopback)
+        ? `<span style="color:var(--warn,#f5a524)">⚠ Spotify akzeptiert diese Adresse nicht:
+             erlaubt sind nur <b>https://…</b> oder <code>http://127.0.0.1:PORT/</code>.
+             Trage oben unter „Vollständige URL“ deine HTTPS-Adresse ein – oder öffne das
+             Dashboard über <code>127.0.0.1</code>.</span><br>`
+        : "";
+    }
+    urlInput?.addEventListener("input", refreshRedirect);
+    refreshRedirect();
+    root.querySelector("#ge-spotify-copy")?.addEventListener("click", async () => {
+      const uri = effRedirect();
+      try {
+        await navigator.clipboard.writeText(uri);
+        window.notify?.("Redirect-URI kopiert", "success", 2000);
+      } catch {
+        window.notify?.("Kopieren nicht möglich – bitte manuell übernehmen: " + uri, "info", 8000);
+      }
+    });
     const mayAdminSet = isAdmin() || hasGlobalPerm("admin_settings");
     const mayManageSet = isAdmin() || hasGlobalPerm("manage_settings");
     if (!mayAdminSet) {
@@ -846,7 +900,9 @@ export function renderSettings(body, win) {
           tr.innerHTML = `
             <td>${esc(u.username)}</td>
             <td>${esc(u.display_name)}</td>
-            <td>${esc(u.role)}${u.must_change_pw ? ' <span style="color:var(--warn)">(PW-Wechsel offen)</span>' : ""}</td>
+            <td>${esc(u.role)}${(u.is_admin && u.admin_via === "permission")
+                ? ' <span style="color:var(--warn);font-size:10px" title="Vollzugriff über das Recht super_admin">ADMIN*</span>' : ""}${
+                u.must_change_pw ? ' <span style="color:var(--warn)">(PW-Wechsel offen)</span>' : ""}</td>
             <td><button class="taskbar-btn" data-groups="${u.id}">Gruppen…</button></td>
             <td><button class="taskbar-btn" data-del="${u.id}">Löschen</button></td>`;
           list.appendChild(tr);

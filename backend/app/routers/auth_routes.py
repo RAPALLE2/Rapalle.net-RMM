@@ -66,6 +66,10 @@ def _public_user(user: dict) -> dict:
         "role": user["role"],
         "must_change_pw": bool(user["must_change_pw"]),
         "is_admin": is_super_admin(user),
+        # Woher kommt der Vollzugriff? "role" = Rolle admin (wie beim Anlegen),
+        # "permission" = über das Recht 'super_admin' vergeben, sonst None.
+        "admin_via": ("role" if user["role"] == "admin"
+                      else ("permission" if is_super_admin(user) else None)),
         "language": user["language"],
         "theme": user["theme"],
         "accent": user["accent"] if "accent" in user.keys() else "teal",
@@ -249,7 +253,23 @@ async def get_silent_screen(user: dict = Depends(get_current_user)):
 
 @router.get("/spotify-config")
 async def spotify_config(user: dict = Depends(get_current_user)):
-    return {"client_id": db.get_setting("spotify_client_id", "") or ""}
+    # Die Redirect-URI wird NICHT separat gepflegt, sondern aus der
+    # "Vollständigen URL" (Einstellungen → Allgemein → server_url) abgeleitet.
+    # Damit gibt es genau EINE Stelle, an der die öffentliche Adresse steht.
+    # Ist dort nichts hinterlegt, nimmt das Frontend die Adresse, unter der
+    # das Dashboard gerade geöffnet ist.
+    # WICHTIG: Spotify vergleicht ZEICHENGENAU. Deshalb wird die eingetragene
+    # URL exakt so weitergegeben, wie sie hinterlegt ist - lediglich mehrfache
+    # Schrägstriche am Ende werden auf einen reduziert. Würden wir hier einen
+    # Schrägstrich erzwingen, passte es nicht mehr zu einem Spotify-Eintrag
+    # ohne Schrägstrich (und umgekehrt) -> "Not matching configuration".
+    base = (db.get_setting("server_url", "") or "").strip()
+    if base.endswith("/"):
+        base = base.rstrip("/") + "/"
+    return {
+        "client_id": db.get_setting("spotify_client_id", "") or "",
+        "redirect_uri": base,
+    }
 
 
 @router.put("/silent-screen")

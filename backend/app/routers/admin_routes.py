@@ -151,9 +151,12 @@ PERM_LABELS = {
     "automation": "Automationen",
     "manage_hierarchy": "Tenants/Locations/Ordner verwalten",
     "play_games": "Spiele spielen",
+    "use_media": "Audio-Player & Medien-Bibliothek",
     "manage_favorites": "Favoritenliste bearbeiten",
     "use_relay": "Relay benutzen",
     "use_chat": "Chat benutzen",
+    "super_admin": "⭐ Super-Admin (alle Rechte)",
+    "add_client": "Clients hinzufügen (Enrollment)",
     "relay_unlimited": "Relay unbegrenzt (keine Auto-Schließzeit)",
     # --- Pro Client ---
     "manage_clients": "Bearbeiten",
@@ -196,6 +199,8 @@ async def permission_catalog(user: dict = Depends(get_current_user)):
         # Implikationen (Quelle -> abgedeckte Rechte): Das Frontend nutzt sie,
         # um beim Erlauben eines Rechts die Basis-Rechte automatisch mitzusetzen.
         "implies": db.perm_implies_map(),
+        # Pseudo-Client-Scope, dessen Client-Rechte für JEDEN Client gelten.
+        "default_client_scope": db.DEFAULT_CLIENT_SCOPE,
     }
 
 

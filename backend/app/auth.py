@@ -371,11 +371,23 @@ def get_user_with_permissions(user: dict) -> dict:
 
 
 def is_super_admin(user: dict) -> bool:
-    """Der klassische Voll-Admin (Rolle 'admin') darf alles - Bypass des Resolvers."""
+    """
+    Voll-Administrator - darf alles (Bypass des Resolvers). Zwei Wege:
+      1. Rolle 'admin' (wie bisher)
+      2. das globale Recht 'super_admin' (über die Rechte-Verwaltung vergeben,
+         auch an Gruppen). Damit lässt sich Super-Admin vergeben, ohne die
+         Rolle des Benutzers anzufassen.
+    Ein ausdrückliches 'deny' auf 'super_admin' entzieht das Recht wieder -
+    die Rolle 'admin' bleibt davon aber unberührt.
+    """
     try:
-        return user.get("role") == "admin"
+        role = user.get("role")
     except AttributeError:
-        return user["role"] == "admin"
+        role = user["role"]
+    if role == "admin":
+        return True
+    # Rekursionsschutz: _has_perm() fragt is_super_admin() NICHT für diesen Key.
+    return _has_perm_raw(user, "super_admin", None)
 
 
 def _aggregate_effect(grants: list[dict], perm: str, scopes: list[str]) -> str | None:
@@ -394,7 +406,15 @@ def _aggregate_effect(grants: list[dict], perm: str, scopes: list[str]) -> str |
 
 
 def _resolve(grants: list[dict], perm: str, client_id: str | None) -> bool:
-    scopes = ["global"] + ([client_id] if client_id else [])
+    # Scopes einer Client-Prüfung:
+    #   global                    -> gilt überall
+    #   DEFAULT_CLIENT_SCOPE ("*") -> "Standard-Client": gilt für JEDEN Client
+    #   client_id                 -> Rechte genau dieses Clients
+    # 'deny' schlägt in JEDEM dieser Scopes ein 'allow'. Ein Verbot auf einem
+    # konkreten Client sticht also die Erlaubnis aus dem Standard-Client.
+    scopes = ["global"]
+    if client_id:
+        scopes += [db.DEFAULT_CLIENT_SCOPE, client_id]
     # 1./3. spezifisches Recht. 'deny' auf 'perm' selbst schlägt alles.
     specific = _aggregate_effect(grants, perm, scopes)
     if specific == "deny":
@@ -417,6 +437,16 @@ def _resolve(grants: list[dict], perm: str, client_id: str | None) -> bool:
     if admin == "allow":
         return True
     return False
+
+
+def _has_perm_raw(user: dict, perm: str, client_id: str | None = None) -> bool:
+    """Reine Grant-Auflösung OHNE Super-Admin-Bypass.
+    Nur für is_super_admin() selbst - sonst gäbe es eine Endlosschleife
+    (is_super_admin -> user_has_permission -> is_super_admin -> ...)."""
+    try:
+        return _resolve(db.get_effective_grants(user["id"]), perm, client_id)
+    except Exception:
+        return False
 
 
 def user_has_permission(user: dict, perm: str, client_id: str | None = None) -> bool:

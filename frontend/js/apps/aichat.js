@@ -9,6 +9,72 @@ import { api } from "../api.js";
 import { state } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
 
+// =================================================================
+// NACHRICHTEN-DARSTELLUNG mit Bildern und Videos
+// Antworten der KI werden weiterhin VOLLSTÄNDIG escaped (kein HTML aus dem
+// Modell wird ausgeführt). Danach werden nur ERKANNTE Medien-Adressen in
+// echte <img>/<video>-Elemente umgewandelt:
+//   ![alt](url) und [text](url)   - Markdown
+//   nackte URLs auf .png/.jpg/.gif/.webp/.svg/.mp4/.webm/.ogg/.mov
+//   data:image/…;base64,…         - direkt eingebettete Bilder
+// Erlaubt sind ausschließlich http/https/data:image - damit sind
+// javascript:-Adressen und ähnliche Tricks ausgeschlossen.
+// =================================================================
+const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?[^\s]*)?$/i;
+const VID_EXT = /\.(mp4|webm|ogv|ogg|mov|m4v)(\?[^\s]*)?$/i;
+
+// Aus dem escapten Text zurück in eine echte URL (&amp; -> &) und prüfen.
+function safeUrl(escaped) {
+  const url = String(escaped).replace(/&amp;/g, "&").replace(/&#39;/g, "'").trim();
+  if (/^https?:\/\//i.test(url)) return url;
+  if (/^data:image\/(png|jpe?g|gif|webp|svg\+xml|avif);base64,[A-Za-z0-9+/=\s]+$/i.test(url)) return url;
+  return null;                       // alles andere (javascript:, file:, …) ablehnen
+}
+
+function mediaTag(url, alt = "") {
+  const a = esc(alt);
+  if (VID_EXT.test(url)) {
+    return `<video src="${esc(url)}" controls preload="metadata"
+      style="max-width:100%;max-height:320px;border-radius:8px;margin:6px 0;display:block"></video>`;
+  }
+  // Bilder: anklickbar, öffnet das Original in neuem Tab
+  return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${a || "Bild öffnen"}">
+    <img src="${esc(url)}" alt="${a}" loading="lazy"
+      style="max-width:100%;max-height:320px;border-radius:8px;margin:6px 0;display:block" /></a>`;
+}
+
+export function renderMessageHtml(text) {
+  let out = esc(text ?? "");
+
+  // 1) Markdown-Bilder: ![alt](url)
+  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, rawUrl) => {
+    const url = safeUrl(rawUrl);
+    return url ? mediaTag(url, alt) : m;
+  });
+
+  // 2) Markdown-Links: [text](url) - Medien werden eingebettet, sonst Link
+  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, rawUrl) => {
+    const url = safeUrl(rawUrl);
+    if (!url) return m;
+    if (IMG_EXT.test(url) || VID_EXT.test(url)) return mediaTag(url, label);
+    return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+      style="color:inherit;text-decoration:underline">${label}</a>`;
+  });
+
+  // 3) Nackte URLs (nicht innerhalb bereits erzeugter Tags)
+  out = out.replace(/(^|[\s(])((?:https?:\/\/|data:image\/)[^\s<>"')]+)/g, (m, pre, rawUrl) => {
+    const url = safeUrl(rawUrl);
+    if (!url) return m;
+    if (IMG_EXT.test(url) || VID_EXT.test(url) || url.startsWith("data:image/")) {
+      return pre + mediaTag(url);
+    }
+    return `${pre}<a href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+      style="color:inherit;text-decoration:underline">${esc(url)}</a>`;
+  });
+
+  return out;
+}
+
 export function renderAiChat(body, win) {
   let connections = [];
   let subjects = { users: [], groups: [] };
@@ -108,7 +174,7 @@ export function renderAiChat(body, win) {
       <div style="align-self:${m.role === "user" ? "flex-end" : "flex-start"};max-width:80%;
            background:${m.role === "user" ? "var(--accent, #2f6feb)" : "var(--panel-2)"};
            color:${m.role === "user" ? "#fff" : "var(--text)"};
-           border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.content)}</div>
+           border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px;white-space:pre-wrap;word-break:break-word">${renderMessageHtml(m.content)}</div>
     `).join("") + (busy ? `<div style="color:var(--subtext);font-size:12px">⏳ ${esc(c.model)} denkt nach…</div>` : "");
     msgsEl.scrollTop = msgsEl.scrollHeight;
   }

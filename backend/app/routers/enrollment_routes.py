@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, require_perm
 from app.config import AGENT_TOKEN
 
 router = APIRouter(tags=["enrollment"])
@@ -54,7 +54,9 @@ async def create_enrollment_token(body: CreateEnrollmentBody, request: Request, 
     Frontend window.location.origin vorangestellt - wer das Dashboard über
     localhost/127.0.0.1 öffnet, bekam damit unbrauchbare "localhost"-Links.
     """
-    require_admin(user)
+    # Eigenes Recht statt Admin-Zwang: 'add_client' erlaubt das Aufnehmen
+    # neuer Clients, ohne sonstige Admin-Befugnisse zu vergeben.
+    require_perm(user, "add_client")
     token = db.create_enrollment_token(body.tenant_id, body.location_id, body.client_name)
     base = _backend_url(request)
     return {
