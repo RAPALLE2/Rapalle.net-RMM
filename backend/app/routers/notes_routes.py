@@ -102,11 +102,19 @@ async def notes_activity(client_id: str, user: dict = Depends(get_current_user))
 
 @router.get("/{client_id}/notes/users")
 async def notes_users(client_id: str, user: dict = Depends(get_current_user)):
-    """Auswahlliste für die Sichtbarkeit 'für bestimmte Benutzer'."""
+    """Auswahlliste für 'für bestimmte': Benutzer UND Gruppen.
+    Unverwaltete AD-Gruppen werden markiert, damit das Frontend sie in einen
+    eigenen Ordner einsortieren kann."""
     _client_or_404(client_id)
     require_perm(user, "c_notes_view", client_id)
-    return [{"id": u["id"], "username": u["username"]}
-            for u in db.list_users() if u["id"] != user["id"]]
+    return {
+        "users": [{"id": u["id"], "username": u["username"]}
+                  for u in db.list_users() if u["id"] != user["id"]],
+        "groups": [{"id": g["id"], "name": g["name"],
+                    "is_ad_group": bool(g.get("is_ad_group")),
+                    "unmanaged": bool(g.get("unmanaged"))}
+                   for g in db.list_groups()],
+    }
 
 
 # ------------------------------------------------------------------
@@ -116,7 +124,8 @@ async def notes_users(client_id: str, user: dict = Depends(get_current_user)):
 class NoteBody(BaseModel):
     text: str
     visibility: str = "all"          # all | private | custom
-    shared_with: list[str] = []
+    # Einträge: {"type": "user"|"group", "id": "..."} - reine IDs gelten als Benutzer.
+    shared_with: list = []
     pinned: bool = False
 
 

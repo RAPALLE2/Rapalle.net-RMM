@@ -670,6 +670,14 @@ def init_db() -> None:
     )
     _conn.commit()
 
+    # Freigaben ("für bestimmte") gelten auch für GRUPPEN. Die Spalte user_id
+    # trägt weiterhin die ID - subject_type sagt, ob Benutzer oder Gruppe.
+    # MUSS NACH dem CREATE-TABLE-Skript stehen - weiter oben gibt es die
+    # Tabellen note_shares/ticket_comment_shares noch nicht.
+    _migrate_add_column("note_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
+    _migrate_add_column("ticket_comment_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
+    _conn.commit()
+
     # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
     # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
     _migrate_add_column("realms", "port", "INTEGER")                 # NULL = Standard (389 / 636 bei SSL)

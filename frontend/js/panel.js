@@ -14,6 +14,7 @@ import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
+import { subjectPickerHtml, readSubjectPicker, initSubjectPicker } from "./subjectpicker.js";
 import { api } from "./api.js";
 import { renderDashboard } from "./apps/dashboard.js";
 import { favStarHtml, favState, cycleFav } from "./sidebar.js";
@@ -656,7 +657,7 @@ const NOTE_VIS = {
 export function renderNotesPart(target, client) {
   const mayEdit = isAdmin() || hasClientPerm(client.id, "c_notes_edit");
   let showLog = false;
-  let users = [];
+  let users = null;              // {users:[…], groups:[…]}
   let editingId = null;
 
   target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
@@ -668,11 +669,21 @@ export function renderNotesPart(target, client) {
       target.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
       return;
     }
-    if (!users.length) { try { users = await api.getNotesUsers(client.id); } catch {} }
+    if (!users) { try { users = await api.getNotesUsers(client.id); } catch { users = { users: [], groups: [] }; } }
     draw(notes);
   }
 
-  function userName(id) { return (users.find((u) => u.id === id) || {}).username || id; }
+  // Anzeigename einer Freigabe ({type,id} oder alte reine Benutzer-ID).
+  function shareName(item) {
+    const type = typeof item === "string" ? "user" : (item.type || "user");
+    const id = typeof item === "string" ? item : item.id;
+    if (type === "group") {
+      const g = (users?.groups || []).find((x) => x.id === id);
+      return g ? `👥 ${g.name}` : "👥 ?";
+    }
+    const u = (users?.users || []).find((x) => x.id === id);
+    return u ? u.username : id;
+  }
 
   // Formular für neue Notiz bzw. zum Bearbeiten.
   function formHtml(note) {
@@ -690,13 +701,8 @@ export function renderNotesPart(target, client) {
             <input type="checkbox" class="nf-pin" ${note?.pinned ? "checked" : ""} /> anheften
           </label>
         </div>
-        <div class="nf-share" style="${v === "custom" ? "" : "display:none"};max-height:110px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:5px">
-          ${users.map((u) => `
-            <label style="display:flex;gap:6px;align-items:center;font-size:12px;padding:1px 0">
-              <input type="checkbox" class="nf-user" value="${esc(u.id)}"
-                ${(note?.shared_with || []).includes(u.id) ? "checked" : ""} />
-              <span>${esc(u.username)}</span>
-            </label>`).join("") || `<span style="font-size:11.5px;color:var(--subtext)">Keine weiteren Benutzer.</span>`}
+        <div class="nf-share" style="${v === "custom" ? "" : "display:none"}">
+          ${subjectPickerHtml(users, note?.shared_with || [], { name: "nf-subj" })}
         </div>
         <div class="nf-error form-error hidden"></div>
         <div style="display:flex;gap:6px">
@@ -712,6 +718,7 @@ export function renderNotesPart(target, client) {
     visSel.addEventListener("change", () => {
       shareBox.style.display = visSel.value === "custom" ? "" : "none";
     });
+    initSubjectPicker(shareBox);
     el.addEventListener("mousedown", (e) => e.stopPropagation());
     el.querySelector(".nf-cancel")?.addEventListener("click", () => { editingId = null; load(); });
     el.querySelector(".nf-save").addEventListener("click", async () => {
@@ -723,7 +730,7 @@ export function renderNotesPart(target, client) {
         text,
         visibility: visSel.value,
         pinned: el.querySelector(".nf-pin").checked,
-        shared_with: [...el.querySelectorAll(".nf-user:checked")].map((i) => i.value),
+        shared_with: readSubjectPicker(el.querySelector(".nf-share")),
       };
       if (data.visibility === "custom" && !data.shared_with.length) {
         err.textContent = "Bitte mindestens einen Benutzer auswählen";
@@ -764,7 +771,7 @@ export function renderNotesPart(target, client) {
         if (editingId === n.id) return `<div class="note-edit" data-edit="${esc(n.id)}"></div>`;
         const vinfo = NOTE_VIS[n.visibility] || NOTE_VIS.all;
         const shared = n.visibility === "custom" && (n.shared_with || []).length
-          ? ` (${n.shared_with.map(userName).map(esc).join(", ")})` : "";
+          ? ` (${n.shared_with.map(shareName).map(esc).join(", ")})` : "";
         const when = new Date(n.updated_at || n.created_at).toLocaleString("de-DE");
         return `
           <div class="panel" style="padding:7px 9px;${n.pinned ? "border-color:var(--accent)" : ""}">

@@ -323,7 +323,8 @@ async def set_status(ticket_id: str, body: StatusBody,
 class CommentBody(BaseModel):
     text: str
     visibility: str = "all"            # all | private | custom
-    shared_with: list[str] = []
+    # Einträge: {"type": "user"|"group", "id": "..."} - reine IDs = Benutzer.
+    shared_with: list = []
 
 
 def _vis_label(v: str) -> str:
@@ -392,10 +393,17 @@ async def ticket_activity(ticket_id: str, user: dict = Depends(get_current_user)
 
 @router.get("/meta/users")
 async def ticket_users(user: dict = Depends(get_current_user)):
-    """Auswahlliste für Kommentar-Sichtbarkeit 'für bestimmte Benutzer'."""
+    """Auswahlliste für die Kommentar-Sichtbarkeit 'für bestimmte':
+    Benutzer UND Gruppen (unverwaltete AD-Gruppen sind markiert)."""
     require_perm(user, "ticket_read")
-    return [{"id": u["id"], "username": u["username"]}
-            for u in db.list_users() if u["id"] != user["id"]]
+    return {
+        "users": [{"id": u["id"], "username": u["username"]}
+                  for u in db.list_users() if u["id"] != user["id"]],
+        "groups": [{"id": g["id"], "name": g["name"],
+                    "is_ad_group": bool(g.get("is_ad_group")),
+                    "unmanaged": bool(g.get("unmanaged"))}
+                   for g in db.list_groups()],
+    }
 
 
 # ------------------------------------------------------------------
@@ -474,5 +482,10 @@ async def assign_subjects(user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")
     users = [{"id": u["id"], "label": u.get("display_name") or u["username"]}
              for u in db.list_users()]
-    groups = [{"id": g["id"], "label": g["name"]} for g in db.list_groups()]
+    # Flags mitliefern, damit das Frontend unverwaltete AD-Gruppen in einen
+    # eigenen Ordner einsortieren kann.
+    groups = [{"id": g["id"], "label": g["name"], "name": g["name"],
+               "is_ad_group": bool(g.get("is_ad_group")),
+               "unmanaged": bool(g.get("unmanaged"))}
+              for g in db.list_groups()]
     return {"users": users, "groups": groups}

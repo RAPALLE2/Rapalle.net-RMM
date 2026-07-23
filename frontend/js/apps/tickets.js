@@ -11,6 +11,7 @@
 import { api } from "../api.js";
 import { state, isAdmin, hasGlobalPerm } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
+import { subjectPickerHtml, readSubjectPicker, initSubjectPicker, splitGroups } from "../subjectpicker.js";
 
 const STATUS = {
   open:        { label: "Offen",         color: "#4da6ff" },
@@ -40,8 +41,18 @@ export function renderTickets(body, win) {
   const may = (p) => isAdmin() || hasGlobalPerm(p);
   let tickets = [];
   let subjects = { users: [], groups: [] };
-  let ticketUsers = [];          // Auswahl für "für bestimmte Benutzer"
-  const userName = (id) => (ticketUsers.find((u) => u.id === id) || {}).username || id;
+  let ticketUsers = { users: [], groups: [] };   // Auswahl für "für bestimmte"
+  // Anzeigename einer Freigabe ({type,id} oder alte reine Benutzer-ID)
+  const shareName = (item) => {
+    const type = typeof item === "string" ? "user" : (item.type || "user");
+    const id = typeof item === "string" ? item : item.id;
+    if (type === "group") {
+      const g = (ticketUsers.groups || []).find((x) => x.id === id);
+      return g ? `👥 ${g.name}` : "👥 ?";
+    }
+    const u = (ticketUsers.users || []).find((x) => x.id === id);
+    return u ? u.username : id;
+  };
   let currentId = null;
   let statusFilter = "active";   // 'active' | 'all' | einzelner Status
 
@@ -195,7 +206,7 @@ export function renderTickets(body, win) {
           ${t.comments.map((c) => {
             const v = COMMENT_VIS[c.visibility] || COMMENT_VIS.all;
             const shared = c.visibility === "custom" && (c.shared_with || []).length
-              ? ` (${c.shared_with.map(userName).map(esc).join(", ")})` : "";
+              ? ` (${c.shared_with.map(shareName).map(esc).join(", ")})` : "";
             return `
             <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px">
               <div style="font-size:11px;color:var(--subtext);margin-bottom:3px;display:flex;justify-content:space-between;gap:8px">
@@ -221,11 +232,8 @@ export function renderTickets(body, win) {
               ${Object.entries(COMMENT_VIS).map(([k, o]) =>
                 `<option value="${k}">${o.icon} Sichtbar ${o.label}</option>`).join("")}
             </select>
-            <div id="tkd-comment-users" style="display:none;flex:1;min-width:180px;max-height:80px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:4px">
-              ${ticketUsers.map((u) => `
-                <label style="display:inline-flex;gap:5px;align-items:center;font-size:12px;margin-right:10px">
-                  <input type="checkbox" class="tkd-cu" value="${esc(u.id)}" /> ${esc(u.username)}
-                </label>`).join("") || `<span style="font-size:11.5px;color:var(--subtext)">Keine weiteren Benutzer.</span>`}
+            <div id="tkd-comment-users" style="display:none;flex:1;min-width:220px">
+              ${subjectPickerHtml(ticketUsers, [], { name: "tkd-subj" })}
             </div>
           </div>
         </div>` : ""}
@@ -254,11 +262,12 @@ export function renderTickets(body, win) {
     visSel?.addEventListener("change", () => {
       usersBox.style.display = visSel.value === "custom" ? "" : "none";
     });
+    initSubjectPicker(usersBox);
     detailEl.querySelector("#tkd-comment-send")?.addEventListener("click", async () => {
       const ta = detailEl.querySelector("#tkd-comment");
       if (!ta.value.trim()) return;
       const visibility = visSel?.value || "all";
-      const shared = [...detailEl.querySelectorAll(".tkd-cu:checked")].map((i) => i.value);
+      const shared = readSubjectPicker(usersBox);
       if (visibility === "custom" && !shared.length) {
         window.notify?.("Bitte mindestens einen Benutzer auswählen", "warn"); return;
       }
@@ -351,6 +360,13 @@ export function renderTickets(body, win) {
   // ---------------- Zuweisen-Dialog ----------------
   function openAssign(t) {
     const isChecked = (type, id) => t.assignees.some((a) => a.subject_type === type && a.subject_id === id);
+    // Unverwaltete AD-Gruppen in einen eigenen Ordner, damit die Liste
+    // bei vielen importierten Verzeichnis-Gruppen übersichtlich bleibt.
+    const { managed: managedGroups, unmanaged: unmanagedGroups } = splitGroups(subjects.groups || []);
+    const groupRow = (arr) => arr.map((g) => `
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+        <input type="checkbox" data-stype="group" data-sid="${esc(g.id)}"
+          ${isChecked("group", g.id) ? "checked" : ""}/> ${esc(g.label || g.name)}</label>`).join("");
     editorEl.style.display = "flex";
     editorEl.innerHTML = `
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;width:380px;max-height:90%;overflow:auto">
@@ -360,9 +376,14 @@ export function renderTickets(body, win) {
           ${subjects.users.map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-stype="user" data-sid="${esc(u.id)}" ${isChecked("user", u.id) ? "checked" : ""}/> ${esc(u.label)}</label>`).join("")}
           <div style="font-weight:700;margin:8px 0 4px">Gruppen</div>
-          ${subjects.groups.map((g) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
-            <input type="checkbox" data-stype="group" data-sid="${esc(g.id)}" ${isChecked("group", g.id) ? "checked" : ""}/> ${esc(g.label)}</label>`).join("")
-          || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`}
+          ${groupRow(managedGroups) || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`}
+          ${unmanagedGroups.length ? `
+            <details style="margin-top:8px;border:1px dashed var(--border);border-radius:7px;padding:4px 7px"
+                     ${unmanagedGroups.some((g) => isChecked("group", g.id)) ? "open" : ""}>
+              <summary style="cursor:pointer;color:var(--subtext);list-style:none">
+                📂 Unverwaltete AD-Gruppen (${unmanagedGroups.length})</summary>
+              <div style="margin-top:4px">${groupRow(unmanagedGroups)}</div>
+            </details>` : ""}
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
           <button class="taskbar-btn" id="tka-cancel">Abbrechen</button>
@@ -460,7 +481,7 @@ export function renderTickets(body, win) {
       const [rows, subj, tusers] = await Promise.all([
         api.tickets(),
         api.ticketSubjects().catch(() => ({ users: [], groups: [] })),
-        api.getTicketUsers().catch(() => []),
+        api.getTicketUsers().catch(() => ({ users: [], groups: [] })),
       ]);
       tickets = rows;
       subjects = subj;

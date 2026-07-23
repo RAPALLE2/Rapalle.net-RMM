@@ -804,8 +804,24 @@ export function clearSnapAssist() {
   _assistEls.forEach((el) => { try { el.remove(); } catch {} });
   _assistEls = [];
   document.removeEventListener("keydown", _assistEsc, true);
+  document.removeEventListener("mousedown", _assistOutside, true);
+  window.removeEventListener("blur", clearSnapAssist);
 }
 function _assistEsc(e) { if (e.key === "Escape") clearSnapAssist(); }
+
+// Klick IRGENDWO außerhalb der Vorschlags-Flächen schließt ALLE Vorschläge.
+// Vorher blieben sie stehen, wenn man z.B. in ein Fenster, auf den Desktop
+// oder in die Taskleiste geklickt hat. Capture-Phase, damit es auch greift,
+// wenn das Ziel den Klick selbst stoppt.
+function _assistOutside(e) {
+  if (!_assistEls.length) return;
+  // Klicks INNERHALB einer Vorschlagsfläche behandelt showSnapAssist selbst
+  // (Kachel = Fenster einrasten, freie Fläche = nur diese Zone schließen).
+  for (const el of _assistEls) {
+    if (el === e.target || el.contains(e.target)) return;
+  }
+  clearSnapAssist();
+}
 
 function showSnapAssist(sourceWin, zone) {
   clearSnapAssist();
@@ -865,4 +881,7 @@ function showSnapAssist(sourceWin, zone) {
   }
   renderTiles();
   document.addEventListener("keydown", _assistEsc, true);
+  document.addEventListener("mousedown", _assistOutside, true);
+  // Verlässt der Fokus das Fenster (Tab-Wechsel), ebenfalls aufräumen.
+  window.addEventListener("blur", clearSnapAssist);
 }

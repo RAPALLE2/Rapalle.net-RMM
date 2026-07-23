@@ -42,34 +42,58 @@ def normalize_visibility(value: str | None) -> str:
 # Freigaben (custom)
 # ------------------------------------------------------------------
 
-def set_shares(table: str, id_column: str, entry_id: str, user_ids: list[str]) -> None:
-    """Ersetzt die Freigabe-Liste eines Eintrags."""
+def _norm_share(item) -> tuple[str, str] | None:
+    """Nimmt "u123" (= Benutzer), {"type":"group","id":"g1"} oder
+    "group:g1" entgegen und liefert (subject_type, id)."""
+    if isinstance(item, dict):
+        t = (item.get("type") or "user").lower()
+        i = item.get("id") or ""
+    elif isinstance(item, str) and ":" in item and item.split(":", 1)[0] in ("user", "group"):
+        t, i = item.split(":", 1)
+    else:
+        t, i = "user", str(item or "")
+    if not i:
+        return None
+    if t == "group":
+        return ("group", i) if db.get_group(i) else None
+    return ("user", i) if db.get_user_by_id(i) else None
+
+
+def set_shares(table: str, id_column: str, entry_id: str, subjects: list) -> None:
+    """Ersetzt die Freigabe-Liste eines Eintrags (Benutzer UND Gruppen)."""
     c = db._conn
     c.execute(f"DELETE FROM {table} WHERE {id_column} = ?", (entry_id,))
-    for uid in set(user_ids or []):
-        if uid and db.get_user_by_id(uid):
-            c.execute(f"INSERT OR IGNORE INTO {table} ({id_column}, user_id) VALUES (?, ?)",
-                      (entry_id, uid))
+    seen = set()
+    for item in (subjects or []):
+        norm = _norm_share(item)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        c.execute(
+            f"INSERT OR IGNORE INTO {table} ({id_column}, user_id, subject_type)"
+            f" VALUES (?, ?, ?)", (entry_id, norm[1], norm[0]))
     c.commit()
 
 
-def get_shares(table: str, id_column: str, entry_id: str) -> list[str]:
+def get_shares(table: str, id_column: str, entry_id: str) -> list[dict]:
     rows = db._conn.execute(
-        f"SELECT user_id FROM {table} WHERE {id_column} = ?", (entry_id,)).fetchall()
-    return [r["user_id"] for r in rows]
+        f"SELECT user_id, subject_type FROM {table} WHERE {id_column} = ?",
+        (entry_id,)).fetchall()
+    return [{"type": r["subject_type"] or "user", "id": r["user_id"]} for r in rows]
 
 
-def shares_map(table: str, id_column: str, entry_ids: list[str]) -> dict[str, list[str]]:
+def shares_map(table: str, id_column: str, entry_ids: list[str]) -> dict[str, list[dict]]:
     """Freigaben für viele Einträge auf einmal (spart N Abfragen)."""
     if not entry_ids:
         return {}
     marks = ",".join("?" for _ in entry_ids)
     rows = db._conn.execute(
-        f"SELECT {id_column} AS eid, user_id FROM {table} WHERE {id_column} IN ({marks})",
-        tuple(entry_ids)).fetchall()
-    out: dict[str, list[str]] = {}
+        f"SELECT {id_column} AS eid, user_id, subject_type FROM {table}"
+        f" WHERE {id_column} IN ({marks})", tuple(entry_ids)).fetchall()
+    out: dict[str, list[dict]] = {}
     for r in rows:
-        out.setdefault(r["eid"], []).append(r["user_id"])
+        out.setdefault(r["eid"], []).append(
+            {"type": r["subject_type"] or "user", "id": r["user_id"]})
     return out
 
 
@@ -77,15 +101,29 @@ def shares_map(table: str, id_column: str, entry_ids: list[str]) -> dict[str, li
 # Sichtbarkeits-Prüfung
 # ------------------------------------------------------------------
 
-def may_see(user: dict, entry: dict, shared_with: list[str] | None = None) -> bool:
-    """entry braucht die Felder 'visibility' und 'author_id'."""
+def may_see(user: dict, entry: dict, shared_with: list | None = None) -> bool:
+    """entry braucht die Felder 'visibility' und 'author_id'.
+    shared_with ist eine Liste aus {"type","id"} (oder reine Benutzer-IDs
+    aus Altbeständen). Freigegeben ist, wer selbst genannt ist ODER in einer
+    freigegebenen Gruppe steckt."""
     vis = normalize_visibility(entry.get("visibility"))
     if vis == "all":
         return True
     if entry.get("author_id") and entry["author_id"] == user["id"]:
         return True
-    if vis == "custom":
-        return user["id"] in (shared_with or [])
+    if vis != "custom":
+        return False
+    my_groups = None
+    for item in (shared_with or []):
+        t = item.get("type", "user") if isinstance(item, dict) else "user"
+        i = item.get("id") if isinstance(item, dict) else item
+        if t == "user" and i == user["id"]:
+            return True
+        if t == "group":
+            if my_groups is None:
+                my_groups = set(db.get_user_group_ids(user["id"]))
+            if i in my_groups:
+                return True
     return False
 
 

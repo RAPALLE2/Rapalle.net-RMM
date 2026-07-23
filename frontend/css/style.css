@@ -315,6 +315,61 @@ body {
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
 }
 
+/* ----------------------------------------------------------------
+   Einheitliche, saubere Eingabefelder ÜBERALL
+   Bisher waren nur .form-row und .notes-textarea gestaltet - Felder in
+   Widgets (Notizen, Chat, Kommentare, Dialoge) sahen unfertig aus.
+   Diese Regeln greifen für alle Textfelder, ohne bestehende zu stören.
+   ---------------------------------------------------------------- */
+input[type="text"], input[type="password"], input[type="email"],
+input[type="number"], input[type="search"], input[type="url"],
+input[type="date"], input[type="time"], input[type="datetime-local"],
+textarea, select {
+  font-family: inherit; font-size: 13px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; box-sizing: border-box;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+input::placeholder, textarea::placeholder { color: var(--subtext); opacity: .75; }
+
+input[type="text"]:hover, input[type="password"]:hover, input[type="email"]:hover,
+input[type="number"]:hover, input[type="search"]:hover, input[type="url"]:hover,
+input[type="date"]:hover, textarea:hover, select:hover {
+  border-color: rgba(var(--accent-rgb), .45);
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="email"]:focus,
+input[type="number"]:focus, input[type="search"]:focus, input[type="url"]:focus,
+input[type="date"]:focus, input[type="time"]:focus, input[type="datetime-local"]:focus,
+textarea:focus, select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18);
+  background: var(--panel);
+}
+input:disabled, textarea:disabled, select:disabled {
+  opacity: .55; cursor: not-allowed;
+}
+textarea {
+  resize: vertical; min-height: 60px; line-height: 1.5;
+}
+/* Ungültige Eingaben (z.B. leeres Pflichtfeld nach dem Absenden) */
+input.invalid, textarea.invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(255,77,109,.15);
+}
+
+/* Notiz-Formular im Widget: etwas luftiger und mit klarer Abgrenzung */
+.note-form textarea {
+  min-height: 62px; padding: 9px 11px; font-size: 13px; line-height: 1.55;
+}
+.note-form { background: var(--panel-2); }
+
+/* Auswahl-Liste (Benutzer/Gruppen) - kompakt, aber gut lesbar */
+.subject-picker .sp-scroll { background: var(--panel-2); }
+.subject-picker .sp-row:hover { background: rgba(255,255,255,.05); border-radius: 5px; }
+.subject-picker .sp-folder > summary::-webkit-details-marker { display: none; }
+.subject-picker .sp-folder > summary::before { content: "▸ "; }
+.subject-picker .sp-folder[open] > summary::before { content: "▾ "; }
+
 .actions-panel { display: flex; flex-direction: column; gap: 8px; }
 
 /* Übersichts-Panel rechts; Status-Panel links kann kleiner sein */
@@ -425,7 +480,29 @@ tr.audit-flash td { animation: audit-flash 3s ease forwards; }
   border-color: rgba(var(--accent-2-rgb), 0.55);
   color: var(--accent-2);
 }
-.taskbar-window-btn .client-dot { width: 7px; height: 7px; border-radius: 50%; }
+.taskbar-window-btn .client-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.taskbar-window-btn .tb-icon { font-size: 14px; line-height: 1; flex: none; }
+.taskbar-window-btn .tb-label {
+  overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+}
+/* Minimierte Fenster leicht abgesetzt, damit man sie in der Leiste erkennt */
+.taskbar-window-btn.minimized { opacity: .62; }
+
+/* Icon-Modus: bei vielen offenen Fenstern nur noch Symbole (Titel per Hover).
+   Die Buttons werden quadratisch und schrumpfen nicht weiter, damit die
+   Symbole gut treffbar bleiben. */
+.taskbar-windows.icons-only .taskbar-window-btn {
+  width: 34px; padding: 0; justify-content: center; gap: 0; position: relative;
+}
+.taskbar-windows.icons-only .taskbar-window-btn .tb-icon { font-size: 16px; }
+.taskbar-windows.icons-only .taskbar-window-btn .client-dot {
+  position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px;
+  box-shadow: 0 0 0 1.5px var(--panel);
+}
+/* Scrollbalken der Leiste dezent halten */
+.taskbar-windows { scrollbar-width: thin; }
+.taskbar-windows::-webkit-scrollbar { height: 5px; }
+.taskbar-windows::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
 .taskbar-clock { font-size: 12px; color: var(--subtext); font-variant-numeric: tabular-nums; padding: 0 6px; }
 
 /* Großes DSM-artiges App-Menü (zentriertes Overlay) */
