@@ -155,6 +155,7 @@ PERM_LABELS = {
     "manage_favorites": "Favoritenliste bearbeiten",
     "use_relay": "Relay benutzen",
     "use_chat": "Chat benutzen",
+    "use_todos": "Todo-Liste benutzen (privat)",
     "super_admin": "⭐ Super-Admin (alle Rechte)",
     "add_client": "Clients hinzufügen (Enrollment)",
     "see_org": "Organigramm ansehen",

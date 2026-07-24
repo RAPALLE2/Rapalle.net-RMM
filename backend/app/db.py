@@ -714,6 +714,47 @@ def init_db() -> None:
             last_fired TEXT NOT NULL DEFAULT '{}',
             created_at INTEGER NOT NULL
         );
+
+        -- ----------------------------------------------------------
+        -- TODOS (persönliche Aufgabenliste, "Mini-Notion")
+        -- Streng privat: jeder Datensatz hängt an user_id, es gibt keine
+        -- Freigaben. Kategorien sind die Wichtigkeits-Spalten; vier davon
+        -- werden pro Benutzer automatisch angelegt (builtin: high | mid |
+        -- low | archive), weitere kann sich jeder selbst anlegen.
+        -- rank = manuelle Sortierung, kleiner = weiter oben/vorne.
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS todo_categories (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '#38bdf8',
+            rank INTEGER NOT NULL DEFAULT 0,
+            builtin TEXT NOT NULL DEFAULT '',   -- '' = selbst angelegt
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_todo_cat_user
+            ON todo_categories(user_id, rank);
+
+        CREATE TABLE IF NOT EXISTS todos (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            category_id TEXT NOT NULL,
+            prev_category_id TEXT NOT NULL DEFAULT '',  -- Kategorie vor dem Archivieren
+            title TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            done INTEGER NOT NULL DEFAULT 0,
+            done_at INTEGER,
+            recurring INTEGER NOT NULL DEFAULT 0,       -- 1 = täglich neu abhaken
+            last_reset TEXT NOT NULL DEFAULT '',        -- 'YYYY-MM-DD' des letzten Tages-Resets
+            last_done_day TEXT NOT NULL DEFAULT '',     -- 'YYYY-MM-DD' des letzten Abhakens
+            streak INTEGER NOT NULL DEFAULT 0,          -- Serie erledigter Tage
+            due_at INTEGER,
+            rank INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_todos_user
+            ON todos(user_id, category_id, done, rank);
         """
     )
     _conn.commit()
@@ -1593,6 +1634,8 @@ GLOBAL_PERM_KEYS = [
     "use_relay", "relay_unlimited",
     # Chat-App (Direktnachrichten & Gruppen)
     "use_chat",
+    # Persönliche Todo-Liste (streng privat, keine Freigaben)
+    "use_todos",
     # Voll-Administrator: deckt JEDES andere Recht ab (wie Rolle 'admin').
     # Damit lässt sich Super-Admin auch über die Rechte-Verwaltung vergeben,
     # ohne die Rolle des Benutzers zu ändern.

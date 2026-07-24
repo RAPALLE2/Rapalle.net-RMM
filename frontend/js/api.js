@@ -231,6 +231,30 @@ export const api = {
   updateEvent: (id, data) => request(`/api/calendar/events/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteEvent: (id) => request(`/api/calendar/events/${id}`, { method: "DELETE" }),
 
+  // --- Todos (persönliche Liste, streng privat) ---
+  // 'today' ist immer das Datum des BROWSERS (YYYY-MM-DD). Damit setzt der
+  // Server wiederkehrende Todos in der Zeitzone des Nutzers zurück.
+  getTodos: (today) => request(`/api/todos?today=${encodeURIComponent(today)}`),
+  createTodo: (data, today) => request(`/api/todos?today=${encodeURIComponent(today)}`, {
+    method: "POST", body: JSON.stringify(data) }),
+  updateTodo: (id, data) => request(`/api/todos/${id}`, {
+    method: "PUT", body: JSON.stringify(data) }),
+  toggleTodo: (id, done, today) => request(`/api/todos/${id}/toggle`, {
+    method: "POST", body: JSON.stringify({ done, today }) }),
+  moveTodo: (id, categoryId, order) => request(`/api/todos/${id}/move`, {
+    method: "POST", body: JSON.stringify({ category_id: categoryId, order: order || [] }) }),
+  archiveTodo: (id) => request(`/api/todos/${id}/archive`, { method: "POST" }),
+  unarchiveTodo: (id) => request(`/api/todos/${id}/unarchive`, { method: "POST" }),
+  archiveDoneTodos: () => request("/api/todos/archive-done", { method: "POST" }),
+  deleteTodo: (id) => request(`/api/todos/${id}`, { method: "DELETE" }),
+  createTodoCategory: (data) => request("/api/todos/categories", {
+    method: "POST", body: JSON.stringify(data) }),
+  updateTodoCategory: (id, data) => request(`/api/todos/categories/${id}`, {
+    method: "PUT", body: JSON.stringify(data) }),
+  deleteTodoCategory: (id) => request(`/api/todos/categories/${id}`, { method: "DELETE" }),
+  reorderTodoCategories: (ids) => request("/api/todos/categories/order", {
+    method: "PUT", body: JSON.stringify({ ids }) }),
+
   scanNetwork: (subnet) => request(`/api/network/scan${subnet ? `?subnet=${encodeURIComponent(subnet)}` : ""}`),
   // Job-basierter Scan (große Netze wie 10.10 = /16, mit Fortschritt + Speed-Up)
   scanPreview: (target) => request(`/api/network/scan/preview${target ? `?target=${encodeURIComponent(target)}` : ""}`),
