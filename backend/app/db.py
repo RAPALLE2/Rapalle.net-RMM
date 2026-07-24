@@ -651,6 +651,54 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_media_owner
             ON media_items(owner_id, kind, created_at);
 
+        -- ----------------------------------------------------------
+        -- ORGANISATIONS-HIERARCHIE
+        -- Jeder Knoten (Benutzer ODER Gruppe) kann GENAU EINEN Vorgesetzten
+        -- haben - ebenfalls ein Benutzer oder eine Gruppe. Daraus ergibt sich
+        -- ein Baum: "Wer ist wem unterstellt?".
+        -- Vorgesetzte dürfen die Kalender ihrer Untergebenen sehen und dort
+        -- Termine eintragen (siehe calendar_routes).
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS org_hierarchy (
+            child_type TEXT NOT NULL,      -- 'user' | 'group'
+            child_id TEXT NOT NULL,
+            parent_type TEXT,              -- NULL = oberste Ebene
+            parent_id TEXT,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (child_type, child_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_org_parent
+            ON org_hierarchy(parent_type, parent_id);
+
+        -- ----------------------------------------------------------
+        -- KALENDER
+        -- Ein Termin kann sich an Benutzer, Gruppen UND Clients richten
+        -- (calendar_targets). importance: low | normal | high | critical
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            start_at INTEGER NOT NULL,     -- Unix-ms
+            end_at INTEGER NOT NULL,       -- Unix-ms
+            all_day INTEGER NOT NULL DEFAULT 0,
+            importance TEXT NOT NULL DEFAULT 'normal',
+            created_by TEXT,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cal_start ON calendar_events(start_at);
+        CREATE TABLE IF NOT EXISTS calendar_targets (
+            event_id TEXT NOT NULL REFERENCES calendar_events(id) ON DELETE CASCADE,
+            target_type TEXT NOT NULL,     -- 'user' | 'group' | 'client'
+            target_id TEXT NOT NULL,
+            PRIMARY KEY (event_id, target_type, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cal_target
+            ON calendar_targets(target_type, target_id);
+
         -- Benachrichtigungs-Regeln: "Wenn <trigger> (auf Clients X/Y/Z),
         -- dann <channel> an <target>". params = JSON (z.B. days_before,
         -- threshold). last_fired = JSON {key: ts} fuer Cooldown/Dedupe.
@@ -674,6 +722,8 @@ def init_db() -> None:
     # trägt weiterhin die ID - subject_type sagt, ob Benutzer oder Gruppe.
     # MUSS NACH dem CREATE-TABLE-Skript stehen - weiter oben gibt es die
     # Tabellen note_shares/ticket_comment_shares noch nicht.
+    # Arbeitsbereich / Abteilung eines Benutzers (frei wählbarer Text).
+    _migrate_add_column("users", "workspace", "TEXT")
     _migrate_add_column("note_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _migrate_add_column("ticket_comment_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _conn.commit()
@@ -1549,6 +1599,12 @@ GLOBAL_PERM_KEYS = [
     "super_admin",
     # Neue Clients aufnehmen (Enrollment-Token erzeugen, Agent-Installer holen)
     "add_client",
+    # Organigramm (Über-/Unterstellung von Benutzern und Gruppen)
+    "see_org", "manage_org",
+    # Kalender
+    "use_calendar",      # eigenen Kalender + eigene Termine sehen
+    "manage_calendar",   # Termine für andere anlegen/ändern (über die eigene
+                         # Vorgesetzten-Rolle hinaus)
     # Remote-Bildschirm ohne Anfrage: erlaubt den einmaligen "Silent-Modus"
     # im Profil (nächste Remote-Sitzung ohne Zustimmungs-Dialog am Gerät).
     "screen_silent",
@@ -1628,6 +1684,8 @@ _PERM_IMPLIES = {
     "c_websites_edit": ["c_websites_view"],
     "c_relay_unlimited": ["c_relay"],
     "manage_permissions": ["see_permissions"],
+    "manage_org": ["see_org"],
+    "manage_calendar": ["use_calendar"],
     "edit_source": ["see_source"],
     "delete_source": ["see_source", "edit_source"],
     "relay_unlimited": ["use_relay"],

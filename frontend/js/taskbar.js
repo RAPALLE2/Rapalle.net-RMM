@@ -29,6 +29,8 @@ export const APP_ICON = {
   "edit-client": "✏️",
   "add-client": "➕",
   permissions: "🔐",
+  orgchart: "🏛️",
+  calendar: "🗓️",
   settings: "⚙️",
   profile: "👤",
   audit: "📝",

@@ -659,6 +659,7 @@ export function renderNotesPart(target, client) {
   let showLog = false;
   let users = null;              // {users:[…], groups:[…]}
   let editingId = null;
+  let addOpen = false;           // "Notiz hinzufügen" standardmäßig zu
 
   target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
 
@@ -720,7 +721,9 @@ export function renderNotesPart(target, client) {
     });
     initSubjectPicker(shareBox);
     el.addEventListener("mousedown", (e) => e.stopPropagation());
-    el.querySelector(".nf-cancel")?.addEventListener("click", () => { editingId = null; load(); });
+    el.querySelector(".nf-cancel")?.addEventListener("click", () => {
+      editingId = null; addOpen = false; load();
+    });
     el.querySelector(".nf-save").addEventListener("click", async () => {
       const err = el.querySelector(".nf-error");
       err.classList.add("hidden");
@@ -738,7 +741,7 @@ export function renderNotesPart(target, client) {
       }
       try {
         if (note) await api.updateNote(client.id, note.id, data);
-        else await api.createNote(client.id, data);
+        else { await api.createNote(client.id, data); addOpen = false; }
         editingId = null;
         load();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
@@ -757,10 +760,25 @@ export function renderNotesPart(target, client) {
         <div id="note-list" style="display:flex;flex-direction:column;gap:6px"></div>
       </div>`;
 
+    // "Notiz hinzufügen" ist standardmäßig EINGEKLAPPT - das Formular nimmt
+    // sonst dauerhaft den halben Platz im Widget ein. Ein Klick öffnet es;
+    // der Zustand bleibt beim Neuzeichnen erhalten (addOpen).
     if (mayEdit && !editingId) {
       const box = target.querySelector("#note-add");
-      box.innerHTML = formHtml(null);
-      bindForm(box.querySelector(".note-form"), null);
+      const btn = document.createElement("button");
+      btn.className = "action-btn";
+      btn.style.cssText = "width:100%;justify-content:center;color:var(--accent)";
+      btn.textContent = addOpen ? "✕ Abbrechen" : "+ Notiz hinzufügen";
+      btn.addEventListener("click", () => { addOpen = !addOpen; draw(notes); });
+      box.appendChild(btn);
+      if (addOpen) {
+        const form = document.createElement("div");
+        form.style.marginTop = "6px";
+        form.innerHTML = formHtml(null);
+        box.appendChild(form);
+        bindForm(form.querySelector(".note-form"), null);
+        form.querySelector(".nf-text")?.focus();
+      }
     }
 
     const listEl = target.querySelector("#note-list");

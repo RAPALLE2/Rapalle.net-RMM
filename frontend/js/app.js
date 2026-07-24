@@ -45,6 +45,8 @@ import { renderGamingHub } from "./apps/gaminghub.js";
 import { renderAiChat } from "./apps/aichat.js";
 import { renderTickets } from "./apps/tickets.js";
 import { renderChat } from "./apps/chat.js";
+import { renderOrgChart } from "./apps/orgchart.js";
+import { renderCalendar } from "./apps/calendar.js";
 import { renderAudioPlayer } from "./apps/audioplayer.js";
 import { handleSpotifyCallback } from "./spotify.js";
 import { renderWebBrowser, renderWebApp, getWebApps } from "./apps/webbrowser.js";
@@ -85,6 +87,8 @@ const APP_RENDERERS = {
   aichat: renderAiChat,
   tickets: renderTickets,
   chat: renderChat,
+  orgchart: renderOrgChart,
+  calendar: renderCalendar,
   audioplayer: renderAudioPlayer,
   webbrowser: renderWebBrowser,
   webapp: renderWebApp,           // gespeicherte Web-Apps (props: {url,name,icon})
@@ -154,6 +158,9 @@ const APP_REQUIRED_PERM = {
   tickets: "ticket_read",
   chat: "use_chat",
   audioplayer: "use_media",
+  "add-client": "add_client",
+  orgchart: "see_org",
+  calendar: "use_calendar",
 };
 
 function _appAllowed(appKey) {
@@ -599,6 +606,8 @@ function initMenusAndButtons() {
     }
     else if (app === "tickets") openWindow({ singleton: true, key: "tickets", appId: "tickets", title: "Tickets", w: 960, h: 660 });
     else if (app === "chat") openWindow({ singleton: true, key: "chat", appId: "chat", title: "Chat", w: 900, h: 620 });
+    else if (app === "orgchart") openWindow({ singleton: true, key: "orgchart", appId: "orgchart", title: "Organigramm", w: 780, h: 640 });
+    else if (app === "calendar") openWindow({ singleton: true, key: "calendar", appId: "calendar", title: "Kalender", w: 900, h: 680 });
     else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
     else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
     else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });

@@ -52,6 +52,7 @@ from app.routers import (
     notify_routes,
     notes_routes,
     media_routes,
+    calendar_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -106,6 +107,7 @@ api.include_router(games_routes.router)       # Gaming-Hub-Scoreboard
 api.include_router(chat_routes.router)        # Chat (DMs + Gruppen)
 api.include_router(notify_routes.router)      # Benachrichtigungs-Regeln + SMTP
 api.include_router(notes_routes.router)       # Client-Notizen (Sichtbarkeit + Protokoll)
+api.include_router(calendar_routes.router)    # Organigramm + Kalender
 api.include_router(media_routes.router)       # Medien-Bibliothek des Audio-Players
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen

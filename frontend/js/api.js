@@ -217,6 +217,20 @@ export const api = {
   getTicketUsers: () => request("/api/tickets/meta/users"),
   deleteTicketComment: (ticketId, commentId) => request(`/api/tickets/${ticketId}/comments/${commentId}`, { method: "DELETE" }),
 
+  // --- Organigramm (Über-/Unterstellung, Arbeitsbereiche) ---
+  getOrgTree: () => request("/api/org/tree"),
+  setOrgParent: (data) => request("/api/org/parent", { method: "PUT", body: JSON.stringify(data) }),
+  setWorkspace: (userId, workspace) => request(`/api/org/users/${userId}/workspace`, {
+    method: "PUT", body: JSON.stringify({ workspace }) }),
+  getWorkspaces: () => request("/api/org/workspaces"),
+
+  // --- Kalender ---
+  getEvents: (start, end) => request(`/api/calendar/events?start=${start}&end=${end}`),
+  getEventTargets: () => request("/api/calendar/targets"),
+  createEvent: (data) => request("/api/calendar/events", { method: "POST", body: JSON.stringify(data) }),
+  updateEvent: (id, data) => request(`/api/calendar/events/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteEvent: (id) => request(`/api/calendar/events/${id}`, { method: "DELETE" }),
+
   scanNetwork: (subnet) => request(`/api/network/scan${subnet ? `?subnet=${encodeURIComponent(subnet)}` : ""}`),
   // Job-basierter Scan (große Netze wie 10.10 = /16, mit Fortschritt + Speed-Up)
   scanPreview: (target) => request(`/api/network/scan/preview${target ? `?target=${encodeURIComponent(target)}` : ""}`),

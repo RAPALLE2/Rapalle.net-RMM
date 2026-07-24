@@ -1625,3 +1625,56 @@ button > .svgicon:only-child { vertical-align: middle; }
 }
 
 .start-menu-panel .sm-catalog-hidden { display: none !important; }
+
+
+/* ---------------- Organigramm: Baumdiagramm ----------------
+   Klassische Kästchen-Darstellung mit Verbindungslinien, rein per CSS
+   (verschachtelte <ul>/<li>). Die Linien entstehen aus ::before/::after,
+   die erste und letzte Spalte bekommen die halbe waagerechte Linie. */
+.oc-tree, .oc-tree ul {
+  display: flex; justify-content: center; list-style: none;
+  margin: 0; padding: 0; position: relative;
+}
+.oc-tree ul { padding-top: 20px; }
+.oc-tree li {
+  list-style: none; position: relative;
+  padding: 20px 10px 0; text-align: center;
+}
+/* senkrechte Linie nach oben zum Elternteil */
+.oc-tree li::before, .oc-tree li::after {
+  content: ""; position: absolute; top: 0; right: 50%;
+  border-top: 1px solid var(--border); width: 50%; height: 20px;
+}
+.oc-tree li::after { right: auto; left: 50%; border-left: 1px solid var(--border); }
+.oc-tree li:only-child::after, .oc-tree li:only-child::before { display: none; }
+.oc-tree li:only-child { padding-top: 0; }
+.oc-tree li:first-child::before, .oc-tree li:last-child::after { border: 0 none; }
+.oc-tree li:last-child::before {
+  border-right: 1px solid var(--border); border-radius: 0 5px 0 0;
+}
+.oc-tree li:first-child::after { border-radius: 5px 0 0 0; }
+/* Strich von der Elternbox nach unten */
+.oc-tree ul::before {
+  content: ""; position: absolute; top: 0; left: 50%;
+  border-left: 1px solid var(--border); width: 0; height: 20px;
+}
+.oc-boxwrap { display: inline-block; }
+.oc-box {
+  position: relative; display: inline-block; min-width: 130px; max-width: 190px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 7px 11px; font-size: 12.5px; color: var(--text); cursor: grab;
+  transition: border-color .15s, box-shadow .15s, transform .1s;
+}
+.oc-box:hover { border-color: rgba(var(--accent-rgb), .6); transform: translateY(-1px); }
+.oc-box.oc-drop { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .2); }
+.oc-box.oc-me { border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(var(--accent-2-rgb), .25); }
+.oc-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-sub { font-size: 10.5px; color: var(--subtext); margin-top: 1px; }
+.oc-count { font-size: 10px; color: var(--subtext); margin-top: 3px; opacity: .85; }
+.oc-toggle {
+  position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%);
+  width: 18px; height: 18px; line-height: 15px; padding: 0; z-index: 2;
+  border-radius: 50%; border: 1px solid var(--border); background: var(--panel);
+  color: var(--text); font-size: 12px; cursor: pointer;
+}
+.oc-toggle:hover { border-color: var(--accent); color: var(--accent); }

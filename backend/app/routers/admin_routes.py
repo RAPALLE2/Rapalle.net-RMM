@@ -157,6 +157,10 @@ PERM_LABELS = {
     "use_chat": "Chat benutzen",
     "super_admin": "⭐ Super-Admin (alle Rechte)",
     "add_client": "Clients hinzufügen (Enrollment)",
+    "see_org": "Organigramm ansehen",
+    "manage_org": "Organigramm bearbeiten (Über-/Unterstellung, Arbeitsbereich)",
+    "use_calendar": "Kalender benutzen",
+    "manage_calendar": "Kalender: Termine für alle anlegen",
     "relay_unlimited": "Relay unbegrenzt (keine Auto-Schließzeit)",
     # --- Pro Client ---
     "manage_clients": "Bearbeiten",
