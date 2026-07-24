@@ -48,6 +48,7 @@ import { renderChat } from "./apps/chat.js";
 import { renderOrgChart } from "./apps/orgchart.js";
 import { renderCalendar } from "./apps/calendar.js";
 import { renderTodos } from "./apps/todos.js";
+import { renderPrivacy } from "./apps/privacy.js";
 import { renderAudioPlayer } from "./apps/audioplayer.js";
 import { handleSpotifyCallback } from "./spotify.js";
 import { renderWebBrowser, renderWebApp, getWebApps } from "./apps/webbrowser.js";
@@ -91,6 +92,7 @@ const APP_RENDERERS = {
   orgchart: renderOrgChart,
   calendar: renderCalendar,
   todos: renderTodos,
+  privacy: renderPrivacy,
   audioplayer: renderAudioPlayer,
   webbrowser: renderWebBrowser,
   webapp: renderWebApp,           // gespeicherte Web-Apps (props: {url,name,icon})
@@ -612,6 +614,7 @@ function initMenusAndButtons() {
     else if (app === "orgchart") openWindow({ singleton: true, key: "orgchart", appId: "orgchart", title: "Organigramm", w: 780, h: 640 });
     else if (app === "calendar") openWindow({ singleton: true, key: "calendar", appId: "calendar", title: "Kalender", w: 900, h: 680 });
     else if (app === "todos") openWindow({ singleton: true, key: "todos", appId: "todos", title: "Todos", w: 960, h: 640 });
+    else if (app === "privacy") openWindow({ singleton: true, key: "privacy", appId: "privacy", title: "Datenschutz", w: 820, h: 680 });
     else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
     else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
     else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });

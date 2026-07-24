@@ -231,6 +231,45 @@ export const api = {
   updateEvent: (id, data) => request(`/api/calendar/events/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteEvent: (id) => request(`/api/calendar/events/${id}`, { method: "DELETE" }),
 
+  // --- Datenschutz / DSGVO ---
+  // Auskunft nach Art. 15/20 kommt als Datei-Download, deshalb roher fetch
+  // statt request() - der würde JSON parsen statt eine Datei anzubieten.
+  getMyPrivacyData: () => request("/api/privacy/me"),
+  downloadPrivacyExport: async (userId) => {
+    const path = userId ? `/api/privacy/users/${userId}/export` : "/api/privacy/me/export";
+    const res = await fetch(`${BACKEND_URL}${path}`, {
+      headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!res.ok) {
+      let msg = `Fehler ${res.status}`;
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("content-disposition") || "";
+    const match = cd.match(/filename="?([^"]+)"?/);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = match ? match[1] : "auskunft.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  },
+  requestErasure: (kind, reason) => request("/api/privacy/me/erasure-request", {
+    method: "POST", body: JSON.stringify({ kind, reason }) }),
+  getMyErasureRequests: () => request("/api/privacy/me/erasure-request"),
+  getPrivacyReport: () => request("/api/privacy/report"),
+  setRetention: (values) => request("/api/privacy/retention", {
+    method: "PUT", body: JSON.stringify({ values }) }),
+  runPrivacyPurge: () => request("/api/privacy/purge", { method: "POST" }),
+  getErasureRequests: (status) => request(
+    `/api/privacy/erasure-requests${status ? `?status=${status}` : ""}`),
+  resolveErasureRequest: (id, status, note) => request(
+    `/api/privacy/erasure-requests/${id}/resolve`, {
+      method: "POST", body: JSON.stringify({ status, note }) }),
+  eraseUser: (userId, mode, confirmUsername) => request(
+    `/api/privacy/users/${userId}/erase`, {
+      method: "POST", body: JSON.stringify({ mode, confirm_username: confirmUsername }) }),
+
   // --- Todos (persönliche Liste, streng privat) ---
   // 'today' ist immer das Datum des BROWSERS (YYYY-MM-DD). Damit setzt der
   // Server wiederkehrende Todos in der Zeitzone des Nutzers zurück.

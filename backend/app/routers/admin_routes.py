@@ -156,6 +156,7 @@ PERM_LABELS = {
     "use_relay": "Relay benutzen",
     "use_chat": "Chat benutzen",
     "use_todos": "Todo-Liste benutzen (privat)",
+    "manage_privacy": "Datenschutz: Fristen, Auskunft, Löschung (DSGVO)",
     "super_admin": "⭐ Super-Admin (alle Rechte)",
     "add_client": "Clients hinzufügen (Enrollment)",
     "see_org": "Organigramm ansehen",

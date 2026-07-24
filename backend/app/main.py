@@ -54,6 +54,7 @@ from app.routers import (
     media_routes,
     calendar_routes,
     todos_routes,
+    privacy_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -63,16 +64,17 @@ from app import dbsync as _dbsync
 _dbsync.startup_restore_if_external()
 db.init_db()
 
-# Beim Start aufräumen: alte Audit-Einträge (30 Tage) und alte
-# Screen-Aufzeichnungen (10 Tage) entfernen.
-db.cleanup_old_audit_entries(30)
+# Beim Start alle Aufbewahrungsfristen anwenden (DSGVO Art. 5 Abs. 1 lit. e).
+# Die Fristen stehen in den Einstellungen; privacy.purge() ist die einzige
+# Stelle, die sie durchsetzt - danach läuft sie täglich als Hintergrund-Job.
 try:
-    from app import recording
-    removed = recording.cleanup_old_recordings()
-    if removed:
-        print(f"[cleanup] {removed} alte Aufzeichnung(en) gelöscht")
+    from app import privacy as _privacy
+    _report = _privacy.purge()
+    _removed = sum(v for v in _report.values() if isinstance(v, int))
+    if _removed:
+        print(f"[privacy] Aufbewahrungsfristen angewendet: {_report}")
 except Exception as e:
-    print(f"[cleanup] Konnte alte Aufzeichnungen nicht aufräumen: {e}")
+    print(f"[privacy] Fristen konnten beim Start nicht angewendet werden: {e}")
 
 # 2) FastAPI-App erstellen und alle Routen-Module einhängen
 api = FastAPI(title="RAPALLE.net RMM Backend")
@@ -111,6 +113,7 @@ api.include_router(notes_routes.router)       # Client-Notizen (Sichtbarkeit + P
 api.include_router(calendar_routes.router)    # Organigramm + Kalender
 api.include_router(media_routes.router)       # Medien-Bibliothek des Audio-Players
 api.include_router(todos_routes.router)       # Persönliche Todo-Liste (privat)
+api.include_router(privacy_routes.router)     # DSGVO: Auskunft, Löschung, Fristen
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
@@ -434,6 +437,7 @@ async def _start_background_tasks():
     _asyncio.create_task(_server_auto_update_engine())
     _asyncio.create_task(_db_sync_engine())
     _asyncio.create_task(_relay_expiry_engine())
+    _asyncio.create_task(_privacy_purge_engine())
 
 
 async def _relay_expiry_engine():
@@ -526,3 +530,23 @@ api.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 # 4) Socket.IO und FastAPI zu einer einzigen ASGI-Anwendung zusammenfügen.
 #    "socket_app" ist das, was uvicorn am Ende tatsächlich startet (siehe run.py).
 socket_app = socketio.ASGIApp(sio, other_asgi_app=api, socketio_path="socket.io")
+
+
+async def _privacy_purge_engine():
+    """
+    Wendet die Aufbewahrungsfristen einmal täglich an (DSGVO Art. 5 Abs. 1
+    lit. e - Speicherbegrenzung). Ohne diesen Job würden Fristen nur beim
+    Neustart greifen; auf einem Server, der monatelang durchläuft, wären
+    sie damit praktisch wirkungslos.
+    """
+    await _asyncio.sleep(120)          # Start-Ansturm abwarten
+    while True:
+        try:
+            from app import privacy as _p
+            result = _p.purge()
+            total = sum(v for v in result.values() if isinstance(v, int))
+            if total:
+                print(f"[privacy] Täglicher Durchlauf: {result}")
+        except Exception as e:
+            print(f"[privacy] Täglicher Durchlauf fehlgeschlagen: {e}")
+        await _asyncio.sleep(86400)

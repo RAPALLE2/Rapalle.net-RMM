@@ -755,6 +755,26 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_todos_user
             ON todos(user_id, category_id, done, rank);
+
+        -- ----------------------------------------------------------
+        -- DSGVO: Löschanträge Betroffener (Art. 17).
+        -- Wird nicht sofort ausgeführt - Art. 17 Abs. 3 kennt Ausnahmen,
+        -- deshalb prüft ein Admin. status: open | done | rejected
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS erasure_requests (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT 'account',   -- 'account' | 'content'
+            reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            note TEXT NOT NULL DEFAULT '',          -- Begründung der Entscheidung
+            created_at INTEGER NOT NULL,
+            handled_at INTEGER,
+            handled_by TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_erasure_status
+            ON erasure_requests(status, created_at);
         """
     )
     _conn.commit()
@@ -765,6 +785,7 @@ def init_db() -> None:
     # Tabellen note_shares/ticket_comment_shares noch nicht.
     # Arbeitsbereich / Abteilung eines Benutzers (frei wählbarer Text).
     _migrate_add_column("users", "workspace", "TEXT")
+    _migrate_add_column("erasure_requests", "note", "TEXT NOT NULL DEFAULT ''")
     _migrate_add_column("note_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _migrate_add_column("ticket_comment_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _conn.commit()
@@ -1636,6 +1657,10 @@ GLOBAL_PERM_KEYS = [
     "use_chat",
     # Persönliche Todo-Liste (streng privat, keine Freigaben)
     "use_todos",
+    # Datenschutz: Fristen setzen, Auskunft über Dritte, Löschung ausführen.
+    # Bewusst NICHT in 'admin_settings' enthalten - wer Server-Einstellungen
+    # ändern darf, muss nicht automatisch fremde Personendaten einsehen.
+    "manage_privacy",
     # Voll-Administrator: deckt JEDES andere Recht ab (wie Rolle 'admin').
     # Damit lässt sich Super-Admin auch über die Rechte-Verwaltung vergeben,
     # ohne die Rolle des Benutzers zu ändern.
@@ -2084,8 +2109,20 @@ DEFAULT_SETTINGS = {
     # 0 = UNBEGRENZT: es wird nie automatisch gelöscht - die Graphen zeigen
     # nach einem Browser-Reload immer die komplette bisherige Historie.
     "metrics_retention_hours": "0",
-    # Wie lange Screen-Replays aufbewahrt werden (Tage).
-    "replay_retention_days": "10",
+    # --- Aufbewahrungsfristen (DSGVO Art. 5 Abs. 1 lit. e) ---
+    # Überall gilt: 0 = unbegrenzt. Das ist eine bewusste Entscheidung und
+    # sollte begründet sein - "aus Versehen für immer" ist kein Rechtsgrund.
+    # Durchgesetzt werden die Fristen von privacy.purge() (täglicher Job).
+    # Wie lange Screen-Replays aufbewahrt werden (Tage). Der heikelste
+    # Bestand des Systems, daher knapper Standard.
+    "replay_retention_days": "30",
+    "retention_audit_days": "90",        # danach anonymisiert, nicht gelöscht
+    "retention_activity_days": "180",
+    "retention_chat_days": "365",
+    "retention_todo_archive_days": "365",
+    "retention_enrollment_days": "30",
+    # Zeitpunkt des letzten Durchlaufs (nur Anzeige).
+    "privacy_last_purge": "0",
     # --- Aufnahme-Einstellungen (Screen-Agent UND Guacamole-Sessions) ---
     # Master-Schalter: "1" = Sessions werden als Replay aufgezeichnet, "0" = aus.
     "recording_enabled": "1",

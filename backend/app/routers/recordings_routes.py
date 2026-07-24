@@ -66,6 +66,12 @@ async def get_recording_video(rec_id: str, user: dict = Depends(get_current_user
     path = pathlib.Path(rec["file_path"])
     if not path.exists():
         raise HTTPException(404, "Aufzeichnungs-Datei fehlt")
+    # Ansehen einer Aufzeichnung ist selbst ein Eingriff in die Rechte der
+    # aufgezeichneten Person und wird deshalb protokolliert (Art. 32 - die
+    # Kontrolle darüber, WER auf die Daten zugreift, gehört zur Sicherheit).
+    db.add_audit_entry(user.get("username"), "recording.viewed",
+                       target=rec.get("client_hostname"),
+                       details=f"Video-Aufzeichnung von {rec.get('username') or 'unbekannt'} angesehen")
     return FileResponse(str(path), media_type="video/webm", filename=path.name)
 
 
@@ -108,6 +114,10 @@ async def get_recording_frames(rec_id: str, user: dict = Depends(get_current_use
     path = pathlib.Path(rec["file_path"])
     if not path.exists():
         raise HTTPException(404, "Aufzeichnungs-Datei fehlt (evtl. bereits gelöscht)")
+
+    db.add_audit_entry(user.get("username"), "recording.viewed",
+                       target=rec.get("client_hostname"),
+                       details=f"Aufzeichnung von {rec.get('username') or 'unbekannt'} abgespielt")
 
     frames = []
     with open(path, "r", encoding="utf-8") as f:
