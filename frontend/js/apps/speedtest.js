@@ -9,6 +9,8 @@
 // unkomprimierbaren Zufallsdaten. Endpunkte: backend/routers/speedtest_routes.py
 
 import { registerCleanup } from "../windowmanager.js";
+// t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
+import { t as tr } from "../i18n.js";
 
 const DURATION_MS = 8000;      // Messdauer je Richtung
 const DL_STREAMS = 4;
@@ -139,7 +141,7 @@ export function renderSpeedtest(body, win) {
   });
 
   async function measurePing() {
-    phaseEl.textContent = "Ping wird gemessen…";
+    phaseEl.textContent = tr("u_ping_wird_gemessen");
     const times = [];
     for (let i = 0; i < 6; i++) {
       const t0 = performance.now();
@@ -166,7 +168,7 @@ export function renderSpeedtest(body, win) {
   }
 
   async function measureDownload() {
-    phaseEl.textContent = "Download wird gemessen…";
+    phaseEl.textContent = tr("u_download_wird_gemessen");
     displayed = 0;
     let bytes = 0;
     const t0 = performance.now();
@@ -199,7 +201,7 @@ export function renderSpeedtest(body, win) {
   }
 
   async function measureUpload() {
-    phaseEl.textContent = "Upload wird gemessen…";
+    phaseEl.textContent = tr("u_upload_wird_gemessen");
     displayed = 0;
     // Unkomprimierbare Zufallsdaten (crypto liefert max 64 KiB pro Aufruf)
     const chunk = new Uint8Array(UL_CHUNK);
@@ -239,10 +241,10 @@ export function renderSpeedtest(body, win) {
   // oeffentlichen M-Lab-Servern. Kein Server-Binary, kein Backend, kein CORS-
   // Problem. Gemessen wird die echte Internet-Anbindung DIESES Geraets.
   const PHASE_TEXT = {
-    server: "M-Lab-Server wird gewählt…",
-    ping: "Latenz wird gemessen…",
-    download: "Download wird gemessen…",
-    upload: "Upload wird gemessen…",
+    server: tr("u_m_lab_server_wird_gewahlt"),
+    ping: tr("u_latenz_wird_gemessen"),
+    download: tr("u_download_wird_gemessen"),
+    upload: tr("u_upload_wird_gemessen"),
     done: "Fertig ✓",
   };
 
@@ -254,11 +256,11 @@ export function renderSpeedtest(body, win) {
     try {
       r = await fetch(url, { cache: "no-store" });
     } catch (e) {
-      throw new Error("M-Lab-Serverauswahl nicht erreichbar (Internet/Firewall?).");
+      throw new Error(tr("u_m_lab_serverauswahl_nicht_erreichb"));
     }
     if (!r.ok) throw new Error(`Serverauswahl fehlgeschlagen (HTTP ${r.status})`);
     const j = await r.json();
-    if (!j.results || !j.results.length) throw new Error("Kein M-Lab-Server verfügbar");
+    if (!j.results || !j.results.length) throw new Error(tr("u_kein_m_lab_server_verfugbar"));
     return j.results[0];   // { machine, location, urls: {...} }
   }
 
@@ -362,7 +364,7 @@ export function renderSpeedtest(body, win) {
     const urls = srv.urls || {};
     const dlUrl = urls["wss:///ndt/v7/download"] || urls["ws:///ndt/v7/download"];
     const ulUrl = urls["wss:///ndt/v7/upload"] || urls["ws:///ndt/v7/upload"];
-    if (!dlUrl || !ulUrl) throw new Error("M-Lab-Server liefert keine gültigen URLs");
+    if (!dlUrl || !ulUrl) throw new Error(tr("u_m_lab_server_liefert_keine_gultige"));
 
     // Download
     phaseEl.textContent = PHASE_TEXT.download; displayed = 0;
@@ -407,7 +409,7 @@ export function renderSpeedtest(body, win) {
   startBtn.addEventListener("click", async () => {
     if (running) return;
     running = true;
-    startBtn.disabled = true; startBtn.textContent = "Läuft…";
+    startBtn.disabled = true; startBtn.textContent = tr("u_lauft_2");
     ["ping", "jitter", "down", "up"].forEach((id) => ($(`st-r-${id}`).textContent = "–"));
     $("st-server").textContent = "";
     const isNdt = $("st-mode").value === "ndt7";
@@ -422,7 +424,7 @@ export function renderSpeedtest(body, win) {
         phaseEl.textContent = "Fertig ✓";
       }
     } catch (e) {
-      phaseEl.textContent = `Messung fehlgeschlagen: ${e.message || "Verbindung prüfen."}`;
+      phaseEl.textContent = `Messung fehlgeschlagen: ${e.message || tr("u_verbindung_prufen")}`;
     } finally {
       cleanupAbort();
       // Nadel-Endwert nach erfolgreichem NDT7-Lauf stehen lassen, sonst 0.

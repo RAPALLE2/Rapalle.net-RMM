@@ -12,6 +12,7 @@ import { setLanguage, applyStaticTranslations } from "../i18n_apply.js";
 import { renderSidebar } from "../sidebar.js";
 import { renderMainContent } from "../panel.js";
 import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePrefs } from "../persist.js";
+import { t } from "../i18n.js";
 
 export function renderProfile(body, win) {
   const u = state.user;
@@ -125,7 +126,7 @@ export function renderProfile(body, win) {
       </style>
       <div class="form-row" style="align-items:center" ${maySilent ? "" : "hidden"}>
         <label>Silent-Modus</label>
-        <label class="pr-toggle" title="Nächste Remote-Sitzung ohne Anfrage am Gerät (einmalig)">
+        <label class="pr-toggle" title="${t("u_nachste_remote_sitzung_ohne_anfrag")}">
           <input type="checkbox" id="pr-silent" disabled />
           <span class="knob"></span>
         </label>
@@ -183,8 +184,8 @@ export function renderProfile(body, win) {
       try { localStorage.setItem("rmm_term_rightclick", termRc.value); } catch {}
       import("../persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
       window.notify?.(termRc.value === "menu"
-        ? "Terminal-Rechtsklick: Kontextmenü"
-        : "Terminal-Rechtsklick: direkt Kopieren/Einfügen", "success", 2500);
+        ? t("u_terminal_rechtsklick_kontextmenu")
+        : t("u_terminal_rechtsklick_direkt_kopier"), "success", 2500);
     });
   }
 
@@ -207,8 +208,8 @@ export function renderProfile(body, win) {
     const silentState = body.querySelector("#pr-silent-state");
     const setStateText = (on) => {
       if (silentState) silentState.textContent = on
-        ? "AN - nächste Sitzung ohne Anfrage (einmalig)"
-        : "AUS - Sitzungen fragen normal am Gerät an";
+        ? t("u_an_nachste_sitzung_ohne_anfrage_ei")
+        : t("u_aus_sitzungen_fragen_normal_am_ger");
     };
     const refresh = async () => {
       try {
@@ -275,7 +276,7 @@ export function renderProfile(body, win) {
         await api.setSilentScreen(on);
         setStateText(on);
         if (silentMsg) silentMsg.textContent = on
-          ? "Aktiv: Die nächste Remote-Sitzung startet ohne Anfrage."
+          ? t("u_aktiv_die_nachste_remote_sitzung_s")
           : "Silent-Modus deaktiviert.";
         window.notify?.(on ? "Silent-Modus aktiviert (einmalig)" : "Silent-Modus deaktiviert",
                         on ? "success" : "info");

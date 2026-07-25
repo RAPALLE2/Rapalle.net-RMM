@@ -7,6 +7,7 @@
 // Alle Spiele rendern in einen Container (gleiche Signatur wie Apps).
 // Scores gehen ans Gaming-Hub-Scoreboard (bester Wert pro Benutzer).
 import { reportScore } from "./gaminghub.js";
+import { t } from "../i18n.js";
 
 // ================= WORDLE =================
 const WORDLE_WORDS = [
@@ -300,7 +301,7 @@ export function renderSudoku(body) {
       else if (conflicts(r, c)) bad = true;
     }
     msgEl.style.color = bad ? "#ff4d6d" : full ? "#3ecf8e" : "#ffd166";
-    msgEl.textContent = bad ? "Konflikte gefunden!" : full ? "🎉 Gelöst!" : "Bisher fehlerfrei";
+    msgEl.textContent = bad ? "Konflikte gefunden!" : full ? t("u_gelost_2") : "Bisher fehlerfrei";
     if (full && !bad) {
       // Punkte nach Schwierigkeit (entfernte Zellen: 35/45/54)
       reportScore("sudoku", { 35: 100, 45: 200, 54: 300 }[difficulty] || 100);

@@ -8,6 +8,7 @@ import { renderGameOfLife } from "./gameoflife.js";
 import { renderWordle, renderSudoku, renderSnake, renderMinesweeper, renderTetris } from "./minigames.js";
 import { api } from "../api.js";
 import { esc } from "../utils.js";
+import { t } from "../i18n.js";
 
 // Score still ans Backend melden (gespeichert wird nur der persönliche
 // Bestwert pro Spiel). Wird von den Spielen aufgerufen; Fehler (z.B. offline)
@@ -24,37 +25,37 @@ export function reportScore(game, score) {
 const GAMES = [
   {
     id: "towerdefense", icon: "🛡️", title: "Tower Defense",
-    desc: "Verteidige den Server auf 4 Maps: Firewall, IDS, Antivirus & Quarantäne gegen Bugs, Threats und Viren. Raster-Bauen, Upgrades bis Stufe 5.",
+    desc: t("u_verteidige_den_server_auf_4_maps_f"),
     render: renderTowerDefense,
   },
   {
     id: "gameoflife", icon: "🧬", title: "Game of Life",
-    desc: "John Conways Zell-Automat: Muster zeichnen, laufen lassen und zusehen, wie Leben entsteht (und vergeht).",
+    desc: t("u_john_conways_zell_automat_muster_z"),
     render: renderGameOfLife,
   },
   {
     id: "wordle", icon: "🟩", title: "Wordle des Tages",
-    desc: "Errate das deutsche 5-Buchstaben-Wort in 6 Versuchen. Jeden Tag ein neues Wort - für alle dasselbe.",
+    desc: t("u_errate_das_deutsche_5_buchstaben_w"),
     render: renderWordle,
   },
   {
     id: "sudoku", icon: "🔢", title: "Sudoku",
-    desc: "Zahlenrätsel mit Generator in drei Schwierigkeitsgraden, Konflikt-Anzeige und Tastatur-Steuerung.",
+    desc: t("u_zahlenratsel_mit_generator_in_drei"),
     render: renderSudoku,
   },
   {
     id: "snake", icon: "🐍", title: "Snake",
-    desc: "Der Terminal-Klassiker: Äpfel fressen, wachsen, nicht in den eigenen Schwanz beißen. Wird immer schneller.",
+    desc: t("u_der_terminal_klassiker_apfel_fress"),
     render: renderSnake,
   },
   {
     id: "minesweeper", icon: "💣", title: "Minesweeper",
-    desc: "Minenfeld räumen in drei Größen. Linksklick deckt auf, Rechtsklick setzt Flaggen - der erste Klick ist immer sicher.",
+    desc: t("u_minenfeld_raumen_in_drei_gro_en_li"),
     render: renderMinesweeper,
   },
   {
     id: "tetris", icon: "🧱", title: "Tetris",
-    desc: "Fallende Blöcke stapeln, Reihen räumen, Level steigen. Mit Hard-Drop per Leertaste.",
+    desc: t("u_fallende_blocke_stapeln_reihen_rau"),
     render: renderTetris,
   },
 ];

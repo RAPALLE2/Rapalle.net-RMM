@@ -12,9 +12,10 @@ import { api } from "../api.js";
 import { esc } from "../utils.js";
 import { openWindow } from "../windowmanager.js";
 import { registerCleanup } from "../windowmanager.js";
+import { t } from "../i18n.js";
 
 const SPEEDS = {
-  normal: { label: "🐢 Normal", hint: "schont Netz und CPU" },
+  normal: { label: "🐢 Normal", hint: t("u_schont_netz_und_cpu") },
   fast:   { label: "⚡ Speed-Up", hint: "8 Subnetze gleichzeitig – empfohlen" },
   turbo:  { label: "🚀 Turbo", hint: "24 Subnetze parallel (max. 512 Pings gleichzeitig)" },
 };
@@ -145,7 +146,7 @@ export function renderNetwork(body, win) {
       if (job.status === "error") {
         statusEl.style.color = "var(--danger)";
         statusEl.textContent = job.error || "Scan fehlgeschlagen";
-        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(job.error || "Fehler")}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(job.error || t("u_fehler"))}</td></tr>`;
         return;
       }
       renderDevices(job.devices || []);

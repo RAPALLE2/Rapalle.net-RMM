@@ -12,6 +12,7 @@ import { state } from "../state.js";
 import { esc, uiConfirm, uiPrompt } from "../utils.js";
 import { dashboardSocket } from "../socket.js";
 import { registerCleanup } from "../windowmanager.js";
+import { t } from "../i18n.js";
 
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 const fmtDay = (ms) => new Date(ms).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -101,7 +102,7 @@ export function renderChat(body, win) {
               : "Direktnachricht"}</div>
         </div>
         ${conv.type === "group" ? `<button class="taskbar-btn" id="ch-settings">⚙️ Gruppe</button>` : ""}
-        <button class="taskbar-btn" id="ch-del" title="${conv.type === "group" ? (conv.is_admin ? "Gruppe löschen" : "Gruppe verlassen") : "Chat löschen"}">
+        <button class="taskbar-btn" id="ch-del" title="${conv.type === "group" ? (conv.is_admin ? "Gruppe löschen" : "Gruppe verlassen") : t("u_chat_loschen")}">
           ${conv.type === "group" && !conv.is_admin ? "🚪" : "🗑"}</button>
       </div>
       <div id="ch-settings-box" style="display:none;border-bottom:1px solid var(--border);padding:10px 12px;max-height:45%;overflow:auto"></div>
@@ -125,8 +126,8 @@ export function renderChat(body, win) {
         if (!(await uiConfirm(`Gruppe „${conv.name}“ verlassen?`, { okText: "Verlassen" }))) return;
         await api.chatRemoveMember(conv.id, state.user.id);
       } else {
-        const what = conv.type === "group" ? `Gruppe „${conv.name}“ für ALLE löschen?` : "Chat für beide Seiten löschen?";
-        if (!(await uiConfirm(what, { okText: "Löschen", danger: true }))) return;
+        const what = conv.type === "group" ? `Gruppe „${conv.name}“ für ALLE löschen?` : t("u_chat_fur_beide_seiten_loschen");
+        if (!(await uiConfirm(what, { okText: t("delete"), danger: true }))) return;
         await api.chatDelete(conv.id);
       }
       currentId = null; loadConvs();
@@ -185,7 +186,7 @@ export function renderChat(body, win) {
       const more = document.createElement("button");
       more.className = "taskbar-btn";
       more.style.cssText = "align-self:center;margin-bottom:6px;font-size:11.5px";
-      more.textContent = "↑ Ältere Nachrichten laden";
+      more.textContent = t("u_altere_nachrichten_laden");
       more.addEventListener("click", async () => {
         try {
           const older = await api.chatMessages(conv.id, oldestTs);
@@ -257,7 +258,7 @@ export function renderChat(body, win) {
   body.querySelector("#ch-new-dm").addEventListener("click", async () => {
     let users = [];
     try { users = await api.chatUsers(); } catch (e) { window.notify?.(e.message, "error"); return; }
-    if (!users.length) { window.notify?.("Keine anderen Benutzer vorhanden", "info"); return; }
+    if (!users.length) { window.notify?.(t("u_keine_anderen_benutzer_vorhanden"), "info"); return; }
     pickerDialog("Neuer Chat mit …", users, false, async (ids) => {
       if (!ids.length) return;
       const conv = await api.chatCreate({ type: "dm", user_id: ids[0] });

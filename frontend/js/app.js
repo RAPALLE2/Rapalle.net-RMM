@@ -49,6 +49,7 @@ import { renderOrgChart } from "./apps/orgchart.js";
 import { renderCalendar } from "./apps/calendar.js";
 import { renderTodos } from "./apps/todos.js";
 import { renderPrivacy } from "./apps/privacy.js";
+import { renderPatching } from "./apps/patching.js";
 import { renderAudioPlayer } from "./apps/audioplayer.js";
 import { handleSpotifyCallback } from "./spotify.js";
 import { renderWebBrowser, renderWebApp, getWebApps } from "./apps/webbrowser.js";
@@ -68,6 +69,7 @@ import { updateClientLayouts } from "./dashlayout.js";
 import { renderPanelPart } from "./apps/panelpart.js";
 import { renderFleetWidget } from "./apps/fleetwidget.js";
 import { initStartMenu, refreshStartMenu } from "./startmenu.js";
+import { t } from "./i18n.js";
 
 // -----------------------------------------------------------------
 // Content-Router: welcher Renderer gehört zu welchem appId?
@@ -93,6 +95,7 @@ const APP_RENDERERS = {
   calendar: renderCalendar,
   todos: renderTodos,
   privacy: renderPrivacy,
+  patching: renderPatching,
   audioplayer: renderAudioPlayer,
   webbrowser: renderWebBrowser,
   webapp: renderWebApp,           // gespeicherte Web-Apps (props: {url,name,icon})
@@ -166,6 +169,7 @@ const APP_REQUIRED_PERM = {
   orgchart: "see_org",
   calendar: "use_calendar",
   todos: "use_todos",
+  patching: "patching",
 };
 
 function _appAllowed(appKey) {
@@ -212,7 +216,7 @@ function drawUserMenuName(user) {
   const tag = document.createElement("span");
   tag.textContent = user.admin_via === "permission" ? "ADMIN*" : "ADMIN";
   tag.title = user.admin_via === "permission"
-    ? "Vollzugriff über das Recht super_admin" : "Rolle admin";
+    ? t("u_vollzugriff_uber_das_recht_super_a") : "Rolle admin";
   tag.style.cssText = "color:var(--warn,#f5a524);font-size:10px;font-weight:700;margin-left:5px";
   nameEl.appendChild(tag);
 }
@@ -509,7 +513,7 @@ function initChangePwForm() {
     const repeat = document.getElementById("cpw-repeat").value;
 
     if (newPw !== repeat) {
-      errBox.textContent = "Die neuen Passwörter stimmen nicht überein";
+      errBox.textContent = t("u_die_neuen_passworter_stimmen_nicht");
       errBox.classList.remove("hidden");
       return;
     }
@@ -567,7 +571,7 @@ function initMenusAndButtons() {
   attachUnreadDot(document.getElementById("btn-open-notifications"));
   document.getElementById("btn-open-settings").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ singleton: true, key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
+    openWindow({ singleton: true, key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
   });
 
   // Startmenü (unten links)
@@ -593,7 +597,7 @@ function initMenusAndButtons() {
     else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
     else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
     else if (app === "manage") openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
-    else if (app === "settings") openWindow({ singleton: true, key: "settings", appId: "settings", title: "Einstellungen", w: 560, h: 620 });
+    else if (app === "settings") openWindow({ singleton: true, key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
     else if (app === "permissions") openWindow({ singleton: true, key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
     else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
     else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
@@ -615,6 +619,7 @@ function initMenusAndButtons() {
     else if (app === "calendar") openWindow({ singleton: true, key: "calendar", appId: "calendar", title: "Kalender", w: 900, h: 680 });
     else if (app === "todos") openWindow({ singleton: true, key: "todos", appId: "todos", title: "Todos", w: 960, h: 640 });
     else if (app === "privacy") openWindow({ singleton: true, key: "privacy", appId: "privacy", title: "Datenschutz", w: 820, h: 680 });
+    else if (app === "patching") openWindow({ singleton: true, key: "patching", appId: "patching", title: "Updates", w: 940, h: 700 });
     else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
     else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
     else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
@@ -643,7 +648,7 @@ function initMenusAndButtons() {
 
   // "Client hinzufügen"
   document.getElementById("btn-add-client").addEventListener("click", () => {
-    openWindow({ singleton: true, key: "add-client", appId: "add-client", title: "Client hinzufügen", w: 560, h: 600 });
+    openWindow({ singleton: true, key: "add-client", appId: "add-client", title: t("u_client_hinzufugen"), w: 560, h: 600 });
   });
 }
 
@@ -765,7 +770,7 @@ function initLiveUpdates() {
   // Fehler bei der Bildschirmübertragung (z.B. headless VM) als Notification
   // + Eintrag im Audit-Log
   dashboardSocket.on("screen-error", (data) => {
-    notifyError(data.error || "Fehler bei der Bildschirmübertragung", "error", "remote-screen", 12000);
+    notifyError(data.error || t("u_fehler_bei_der_bildschirmubertragu"), "error", "remote-screen", 12000);
   });
 
   // Agent-Absturz: Der Agent hat sich selbst neu gestartet und meldet den

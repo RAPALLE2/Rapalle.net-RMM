@@ -6,6 +6,7 @@
 // index.html (CDN), ist also schon global verfügbar, wenn diese Datei läuft.
 
 import { BACKEND_URL } from "./config.js";
+import { t } from "./i18n.js";
 
 export const dashboardSocket = io(`${BACKEND_URL}/dashboard`, {
   autoConnect: true,
@@ -49,7 +50,7 @@ dashboardSocket.on("relay-changed", (detail = {}) => {
     window.dispatchEvent(new CustomEvent("relay-changed", { detail }));
   } catch {}
   if (detail && detail.auto && window.notify) {
-    window.notify("Ein Explorer-Relay wurde automatisch geschlossen (Zeit abgelaufen).",
+    window.notify(t("u_ein_explorer_relay_wurde_automatis"),
       "info", 6000, { source: "webhook" });
   }
 });

@@ -9,6 +9,7 @@ import { api } from "../api.js";
 import { registerCleanup } from "../windowmanager.js";
 import { esc, uiConfirm } from "../utils.js";
 import { MiniTerm } from "./miniterm.js";
+import { t } from "../i18n.js";
 
 function formatDuration(ms) {
   if (ms == null) return "–";
@@ -173,7 +174,7 @@ export function renderRecordings(body, win) {
       } catch (e) {
         const gone = /nicht gefunden|fehlt|404/i.test(e.message || "");
         playerEl.innerHTML = `<div style="color:${gone ? "var(--danger)" : "var(--subtext)"};padding:20px;text-align:center">
-          ${gone ? "Replay gibt's nicht mehr – die Datei wurde gelöscht." : esc(e.message)}</div>`;
+          ${gone ? t("u_replay_gibt_s_nicht_mehr_die_datei") : esc(e.message)}</div>`;
         if (gone) loadList();   // Liste auffrischen (Eintrag wird serverseitig entfernt)
       }
       return;
@@ -188,7 +189,7 @@ export function renderRecordings(body, win) {
         playerEl.innerHTML = `<video controls autoplay style="max-width:100%;max-height:100%;background:#000" src="${videoUrl}"></video>`;
       } catch (e) {
         const gone = /nicht gefunden|fehlt|404/i.test(e.message || "");
-        playerEl.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${gone ? "Replay gibt's nicht mehr – die Datei wurde gelöscht." : esc(e.message)}</div>`;
+        playerEl.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${gone ? t("u_replay_gibt_s_nicht_mehr_die_datei") : esc(e.message)}</div>`;
         if (gone) loadList();
       }
       return;
@@ -210,7 +211,7 @@ export function renderRecordings(body, win) {
       showFrame(0);
     } catch (e) {
       const gone = /nicht gefunden|fehlt|404/i.test(e.message || "");
-      playerEl.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${gone ? "Replay gibt's nicht mehr – die Datei wurde gelöscht." : esc(e.message)}</div>`;
+      playerEl.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${gone ? t("u_replay_gibt_s_nicht_mehr_die_datei") : esc(e.message)}</div>`;
       if (gone) loadList();
     }
   }
@@ -236,7 +237,7 @@ export function renderRecordings(body, win) {
                 : `${formatDuration(r.duration_ms)} · ${r.format === "video" ? "🎬 Video" : r.format === "term" ? "⌨️ Terminal" : `${r.frame_count} Frames`} · ${esc(r.username || "")}`}
             </div>
           </td>
-          <td style="width:30px"><button class="taskbar-btn" data-del="${r.id}" title="Löschen">✕</button></td>
+          <td style="width:30px"><button class="taskbar-btn" data-del="${r.id}" title="${t("delete")}">✕</button></td>
         </tr>`;
       }).join("");
 
@@ -251,7 +252,7 @@ export function renderRecordings(body, win) {
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async (e) => {
           e.stopPropagation();
-          if (!(await uiConfirm("Aufzeichnung löschen?", { okText: "Löschen", danger: true }))) return;
+          if (!(await uiConfirm(t("u_aufzeichnung_loschen"), { okText: t("delete"), danger: true }))) return;
           try { await api.deleteRecording(btn.dataset.del); loadList(); }
           catch (err) { window.notify?.(err.message, "error"); }
         })

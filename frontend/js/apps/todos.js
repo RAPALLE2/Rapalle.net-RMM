@@ -12,6 +12,7 @@
 
 import { api } from "../api.js";
 import { esc, uiConfirm, uiPrompt } from "../utils.js";
+import { t } from "../i18n.js";
 import { registerCleanup } from "../windowmanager.js";
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -39,20 +40,20 @@ export function renderTodos(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:var(--panel)">
       <div class="explorer-toolbar" style="gap:8px;flex-wrap:wrap">
-        <input id="todo-new" placeholder="Neues Todo… (Enter)" style="flex:1;min-width:180px;
+        <input id="todo-new" placeholder="${t("todo_new")}" style="flex:1;min-width:180px;
           padding:6px 10px;border-radius:6px;border:1px solid var(--border);
           background:var(--panel-2);color:var(--text);font-size:13px">
         <select id="todo-new-cat" style="padding:6px 8px;border-radius:6px;
           border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px"></select>
         <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--subtext);cursor:pointer"
-               title="Wird jeden Tag automatisch wieder auf offen gesetzt">
-          <input type="checkbox" id="todo-new-rec"> 🔁 täglich
+               title="${t("todo_daily_hint")}">
+          <input type="checkbox" id="todo-new-rec"> ${t("todo_daily")}
         </label>
-        <button class="btn-primary" id="todo-add" style="width:auto;margin:0">+ Hinzufügen</button>
+        <button class="btn-primary" id="todo-add" style="width:auto;margin:0">${t("todo_add")}</button>
         <span style="flex:1"></span>
-        <button class="taskbar-btn" id="todo-newcat" title="Eigene Kategorie anlegen">+ Kategorie</button>
-        <button class="taskbar-btn" id="todo-sweep" title="Alle erledigten (nicht wiederkehrenden) ins Archiv">🧹 Aufräumen</button>
-        <button class="taskbar-btn" id="todo-arch">📦 Archiv</button>
+        <button class="taskbar-btn" id="todo-newcat" title="${t("todo_category")}">${t("todo_category")}</button>
+        <button class="taskbar-btn" id="todo-sweep" title="${t("todo_sweep_q")}">${t("todo_sweep")}</button>
+        <button class="taskbar-btn" id="todo-arch">${t("todo_archive")}</button>
       </div>
       <div id="todo-board" style="flex:1;overflow:auto;padding:10px 12px 16px;
            display:flex;gap:12px;align-items:flex-start"></div>
@@ -69,7 +70,7 @@ export function renderTodos(body, win) {
 
   async function load() {
     day = todayStr();
-    board.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:10px">Lädt…</div>`;
+    board.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:10px">${t("todo_loading")}</div>`;
     try {
       const data = await api.getTodos(day);
       cats = data.categories || [];
@@ -112,13 +113,13 @@ export function renderTodos(body, win) {
     board.innerHTML = visible.map(columnHtml).join("");
     board.querySelectorAll("[data-cat]").forEach(wireColumn);
     board.querySelectorAll("[data-todo]").forEach(wireCard);
-    body.querySelector("#todo-arch").textContent = showArchive ? "📦 Archiv aus" : "📦 Archiv";
+    body.querySelector("#todo-arch").textContent = showArchive ? t("todo_archive_off") : t("todo_archive");
   }
 
   function columnHtml(cat) {
     const isArchive = cat.builtin === "archive";
-    const items = todos.filter((t) => t.category_id === cat.id);
-    const open = items.filter((t) => !t.done).length;
+    const items = todos.filter((td) => td.category_id === cat.id);
+    const open = items.filter((td) => !td.done).length;
     return `
       <div data-cat="${esc(cat.id)}" style="flex:0 0 280px;display:flex;flex-direction:column;
            background:var(--panel-2);border:1px solid var(--border);border-radius:10px;
@@ -130,47 +131,47 @@ export function renderTodos(body, win) {
                   title="${esc(cat.name)}">${esc(cat.name)}</strong>
           <span style="font-size:11px;color:var(--subtext)">${isArchive ? items.length : `${open}/${items.length}`}</span>
           ${cat.builtin ? "" : `<button data-editcat="${esc(cat.id)}" class="taskbar-btn"
-             style="padding:1px 6px;font-size:11px" title="Kategorie umbenennen/löschen">⋯</button>`}
+             style="padding:1px 6px;font-size:11px" title="${t("todo_tip_cat_edit")}">⋯</button>`}
         </div>
         <div data-drop="${esc(cat.id)}" style="flex:1;overflow:auto;padding:8px;
              display:flex;flex-direction:column;gap:6px;min-height:60px">
-          ${items.length ? items.map((t) => cardHtml(t, isArchive)).join("")
-            : `<div style="color:var(--subtext);font-size:12px;padding:8px;text-align:center">leer</div>`}
+          ${items.length ? items.map((td) => cardHtml(td, isArchive)).join("")
+            : `<div style="color:var(--subtext);font-size:12px;padding:8px;text-align:center">${t("todo_empty")}</div>`}
         </div>
       </div>`;
   }
 
-  function cardHtml(t, isArchive) {
-    const overdue = t.due_at && !t.done && t.due_at < Date.now();
+  function cardHtml(td, isArchive) {
+    const overdue = td.due_at && !td.done && td.due_at < Date.now();
     return `
-      <div data-todo="${esc(t.id)}" draggable="true" style="
+      <div data-todo="${esc(td.id)}" draggable="true" style="
            background:var(--panel);border:1px solid var(--border);border-radius:8px;
            padding:7px 9px;display:flex;gap:8px;align-items:flex-start;cursor:grab;
-           opacity:${t.done ? "0.55" : "1"}">
-        <input type="checkbox" data-check="${esc(t.id)}" ${t.done ? "checked" : ""}
+           opacity:${td.done ? "0.55" : "1"}">
+        <input type="checkbox" data-check="${esc(td.id)}" ${td.done ? "checked" : ""}
                style="margin-top:2px;cursor:pointer">
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;line-height:1.3;word-break:break-word;
-               text-decoration:${t.done ? "line-through" : "none"}">${esc(t.title)}</div>
-          ${t.notes ? `<div style="font-size:11px;color:var(--subtext);margin-top:2px;
-               white-space:pre-wrap;word-break:break-word">${esc(t.notes)}</div>` : ""}
+               text-decoration:${td.done ? "line-through" : "none"}">${esc(td.title)}</div>
+          ${td.notes ? `<div style="font-size:11px;color:var(--subtext);margin-top:2px;
+               white-space:pre-wrap;word-break:break-word">${esc(td.notes)}</div>` : ""}
           <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:3px;font-size:10px;color:var(--subtext)">
-            ${t.recurring ? `<span title="Wiederkehrend – morgen wieder offen">🔁 täglich${
-              t.streak > 1 ? ` · 🔥 ${t.streak}` : ""}</span>` : ""}
-            ${t.due_at ? `<span style="color:${overdue ? "var(--danger)" : "inherit"}"
-               title="Fällig">📅 ${fmtDate(t.due_at)}</span>` : ""}
+            ${td.recurring ? `<span title="${t("todo_tip_recurring")}">${t("todo_daily")}${
+              td.streak > 1 ? ` · 🔥 ${td.streak}` : ""}</span>` : ""}
+            ${td.due_at ? `<span style="color:${overdue ? "var(--danger)" : "inherit"}"
+               title="${t("todo_tip_due")}">📅 ${fmtDate(td.due_at)}</span>` : ""}
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:2px">
-          <button data-edit="${esc(t.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
-                  title="Bearbeiten">✏️</button>
+          <button data-edit="${esc(td.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
+                  title="${t("todo_tip_edit")}">✏️</button>
           ${isArchive
-            ? `<button data-unarch="${esc(t.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
-                 title="Zurückholen">↩️</button>`
-            : `<button data-arch="${esc(t.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
-                 title="Ins Archiv">📦</button>`}
-          <button data-del="${esc(t.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
-                  title="Löschen">🗑️</button>
+            ? `<button data-unarch="${esc(td.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
+                 title="${t("todo_tip_unarchive")}">↩️</button>`
+            : `<button data-arch="${esc(td.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
+                 title="${t("todo_tip_archive")}">📦</button>`}
+          <button data-del="${esc(td.id)}" class="taskbar-btn" style="padding:0 5px;font-size:11px"
+                  title="${t("todo_tip_delete")}">🗑️</button>
         </div>
       </div>`;
   }
@@ -193,14 +194,14 @@ export function renderTodos(body, win) {
     el.querySelector(`[data-check="${CSS.escape(id)}"]`)
       .addEventListener("change", (e) => toggle(id, e.target.checked));
     el.querySelector(`[data-edit="${CSS.escape(id)}"]`)
-      .addEventListener("click", () => openEditor(todos.find((t) => t.id === id)));
+      .addEventListener("click", () => openEditor(todos.find((td) => td.id === id)));
     const arch = el.querySelector(`[data-arch="${CSS.escape(id)}"]`);
     if (arch) arch.addEventListener("click", () => act(() => api.archiveTodo(id)));
     const un = el.querySelector(`[data-unarch="${CSS.escape(id)}"]`);
     if (un) un.addEventListener("click", () => act(() => api.unarchiveTodo(id)));
     el.querySelector(`[data-del="${CSS.escape(id)}"]`).addEventListener("click", async () => {
-      const t = todos.find((x) => x.id === id);
-      if (!await uiConfirm(`„${t ? t.title : "Todo"}“ endgültig löschen?`)) return;
+      const todoObj = todos.find((x) => x.id === id);
+      if (!await uiConfirm(t("todo_delete_q", { name: todoObj ? todoObj.title : "Todo" }))) return;
       act(() => api.deleteTodo(id));
     });
   }
@@ -218,8 +219,8 @@ export function renderTodos(body, win) {
       drop.style.background = "";
       const id = dragId || e.dataTransfer.getData("text/plain");
       if (!id) return;
-      const t = todos.find((x) => x.id === id);
-      if (!t || t.category_id === catId) return;
+      const td = todos.find((x) => x.id === id);
+      if (!td || td.category_id === catId) return;
       // Neue Reihenfolge der Zielspalte: offene zuerst, Karte ans Ende der offenen.
       const rest = todos.filter((x) => x.category_id === catId && x.id !== id);
       const order = [...rest.filter((x) => !x.done).map((x) => x.id), id,
@@ -232,8 +233,8 @@ export function renderTodos(body, win) {
   }
 
   async function toggle(id, done) {
-    const t = todos.find((x) => x.id === id);
-    if (t) { t.done = done ? 1 : 0; draw(); }     // sofortiges Feedback
+    const td = todos.find((x) => x.id === id);
+    if (td) { td.done = done ? 1 : 0; draw(); }     // sofortiges Feedback
     try {
       await api.toggleTodo(id, done, todayStr());
     } catch (e) {
@@ -271,13 +272,12 @@ export function renderTodos(body, win) {
   });
 
   body.querySelector("#todo-sweep").addEventListener("click", async () => {
-    if (!await uiConfirm("Alle erledigten Todos ins Archiv verschieben?",
-                         { description: "Wiederkehrende Todos bleiben stehen." })) return;
+    if (!await uiConfirm(t("todo_sweep_q"), { description: t("todo_sweep_note") })) return;
     act(() => api.archiveDoneTodos());
   });
 
   body.querySelector("#todo-newcat").addEventListener("click", async () => {
-    const name = await uiPrompt("Name der neuen Kategorie");
+    const name = await uiPrompt(t("todo_category_new"));
     if (!name || !name.trim()) return;
     const color = COLORS[cats.length % COLORS.length];
     act(() => api.createTodoCategory({ name: name.trim(), color }));
@@ -286,12 +286,11 @@ export function renderTodos(body, win) {
   async function editCategory(catId) {
     const cat = cats.find((c) => c.id === catId);
     if (!cat) return;
-    const name = await uiPrompt("Kategorie umbenennen (leer = löschen)",
-                                { value: cat.name });
+    const name = await uiPrompt(t("todo_category_rename"), { value: cat.name });
     if (name === null) return;
     if (!name.trim()) {
-      if (!await uiConfirm(`Kategorie „${cat.name}“ löschen?`,
-                           { description: "Enthaltene Todos wandern ins Archiv.", danger: true })) return;
+      if (!await uiConfirm(t("todo_category_delete_q", { name: cat.name }),
+                           { description: t("todo_category_delete_note"), danger: true })) return;
       return act(() => api.deleteTodoCategory(catId));
     }
     act(() => api.updateTodoCategory(catId, { name: name.trim(), color: cat.color }));
@@ -305,28 +304,28 @@ export function renderTodos(body, win) {
     overlay.innerHTML = `
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;
            padding:14px;width:min(380px,92%);display:flex;flex-direction:column;gap:9px">
-        <strong style="font-size:13px">Todo bearbeiten</strong>
+        <strong style="font-size:13px">${t("todo_edit")}</strong>
         <input id="ed-title" value="${esc(todo.title)}" style="padding:6px 9px;border-radius:6px;
           border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px">
-        <textarea id="ed-notes" rows="4" placeholder="Notiz…" style="padding:6px 9px;border-radius:6px;
+        <textarea id="ed-notes" rows="4" placeholder="${t("todo_note")}" style="padding:6px 9px;border-radius:6px;
           border:1px solid var(--border);background:var(--panel-2);color:var(--text);
           font-size:12px;resize:vertical">${esc(todo.notes || "")}</textarea>
-        <label style="font-size:11px;color:var(--subtext)">Kategorie</label>
+        <label style="font-size:11px;color:var(--subtext)">${t("todo_category").replace("+ ", "")}</label>
         <select id="ed-cat" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);
           background:var(--panel-2);color:var(--text);font-size:12px">
           ${cats.map((c) => `<option value="${esc(c.id)}" ${c.id === todo.category_id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
         </select>
-        <label style="font-size:11px;color:var(--subtext)">Fällig am (optional)</label>
+        <label style="font-size:11px;color:var(--subtext)">${t("todo_due")}</label>
         <input id="ed-due" type="date" value="${todo.due_at ? isoDate(todo.due_at) : ""}"
           style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);
           background:var(--panel-2);color:var(--text);font-size:12px">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
           <input type="checkbox" id="ed-rec" ${todo.recurring ? "checked" : ""}>
-          🔁 wiederkehrend (jeden Tag neu abhaken)
+          ${t("todo_recurring")}
         </label>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
-          <button class="taskbar-btn" id="ed-cancel">Abbrechen</button>
-          <button class="btn-primary" id="ed-save" style="width:auto;margin:0">Speichern</button>
+          <button class="taskbar-btn" id="ed-cancel">${t("cancel")}</button>
+          <button class="btn-primary" id="ed-save" style="width:auto;margin:0">${t("save")}</button>
         </div>
       </div>`;
     body.appendChild(overlay);

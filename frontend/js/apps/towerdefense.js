@@ -17,6 +17,8 @@
 
 // ---- Maps: Pfade in RASTER-Koordinaten (logisches Gitter 20 x 13 Zellen) ----
 import { reportScore } from "./gaminghub.js";
+// t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
+import { t as tr } from "../i18n.js";
 
 const GRID_COLS = 20, GRID_ROWS = 13;
 const MAPS = [
@@ -27,7 +29,7 @@ const MAPS = [
   },
   {
     id: "zickzack", name: "Zickzack-Backbone", icon: "⚡",
-    desc: "Vier enge Kurven - perfekt für Quarantäne-Flächen.",
+    desc: tr("u_vier_enge_kurven_perfekt_fur_quara"),
     path: [[0, 1], [16, 1], [16, 4], [3, 4], [3, 7], [16, 7], [16, 10], [0, 10], [0, 12], [19, 12]],
   },
   {
@@ -37,7 +39,7 @@ const MAPS = [
   },
   {
     id: "autobahn", name: "Daten-Autobahn", icon: "🛣️",
-    desc: "Kurzer, direkter Weg - hier zählt Feuerkraft, nicht Zeit.",
+    desc: tr("u_kurzer_direkter_weg_hier_zahlt_feu"),
     path: [[0, 6], [8, 6], [8, 3], [12, 3], [12, 9], [19, 9]],
   },
 ];
@@ -56,7 +58,7 @@ export function renderTowerDefense(body, win) {
         <button class="taskbar-btn" data-tower="av" title="Antivirus: High-Damage-Scan">🦠 100$</button>
         <button class="taskbar-btn" data-tower="qr" title="Quarantäne: isoliert mehrere Gegner (Flächenschaden)">☣️ 150$</button>
         <button class="taskbar-btn" id="td-start">▶ Welle</button>
-        <button class="taskbar-btn" id="td-maps" title="Andere Map wählen">🗺️</button>
+        <button class="taskbar-btn" id="td-maps" title="${tr("u_andere_map_wahlen")}">🗺️</button>
       </div>
       <div style="flex:1;position:relative;overflow:hidden">
         <canvas id="td-canvas" style="display:block;width:100%;height:100%"></canvas>
@@ -79,7 +81,7 @@ export function renderTowerDefense(body, win) {
     fw:  { name: "Firewall",   emoji: "🧱", cost: 50,  range: 95,  dmg: 10, cooldown: 32, color: "#4da6ff", aoe: 0 },
     ids: { name: "IDS",        emoji: "🔎", cost: 75,  range: 150, dmg: 6,  cooldown: 12, color: "#ffd166", aoe: 0 },
     av:  { name: "Antivirus",  emoji: "🦠", cost: 100, range: 120, dmg: 34, cooldown: 60, color: "#3ecf8e", aoe: 0 },
-    qr:  { name: "Quarantäne", emoji: "☣️", cost: 150, range: 110, dmg: 14, cooldown: 45, color: "#c77dff", aoe: 55 },
+    qr:  { name: tr("u_quarantane"), emoji: "☣️", cost: 150, range: 110, dmg: 14, cooldown: 45, color: "#c77dff", aoe: 55 },
   };
   const MAX_LEVEL = 5;
   function statsFor(type, level) {
@@ -178,8 +180,8 @@ export function renderTowerDefense(body, win) {
     }
     const base = TOWER_TYPES[placing];
     if (money < base.cost) { flash("Nicht genug Budget!"); return; }
-    if (pathCells.has(`${c.gx},${c.gy}`)) { flash("Pfad-Zelle - hier läuft die Malware!"); return; }
-    if (towers.some((t) => t.gx === c.gx && t.gy === c.gy)) { flash("Zelle schon belegt!"); return; }
+    if (pathCells.has(`${c.gx},${c.gy}`)) { flash(tr("u_pfad_zelle_hier_lauft_die_malware")); return; }
+    if (towers.some((t) => t.gx === c.gx && t.gy === c.gy)) { flash(tr("u_zelle_schon_belegt")); return; }
 
     const [x, y] = cellCenter(c.gx, c.gy);
     const st = statsFor(placing, 1);
@@ -211,7 +213,7 @@ export function renderTowerDefense(body, win) {
     `;
     tinfo.querySelector("#td-up")?.addEventListener("click", () => {
       const c = upgradeCost(t);
-      if (money < c) { flash("Nicht genug Budget fürs Upgrade!"); return; }
+      if (money < c) { flash(tr("u_nicht_genug_budget_furs_upgrade")); return; }
       money -= c; t.invested += c; t.level++;
       Object.assign(t, statsFor(t.type, t.level));
       updateHud(); renderTowerInfo();
@@ -297,7 +299,7 @@ export function renderTowerDefense(body, win) {
     for (const e of enemies) {
       if (moveEnemy(e)) {
         e.dead = true; hp -= e.dmg;
-        flash("⚠ Durchbruch! -" + e.dmg + "% Integrität");
+        flash("⚠ Durchbruch! -" + e.dmg + tr("u_integritat"));
         updateHud();
       }
     }
@@ -481,7 +483,7 @@ export function renderTowerDefense(body, win) {
     overlay.innerHTML = `
       <h2 style="color:#4da6ff;margin:0 0 4px">🛡️ RAPALLE Defense</h2>
       <p style="color:#9fb3c8;max-width:460px;font-size:13px;margin:0 0 12px">
-        ${initial ? "Wähle eine Map. " : "Map wechseln setzt das laufende Spiel zurück. "}
+        ${initial ? tr("u_wahle_eine_map") : tr("u_map_wechseln_setzt_das_laufende_sp")}
         Türme rasten auf dem Gitter ein - Pfad-Zellen sind gesperrt.
         Upgrades bis Stufe 5 (Kosten = Basispreis × 50% × Stufe), Verkauf = 70% der Investition.
       </p>

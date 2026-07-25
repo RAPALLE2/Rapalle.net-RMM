@@ -8,6 +8,7 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
+import { t } from "../i18n.js";
 
 // =================================================================
 // NACHRICHTEN-DARSTELLUNG mit Bildern und Videos
@@ -87,7 +88,7 @@ export function renderAiChat(body, win) {
       <div style="width:230px;min-width:230px;border-right:1px solid var(--border);display:flex;flex-direction:column">
         <div style="padding:10px 12px;font-weight:700;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
           🤖 Verbindungen <span style="flex:1"></span>
-          <button class="taskbar-btn" id="ai-new" title="Neue Verbindung" style="font-size:12px">＋</button>
+          <button class="taskbar-btn" id="ai-new" title=t("u_neue_verbindung") style="font-size:12px">＋</button>
         </div>
         <div id="ai-conns" style="flex:1;overflow:auto"></div>
       </div>
@@ -126,7 +127,7 @@ export function renderAiChat(body, win) {
         <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px">
           ${esc(c.name)}
           ${c.visibility === "all" ? `<span title="Für alle Benutzer">🌐</span>`
-            : c.visibility === "shared" ? `<span title="Freigegeben an Benutzer/Gruppen">👥</span>`
+            : c.visibility === "shared" ? `<span title=t("u_freigegeben_an_benutzer_gruppen")>👥</span>`
             : `<span title="Privat">🔒</span>`}
         </div>
         <div style="color:var(--subtext);font-size:11px">${esc(c.model)}</div>
@@ -168,7 +169,7 @@ export function renderAiChat(body, win) {
     const c = connections.find((x) => x.id === currentId);
     headEl.textContent = c
       ? `${c.name} · Modell: ${c.model}`
-      : "Keine Verbindung ausgewählt";
+      : t("u_keine_verbindung_ausgewahlt");
     if (!c) { msgsEl.innerHTML = ""; return; }
     msgsEl.innerHTML = messages.map((m) => `
       <div style="align-self:${m.role === "user" ? "flex-end" : "flex-start"};max-width:80%;
@@ -183,7 +184,7 @@ export function renderAiChat(body, win) {
     const text = inputEl.value.trim();
     const c = connections.find((x) => x.id === currentId);
     if (!text || !c || busy) {
-      if (!c) window.notify?.("Bitte zuerst links eine Verbindung auswählen", "info");
+      if (!c) window.notify?.(t("u_bitte_zuerst_links_eine_verbindung"), "info");
       return;
     }
     inputEl.value = "";
@@ -212,7 +213,7 @@ export function renderAiChat(body, win) {
     editorEl.style.display = "flex";
     editorEl.innerHTML = `
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;width:440px;max-height:90%;overflow:auto">
-        <h3 style="margin:0 0 12px">${isEdit ? "Verbindung bearbeiten" : "Neue AI-Verbindung"}</h3>
+        <h3 style="margin:0 0 12px">${isEdit ? t("u_verbindung_bearbeiten") : t("u_neue_ai_verbindung")}</h3>
         <div class="form-row"><label>Name</label>
           <input id="aie-name" value="${esc(existing?.name || "")}" placeholder="z.B. GPT-4o Firmenkonto" /></div>
         <div class="form-row"><label>API-URL</label>
@@ -243,7 +244,7 @@ export function renderAiChat(body, win) {
         <div id="aie-error" class="hidden" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
           <button class="taskbar-btn" id="aie-cancel">Abbrechen</button>
-          <button class="btn-primary" id="aie-save" style="margin:0;width:auto">${isEdit ? "Speichern" : "Anlegen"}</button>
+          <button class="btn-primary" id="aie-save" style="margin:0;width:auto">${isEdit ? t("save") : "Anlegen"}</button>
         </div>
       </div>
     `;

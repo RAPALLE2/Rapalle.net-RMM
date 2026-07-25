@@ -1,3 +1,4 @@
+import { t } from "../i18n.js";
 // apps/miniterm.js
 // ----------------
 // Schlanker, abhängigkeitsfreier Terminal-Emulator (VT100/ANSI-Subset).
@@ -369,7 +370,7 @@ export class MiniTerm {
           this._copy(sel);
           try { window.getSelection().removeAllRanges(); } catch {}
         } },
-      { label: "📥  Einfügen", hint: "Strg+V", fn: () => this._paste() },
+      { label: t("u_einfugen"), hint: "Strg+V", fn: () => this._paste() },
       { label: "🔎  Alles kopieren", fn: () => this._copy(this._allText()) },
       { label: "✖  Auswahl aufheben", disabled: !sel, fn: () => {
           try { window.getSelection().removeAllRanges(); } catch {}

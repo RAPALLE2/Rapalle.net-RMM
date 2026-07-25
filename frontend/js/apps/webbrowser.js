@@ -12,6 +12,9 @@
 // (z.B. google.com) - dafür gibt es den "Extern öffnen"-Knopf.
 import { esc, uiConfirm } from "../utils.js";
 import { state } from "../state.js";
+// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
+// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+import { t as tr } from "../i18n.js";
 
 // ---------------- Web-App-Speicher (pro Benutzer) ----------------
 const storeKey = () => `rmm_webapps:${state.user?.username || "default"}`;
@@ -58,15 +61,15 @@ export function renderWebBrowser(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:var(--panel)">
       <div style="display:flex;gap:6px;align-items:center;padding:6px 8px;background:var(--panel-2);border-bottom:1px solid var(--border)">
-        <button class="taskbar-btn" id="wb-back" title="Zurück">◀</button>
+        <button class="taskbar-btn" id="wb-back" title="${tr("exp_back")}">◀</button>
         <button class="taskbar-btn" id="wb-fwd" title="Vor">▶</button>
         <button class="taskbar-btn" id="wb-reload" title="Neu laden">🔄</button>
         <input id="wb-url" placeholder="https://…  (Enter zum Laden)"
           style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:16px;
           color:var(--text);padding:6px 14px;font-size:13px;outline:none" />
         <button class="taskbar-btn" id="wb-go" title="Laden">➜</button>
-        <button class="taskbar-btn" id="wb-save" title="Diese Seite als interne App speichern (Startmenü)">⭐ Als App</button>
-        <button class="taskbar-btn" id="wb-ext" title="In neuem Browser-Tab öffnen">🔗</button>
+        <button class="taskbar-btn" id="wb-save" title="${tr("u_diese_seite_als_interne_app_speich")}">⭐ Als App</button>
+        <button class="taskbar-btn" id="wb-ext" title="${tr("u_in_neuem_browser_tab_offnen")}">🔗</button>
       </div>
       <div id="wb-stage" style="flex:1;position:relative;background:#fff">
         <iframe id="wb-frame" style="position:absolute;inset:0;width:100%;height:100%;border:0;display:none"
@@ -171,7 +174,7 @@ export function renderWebBrowser(body, win) {
   // ---------------- "Als App speichern" ----------------
   function openSaveDialog() {
     const url = currentUrl() || urlEl.value.trim();
-    if (!normalizeUrl(url)) { window.notify?.("Bitte zuerst eine Seite laden", "warn"); return; }
+    if (!normalizeUrl(url)) { window.notify?.(tr("u_bitte_zuerst_eine_seite_laden"), "warn"); return; }
     let guess = "";
     try { guess = new URL(normalizeUrl(url)).hostname.replace(/^www\./, "").split(".")[0]; } catch {}
     guess = guess ? guess[0].toUpperCase() + guess.slice(1) : "Web-App";

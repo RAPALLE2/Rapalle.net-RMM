@@ -6,6 +6,7 @@
 import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
+import { t } from "../i18n.js";
 
 export function renderAutomation(body, win) {
   async function draw() {
@@ -18,7 +19,7 @@ export function renderAutomation(body, win) {
         <h3>Neue Automation</h3>
         <div class="form-row">
           <label>Name</label>
-          <input type="text" id="au-name" placeholder="z.B. Nächtliches Update" />
+          <input type="text" id="au-name" placeholder="${t("u_z_b_nachtliches_update")}" />
         </div>
         <div class="form-row">
           <label>Gespeichertes Skript einsetzen (optional)</label>
@@ -71,8 +72,8 @@ export function renderAutomation(body, win) {
       const unit = parseInt(body.querySelector("#au-unit").value);
       const err = body.querySelector("#au-error");
       err.classList.add("hidden");
-      if (!name || !command) { err.textContent = "Name und Befehl erforderlich"; err.classList.remove("hidden"); return; }
-      if (!clientIds.length) { err.textContent = "Mindestens einen Client wählen"; err.classList.remove("hidden"); return; }
+      if (!name || !command) { err.textContent = t("u_name_und_befehl_erforderlich"); err.classList.remove("hidden"); return; }
+      if (!clientIds.length) { err.textContent = t("u_mindestens_einen_client_wahlen"); err.classList.remove("hidden"); return; }
       try {
         await api.createAutomation({ name, command, client_ids: clientIds, interval_seconds: interval * unit });
         window.notify?.("Automation angelegt", "success");
@@ -123,7 +124,7 @@ export function renderAutomation(body, win) {
       );
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!(await uiConfirm("Automation löschen?", { okText: "Löschen", danger: true }))) return;
+          if (!(await uiConfirm(t("u_automation_loschen"), { okText: t("delete"), danger: true }))) return;
           await api.deleteAutomation(btn.dataset.del); loadList();
         })
       );
@@ -145,7 +146,7 @@ export function renderAutomation(body, win) {
               const okCount = run.results.filter((r) => r.ok && (r.exit_code === 0 || r.exit_code == null)).length;
               const rows = run.results.map((r) => {
                 const good = r.ok && (r.exit_code === 0 || r.exit_code == null);
-                const output = (r.stdout || "").trim() || (r.stderr || "").trim() || "(keine Ausgabe)";
+                const output = (r.stdout || "").trim() || (r.stderr || "").trim() || t("u_keine_ausgabe");
                 return `
                   <div style="border-top:1px solid var(--border);padding:6px 0">
                     <div style="display:flex;justify-content:space-between;font-size:12px">

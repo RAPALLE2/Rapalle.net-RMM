@@ -16,6 +16,7 @@ import { formatBytes, esc, uiConfirm, uiPrompt, uiChoice } from "../utils.js";
 import { BACKEND_URL } from "../config.js";
 import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../state.js";
 import { scheduleSave } from "../persist.js";
+import { t } from "../i18n.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
 const RELAY_AUTOCLOSE_BASE = [
@@ -44,7 +45,7 @@ function copyToClipboard(text) {
     ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
     document.body.appendChild(ta);
     ta.focus(); ta.select();
-    try { document.execCommand("copy") ? resolve() : reject(new Error("Kopieren nicht möglich")); }
+    try { document.execCommand("copy") ? resolve() : reject(new Error(t("exp_copy_fail"))); }
     catch (err) { reject(err); } finally { ta.remove(); }
   });
 }
@@ -100,30 +101,30 @@ export function renderExplorer(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div class="explorer-toolbar" style="gap:6px;flex-wrap:wrap">
-        <button id="exp-tab-files-${win.key}" class="btn-primary" style="padding:4px 10px">📁 Dateien</button>
-        ${clientId ? `<button id="exp-tab-relay-${win.key}" class="taskbar-btn">🔌 Relay (Netzlaufwerk)</button>` : ""}
+        <button id="exp-tab-files-${win.key}" class="btn-primary" style="padding:4px 10px">${t("exp_files")}</button>
+        ${clientId ? `<button id="exp-tab-relay-${win.key}" class="taskbar-btn">${t("exp_relay")}</button>` : ""}
       </div>
 
       <div id="exp-files-${win.key}" style="display:flex;flex-direction:column;flex:1;min-height:0">
         <div class="explorer-toolbar" style="flex-wrap:wrap;gap:6px">
-          <button id="exp-back-${win.key}" title="Zurück">←</button>
-          <button id="exp-refresh-${win.key}" title="Aktualisieren">🔄</button>
-          <button id="exp-up-${win.key}" title="Übergeordneter Ordner">⬆️</button>
-          <div id="exp-crumbs-${win.key}" title="Klicken, um den Pfad zu bearbeiten oder einzufügen" style="flex:1;color:var(--subtext);overflow-x:auto;white-space:nowrap;cursor:text"></div>
+          <button id="exp-back-${win.key}" title="${t("exp_back")}">←</button>
+          <button id="exp-refresh-${win.key}" title="${t("exp_refresh")}">🔄</button>
+          <button id="exp-up-${win.key}" title="${t("exp_up")}">⬆️</button>
+          <div id="exp-crumbs-${win.key}" title="${t("exp_crumbs")}" style="flex:1;color:var(--subtext);overflow-x:auto;white-space:nowrap;cursor:text"></div>
           <input id="exp-path-${win.key}" class="hidden" spellcheck="false" style="flex:1;font-family:monospace;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--accent);background:var(--panel-2);color:var(--text)" />
-          <button id="exp-copy-${win.key}" title="Aktuellen Pfad kopieren">📋</button>
-          ${clientId ? `<button id="exp-fav-${win.key}" title="Diesen Ordner als Arbeitsordner merken/entfernen">⭐</button>` : ""}
-          <button id="exp-mkdir-${win.key}" title="Neuer Ordner">➕📁</button>
-          <button id="exp-upload-${win.key}" title="Datei hochladen">⬆️ Upload</button>
+          <button id="exp-copy-${win.key}" title="${t("exp_copypath")}">📋</button>
+          ${clientId ? `<button id="exp-fav-${win.key}" title="${t("exp_fav")}">⭐</button>` : ""}
+          <button id="exp-mkdir-${win.key}" title="${t("exp_mkdir")}">➕📁</button>
+          <button id="exp-upload-${win.key}" title="${t("exp_upload")}">⬆️ Upload</button>
           <input type="file" id="exp-file-${win.key}" multiple style="display:none" />
         </div>
         <div id="exp-drop-${win.key}" style="flex:1;overflow:auto;position:relative">
           <table class="explorer-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th style="width:90px">Größe</th>
-                <th style="width:150px">Geändert</th>
+                <th>${t("exp_col_name")}</th>
+                <th style="width:90px">${t("exp_col_size")}</th>
+                <th style="width:150px">${t("exp_col_modified")}</th>
                 <th style="width:110px">Rechte</th>
                 <th style="width:130px">Besitzer</th>
                 <th style="width:150px">Aktionen</th>
@@ -175,10 +176,10 @@ export function renderExplorer(body, win) {
   });
   pathInput.addEventListener("blur", closePathEdit);
   body.querySelector(`#exp-copy-${win.key}`).addEventListener("click", () => {
-    if (!currentPath) { window.notify?.("Kein Pfad geöffnet (Laufwerksliste).", "warning"); return; }
+    if (!currentPath) { window.notify?.(t("exp_no_path"), "warning"); return; }
     copyToClipboard(currentPath).then(
       () => window.notify?.("Pfad kopiert", "success"),
-      () => { openPathEdit(); window.notify?.("Automatisches Kopieren nicht möglich - Pfad ist markiert, bitte Strg+C drücken.", "warning"); });
+      () => { openPathEdit(); window.notify?.(t("exp_copy_manual"), "warning"); });
   });
 
   async function downloadFile(entry) {
@@ -203,7 +204,7 @@ export function renderExplorer(body, win) {
           <div style="margin-bottom:8px;color:var(--subtext)">${esc(entry.name)}</div>
           <img src="data:${mime};base64,${res.data}" style="max-width:100%;max-height:70vh;border-radius:8px" />
         </div>`);
-    } catch (e) { window.notify?.("Bild konnte nicht geladen werden: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("exp_img_fail", { err: e.message }), "error"); }
   }
 
   async function editFile(entry) {
@@ -219,8 +220,8 @@ export function renderExplorer(body, win) {
             background:var(--panel-2,#0f1626);color:var(--text);border:1px solid var(--border);
             border-radius:8px;padding:10px;resize:none"></textarea>
           <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
-            <button class="taskbar-btn" id="exp-edit-cancel">Abbrechen</button>
-            <button class="btn-primary" id="exp-edit-save" style="margin:0">Speichern</button>
+            <button class="taskbar-btn" id="exp-edit-cancel">${t("cancel")}</button>
+            <button class="btn-primary" id="exp-edit-save" style="margin:0">${t("save")}</button>
           </div>
         </div>`);
       const ta = overlay.querySelector("#exp-editor");
@@ -233,14 +234,14 @@ export function renderExplorer(body, win) {
           window.notify?.("Gespeichert", "success");
           closeOverlay();
           load(currentPath);
-        } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+        } catch (e) { window.notify?.(t("exp_save_fail", { err: e.message }), "error"); }
       });
-    } catch (e) { window.notify?.("Öffnen fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("exp_open_fail", { err: e.message }), "error"); }
   }
 
   async function uploadFiles(fileList) {
     if (!currentPath) {
-      window.notify?.("Bitte zuerst in ein Laufwerk/einen Ordner wechseln.", "warn");
+      window.notify?.(t("exp_pick_drive"), "warn");
       return;
     }
     for (const file of fileList) {
@@ -257,24 +258,24 @@ export function renderExplorer(body, win) {
   }
 
   async function doMkdir() {
-    if (!currentPath) { window.notify?.("Bitte zuerst einen Ordner öffnen.", "warn"); return; }
-    const name = await uiPrompt("Neuen Ordner anlegen", { description: "Name des neuen Ordners:" });
+    if (!currentPath) { window.notify?.(t("exp_pick_folder"), "warn"); return; }
+    const name = await uiPrompt(t("exp_mkdir_title"), { description: t("exp_mkdir_desc") });
     if (!name) return;
     try { await fs.mkdir(joinPath(currentPath, name)); load(currentPath); }
     catch (e) { window.notify?.("Anlegen fehlgeschlagen: " + e.message, "error"); }
   }
 
   async function doRename(entry) {
-    const name = await uiPrompt("Umbenennen", { description: "Neuer Name:", value: entry.name });
+    const name = await uiPrompt(t("exp_rename"), { description: t("exp_rename_desc"), value: entry.name });
     if (!name || name === entry.name) return;
     try { await fs.rename(entry.path, joinPath(parentOf(entry.path), name)); load(currentPath); }
     catch (e) { window.notify?.("Umbenennen fehlgeschlagen: " + e.message, "error"); }
   }
 
   async function doDelete(entry) {
-    if (!(await uiConfirm(`"${entry.name}" wirklich löschen?`, { okText: "Löschen", danger: true }))) return;
+    if (!(await uiConfirm(t("exp_delete_q", { name: entry.name }), { okText: t("delete"), danger: true }))) return;
     try { await fs.del(entry.path); load(currentPath); }
-    catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
+    catch (e) { window.notify?.(t("exp_delete_fail", { err: e.message }), "error"); }
   }
 
   // ---------------- Rechtsklick-Kontextmenü ----------------
@@ -317,18 +318,18 @@ export function renderExplorer(body, win) {
 
   function showProperties(entry) {
     const rows = [
-      ["Name", entry.name],
+      [t("exp_col_name"), entry.name],
       ["Pfad", entry.path],
-      ["Typ", entry.isDir ? "Ordner" : "Datei"],
-      ["Größe", entry.isDir ? "-" : formatBytes(entry.size)],
-      ["Geändert", entry.mtime ? new Date(entry.mtime).toLocaleString("de-DE") : "-"],
+      [t("exp_type"), entry.isDir ? t("exp_folder") : t("exp_file")],
+      [t("exp_col_size"), entry.isDir ? "-" : formatBytes(entry.size)],
+      [t("exp_col_modified"), entry.mtime ? new Date(entry.mtime).toLocaleString() : "-"],
       ["Rechte", (entry.perms || "-") + (entry.mode ? `  (${entry.mode})` : "")],
       ["Besitzer", entry.owner || "-"],
       ["Gruppe", entry.group || "-"],
     ];
     openOverlay(`
       <div style="min-width:340px">
-        <h3 style="margin:0 0 10px">🔐 Eigenschaften</h3>
+        <h3 style="margin:0 0 10px">${t("exp_props")}</h3>
         <table style="width:100%;font-size:13px;border-collapse:collapse">
           ${rows.map(([k, v]) => `
             <tr>
@@ -337,7 +338,7 @@ export function renderExplorer(body, win) {
             </tr>`).join("")}
         </table>
         <p style="color:var(--subtext);font-size:11px;margin:10px 0 0">
-          Rechte/Besitzer werden vom Agenten geliefert (Linux: rwx-Modus, Windows: Attribute).
+          ${t("exp_props_hint")}
         </p>
       </div>`);
   }
@@ -347,19 +348,19 @@ export function renderExplorer(body, win) {
     const isTxt = !entry.isDir && TEXT_EXT.has(extOf(entry.name));
     const items = [];
     if (entry.isDir) {
-      items.push({ icon: "📂", label: "Öffnen", fn: () => { history.push(entry.path); load(entry.path); } });
+      items.push({ icon: "📂", label: t("exp_open"), fn: () => { history.push(entry.path); load(entry.path); } });
     } else {
-      if (isImg) items.push({ icon: "👁", label: "Ansehen", fn: () => viewImage(entry) });
-      if (isTxt) items.push({ icon: "✏️", label: "Bearbeiten", fn: () => editFile(entry) });
+      if (isImg) items.push({ icon: "👁", label: t("exp_view"), fn: () => viewImage(entry) });
+      if (isTxt) items.push({ icon: "✏️", label: t("exp_edit"), fn: () => editFile(entry) });
       items.push({ icon: "⬇", label: "Herunterladen", fn: () => downloadFile(entry) });
     }
     if (currentPath && !entry._fav) {
       items.push("-");
-      items.push({ icon: "✏", label: "Umbenennen", fn: () => doRename(entry) });
-      items.push({ icon: "🗑", label: "Löschen", danger: true, fn: () => doDelete(entry) });
+      items.push({ icon: "✏", label: t("exp_rename"), fn: () => doRename(entry) });
+      items.push({ icon: "🗑", label: t("delete"), danger: true, fn: () => doDelete(entry) });
     }
     items.push("-");
-    items.push({ icon: "📋", label: "Pfad kopieren", fn: async () => {
+    items.push({ icon: "📋", label: t("exp_copy_path"), fn: async () => {
       try { await navigator.clipboard.writeText(entry.path); window.notify?.("Pfad kopiert", "success", 2000); }
       catch { window.notify?.("Kopieren blockiert (Browser)", "warn"); }
     }});
@@ -430,7 +431,7 @@ export function renderExplorer(body, win) {
         };
 
         if (entry.isDir) {
-          tr.firstElementChild.title = "Öffnen";
+          tr.firstElementChild.title = t("exp_open");
           tr.firstElementChild.addEventListener("dblclick", () => { history.push(entry.path); load(entry.path); });
         } else {
           if (isImg) actionsTd.appendChild(mkBtn("👁", "Ansehen", () => viewImage(entry)));
@@ -442,7 +443,7 @@ export function renderExplorer(body, win) {
         }
         if (currentPath) {
           actionsTd.appendChild(mkBtn("✏", "Umbenennen", () => doRename(entry)));
-          actionsTd.appendChild(mkBtn("🗑", "Löschen", () => doDelete(entry)));
+          actionsTd.appendChild(mkBtn("🗑", t("delete"), () => doDelete(entry)));
         }
         // Rechtsklick-Menü auf dem Eintrag (wie im Windows-Explorer)
         tr.addEventListener("contextmenu", (ev) => {
@@ -491,7 +492,7 @@ export function renderExplorer(body, win) {
 
   async function renderRelay() {
     if (!relayPane) return;
-    relayPane.innerHTML = `<div style="color:var(--subtext);padding:20px">Lädt…</div>`;
+    relayPane.innerHTML = `<div style="color:var(--subtext);padding:20px">${t("loading")}</div>`;
 
     // --- Adresse bestimmen (die, über die das Dashboard läuft; Port aus Config) ---
     const testBase = (BACKEND_URL || window.location.origin).replace(/\/$/, "");
@@ -543,7 +544,7 @@ export function renderExplorer(body, win) {
     const header = card(`
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div>
-          <div style="font-size:16px;font-weight:700;margin-bottom:4px">🔌 Explorer-Relay ${badge}</div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:4px">${t("exp_relay_title", { badge })}</div>
           <div style="color:var(--subtext);font-size:13px">
             Gibt <b>${esc(clientName || clientId)}</b> im gemeinsamen Netzlaufwerk frei.
           </div>
@@ -559,7 +560,7 @@ export function renderExplorer(body, win) {
       </div>`;
 
     const address = card(`
-      <div style="font-weight:700;margin-bottom:6px">📍 Ein Netzlaufwerk für alle freigegebenen Clients</div>
+      <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_one")}</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:10px">
         Du verbindest EINMAL dieses Laufwerk. Darin erscheint pro freigegebenem Client ein
         Ordner, und darin die Festplatten. Mehrere Clients gleichzeitig, ganz automatisch.
@@ -568,12 +569,12 @@ export function renderExplorer(body, win) {
         ${copyField("Windows / macOS / Linux", httpRoot)}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        In „Netzlaufwerk verbinden" bzw. „Netzwerkadresse hinzufügen" genau diese
+        ${t("exp_relay_one_hint")}
         <b>http://…:Port/dav</b>-Adresse eintragen (mit Doppelpunkt vor dem Port).
       </div>`);
 
     const login = card(`
-      <div style="font-weight:700;margin-bottom:6px">🔑 Anmeldung</div>
+      <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_login")}</div>
       <div style="color:var(--subtext);font-size:13px;line-height:1.7">
         Mit deinem <b>normalen Dashboard-Login</b> anmelden:
         <ul style="margin:6px 0 0;padding-left:18px">
@@ -581,7 +582,7 @@ export function renderExplorer(body, win) {
           <li>Passwort: dein gewohntes Dashboard-Passwort</li>
         </ul>
         <div style="font-size:12px;margin-top:8px">
-          Hinweis: Nach diesem Update bitte einmal am Dashboard neu anmelden – dabei wird
+          ${t("exp_relay_login_hint")}
           die Netzlaufwerk-Anmeldung für dein Konto scharf geschaltet.
         </div>
       </div>`);
@@ -593,13 +594,13 @@ export function renderExplorer(body, win) {
     // Bei https lautet die Form \\\\host@SSL@Port\\dav.
     const uncRoot = `\\\\${host}@${scheme === "https" ? "SSL@" : ""}${port}\\dav`;
     const netUse = username ? card(`
-      <div style="font-weight:700;margin-bottom:6px">💽 Als Netzlaufwerk (mit Laufwerksbuchstaben Z:)</div>
+      <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_drive")}</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
-        Zuverlässigster Weg für einen echten Laufwerksbuchstaben: in der
+        ${t("exp_relay_drive_hint")}
         <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
         Vorher muss der Dienst „WebClient" laufen (<code>net start webclient</code>).
       </div>
-      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
+      ${copyField(t("exp_relay_cmd"), `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
         Statt <code>Z:</code> geht jeder freie Buchstabe. <code>/persistent:yes</code> ist schon
         dabei, damit das Laufwerk nach dem Neustart bleibt. Die Form
@@ -608,11 +609,11 @@ export function renderExplorer(body, win) {
         endet in Fehler 67 bzw. 0x800704b3).
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
-        Trennen später mit: <code>net use Z: /delete</code>
+        ${t("exp_relay_disconnect")}
       </div>`) : "";
 
     const guide = card(`
-      <div style="font-weight:700;margin-bottom:6px">🪟 Windows – Netzlaufwerk verbinden (grafisch)</div>
+      <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_gui")}</div>
       <ol style="margin:0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.8">
         <li>Dienst „WebClient" muss laufen: in <code>cmd</code> (als Admin)
           <code>net start webclient</code>.</li>
@@ -635,7 +636,7 @@ export function renderExplorer(body, win) {
     if (!enabled) {
       relayPane.innerHTML = header + card(`
         <div style="color:var(--subtext);font-size:13px;line-height:1.7">
-          Dieser Client ist <b>nicht freigegeben</b> und erscheint daher nicht im Netzlaufwerk.
+          ${t("exp_relay_notshared")}
           ${isAdmin ? "Gib ihn oben frei." : "Ein Administrator muss ihn freigeben."}
         </div>`) + address;
       wire();
@@ -656,9 +657,9 @@ export function renderExplorer(body, win) {
             const mayUnlimited = hasGlobalPerm("relay_unlimited") || hasClientPerm(clientId, "c_relay_unlimited");
             const opts = mayUnlimited ? [...RELAY_AUTOCLOSE_BASE, RELAY_UNLIMITED_OPTION] : [...RELAY_AUTOCLOSE_BASE];
             const choice = await uiChoice(
-              "Relay automatisch schließen?",
+              t("exp_relay_close_q"),
               opts,
-              { description: "Wann soll die Freigabe dieses Clients automatisch wieder geschlossen werden?" });
+              { description: t("exp_relay_close_desc") });
             if (choice === null) return;   // abgebrochen
             autoCloseMin = choice;
           }
@@ -669,7 +670,7 @@ export function renderExplorer(body, win) {
             window.dispatchEvent(new CustomEvent("relay-changed", { detail: { clientId } }));
             renderRelay();
           }
-          catch (e) { window.notify?.("Fehler: " + e.message, "error"); btn.disabled = false; }
+          catch (e) { window.notify?.(t("exp_error", { err: e.message }), "error"); btn.disabled = false; }
         });
       }
       relayPane.querySelectorAll("[data-copy]").forEach((b) =>
@@ -680,7 +681,7 @@ export function renderExplorer(body, win) {
               // Letzter Ausweg: Feld markieren, damit Strg+C reicht.
               const input = b.parentElement?.querySelector("input");
               if (input) { input.focus(); input.select(); }
-              window.notify?.("Automatisches Kopieren nicht möglich - Text ist markiert, bitte Strg+C drücken.", "warning");
+              window.notify?.(t("exp_copy_manual2"), "warning");
             })));
     }
   }
@@ -711,7 +712,7 @@ export function renderExplorer(body, win) {
     favBtn.addEventListener("click", async () => {
       // In der Wurzelansicht ohne Favorit: nichts sinnvolles zu tun.
       if (!currentPath && !favDir) {
-        window.notify?.("Zuerst in einen Ordner wechseln, den du als Arbeitsordner merken willst.", "warn");
+        window.notify?.(t("exp_fav_first"), "warn");
         return;
       }
       const isCurrentFav = currentPath && favDir === currentPath;
@@ -722,7 +723,7 @@ export function renderExplorer(body, win) {
         newFav = "";
       } else {
         if (!(await uiConfirm("Als Arbeitsordner merken?", {
-          description: `„${currentPath}" erscheint künftig in der Laufwerksansicht dieses Clients.`,
+          description: t("exp_fav_desc", { path: currentPath }),
           okText: "Merken" }))) return;
         newFav = currentPath;
       }
@@ -737,7 +738,7 @@ export function renderExplorer(body, win) {
         window.notify?.(newFav ? "Arbeitsordner gespeichert" : "Arbeitsordner entfernt", "success");
         if (!currentPath) load("");   // Wurzelansicht neu zeichnen
       } catch (e) {
-        window.notify?.("Fehler: " + e.message, "error");
+        window.notify?.(t("exp_error", { err: e.message }), "error");
       }
     });
   }

@@ -8,6 +8,7 @@ import { api } from "../api.js";
 import { attachScriptPicker } from "../scriptpicker.js";
 import { registerCleanup } from "../windowmanager.js";
 import { esc } from "../utils.js";
+import { t } from "../i18n.js";
 
 export function renderBulk(body, win) {
   async function draw() {
@@ -96,7 +97,7 @@ export function renderBulk(body, win) {
           }
           return `<div class="panel" style="margin-bottom:8px">
             <strong style="color:var(--danger)">✗ ${esc(name)}</strong>
-            <div style="color:var(--danger);font-size:12px;margin-top:4px">${esc(r.error || "Fehler")}</div>
+            <div style="color:var(--danger);font-size:12px;margin-top:4px">${esc(r.error || t("u_fehler"))}</div>
           </div>`;
         }).join("");
       } catch (e) {

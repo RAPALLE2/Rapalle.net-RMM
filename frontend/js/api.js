@@ -6,6 +6,7 @@
 //   2. Fehler einheitlich behandeln (Backend liefert {"detail": "..."} bei Fehlern)
 
 import { BACKEND_URL } from "./config.js";
+import { t } from "./i18n.js";
 
 export function getToken() {
   return localStorage.getItem("rmm_token");
@@ -231,6 +232,29 @@ export const api = {
   updateEvent: (id, data) => request(`/api/calendar/events/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteEvent: (id) => request(`/api/calendar/events/${id}`, { method: "DELETE" }),
 
+  // --- Software-Patching ---
+  getPatchOverview: () => request("/api/patches/overview"),
+  getClientPatches: (id, status) => request(
+    `/api/patches/client/${id}${status ? `?status=${status}` : ""}`),
+  scanPatches: (id) => request(`/api/patches/client/${id}/scan`, { method: "POST" }),
+  applyPatches: (id, items) => request(`/api/patches/client/${id}/apply`, {
+    method: "POST", body: JSON.stringify({ items: items || [] }) }),
+  excludePatch: (patchId, excluded) => request(`/api/patches/${patchId}/exclude`, {
+    method: "POST", body: JSON.stringify({ excluded }) }),
+  getPatchRules: () => request("/api/patches/rules"),
+  setPatchGlobalSwitch: (enabled) => request("/api/patches/rules/global/switch", {
+    method: "PUT", body: JSON.stringify({ enabled }) }),
+  savePatchGlobalRule: (values) => request("/api/patches/rules/global", {
+    method: "PUT", body: JSON.stringify(values) }),
+  savePatchClientRule: (id, values) => request(`/api/patches/rules/client/${id}`, {
+    method: "PUT", body: JSON.stringify(values) }),
+  deletePatchClientRule: (id) => request(`/api/patches/rules/client/${id}`, { method: "DELETE" }),
+  setPatchPolicy: (id, policy) => request(`/api/patches/policy/${id}`, {
+    method: "PUT", body: JSON.stringify({ policy }) }),
+  getPatchRuns: (clientId) => request(
+    `/api/patches/runs${clientId ? `?client_id=${clientId}` : ""}`),
+  runPatchAuto: () => request("/api/patches/auto/run", { method: "POST" }),
+
   // --- Datenschutz / DSGVO ---
   // Auskunft nach Art. 15/20 kommt als Datei-Download, deshalb roher fetch
   // statt request() - der würde JSON parsen statt eine Datei anzubieten.
@@ -451,7 +475,7 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) {
-      let msg = "RDP-Datei konnte nicht erstellt werden";
+      let msg = t("u_rdp_datei_konnte_nicht_erstellt_we");
       try { const j = await res.json(); msg = j.detail || msg; } catch {}
       throw new Error(msg);
     }

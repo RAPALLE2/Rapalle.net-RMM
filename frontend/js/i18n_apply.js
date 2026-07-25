@@ -37,6 +37,7 @@ export function applyStaticTranslations() {
     bulk: "bulk_shell", network: "network_scanner", recordings: "recordings",
     towerdefense: "tower_defense", audit: "audit_log", settings: "settings",
     automation: "automation", notifications: "notifications",
+    todos: "todos", privacy: "privacy", patching: "patching",
   };
   document.querySelectorAll("#start-menu [data-app]").forEach((btn) => {
     const key = startMenuKeys[btn.dataset.app];
@@ -51,7 +52,7 @@ export function applyStaticTranslations() {
 
   // Benutzermenü
   const profileBtn = document.getElementById("btn-open-profile");
-  if (profileBtn) profileBtn.textContent = getLanguage() === "en" ? "Profile / change password" : "Profil / Passwort ändern";
+  if (profileBtn) profileBtn.textContent = getLanguage() === "en" ? "Profile / change password" : t("u_profil_passwort_andern");
   const settingsBtn = document.getElementById("btn-open-settings");
   if (settingsBtn) settingsBtn.textContent = t("settings");
   const logoutBtn = document.getElementById("btn-logout");

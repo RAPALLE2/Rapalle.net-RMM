@@ -17,7 +17,7 @@ import {
   renderOverviewSub, OVERVIEW_SUBS, renderChildrenPart,
 } from "./panel.js";
 import { openWindow } from "./windowmanager.js";
-import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable, availableClientKinds } from "./clientmetrics.js";
+import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable, availableClientKinds, groupLabel } from "./clientmetrics.js";
 import {
   getDashLayout, setDashLayout, getDashEdit, setDashEdit, scheduleSave,
   getOrgDefaultDash,
@@ -47,13 +47,13 @@ const nid = () => `p-${Date.now().toString(36)}-${(_uid++).toString(36)}`;
 const LEAF_LABEL = {
   status: () => t("status"),
   actions: () => t("actions"),
-  websites: () => "🔗 Websites",
+  websites: () => t("dl_websites"),
   metrics: () => (OVERVIEW_SUBS.metrics ? OVERVIEW_SUBS.metrics() : "Metrics"),
   notes: () => (OVERVIEW_SUBS.notes ? OVERVIEW_SUBS.notes() : "Notes"),
   disk: () => (OVERVIEW_SUBS.disk ? OVERVIEW_SUBS.disk() : "Disk"),
   text: () => "Text",
-  warranty: () => "🛡️ Garantie",
-  children: () => "🖥️ VMs & Container",
+  warranty: () => t("dl_warranty"),
+  children: () => t("dl_children"),
 };
 
 // Standard-Größe (in Rasterzellen) je Panel-Typ.
@@ -72,17 +72,17 @@ function defaultSizeFor(panel) {
 }
 
 const ADDABLE = [
-  ["Übersicht", [
+  [t("dl_overview"), [
     { type: "metrics", label: "Metrics (CPU/RAM/Netz)" },
     { type: "notes", label: "Notizen" },
-    { type: "disk", label: "Datenträger" },
+    { type: "disk", label: t("dl_disk") },
   ]],
   ["Client", [
     { type: "status", label: "Status" },
     { type: "actions", label: "Aktionen" },
     { type: "websites", label: "Websites" },
-    { type: "warranty", label: "🛡️ Garantie" },
-    { type: "children", label: "🖥️ VMs & Container (Gäste)" },
+    { type: "warranty", label: t("dl_warranty") },
+    { type: "children", label: t("dl_children_full") },
   ]],
   ["Container", [
     { type: "folder", label: "Ordner (Tabs)" },
@@ -318,7 +318,7 @@ export function renderClientLayout(host, toolbarHost, client) {
     const customNames = Object.keys(profiles).filter((n) => !PROFILE_PRESETS.includes(n)).sort((a, b) => a.localeCompare(b));
     const activeProf = getClientDashProfile(client.id) || "";
     const isPreset = PROFILE_PRESETS.includes(activeProf);
-    const profSelect = `<select data-prof-select title="Layout-Profil für diesen Client" style="max-width:150px;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
+    const profSelect = `<select data-prof-select title="${t("dl_prof_select")}" style="max-width:150px;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
         <option value="">(Standard)</option>
         ${PROFILE_PRESETS.map((n) => `<option value="${esc(n)}" ${n === activeProf ? "selected" : ""}>${esc(n)}${profiles[n] ? " (angepasst)" : ""}</option>`).join("")}
         ${customNames.map((n) => `<option value="${esc(n)}" ${n === activeProf ? "selected" : ""}>${esc(n)}</option>`).join("")}
@@ -326,14 +326,14 @@ export function renderClientLayout(host, toolbarHost, client) {
 
     toolbarHost.innerHTML = edit ? `<span class="dash-edit-tools">
           ${profSelect}
-          <button data-prof-new title="Neues Profil (Kopie des aktuellen Layouts) anlegen">＋ Profil</button>
-          ${activeProf && !isPreset ? `<button data-prof-rename title="Aktives Profil umbenennen">✏️</button>` : ""}
-          ${activeProf ? `<button data-prof-delete title="${isPreset ? "Eigene Anpassungen dieses Presets verwerfen (zurück zur Vorgabe)" : "Aktives Profil löschen"}">🗑</button>` : ""}
-          ${activeProf && isPreset && isAdmin() ? `<button data-prof-org title="Dieses Preset mit dem aktuellen Layout für ALLE Nutzer überschreiben">💾 Profil für alle</button>` : ""}
+          <button data-prof-new title="${t("dl_prof_new")}">${t("dl_prof_new_btn")}</button>
+          ${activeProf && !isPreset ? `<button data-prof-rename title="${t("dl_prof_rename")}">✏️</button>` : ""}
+          ${activeProf ? `<button data-prof-delete title="${isPreset ? t("dl_preset_discard") : t("dl_prof_delete")}">🗑</button>` : ""}
+          ${activeProf && isPreset && isAdmin() ? `<button data-prof-org title="${t("dl_prof_org")}">${t("dl_prof_org_btn")}</button>` : ""}
           <button data-add-panel>+ Panel</button>
-          <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
-          ${isAdmin() ? `<button data-set-default title="Aktuelles Layout als Standard für ALLE Nutzer speichern">💾 Als Standard für alle</button>` : ""}
-          <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="Bearbeiten-Modus verlassen">✓ Bearbeiten beenden</button>
+          <button data-reset title="${t("dl_reset")}">${t("dl_reset_btn")}</button>
+          ${isAdmin() ? `<button data-set-default title="${t("dl_setdefault")}">${t("dl_setdefault_btn")}</button>` : ""}
+          <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="${t("dl_end_edit")}">${t("dl_end_edit_btn")}</button>
         </span>` : `<span class="dash-edit-tools" style="opacity:0.9">${hasGlobalPerm("customize_dashboard") ? profSelect : ""}</span>`;
 
     // Profil für diesen Client wechseln
@@ -344,11 +344,11 @@ export function renderClientLayout(host, toolbarHost, client) {
     });
     // Neues Profil = Kopie des aktuell angezeigten Layouts, direkt zugewiesen
     toolbarHost.querySelector("[data-prof-new]")?.addEventListener("click", async () => {
-      const name = (await uiPrompt("Neues Layout-Profil", {
-        description: "Das aktuelle Layout wird als Profil kopiert und diesem Client zugewiesen. Beispiele: Physisch, VMs, LXCs.",
+      const name = (await uiPrompt(t("dl_new_prof"), {
+        description: t("dl_new_prof_desc"),
         placeholder: "Profilname" }))?.trim();
       if (!name) return;
-      if (getDashProfiles()[name] && !(await uiConfirm(`Profil "${name}" überschreiben?`, { okText: "Überschreiben", danger: true }))) return;
+      if (getDashProfiles()[name] && !(await uiConfirm(t("dl_overwrite_q", { name }), { okText: t("dl_overwrite"), danger: true }))) return;
       const copy = JSON.parse(JSON.stringify(layout));
       for (const p of copy.panels) p.id = nid();
       getDashProfiles()[name] = copy;
@@ -364,7 +364,7 @@ export function renderClientLayout(host, toolbarHost, client) {
       const name = (await uiPrompt("Profil umbenennen", { value: oldName }))?.trim();
       if (!name || name === oldName) return;
       const profs = getDashProfiles();
-      if (profs[name] && !(await uiConfirm(`Profil "${name}" überschreiben?`, { okText: "Überschreiben", danger: true }))) return;
+      if (profs[name] && !(await uiConfirm(t("dl_overwrite_q", { name }), { okText: t("dl_overwrite"), danger: true }))) return;
       profs[name] = profs[oldName]; delete profs[oldName];
       // Alle Client-Zuordnungen auf den neuen Namen umziehen
       const map = getClientDashProfileMap();
@@ -377,11 +377,11 @@ export function renderClientLayout(host, toolbarHost, client) {
       const name = getClientDashProfile(client.id);
       if (!name) return;
       const preset = PROFILE_PRESETS.includes(name);
-      if (!(await uiConfirm(preset ? `Eigene Anpassungen von "${name}" verwerfen?` : `Profil "${name}" löschen?`, {
+      if (!(await uiConfirm(preset ? t("dl_discard_q", { name }) : t("dl_delete_q", { name }), {
         description: preset
           ? "Das Preset zeigt danach wieder die Vorgabe (Admin-Version bzw. Standard)."
-          : "Alle Clients mit diesem Profil nutzen danach wieder das Standard-Layout.",
-        okText: preset ? "Verwerfen" : "Löschen", danger: true }))) return;
+          : t("dl_delete_desc"),
+        okText: preset ? t("dl_discard") : t("delete"), danger: true }))) return;
       delete getDashProfiles()[name];
       delete _presetSession[name];
       if (!preset) {
@@ -395,20 +395,20 @@ export function renderClientLayout(host, toolbarHost, client) {
       const name = getClientDashProfile(client.id);
       const kind = PRESET_ORG_KIND[name];
       if (!kind) return;
-      if (!(await uiConfirm(`Preset "${name}" für ALLE Nutzer überschreiben?`, {
-        description: "Nutzer ohne eigene Anpassungen dieses Presets sehen ab dem nächsten Laden das neue Layout. Eigene Anpassungen anderer Nutzer bleiben unangetastet.",
-        okText: "Für alle speichern" }))) return;
+      if (!(await uiConfirm(t("dl_preset_all_q", { name }), {
+        description: t("u_nutzer_ohne_eigene_anpassungen_die"),
+        okText: t("dl_save_all") }))) return;
       try {
         await api.setDefaultLayout(kind, layout);
         getOrgProfilePresets()[name] = JSON.parse(JSON.stringify(layout));
-        window.notify?.(`Preset "${name}" für alle Nutzer gespeichert.`, "success");
-      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+        window.notify?.(t("dl_preset_saved", { name }), "success");
+      } catch (e) { window.notify?.(t("u_speichern_fehlgeschlagen") + e.message, "error"); }
     });
 
     toolbarHost.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddPicker(host, toolbarHost, client, null));
     toolbarHost.querySelector("[data-reset]")?.addEventListener("click", async () => {
       const prof = getClientDashProfile(client.id);
-      if (!(await uiConfirm(prof ? `Profil "${prof}" auf Standard zurücksetzen?` : "Layout auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true }))) return;
+      if (!(await uiConfirm(prof ? t("dl_reset_prof_q", { name: prof }) : t("dl_reset_q"), { okText: t("dl_reset_ok"), danger: true }))) return;
       if (prof) getDashProfiles()[prof] = PROFILE_PRESETS.includes(prof) ? presetBaseLayout(prof) : orgOrBuiltinDefault();
       else setDashLayout(orgOrBuiltinDefault());
       saveLayout(); renderClientLayout(host, toolbarHost, client);
@@ -421,13 +421,13 @@ export function renderClientLayout(host, toolbarHost, client) {
       try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
     });
     toolbarHost.querySelector("[data-set-default]")?.addEventListener("click", async () => {
-      if (!(await uiConfirm("Aktuelles Client-Panel-Layout als Standard für ALLE Nutzer setzen?", {
-        description: "Neue Nutzer und alle, die auf \"Standard\" zurücksetzen, bekommen dieses Layout. Bestehende eigene Layouts bleiben unangetastet.",
+      if (!(await uiConfirm(t("dl_default_all_q"), {
+        description: t("dl_default_all_desc"),
         okText: "Als Standard speichern" }))) return;
       try {
         await api.setDefaultLayout("dash", currentLayout());
         window.notify?.("Als organisationsweiter Standard gespeichert.", "success");
-      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+      } catch (e) { window.notify?.(t("u_speichern_fehlgeschlagen") + e.message, "error"); }
     });
   }
 
@@ -529,7 +529,7 @@ function renderEmptyCells(host, layout, rows, ctx) {
       cell.className = "grid-empty-cell";
       cell.style.gridColumn = `${x + 1} / span 1`;
       cell.style.gridRow = `${y + 1} / span 1`;
-      cell.title = "Hier ein Panel einfügen";
+      cell.title = t("dl_cell_hint");
       cell.innerHTML = "<span>+</span>";
       cell.addEventListener("click", () => openAddPicker(host, ctx.toolbarHost, ctx.client, { gx: x, gy: y }));
       host.appendChild(cell);
@@ -557,7 +557,7 @@ function buildPanel(panel, client, ctx) {
   const tools = document.createElement("span");
   tools.className = "dash-lp-tools";
   const popBtn = document.createElement("button");
-  popBtn.className = "dash-lp-btn"; popBtn.title = "Als eigenes Fenster herauslösen"; popBtn.textContent = "↗️";
+  popBtn.className = "dash-lp-btn"; popBtn.title = t("dl_popout"); popBtn.textContent = "↗️";
   popBtn.addEventListener("click", (e) => { e.stopPropagation(); detachPanel(panel, client); });
   tools.appendChild(popBtn);
   if (edit) {
@@ -568,7 +568,7 @@ function buildPanel(panel, client, ctx) {
       ren.className = "dash-lp-btn"; ren.title = "Eigenen Namen geben"; ren.textContent = "✏️";
       ren.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const name = await uiPrompt("Widget-Namen ändern", {
+        const name = await uiPrompt(t("u_widget_namen_andern"), {
           description: "Leer lassen = Standard-Titel.", value: panel.title || "" });
         if (name !== null) { panel.title = name.trim() || null; saveLayout(); titleEl.textContent = panelTitle(panel); }
       });
@@ -679,7 +679,7 @@ function renderWarrantyPart(bodyEl, panel, client, ctx) {
         if (inState) inState.warranty_until = until;
         window.notify?.("Garantie-Datum gespeichert", "success");
         fillPanelBody(bodyEl, panel, client, ctx);
-      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+      } catch (e) { window.notify?.(t("u_speichern_fehlgeschlagen") + e.message, "error"); }
     });
     row.appendChild(inp);
     wrap.appendChild(row);
@@ -835,13 +835,13 @@ function openAddPicker(host, toolbarHost, client, atCell) {
       <div class="wp-head"><strong>Panel hinzufügen${atCell ? ` (Zelle ${atCell.gx + 1},${atCell.gy + 1})` : ""}</strong><button class="dash-lp-btn" data-close>✕</button></div>
       <div class="wp-body">
         ${ADDABLE.map(([group, items]) => `
-          <div class="wp-group-title">${esc(group)}</div>
+          <div class="wp-group-title">${esc(groupLabel(group))}</div>
           <div class="wp-grid">
             ${items.map((it) => `<button class="wp-item" data-type="${esc(it.type)}"><span class="wp-item-label">${esc(it.label)}</span></button>`).join("")}
           </div>`).join("")}
         <div class="wp-group-title" style="margin-top:20px;color:var(--accent)">📡 Telemetrie-Metriken</div>
         ${clientPresetsByGroup(client.device_type).map(([group, presets]) => `
-          <div class="wp-group-title">${esc(group)}</div>
+          <div class="wp-group-title">${esc(groupLabel(group))}</div>
           <div class="wp-grid">
             ${presets.map((pr) => `<button class="wp-item" data-metric="${esc(pr.id)}"><span class="wp-item-label">${esc(pr.label)}</span><span class="wp-item-kinds">${pr.charts.join(" · ")}</span></button>`).join("")}
           </div>`).join("")}

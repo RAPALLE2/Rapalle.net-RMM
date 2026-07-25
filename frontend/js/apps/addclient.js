@@ -6,6 +6,8 @@
 import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc } from "../utils.js";
+// t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
+import { t as tr } from "../i18n.js";
 
 export function renderAddClient(body, win) {
   const tenantOptions = state.hierarchy.tenants
@@ -32,7 +34,7 @@ export function renderAddClient(body, win) {
 
       <div class="form-row" style="margin-top:14px">
         <label>Wunschname für den Client (optional)</label>
-        <input type="text" id="ac-name" placeholder="leer lassen = echter Hostname des Geräts" />
+        <input type="text" id="ac-name" placeholder="${tr("u_leer_lassen_echter_hostname_des_ge")}" />
       </div>
       <div class="form-row">
         <label>Tenant (optional)</label>

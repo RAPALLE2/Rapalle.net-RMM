@@ -11,6 +11,9 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
+// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
+// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+import { t as tr } from "../i18n.js";
 
 const PLACEHOLDER_HELP =
   "Platzhalter: {head} {body} {message} {client} {tenant} {location} {service} {level} {timestamp}";
@@ -70,7 +73,7 @@ export function renderNotifications(body, win) {
           <div style="font-size:11px;color:var(--subtext);margin-top:3px">${PLACEHOLDER_HELP}</div></div>
       </div>
       <div id="wf-error" class="form-error hidden"></div>
-      <button class="btn-primary" id="wf-save" style="margin-top:4px">${isEdit ? "Änderungen speichern" : "+ Webhook speichern"}</button>
+      <button class="btn-primary" id="wf-save" style="margin-top:4px">${isEdit ? tr("u_anderungen_speichern") : "+ Webhook speichern"}</button>
       ${isEdit ? `<button class="taskbar-btn" id="wf-cancel" style="margin-left:6px">Abbrechen</button>` : ""}`;
   }
 
@@ -89,10 +92,10 @@ export function renderNotifications(body, win) {
         headers: root.querySelector("#wf-headers")?.value.trim() || null,
         body_template: root.querySelector("#wf-body")?.value.trim() || null,
       };
-      if (!data.name || !data.url) { err.textContent = "Name und URL erforderlich"; err.classList.remove("hidden"); return; }
+      if (!data.name || !data.url) { err.textContent = tr("u_name_und_url_erforderlich"); err.classList.remove("hidden"); return; }
       if (data.headers) {
         try { const p = JSON.parse(data.headers); if (typeof p !== "object" || Array.isArray(p)) throw 0; }
-        catch { err.textContent = 'Header müssen ein JSON-Objekt sein, z.B. {"X-Api-Key": "…"}'; err.classList.remove("hidden"); return; }
+        catch { err.textContent = tr("u_header_mussen_ein_json_objekt_sein"); err.classList.remove("hidden"); return; }
       }
       try {
         if (editId) await api.updateWebhook(editId, data);
@@ -156,7 +159,7 @@ export function renderNotifications(body, win) {
       btn.textContent = "Testen";
     }));
     listEl.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", async () => {
-      if (!(await uiConfirm("Webhook löschen? Regeln, die ihn nutzen, laufen dann ins Leere.", { okText: "Löschen", danger: true }))) return;
+      if (!(await uiConfirm(tr("u_webhook_loschen_regeln_die_ihn_nut"), { okText: tr("delete"), danger: true }))) return;
       await api.deleteWebhook(btn.dataset.del); draw();
     }));
   }
@@ -212,13 +215,13 @@ export function renderNotifications(body, win) {
           from_addr: root.querySelector("#sm-from").value.trim(),
           security: root.querySelector("#sm-sec").value,
         });
-        window.notify?.("SMTP-Einstellungen gespeichert", "success");
+        window.notify?.(tr("u_smtp_einstellungen_gespeichert"), "success");
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
     root.querySelector("#sm-test").addEventListener("click", async () => {
       err.classList.add("hidden");
       const to = root.querySelector("#sm-testto").value.trim();
-      if (!to) { err.textContent = "Test-Empfänger angeben"; err.classList.remove("hidden"); return; }
+      if (!to) { err.textContent = tr("u_test_empfanger_angeben"); err.classList.remove("hidden"); return; }
       try { await api.testSmtp(to); window.notify?.("Test-Mail verschickt ✔", "success"); }
       catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
@@ -318,7 +321,7 @@ export function renderNotifications(body, win) {
         params,
       };
       if ((data.channel === "email" || data.channel === "webhook") && !data.target) {
-        err.textContent = "Ziel (E-Mail bzw. Webhook) erforderlich";
+        err.textContent = tr("u_ziel_e_mail_bzw_webhook_erforderli");
         err.classList.remove("hidden");
         return null;
       }
@@ -367,7 +370,7 @@ export function renderNotifications(body, win) {
       try { params = JSON.parse(r.params || "{}"); } catch {}
       const paramTxt = Object.entries(params).map(([k, v]) => `${PARAM_LABELS[k] || k}: ${v}`).join(", ");
       const targetTxt = r.channel === "webhook"
-        ? ((webhooks.find((w) => w.id === r.target) || {}).name || "(gelöschter Webhook)")
+        ? ((webhooks.find((w) => w.id === r.target) || {}).name || tr("u_geloschter_webhook"))
         : r.target;
       return `
       <div class="panel" style="margin-bottom:8px;${r.enabled ? "" : "opacity:.55"}">
@@ -397,12 +400,12 @@ export function renderNotifications(body, win) {
     }));
     listEl.querySelectorAll("[data-test]").forEach((b) => b.addEventListener("click", async () => {
       b.textContent = "…";
-      try { await api.testNotifyRule(b.dataset.test); window.notify?.("Test über den Regel-Kanal gesendet", "success"); }
+      try { await api.testNotifyRule(b.dataset.test); window.notify?.(tr("u_test_uber_den_regel_kanal_gesendet"), "success"); }
       catch (e) { window.notify?.(e.message, "error"); }
       b.textContent = "Testen";
     }));
     listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
-      if (!(await uiConfirm("Regel löschen?", { okText: "Löschen", danger: true }))) return;
+      if (!(await uiConfirm(tr("u_regel_loschen"), { okText: tr("delete"), danger: true }))) return;
       await api.deleteNotifyRule(b.dataset.del); draw();
     }));
     listEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {

@@ -11,6 +11,8 @@
 //   3. handleSpotifyCallback() (beim App-Boot) tauscht den Code gegen Tokens
 //   4. getSpotifyToken() liefert ein gültiges Access-Token (auto-refresh)
 import { api } from "./api.js";
+// t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
+import { t as tr } from "./i18n.js";
 
 const TOKENS_KEY = "rmm_spotify_tokens";
 const PKCE_KEY = "rmm_spotify_pkce";
@@ -188,7 +190,7 @@ function randomBytes(len) {
 // ---- Login starten (leitet den Browser zu Spotify um) ----
 export async function spotifyLogin() {
   const clientId = await getSpotifyClientId();
-  if (!clientId) throw new Error("Keine Spotify Client-ID hinterlegt (Einstellungen → Spotify)");
+  if (!clientId) throw new Error(tr("u_keine_spotify_client_id_hinterlegt"));
   const verifier = randomString(64);
   const state = STATE_PREFIX + randomString(16);
   // Die verwendete URI mitspeichern: Beim späteren Token-Tausch MUSS exakt

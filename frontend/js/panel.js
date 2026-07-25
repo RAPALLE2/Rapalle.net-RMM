@@ -144,14 +144,14 @@ function maybePromptDeviceType(client) {
     "display:flex;align-items:center;justify-content:center";
   overlay.innerHTML = `
     <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;width:440px;max-width:92vw">
-      <h3 style="margin:0 0 8px">🔎 Gerätetyp erkannt: ${esc(label)}</h3>
+      <h3 style="margin:0 0 8px">${t("dt_detected", { label: esc(label) })}</h3>
       <p style="color:var(--subtext);font-size:13px;margin:0 0 12px">
         Der Agent auf <b>${esc(client.hostname)}</b> hat erkannt, dass er in einer
-        ${esc(label)} läuft. Soll der Client entsprechend eingeordnet werden?
-        Das beeinflusst Zählweisen, Layout-Presets und die Remote-Screen-Abfrage.
+        ${t("dt_question", { label: esc(label) })}
+        ${t("dt_hint")}
       </p>
       <div class="form-row">
-        <label>Übergeordneter Host (optional)</label>
+        <label>${t("dt_parent")}</label>
         <select id="dt-host">
           <option value="">— kein Host zuordnen —</option>
           ${hosts.map((h) => `<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("")}
@@ -160,7 +160,7 @@ function maybePromptDeviceType(client) {
       <div id="dt-error" class="form-error hidden"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
         <button class="taskbar-btn" id="dt-keep">Als physisch behalten</button>
-        <button class="btn-primary" id="dt-apply" style="width:auto;margin:0">Als ${detected === "vm" ? "VM" : "LXC"} übernehmen</button>
+        <button class="btn-primary" id="dt-apply" style="width:auto;margin:0">${t("dt_apply", { kind: detected === "vm" ? "VM" : "LXC" })}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -173,7 +173,7 @@ function maybePromptDeviceType(client) {
       renderMainContent();
       window.notify?.(
         fields.device_type === "physical"
-          ? `${client.hostname} bleibt als physisches Gerät geführt.`
+          ? t("dt_keep_physical", { host: client.hostname })
           : `${client.hostname} ist jetzt als ${fields.device_type.toUpperCase()} eingeordnet.`,
         "success");
     } catch (e) {
@@ -223,7 +223,7 @@ export function renderStatusPart(target, client) {
       <button data-quick="shutdown" ${client.online ? "" : "disabled"}>📴 ${t("shutdown")}</button>` : ""}
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
-      <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="Agent deinstallieren">🗑️ Agent deinstallieren</button>` : ""}
+      <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="${t("uninstall_agent")}">🗑️ ${t("uninstall_agent")}</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✏️ ${t("edit")}</button>` : ""}
     </div>
     <div style="flex:1;min-width:200px;display:flex;flex-direction:column;justify-content:center">
@@ -293,8 +293,8 @@ function wsFormHtml(w, client) {
       <input class="ws-f-name" type="text" placeholder="Name (z.B. Proxmox Web-UI)" value="${esc(v.name)}" />
       <input class="ws-f-url" type="text" placeholder="https://…" value="${esc(v.url)}" />
       <select class="ws-f-openmode">
-        <option value="external" ${v.open_mode !== "internal" ? "selected" : ""}>Öffnen: externer Browser-Tab</option>
-        <option value="internal" ${v.open_mode === "internal" ? "selected" : ""}>Öffnen: interner Browser (eigenes Fenster)</option>
+        <option value="external" ${v.open_mode !== "internal" ? "selected" : ""}>${t("ws_open_external")}</option>
+        <option value="internal" ${v.open_mode === "internal" ? "selected" : ""}>${t("ws_open_internal")}</option>
       </select>
       <label style="display:flex;gap:6px;align-items:center;font-size:12px">
         <input class="ws-f-mon" type="checkbox" ${v.monitor_enabled ? "checked" : ""} /> Uptime-Monitoring aktivieren
@@ -310,13 +310,13 @@ function wsFormHtml(w, client) {
             `<option value="${sec}" ${Number(v.monitor_interval_seconds) === sec ? "selected" : ""}>Scan alle ${lbl}</option>`).join("")}
         </select>
         <div style="font-size:11px;color:var(--subtext)">
-          Bei „DOWN“/„UP“ wird nur beim Statuswechsel benachrichtigt, „immer“ nach jedem Scan.
+          ${t("ws_notify_hint")}
         </div>
       </div>
       <div class="ws-f-error form-error hidden"></div>
       <div style="display:flex;gap:6px">
-        <button class="btn-primary ws-f-save" style="flex:1;margin:0">${w ? "Speichern" : "+ Hinzufügen"}</button>
-        <button class="taskbar-btn ws-f-cancel">Abbrechen</button>
+        <button class="btn-primary ws-f-save" style="flex:1;margin:0">${w ? t("save") : t("ws_add")}</button>
+        <button class="taskbar-btn ws-f-cancel">${t("cancel")}</button>
       </div>
     </div>`;
 }
@@ -335,7 +335,7 @@ function bindWsForm(formEl, onDone, onCancel) {
     err.classList.add("hidden");
     const name = formEl.querySelector(".ws-f-name").value.trim();
     const url = formEl.querySelector(".ws-f-url").value.trim();
-    if (!name || !url) { err.textContent = "Name und URL erforderlich"; err.classList.remove("hidden"); return; }
+    if (!name || !url) { err.textContent = t("u_name_und_url_erforderlich"); err.classList.remove("hidden"); return; }
     try {
       await onDone({
         name, url,
@@ -364,11 +364,11 @@ export function renderWebsitesPart(target, client) {
   const mayEdit = isAdmin() || hasClientPerm(client.id, "c_websites_edit");
   const reload = () => renderWebsitesPart(target, client);
 
-  target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
+  target.innerHTML = `<div style="color:var(--subtext);font-size:12px">${t("loading")}</div>`;
   api.getClientWebsites(client.id).then((sites) => {
     target.innerHTML = "";
     if (!sites || !sites.length) {
-      target.innerHTML = `<div style="color:var(--subtext);font-size:12px;margin-bottom:6px">Keine Websites verknüpft.</div>`;
+      target.innerHTML = `<div style="color:var(--subtext);font-size:12px;margin-bottom:6px">${t("ws_none")}</div>`;
     } else {
       // Favoriten-Hierarchie im Widget: goldene Sterne (Seitenleiste+Dashboard)
       // ganz oben, dann Akzent 1 (Seitenleiste), dann Akzent 2 (Dashboard),
@@ -396,7 +396,7 @@ export function renderWebsitesPart(target, client) {
             ${favStarHtml("websites", w.id, favMeta)}
             ${mayEdit ? `
               <button class="taskbar-btn" data-ws-openmode="${esc(w.id)}"
-                title="Öffnet aktuell ${w.open_mode === "internal" ? "im internen Browser – Klick: externer Tab" : "im externen Tab – Klick: interner Browser"}"
+                title="${t("ws_tip_mode", { mode: w.open_mode === "internal" ? t("ws_mode_internal") : t("ws_mode_external") })}"
                 style="padding:1px 6px;font-size:10px">${w.open_mode === "internal" ? "🪟" : "🔗"}</button>
               <button class="taskbar-btn" data-ws-mon="${esc(w.id)}"
                 title="Monitoring ${w.monitor_enabled ? `an (alle ${wsIntervalLabel(w.monitor_interval_seconds)}, ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}) – Klick: aus` : "aus – Klick: an"}"
@@ -404,7 +404,7 @@ export function renderWebsitesPart(target, client) {
               <button class="taskbar-btn" data-ws-edit="${esc(w.id)}" title="Bearbeiten"
                 style="padding:1px 6px;font-size:10px">✏️</button>
               <button class="taskbar-btn" data-ws-del="${esc(w.id)}" data-ws-name="${esc(w.name)}"
-                title="Website-Verknüpfung löschen"
+                title="${t("ws_tip_delete")}"
                 style="padding:1px 6px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>` : ""}
           </div>
           <div class="ws-editbox" data-ws-editbox="${esc(w.id)}" style="display:none"></div>`;
@@ -444,7 +444,7 @@ export function renderWebsitesPart(target, client) {
             await api.updateClientWebsite(client.id, w.id,
               { open_mode: w.open_mode === "internal" ? "external" : "internal" });
             reload();
-          } catch (err) { window.notify?.("Ändern fehlgeschlagen: " + err.message, "error"); }
+          } catch (err) { window.notify?.(t("ws_change_failed", { err: err.message }), "error"); }
         }));
 
       // Monitoring an/aus
@@ -455,7 +455,7 @@ export function renderWebsitesPart(target, client) {
           try {
             await api.updateClientWebsite(client.id, w.id, { monitor_enabled: !w.monitor_enabled });
             reload();
-          } catch (err) { window.notify?.("Ändern fehlgeschlagen: " + err.message, "error"); }
+          } catch (err) { window.notify?.(t("ws_change_failed", { err: err.message }), "error"); }
         }));
 
       // Bearbeiten (Formular direkt unter der Zeile aufklappen)
@@ -480,17 +480,17 @@ export function renderWebsitesPart(target, client) {
       target.querySelectorAll("[data-ws]").forEach((rowEl) => {
         const w = sites.find((x) => x.id === rowEl.dataset.ws);
         if (!w) return;
-        const statusTxt = !w.monitor_enabled ? "kein Monitoring"
+        const statusTxt = !w.monitor_enabled ? t("u_kein_monitoring")
           : w.last_status === "up" ? "erreichbar"
-          : w.last_status === "down" ? `nicht erreichbar${w.last_error ? ": " + w.last_error : ""}`
-          : "noch nicht geprüft";
+          : w.last_status === "down" ? t("ws_unreachable", { detail: w.last_error ? ": " + w.last_error : "" })
+          : t("ws_unchecked");
         const color = !w.monitor_enabled ? "var(--subtext)"
           : w.last_status === "up" ? "var(--online, #3ecf8e)"
           : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
         const tipHtml = () => `<b>${esc(w.name)}</b><br><span style="color:var(--subtext)">${esc(w.url)}</span>`
           + `<br><span style="color:${color}">●</span> ${esc(statusTxt)}`
           + (w.monitor_enabled ? `<br><span style="color:var(--subtext)">Scan alle ${wsIntervalLabel(w.monitor_interval_seconds)}, benachrichtigen ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}</span>` : "")
-          + (w.last_checked ? `<br><span style="color:var(--subtext)">zuletzt geprüft: ${new Date(w.last_checked).toLocaleString("de-DE")}</span>` : "");
+          + (w.last_checked ? `<br><span style="color:var(--subtext)">${t("ws_last_check", { date: new Date(w.last_checked).toLocaleString() })}</span>` : "");
         rowEl.addEventListener("mouseenter", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
         rowEl.addEventListener("mousemove", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
         rowEl.addEventListener("mouseleave", () => hideFleetTip());
@@ -506,7 +506,7 @@ export function renderWebsitesPart(target, client) {
             await api.deleteClientWebsite(client.id, b.dataset.wsDel);
             window.notify?.("Website entfernt.", "success");
             reload();
-          } catch (err) { window.notify?.("Löschen fehlgeschlagen: " + err.message, "error"); }
+          } catch (err) { window.notify?.(t("ws_delete_failed", { err: err.message }), "error"); }
         }));
     }
 
@@ -517,7 +517,7 @@ export function renderWebsitesPart(target, client) {
     const addBtn = document.createElement("button");
     addBtn.className = "action-btn";
     addBtn.style.cssText = "width:100%;justify-content:center;color:var(--accent);margin-top:4px";
-    addBtn.textContent = "+ Website hinzufügen";
+    addBtn.textContent = t("ws_add_btn");
     addBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (addBox.innerHTML) { addBox.innerHTML = ""; return; }
@@ -525,7 +525,7 @@ export function renderWebsitesPart(target, client) {
       bindWsForm(addBox.querySelector(".ws-form"),
         async (fields) => {
           await api.createClientWebsite(client.id, fields);
-          window.notify?.(`Website "${fields.name}" verknüpft.`, "success");
+          window.notify?.(t("ws_linked", { name: fields.name }), "success");
           reload();
         },
         () => { addBox.innerHTML = ""; });
@@ -571,7 +571,7 @@ export function renderChildrenPart(target, client) {
   if (!kids.length) {
     target.innerHTML = `<div style="color:var(--subtext);font-size:12px">
       Keine VMs oder LXC-Container zugeordnet.<br>
-      Zuordnung unter „Client bearbeiten“ → Gerätetyp VM/LXC + Host.</div>`;
+      ${t("kids_hint")}</div>`;
     return;
   }
 
@@ -601,9 +601,9 @@ export function renderChildrenPart(target, client) {
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(kid.hostname || kid.id)}</span>
         <span style="font-size:10.5px;color:var(--subtext)">${esc(info)}</span>
       </span>
-      <button class="taskbar-btn" data-kid-open="${esc(kid.id)}" title="In der Seitenleiste auswählen"
-        style="padding:1px 7px;font-size:10px">Öffnen</button>
-      <button class="taskbar-btn" data-kid-win="${esc(kid.id)}" title="Als eigenes Fenster öffnen"
+      <button class="taskbar-btn" data-kid-open="${esc(kid.id)}" title="${t("kids_select")}"
+        style="padding:1px 7px;font-size:10px">${t("kid_open")}</button>
+      <button class="taskbar-btn" data-kid-win="${esc(kid.id)}" title="${t("kid_open_win")}"
         style="padding:1px 6px;font-size:10px">↗️</button>`;
     target.appendChild(row);
   }
@@ -649,9 +649,9 @@ export function clientHasWebsites(clientId) {
 // aber den Inhalt fremder privater Notizen nicht).
 // =================================================================
 const NOTE_VIS = {
-  all: { icon: "🌍", label: "für alle" },
-  private: { icon: "🔒", label: "nur für mich" },
-  custom: { icon: "👥", label: "für bestimmte" },
+  all: { icon: "🌍", label: t("note_vis_all") },
+  private: { icon: "🔒", label: t("note_vis_private") },
+  custom: { icon: "👥", label: t("note_vis_custom") },
 };
 
 export function renderNotesPart(target, client) {
@@ -661,7 +661,7 @@ export function renderNotesPart(target, client) {
   let editingId = null;
   let addOpen = false;           // "Notiz hinzufügen" standardmäßig zu
 
-  target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lädt…</div>`;
+  target.innerHTML = `<div style="color:var(--subtext);font-size:12px">${t("loading")}</div>`;
 
   async function load() {
     let notes = [];
@@ -707,7 +707,7 @@ export function renderNotesPart(target, client) {
         </div>
         <div class="nf-error form-error hidden"></div>
         <div style="display:flex;gap:6px">
-          <button class="btn-primary nf-save" style="flex:1;margin:0">${note ? "Speichern" : "+ Notiz anlegen"}</button>
+          <button class="btn-primary nf-save" style="flex:1;margin:0">${note ? t("save") : "+ Notiz anlegen"}</button>
           ${note ? `<button class="taskbar-btn nf-cancel">Abbrechen</button>` : ""}
         </div>
       </div>`;
@@ -736,7 +736,7 @@ export function renderNotesPart(target, client) {
         shared_with: readSubjectPicker(el.querySelector(".nf-share")),
       };
       if (data.visibility === "custom" && !data.shared_with.length) {
-        err.textContent = "Bitte mindestens einen Benutzer auswählen";
+        err.textContent = t("note_pick_user");
         err.classList.remove("hidden"); return;
       }
       try {
@@ -753,7 +753,7 @@ export function renderNotesPart(target, client) {
       <div style="display:flex;flex-direction:column;gap:6px;min-height:0">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <span style="font-size:11.5px;color:var(--subtext)">${notes.length} Notiz${notes.length === 1 ? "" : "en"}</span>
-          <button class="taskbar-btn" id="note-log" style="font-size:11px">🕓 Verlauf</button>
+          <button class="taskbar-btn" id="note-log" style="font-size:11px">${t("note_history")}</button>
         </div>
         <div id="note-logbox" style="display:none"></div>
         <div id="note-add"></div>
@@ -768,7 +768,7 @@ export function renderNotesPart(target, client) {
       const btn = document.createElement("button");
       btn.className = "action-btn";
       btn.style.cssText = "width:100%;justify-content:center;color:var(--accent)";
-      btn.textContent = addOpen ? "✕ Abbrechen" : "+ Notiz hinzufügen";
+      btn.textContent = addOpen ? t("note_add_cancel") : t("note_add");
       btn.addEventListener("click", () => { addOpen = !addOpen; draw(notes); });
       box.appendChild(btn);
       if (addOpen) {
@@ -804,7 +804,7 @@ export function renderNotesPart(target, client) {
               </div>` : ""}
             </div>
             <div style="font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:3px">
-              ${n.hidden ? `<i style="color:var(--subtext)">Private Notiz – Inhalt nur für den Verfasser sichtbar.</i>` : esc(n.text)}
+              ${n.hidden ? `<i style="color:var(--subtext)">${t("note_private_hidden")}</i>` : esc(n.text)}
             </div>
           </div>`;
       }).join("");
@@ -820,7 +820,7 @@ export function renderNotesPart(target, client) {
         b.addEventListener("click", () => { editingId = b.dataset.nedit; draw(notes); }));
       listEl.querySelectorAll("[data-ndel]").forEach((b) =>
         b.addEventListener("click", async () => {
-          if (!(await uiConfirm("Notiz löschen?", { okText: "Löschen", danger: true }))) return;
+          if (!(await uiConfirm(t("note_delete_q"), { okText: t("delete"), danger: true }))) return;
           try { await api.deleteNote(client.id, b.dataset.ndel); load(); }
           catch (e) { window.notify?.(e.message, "error"); }
         }));
@@ -852,7 +852,7 @@ export function renderNotesPart(target, client) {
                 ${esc(e.label)}${e.details ? " – " + esc(e.details) : ""}</span>
             </div>`).join("")}
         </div>`
-        : `<div style="color:var(--subtext);font-size:11.5px">Noch keine Aktivität.</div>`;
+        : `<div style="color:var(--subtext);font-size:11.5px">${t("note_no_activity")}</div>`;
     } catch (e) {
       box.innerHTML = `<div style="color:var(--danger);font-size:11.5px">${esc(e.message)}</div>`;
     }
@@ -1013,11 +1013,11 @@ export async function handleQuickAction(action, client) {
     if (action === "reboot") cmd = isWin ? "shutdown /r /t 0" : "sudo reboot";
     else cmd = isWin ? "shutdown /s /t 0" : "sudo shutdown -h now";
     try { await api.execOnClient(client.id, cmd); window.notify?.(t("command_sent"), "success"); }
-    catch (e) { window.notify?.("Fehler: " + e.message, "error"); }
+    catch (e) { window.notify?.(t("error_prefix", { err: e.message }), "error"); }
     return;
   }
   if (action === "update") {
-    if (!(await uiConfirm(`${client.hostname}: Agent aktualisieren?`, { description: "Der Agent lädt die neue Version, ersetzt sich selbst und startet neu.\nDas kann bis zu 60 Sekunden dauern (Bestätigung wird abgewartet).", okText: "Aktualisieren" }))) return;
+    if (!(await uiConfirm(t("agent_update_q", { host: client.hostname }), { description: t("agent_update_desc"), okText: t("agent_update_ok") }))) return;
     window.notify?.(`Aktualisiere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-update:" + client.id });
     try {
       const res = await api.updateAgent(client.id);
@@ -1032,12 +1032,10 @@ export async function handleQuickAction(action, client) {
     return;
   }
   if (action === "uninstall") {
-    if (!(await uiConfirm(`${client.hostname}: Agent WIRKLICH deinstallieren?`, {
-      description: "Es wird: 1) der Agent gestoppt, 2) alle Agent-Daten auf dem Client gelöscht,\n" +
-        "3) der Client aus dem Dashboard entfernt – aber nur, wenn er wirklich offline geht.\n\n" +
-        "Das kann bis zu 60 Sekunden dauern. Bitte warten.",
-      okText: "Deinstallieren", danger: true }))) return;
-    window.notify?.(`Deinstalliere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-uninstall:" + client.id });
+    if (!(await uiConfirm(t("agent_uninstall_q", { host: client.hostname }), {
+      description: t("agent_uninstall_desc"),
+      okText: t("agent_uninstall_ok"), danger: true }))) return;
+    window.notify?.(t("agent_uninstall_run", { host: client.hostname }), "info", 60000, { tag: "agent-uninstall:" + client.id });
     try {
       const res = await api.uninstallAgent(client.id);
       if (res && res.removed) {

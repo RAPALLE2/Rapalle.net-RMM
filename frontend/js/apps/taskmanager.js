@@ -8,6 +8,7 @@
 import { api } from "../api.js";
 import { registerCleanup } from "../windowmanager.js";
 import { esc, uiConfirm } from "../utils.js";
+import { t } from "../i18n.js";
 
 export function renderTaskManager(body, win) {
   const { clientId, clientName } = win.props;
@@ -102,7 +103,7 @@ export function renderTaskManager(body, win) {
         try {
           await api.killProcess(clientId, parseInt(btn.dataset.kill));
           load();
-        } catch (e) { window.notify?.("Fehler: " + e.message, "error"); }
+        } catch (e) { window.notify?.(t("u_fehler_2") + e.message, "error"); }
       })
     );
   }

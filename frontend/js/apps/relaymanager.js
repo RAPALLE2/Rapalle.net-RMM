@@ -9,6 +9,9 @@
 import { api } from "../api.js";
 import { esc, uiChoice } from "../utils.js";
 import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../state.js";
+// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
+// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+import { t as tr } from "../i18n.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
 const RELAY_AUTOCLOSE_BASE = [
@@ -35,7 +38,7 @@ function copyToClipboard(text) {
     const ta = document.createElement("textarea");
     ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
     document.body.appendChild(ta); ta.focus(); ta.select();
-    try { document.execCommand("copy") ? resolve() : reject(new Error("Kopieren nicht möglich")); }
+    try { document.execCommand("copy") ? resolve() : reject(new Error(tr("exp_copy_fail"))); }
     catch (e) { reject(e); }
     finally { ta.remove(); }
   });
@@ -150,7 +153,7 @@ export function renderRelayManager(body, win) {
         <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
         Vorher muss der Dienst „WebClient" laufen (<code>net start webclient</code>).
       </div>
-      ${copyField("Befehl (Passwort ans Ende anhängen)", `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
+      ${copyField(tr("exp_relay_cmd"), `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
         Statt <code>Z:</code> geht jeder freie Buchstabe. Die Form
         <code>${esc(uncRoot)}</code> ist die offizielle WebDAV-Schreibweise mit Port –
@@ -220,7 +223,7 @@ export function renderRelayManager(body, win) {
           () => {
             const input = b.parentElement?.querySelector("input");
             if (input) { input.focus(); input.select(); }
-            window.notify?.("Automatisches Kopieren nicht möglich – Text ist markiert, bitte Strg+C drücken.", "warning");
+            window.notify?.(tr("exp_copy_manual2"), "warning");
           })));
   }
 
@@ -280,7 +283,7 @@ export function renderRelayManager(body, win) {
       }));
 
     const n = selected.size;
-    selInfo.textContent = n ? `${n} ausgewählt` : "nichts ausgewählt";
+    selInfo.textContent = n ? `${n} ausgewählt` : tr("u_nichts_ausgewahlt");
     if (isAdmin) switchBtn.disabled = n === 0;
   }
 
@@ -309,7 +312,7 @@ export function renderRelayManager(body, win) {
     let autoCloseMin = 0;
     if (enabling.length) {
       const choice = await uiChoice(
-        "Relay automatisch schließen?",
+        tr("exp_relay_close_q"),
         relayOptionsFor(enabling),
         { description: `Wann soll der Relay für ${enabling.length === 1 ? "diesen Client" : `diese ${enabling.length} Clients`} automatisch wieder geschlossen werden?` });
       if (choice === null) return;   // abgebrochen -> nichts umschalten

@@ -24,6 +24,7 @@ import { state } from "./state.js";
 import { esc } from "./utils.js";
 import { presetById } from "./metriccatalog.js";
 import { setHostScope, clearHostScope } from "./metriccatalog.js";
+import { t } from "./i18n.js";
 import {
   buildFleetDonut, showFleetTip, hideFleetTip, attachHoverTip,
   scaleToContainer, timeSeriesChart,
@@ -278,7 +279,7 @@ function renderText(target, widget) {
 // Client-Panel (dashlayout.js) und vom herausgelösten Panel (panelpart.js).
 // Farbe: grün > 90 Tage, gelb ab 90, orange ab 30, rot = abgelaufen.
 export function warrantyInfo(untilMs) {
-  if (!untilMs) return { known: false, text: "kein Datum", sub: "im Garantie-Widget setzen", color: "var(--subtext)", days: null };
+  if (!untilMs) return { known: false, text: t("u_kein_datum"), sub: "im Garantie-Widget setzen", color: "var(--subtext)", days: null };
   const days = Math.floor((untilMs - Date.now()) / 86400000);
   const dateTxt = new Date(untilMs).toLocaleDateString("de-DE");
   if (days < 0) {

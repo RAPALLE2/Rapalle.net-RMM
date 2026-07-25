@@ -191,6 +191,53 @@ export function renderSettings(body, win) {
           Dieser Wert wird in die Agent-Installation eingebaut — sonst bekommt ein Agent die
           interne IP (<code>http://ip:4000</code>), die ein externer Client nicht erreichen kann.
         </p>
+
+        <h3 style="margin-top:22px">Zugriff auf diese Adressen beschränken</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Erlaubt Aufrufe nur noch über die oben hinterlegten Adressen. Ist nur eine
+          <b>Domain</b> eingetragen, wird ein Aufruf über die lokale IP abgewiesen.
+        </p>
+        <div style="background:#f5a52415;border:1px solid #f5a52455;border-radius:8px;
+             padding:9px 12px;margin:8px 0;font-size:12px;line-height:1.5">
+          ⚠️ <b>Zwei Dinge vorher wissen:</b><br>
+          1. Der Host-Header lässt sich fälschen. Das hier hält Scanner und
+          versehentliche Zugriffe ab – ein echter Riegel ist nur eine Firewall.<br>
+          2. Agenten sind mit der Adresse verbunden, mit der sie eingerichtet wurden
+          (meist die IP). Reichweite <b>„auch Agenten"</b> trennt dann die gesamte Flotte ab,
+          bis jeder Agent neu eingerichtet ist.<br>
+          Vom Server selbst bleibt <code>http://localhost</code> immer erreichbar –
+          darüber lässt sich die Sperre notfalls zurückdrehen.
+        </div>
+        <div class="form-row">
+          <label>Sperre aktiv</label>
+          <select id="ge-hostlock">
+            <option value="0" ${(s.host_lock_enabled || "0") !== "1" ? "selected" : ""}>Aus</option>
+            <option value="1" ${(s.host_lock_enabled || "0") === "1" ? "selected" : ""}>An</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Reichweite</label>
+          <select id="ge-hostlock-scope">
+            <option value="ui" ${(s.host_lock_scope || "ui") === "ui" ? "selected" : ""}>Nur Oberfläche &amp; API (Agenten weiter erlaubt)</option>
+            <option value="all" ${(s.host_lock_scope || "ui") === "all" ? "selected" : ""}>Auch Agenten-Verbindungen</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Zusätzlich erlaubt</label>
+          <input type="text" id="ge-hostlock-extra" placeholder="rmm.intern, 10.0.0.5"
+                 value="${esc(s.host_lock_extra || "")}" />
+        </div>
+        <div class="form-row">
+          <label>Hinter Reverse Proxy</label>
+          <select id="ge-hostlock-proxy">
+            <option value="0" ${(s.host_lock_trust_proxy || "0") !== "1" ? "selected" : ""}>Nein</option>
+            <option value="1" ${(s.host_lock_trust_proxy || "0") === "1" ? "selected" : ""}>Ja – X-Forwarded-Host auswerten</option>
+          </select>
+        </div>
+        <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
+          „Ja" nur einschalten, wenn wirklich ein Proxy davorsteht: sonst kann jeder
+          den Header selbst mitschicken und die Sperre damit umgehen.
+        </p>
         </div>
 
         <h3 style="margin-top:24px">${t("general_metrics_title")}</h3>
@@ -305,7 +352,7 @@ export function renderSettings(body, win) {
             </div>
             <div class="form-row" style="flex:1">
               <label>Passwort</label>
-              <input type="password" id="dbx-pass" placeholder="(unverändert lassen = leer)" />
+              <input type="password" id="dbx-pass" placeholder="${t("u_unverandert_lassen_leer")}" />
             </div>
           </div>
           <div class="form-row">
@@ -494,7 +541,7 @@ export function renderSettings(body, win) {
         await navigator.clipboard.writeText(uri);
         window.notify?.("Redirect-URI kopiert", "success", 2000);
       } catch {
-        window.notify?.("Kopieren nicht möglich – bitte manuell übernehmen: " + uri, "info", 8000);
+        window.notify?.(t("u_kopieren_nicht_moglich_bitte_manue") + uri, "info", 8000);
       }
     });
     const mayAdminSet = isAdmin() || hasGlobalPerm("admin_settings");
@@ -505,7 +552,7 @@ export function renderSettings(body, win) {
     if (!mayManageSet) {
       root.querySelectorAll("input, select, button, textarea").forEach((el) => {
         el.disabled = true;
-        el.title = "Keine Berechtigung (Standard-Einstellungen ändern)";
+        el.title = t("u_keine_berechtigung_standard_einste");
       });
     }
 
@@ -536,6 +583,10 @@ export function renderSettings(body, win) {
         payload.server_backend_port = parseInt(val("ge-backend-port"), 10) || 4000;
         payload.server_frontend_port = parseInt(val("ge-frontend-port"), 10) || 4000;
         payload.server_url = val("ge-server-url").trim();
+        payload.host_lock_enabled = val("ge-hostlock");
+        payload.host_lock_scope = val("ge-hostlock-scope");
+        payload.host_lock_extra = val("ge-hostlock-extra").trim();
+        payload.host_lock_trust_proxy = val("ge-hostlock-proxy");
       }
       try {
         await api.updateSettings(payload);
@@ -552,11 +603,11 @@ export function renderSettings(body, win) {
       const { uiConfirm } = await import("../utils.js");
       if (!(await uiConfirm("Alle Agenten jetzt aktualisieren?", {
         description: includeOffline
-          ? "Für jeden verbundenen Client wird ein Agent-Update ausgelöst. Offline-Clients werden vorgemerkt und aktualisieren sich, sobald sie wieder online sind."
-          : "Für jeden verbundenen Client wird ein Agent-Update ausgelöst.",
+          ? t("u_fur_jeden_verbundenen_client_wird_")
+          : t("u_fur_jeden_verbundenen_client_wird__2"),
         okText: "Jetzt aktualisieren" }))) return;
       btn.disabled = true;
-      if (msg) msg.textContent = "Wird ausgelöst…";
+      if (msg) msg.textContent = t("u_wird_ausgelost");
       try {
         const res = await api.updateAllAgents({ include_offline: includeOffline });
         const txt = `Ausgelöst für ${res.triggered} Client(s)` +
@@ -627,12 +678,12 @@ export function renderSettings(body, win) {
       const err = root.querySelector("#up-error"); err.classList.add("hidden");
       const target = root.querySelector('input[name="up-target"]:checked').value;
       const tag = target === "custom" ? root.querySelector("#up-custom").value : null;
-      if (target === "custom" && !tag) { err.textContent = "Bitte ein Release wählen"; err.classList.remove("hidden"); return; }
+      if (target === "custom" && !tag) { err.textContent = t("u_bitte_ein_release_wahlen"); err.classList.remove("hidden"); return; }
       const ok = await uiConfirm("Server-Update installieren?",
-        "Das Backend lädt den gewählten Stand aus GitHub, ersetzt seine Dateien und startet neu. Laufende Verbindungen brechen kurz ab.");
+        t("u_das_backend_ladt_den_gewahlten_sta"));
       if (!ok) return;
       const btn = root.querySelector("#up-run");
-      btn.disabled = true; btn.textContent = "Update läuft…";
+      btn.disabled = true; btn.textContent = t("u_update_lauft");
       try {
         const res = await api.runServerUpdate(target, tag);
         btn.textContent = "✓ Update eingespielt — Backend startet neu…";
@@ -651,7 +702,7 @@ export function renderSettings(body, win) {
           server_auto_update: root.querySelector("#up-auto").checked ? "1" : "0",
           server_auto_update_channel: root.querySelector("#up-auto-channel").value,
         });
-        window.notify?.("Auto-Update-Einstellungen gespeichert", "success");
+        window.notify?.(t("u_auto_update_einstellungen_gespeich"), "success");
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
 
@@ -703,7 +754,7 @@ export function renderSettings(body, win) {
       const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
       try {
         await api.testDatabase(dbxConfig());
-        window.notify?.("Verbindung erfolgreich", "success");
+        window.notify?.(t("u_verbindung_erfolgreich"), "success");
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
 
@@ -712,8 +763,8 @@ export function renderSettings(body, win) {
       const ok = await uiConfirm(
         mode === "external" ? "Auf externe Datenbank umschalten?" : "Auf lokale Datenbank umschalten?",
         mode === "external"
-          ? "Alle Daten werden von der lokalen SQLite in die externe Datenbank kopiert (ersetzt dort vorhandene RMM-Daten). Danach startet das Backend neu."
-          : "Der Stand der externen Datenbank wird in die lokale SQLite kopiert. Danach startet das Backend neu und arbeitet lokal.");
+          ? t("u_alle_daten_werden_von_der_lokalen_")
+          : t("u_der_stand_der_externen_datenbank_w"));
       if (!ok) return;
       try {
         const res = await api.switchDatabase({ ...dbxConfig(), mode });
@@ -882,12 +933,12 @@ export function renderSettings(body, win) {
       if (!allGroupsCache.length) {
         try { allGroupsCache = await api.getGroups(); } catch {}
       }
-      if (!allGroupsCache.length) { window.notify?.("Es gibt noch keine Gruppen.", "warn"); return; }
+      if (!allGroupsCache.length) { window.notify?.(t("u_es_gibt_noch_keine_gruppen"), "warn"); return; }
       const picked = await pickGroupsModal(allGroupsCache, pendingGroups);
       if (picked === null) return;
       pendingGroups = picked;
       groupsInfo.textContent = picked.length
-        ? `${picked.length} Gruppe(n) ausgewählt` : "keine ausgewählt";
+        ? `${picked.length} Gruppe(n) ausgewählt` : t("u_keine_ausgewahlt");
     });
 
     async function loadUsers() {
@@ -909,7 +960,7 @@ export function renderSettings(body, win) {
         }
         list.querySelectorAll("[data-del]").forEach((btn) =>
           btn.addEventListener("click", async () => {
-            if (!(await uiConfirm("Benutzer wirklich löschen?", { okText: "Löschen", danger: true }))) return;
+            if (!(await uiConfirm(t("u_benutzer_wirklich_loschen"), { okText: t("delete"), danger: true }))) return;
             try { await api.deleteUser(btn.dataset.del); loadUsers(); }
             catch (e) { window.notify?.(e.message, "error"); }
           })
@@ -923,7 +974,7 @@ export function renderSettings(body, win) {
     }
 
     async function editUserGroups(userId, groups) {
-      if (!groups.length) { window.notify?.("Es gibt noch keine Gruppen (im Berechtigungen-Menü anlegen).", "warn"); return; }
+      if (!groups.length) { window.notify?.(t("u_es_gibt_noch_keine_gruppen_im_bere"), "warn"); return; }
       const current = await api.getUserGroups(userId).then((r) => r.group_ids).catch(() => []);
       // EIN Auswahlmenü statt Gruppe-für-Gruppe abzufragen.
       const chosen = await pickGroupsModal(groups, current);
@@ -966,7 +1017,7 @@ export function renderSettings(body, win) {
         root.querySelector("#su-username").value = "";
         root.querySelector("#su-display").value = "";
         pendingGroups = [];
-        groupsInfo.textContent = "keine ausgewählt";
+        groupsInfo.textContent = t("u_keine_ausgewahlt");
         loadUsers();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
@@ -1086,7 +1137,7 @@ export function renderSettings(body, win) {
           user_filter: root.querySelector("#rl-filter").value.trim(),
           enabled: editing ? !!editing.enabled : true,
         };
-        if (!payload.name || !payload.server) { window.notify?.("Name und Server erforderlich", "warn"); return; }
+        if (!payload.name || !payload.server) { window.notify?.(t("u_name_und_server_erforderlich"), "warn"); return; }
         try {
           if (editing) { await api.updateRealm(editing.id, payload); window.notify?.(t("general_saved"), "success"); }
           else { await api.createRealm(payload); window.notify?.("Realm gespeichert", "success"); }
@@ -1139,7 +1190,7 @@ export function renderSettings(body, win) {
       );
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!(await uiConfirm(t("sso_delete_confirm"), { okText: "Löschen", danger: true }))) return;
+          if (!(await uiConfirm(t("sso_delete_confirm"), { okText: t("delete"), danger: true }))) return;
           await api.deleteRealm(btn.dataset.del); if (editingId === btn.dataset.del) editingId = null; draw();
         })
       );

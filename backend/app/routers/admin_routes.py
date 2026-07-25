@@ -157,6 +157,8 @@ PERM_LABELS = {
     "use_chat": "Chat benutzen",
     "use_todos": "Todo-Liste benutzen (privat)",
     "manage_privacy": "Datenschutz: Fristen, Auskunft, Löschung (DSGVO)",
+    "patching": "Updates sehen und installieren",
+    "manage_patching": "Auto-Patch-Regeln festlegen",
     "super_admin": "⭐ Super-Admin (alle Rechte)",
     "add_client": "Clients hinzufügen (Enrollment)",
     "see_org": "Organigramm ansehen",
@@ -729,6 +731,10 @@ class SettingsBody(BaseModel):
     server_domain: str | None = None
     server_backend_port: int | None = None
     server_frontend_port: int | None = None
+    host_lock_enabled: str | None = None
+    host_lock_scope: str | None = None
+    host_lock_extra: str | None = None
+    host_lock_trust_proxy: str | None = None
     metrics_interval_seconds: int | None = None
     metrics_retention_hours: int | None = None
     replay_retention_days: int | None = None
@@ -761,6 +767,10 @@ ADMIN_SETTING_KEYS = {
     "server_host", "server_domain", "server_backend_port", "server_frontend_port",
     "server_url", "server_auto_update", "server_auto_update_channel",
     "guacd_host", "guacd_port",
+    # Host-Sperre steuert, wer den Dienst überhaupt erreicht - klar
+    # Admin-Sache, nicht 'manage_settings'.
+    "host_lock_enabled", "host_lock_scope", "host_lock_extra",
+    "host_lock_trust_proxy",
 }
 
 

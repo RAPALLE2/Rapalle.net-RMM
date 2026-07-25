@@ -221,7 +221,7 @@ function renderClientList(clients) {
     const name = vms[0].parent_hostname || "Host";
     html += `
       <div class="tree-node">
-        <div class="tree-row" data-toggle="${esc(key)}" title="Physischer Host (kein Zugriff) - enthält deine VMs/LXCs">
+        <div class="tree-row" data-toggle="${esc(key)}" title="${t("u_physischer_host_kein_zugriff_entha")}">
           <span>${isOpen ? "▾" : "▸"}</span> 🖥️ ${esc(name)}
         </div>
         ${isOpen ? `<div class="tree-children">${vms.map(renderClientNode).join("")}</div>` : ""}

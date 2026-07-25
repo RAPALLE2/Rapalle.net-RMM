@@ -1,3 +1,6 @@
+// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
+// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+import { t as tr } from "./i18n.js";
 // utils.js
 // --------
 // Kleine, wiederverwendbare Helferlein, die an mehreren Stellen gebraucht
@@ -282,7 +285,7 @@ export function esc(text) {
 // ------------------------------------------------------------------
 
 function _uiDialog({ title, description = "", input = null, okText = "OK",
-                     cancelText = "Abbrechen", danger = false }) {
+                     cancelText = tr("cancel"), danger = false }) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.5);
@@ -322,14 +325,14 @@ function _uiDialog({ title, description = "", input = null, okText = "OK",
 
 export function uiConfirm(title, opts = {}) {
   return _uiDialog({ title, description: opts.description || "",
-    okText: opts.okText || "Bestätigen", cancelText: opts.cancelText || "Abbrechen",
+    okText: opts.okText || tr("u_bestatigen"), cancelText: opts.cancelText || tr("cancel"),
     danger: !!opts.danger });
 }
 
 export function uiPrompt(title, opts = {}) {
   return _uiDialog({ title, description: opts.description || "",
     input: { value: opts.value || "", placeholder: opts.placeholder || "" },
-    okText: opts.okText || "Übernehmen", cancelText: opts.cancelText || "Abbrechen" });
+    okText: opts.okText || tr("u_ubernehmen"), cancelText: opts.cancelText || tr("cancel") });
 }
 
 // Auswahl-Dialog mit Tasten-Optionen. Gibt den value der gewählten Option
@@ -352,7 +355,7 @@ export function uiChoice(title, options = [], opts = {}) {
         ${opts.description ? `<div style="font-size:12px;color:var(--subtext,#8fa3bd);margin-bottom:12px">${esc(opts.description)}</div>` : ""}
         <div style="display:flex;flex-direction:column;gap:7px">${btns}</div>
         <div style="display:flex;justify-content:flex-end;margin-top:14px">
-          <button class="uic-cancel taskbar-btn">${esc(opts.cancelText || "Abbrechen")}</button>
+          <button class="uic-cancel taskbar-btn">${esc(opts.cancelText || tr("cancel"))}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -371,8 +374,8 @@ export function uiChoice(title, options = [], opts = {}) {
 export async function uiConfirmTwice(title, opts = {}) {
   if (!(await uiConfirm(title, { ...opts, danger: true }))) return false;
   return uiConfirm(opts.secondTitle || "Wirklich sicher?", {
-    description: opts.secondDescription || "Diese Aktion kann NICHT rückgängig gemacht werden.",
-    okText: opts.secondOkText || "Ja, endgültig ausführen", danger: true,
+    description: opts.secondDescription || tr("u_diese_aktion_kann_nicht_ruckgangig"),
+    okText: opts.secondOkText || tr("u_ja_endgultig_ausfuhren"), danger: true,
   });
 }
 

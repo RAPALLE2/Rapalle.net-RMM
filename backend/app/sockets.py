@@ -203,6 +203,59 @@ async def request_fs_read(client_id: str, path: str, timeout_seconds: float = 30
     return payload
 
 
+async def request_patch_scan(client_id: str, timeout_seconds: float = 600.0) -> dict:
+    """
+    Lässt einen Agenten nach verfügbaren Aktualisierungen suchen.
+    Großzügiger Timeout: die Windows-Update-Abfrage braucht auf trägen
+    Systemen regelmäßig mehrere Minuten.
+    """
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Client ist offline")
+
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+
+    await sio.emit("patch-scan", {"requestId": request_id}, to=sid, namespace="/agent")
+
+    try:
+        payload = await asyncio.wait_for(future, timeout=timeout_seconds)
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+    return payload
+
+
+async def request_patch_apply(client_id: str, items: list[dict],
+                              timeout_seconds: float = 3600.0) -> dict:
+    """
+    Lässt einen Agenten die benannten Aktualisierungen installieren.
+    Sehr langer Timeout - Feature-Updates laufen durchaus eine Stunde.
+    """
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Client ist offline")
+
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+
+    await sio.emit("patch-apply", {"requestId": request_id, "items": items},
+                   to=sid, namespace="/agent")
+
+    try:
+        payload = await asyncio.wait_for(future, timeout=timeout_seconds)
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+    return payload
+
+
 async def request_fs_op(client_id: str, event: str, data: dict,
                         timeout_seconds: float = 60.0) -> dict:
     """
@@ -580,6 +633,22 @@ async def on_agent_action_log(sid, payload):
 @sio.on("fs-result", namespace="/agent")
 async def on_fs_result(sid, payload):
     """Antwort eines Agenten auf eine zuvor gesendete 'fs-list'-Anfrage."""
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("patch-scan-result", namespace="/agent")
+async def on_patch_scan_result(sid, payload):
+    """Antwort eines Agenten mit der Liste verfügbarer Aktualisierungen."""
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("patch-apply-result", namespace="/agent")
+async def on_patch_apply_result(sid, payload):
+    """Antwort eines Agenten nach dem Einspielen von Aktualisierungen."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)

@@ -10,51 +10,66 @@ import { openWindow } from "../windowmanager.js";
 import { t } from "../i18n.js";
 
 // Aktionen menschenlesbar machen (mit Emoji für schnelle Orientierung)
-const ACTION_LABELS = {
-  "settings.default_layout_set": "🗂️ Standard-Layout gesetzt",
-  "settings.default_layout_cleared": "🗂️ Standard-Layout entfernt",
-  "login.success": "🔓 Login erfolgreich",
-  "login.failed": "⛔ Login fehlgeschlagen",
-  "password.changed": "🔑 Passwort geändert",
-  "file.download": "⬇️ Datei heruntergeladen",
-  "terminal.exec": "⌨️ Terminal-Befehl",
-  "terminal.session": "⌨️ Terminal-Sitzung",
-  "terminal.bulk_exec": "⚡ Bulk-Befehl",
-  "process.kill": "❌ Prozess beendet",
-  "screen.session_started": "🖥️ Remote-Session gestartet",
-  "recording.deleted": "🗑️ Aufzeichnung gelöscht",
-  "client.updated": "✏️ Client geändert",
-  "client.deleted": "🗑️ Client gelöscht",
-  "user.created": "👤 Benutzer angelegt",
-  "user.deleted": "👤 Benutzer gelöscht",
-  "group.created": "👥 Gruppe angelegt",
-  "group.updated": "👥 Gruppe geändert",
-  "group.deleted": "👥 Gruppe gelöscht",
-  "webhook.created": "🔔 Webhook angelegt",
-  "webhook.deleted": "🔔 Webhook gelöscht",
-  "realm.created": "🏢 Realm angelegt",
-  "realm.deleted": "🏢 Realm gelöscht",
-  "automation.created": "🔁 Automation angelegt",
-  "automation.executed": "🔁 Automation ausgeführt",
-  "automation.deleted": "🔁 Automation gelöscht",
-  "guac.connect": "🕹️ Remote-Sitzung (Guacamole)",
-  "guac.recording": "⏺️ Guacamole-Replay",
-  "error.reported": "🔴 Fehler gemeldet",
-  "error.warn": "🟠 Warnung",
-  "agent.update_triggered": "⬆️ Agent-Update ausgelöst",
-  "agent.update_all_triggered": "⬆️ Agent-Update für ALLE Clients",
-  "agent.update_all_completed": "✅ Agent-Update (alle) abgeschlossen",
-  "relay.auto_closed": "🔌 Relay automatisch geschlossen",
-  "backend.crash": "💥 Backend abgestürzt",
-  "backend.restarted": "♻️ Backend neu gestartet",
-  "frontend.crash_recovered": "💥 Frontend-Absturz erkannt",
-  "rdp.file_generated": "🖥️ RDP-Datei erzeugt",
-  "script.created": "📜 Skript angelegt",
-  "script.deleted": "📜 Skript gelöscht",
-  "tenant.created": "🏢 Tenant angelegt",
-  "location.created": "📍 Standort angelegt",
-  "folder.created": "📁 Ordner angelegt",
+// Aktion -> Übersetzungsschlüssel. Bewusst NICHT die fertigen Texte:
+// diese Map wird beim Laden des Moduls einmal ausgewertet, fertige Texte
+// würden in der beim Laden aktiven Sprache einfrieren. Der Sprachwechsel
+// rendert nur neu, er lädt die Seite nicht neu.
+const ACTION_KEYS = {
+  "settings.default_layout_set": "audit_settings_default_layout_set",
+  "settings.default_layout_cleared": "audit_settings_default_layout_cleared",
+  "login.success": "audit_login_success",
+  "login.failed": "audit_login_failed",
+  "password.changed": "audit_password_changed",
+  "file.download": "audit_file_download",
+  "terminal.exec": "audit_terminal_exec",
+  "terminal.session": "audit_terminal_session",
+  "terminal.bulk_exec": "audit_terminal_bulk_exec",
+  "process.kill": "audit_process_kill",
+  "screen.session_started": "audit_screen_session_started",
+  "recording.deleted": "audit_recording_deleted",
+  "recording.viewed": "audit_recording_viewed",
+  "client.updated": "audit_client_updated",
+  "client.deleted": "audit_client_deleted",
+  "user.created": "audit_user_created",
+  "user.deleted": "audit_user_deleted",
+  "group.created": "audit_group_created",
+  "group.updated": "audit_group_updated",
+  "group.deleted": "audit_group_deleted",
+  "webhook.created": "audit_webhook_created",
+  "webhook.deleted": "audit_webhook_deleted",
+  "realm.created": "audit_realm_created",
+  "realm.deleted": "audit_realm_deleted",
+  "automation.created": "audit_automation_created",
+  "automation.executed": "audit_automation_executed",
+  "automation.deleted": "audit_automation_deleted",
+  "guac.connect": "audit_guac_connect",
+  "guac.recording": "audit_guac_recording",
+  "error.reported": "audit_error_reported",
+  "error.warn": "audit_error_warn",
+  "agent.update_triggered": "audit_agent_update_triggered",
+  "agent.update_all_triggered": "audit_agent_update_all_triggered",
+  "agent.update_all_completed": "audit_agent_update_all_completed",
+  "relay.auto_closed": "audit_relay_auto_closed",
+  "backend.crash": "audit_backend_crash",
+  "backend.restarted": "audit_backend_restarted",
+  "frontend.crash_recovered": "audit_frontend_crash_recovered",
+  "rdp.file_generated": "audit_rdp_file_generated",
+  "script.created": "audit_script_created",
+  "script.deleted": "audit_script_deleted",
+  "tenant.created": "audit_tenant_created",
+  "location.created": "audit_location_created",
+  "folder.created": "audit_folder_created",
+  "patch.scan": "audit_patch_scan",
+  "patch.apply": "audit_patch_apply",
+  "patch.auto_applied": "audit_patch_auto_applied",
+  "privacy.self_export": "audit_privacy_self_export",
+  "privacy.export_other": "audit_privacy_export_other",
+  "privacy.user_erased": "audit_privacy_user_erased",
+  "privacy.purge": "audit_privacy_purge",
 };
+
+// Auflösung erst beim Zugriff - dadurch stimmt die Sprache immer.
+const actionLabel = (a) => (ACTION_KEYS[a] ? t(ACTION_KEYS[a]) : a);
 
 export function renderAudit(body, win) {
   body.innerHTML = `
@@ -155,7 +170,7 @@ export function renderAudit(body, win) {
       const curK = kindSel.value;
       kindSel.innerHTML = `<option value="">Alle Aktionen</option>` +
         `<option value="__sessions">Nur Remote-Sessions</option>` +
-        actions.map((a) => `<option value="${esc(a)}">${esc(ACTION_LABELS[a] || a)}</option>`).join("");
+        actions.map((a) => `<option value="${esc(a)}">${esc(actionLabel(a))}</option>`).join("");
       kindSel.value = curK;
       render();
     } catch (e) {
@@ -189,7 +204,7 @@ export function renderAudit(body, win) {
     }
     for (const e of rows) {
       const tr = document.createElement("tr");
-      const label = ACTION_LABELS[e.action] || e.action;
+      const label = actionLabel(e.action);
 
       let detailsHtml = esc(e.details || "");
       let recId = null;

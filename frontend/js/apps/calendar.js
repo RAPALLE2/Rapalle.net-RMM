@@ -11,6 +11,9 @@
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
 import { splitGroups } from "../subjectpicker.js";
+// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
+// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+import { t as tr } from "../i18n.js";
 
 const IMPORTANCE = {
   low: { label: "niedrig", color: "#64748b", icon: "○" },
@@ -19,7 +22,7 @@ const IMPORTANCE = {
   critical: { label: "kritisch", color: "#ff4d6d", icon: "⬤" },
 };
 const DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
-const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
+const MONTHS = ["Januar", "Februar", tr("u_marz"), "April", "Mai", "Juni", "Juli",
   "August", "September", "Oktober", "November", "Dezember"];
 
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -192,7 +195,7 @@ export function renderCalendar(body, win) {
           style="display:flex;gap:9px;align-items:flex-start;padding:6px 8px;border-radius:8px;
                  border-left:3px solid ${imp.color};background:var(--panel-2);margin-bottom:4px;cursor:pointer">
           <div style="font-size:12px;color:var(--subtext);flex:none;min-width:88px">
-            ${e.all_day ? "ganztägig" : `${esc(fmtTime(e.start_at))} – ${esc(fmtTime(e.end_at))}`}</div>
+            ${e.all_day ? tr("u_ganztagig") : `${esc(fmtTime(e.start_at))} – ${esc(fmtTime(e.end_at))}`}</div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:600">${esc(e.title)}
               <span style="color:${imp.color};font-size:11px">${imp.icon} ${esc(imp.label)}</span></div>
@@ -221,7 +224,7 @@ export function renderCalendar(body, win) {
         <div class="wp-body" style="padding:12px;display:flex;flex-direction:column;gap:7px;font-size:13px">
           <div><span style="color:var(--subtext)">Wann:</span>
             ${esc(new Date(ev.start_at).toLocaleString("de-DE"))}
-            ${ev.all_day ? "(ganztägig)" : `– ${esc(fmtTime(ev.end_at))} (${mins} Min.)`}</div>
+            ${ev.all_day ? tr("u_ganztagig_2") : `– ${esc(fmtTime(ev.end_at))} (${mins} Min.)`}</div>
           <div><span style="color:var(--subtext)">Wichtigkeit:</span>
             <span style="color:${imp.color}">${imp.icon} ${esc(imp.label)}</span></div>
           ${ev.location ? `<div><span style="color:var(--subtext)">Ort:</span> ${esc(ev.location)}</div>` : ""}
@@ -244,7 +247,7 @@ export function renderCalendar(body, win) {
     back.querySelector("[data-close]").addEventListener("click", close);
     back.querySelector("[data-edit]")?.addEventListener("click", () => { close(); openEditor(ev); });
     back.querySelector("[data-del]")?.addEventListener("click", async () => {
-      if (!(await uiConfirm(`Termin „${ev.title}“ löschen?`, { okText: "Löschen", danger: true }))) return;
+      if (!(await uiConfirm(`Termin „${ev.title}“ löschen?`, { okText: tr("delete"), danger: true }))) return;
       close();
       try { await api.deleteEvent(ev.id); load(); }
       catch (e) { window.notify?.(e.message, "error"); }
@@ -326,7 +329,7 @@ export function renderCalendar(body, win) {
         </div>
         <div style="padding:10px;display:flex;justify-content:flex-end;gap:6px">
           <button class="taskbar-btn" data-close>Abbrechen</button>
-          <button class="btn-primary" data-save>${ev ? "Speichern" : "Anlegen"}</button>
+          <button class="btn-primary" data-save>${ev ? tr("save") : "Anlegen"}</button>
         </div>
       </div>`;
     document.body.appendChild(back);
@@ -357,7 +360,7 @@ export function renderCalendar(body, win) {
       const title = back.querySelector("#ce-title").value.trim();
       const date = back.querySelector("#ce-date").value;
       if (!title || !date) {
-        err.textContent = "Titel und Datum sind erforderlich"; err.classList.remove("hidden"); return;
+        err.textContent = tr("u_titel_und_datum_sind_erforderlich"); err.classList.remove("hidden"); return;
       }
       const isAllDay = allday.checked;
       const time = isAllDay ? "00:00" : (back.querySelector("#ce-time").value || "09:00");

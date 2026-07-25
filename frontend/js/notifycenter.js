@@ -15,6 +15,7 @@
 //     blau=info, grün=success).
 
 import { esc, uiConfirm } from "./utils.js";
+import { t } from "./i18n.js";
 
 const STORE_KEY = "rmm_notifications";
 const MAX_ENTRIES = 300;
@@ -131,7 +132,7 @@ export function renderNotifyCenter(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="Ja = alle Meldungen (auch gelesene, mit Lösch-Option). Nein = nur neue (ungelesene).">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="${t("u_ja_alle_meldungen_auch_gelesene_mi")}">
           <input type="checkbox" id="nc-showall" />
           Alles anzeigen <span id="nc-showall-state" style="color:var(--subtext)">(nein)</span>
         </label>
@@ -170,7 +171,7 @@ export function renderNotifyCenter(body, win) {
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0">
         ${!n.read ? `<button class="taskbar-btn" data-read="${n.id}" title="Als gelesen markieren" style="padding:2px 7px;font-size:11px">✓</button>` : ""}
-        ${n.read ? `<button class="taskbar-btn" data-del="${n.id}" title="Löschen" style="padding:2px 7px;font-size:11px;border-color:var(--danger);color:var(--danger)">🗑</button>` : ""}
+        ${n.read ? `<button class="taskbar-btn" data-del="${n.id}" title=t("delete") style="padding:2px 7px;font-size:11px;border-color:var(--danger);color:var(--danger)">🗑</button>` : ""}
       </div>
     `;
     row.querySelector("[data-read]")?.addEventListener("click", () => markRead(n.id));
@@ -222,8 +223,8 @@ export function renderNotifyCenter(body, win) {
   showAllChk.addEventListener("change", () => { showAll = showAllChk.checked; reconcile(); });
   markAllBtn.addEventListener("click", () => { markAllRead(); });
   delReadBtn.addEventListener("click", async () => {
-    const ok = await uiConfirm("Alle gelesenen Benachrichtigungen löschen?", {
-      okText: "Löschen", danger: true });
+    const ok = await uiConfirm(t("u_alle_gelesenen_benachrichtigungen_"), {
+      okText: t("delete"), danger: true });
     if (ok) deleteAllRead();
   });
 

@@ -12,6 +12,7 @@ import { state } from "../state.js";
 import { esc, formatBytes, uiConfirm, uiPrompt, uiConfirmTwice, downloadText } from "../utils.js";
 import { dashboardSocket } from "../socket.js";
 import { MiniTerm } from "./miniterm.js";
+import { t } from "../i18n.js";
 
 export function renderSource(container) {
   container.innerHTML = `
@@ -93,9 +94,8 @@ function renderBackendLog(panel) {
 
   setTimeout(() => {
     if (!gotHistory) {
-      term.write("\x1b[31m[Backend antwortet nicht auf die Log-Anbindung]\x1b[0m\r\n" +
-        "Das laufende Backend kennt die Source-Ausgabe noch nicht -> Backend mit aktueller Version NEU STARTEN.\r\n");
-      statusEl.textContent = "Backend veraltet / nicht neu gestartet.";
+      term.write(t("src_no_log") + t("src_backend_old") + "\r\n");
+      statusEl.textContent = t("src_backend_outdated");
     }
   }, 3000);
 
@@ -108,28 +108,28 @@ function renderBackendLog(panel) {
   });
 
   panel.querySelector("#src-log-restart").addEventListener("click", async () => {
-    const ok = await uiConfirm("Backend wirklich neu starten?", {
+    const ok = await uiConfirm(t("src_restart_q"), {
       description: "Das Dashboard trennt sich kurz und verbindet sich danach automatisch wieder.",
       okText: "Neu starten", danger: true,
     });
     if (!ok) return;
     try {
       await api.restartBackend();
-      window.notify?.("Backend startet neu… Die Seite lädt in ein paar Sekunden neu.", "info", 12000);
+      window.notify?.(t("src_restarting"), "info", 12000);
       setTimeout(() => window.location.reload(), 6000);
-    } catch (e) { window.notify?.("Neustart fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_restart_fail", { err: e.message }), "error"); }
   });
 
   panel.querySelector("#src-log-stop").addEventListener("click", async () => {
-    const ok = await uiConfirm("Backend wirklich STOPPEN?", {
-      description: "Das Dashboard und alle Agent-Verbindungen gehen offline, bis das Backend manuell wieder gestartet wird. (Läuft es unter systemd mit Auto-Restart, startet es sofort wieder.)",
+    const ok = await uiConfirm(t("src_stop_q"), {
+      description: t("src_stop_full_desc"),
       okText: "Stoppen", danger: true,
     });
     if (!ok) return;
     try {
       await api.stopBackend();
-      window.notify?.("Backend wird gestoppt. Die Oberfläche verliert gleich die Verbindung.", "info", 12000);
-    } catch (e) { window.notify?.("Stoppen fehlgeschlagen: " + e.message, "error"); }
+      window.notify?.(t("src_stopping"), "info", 12000);
+    } catch (e) { window.notify?.(t("src_stop_fail", { err: e.message }), "error"); }
   });
 
   return () => {
@@ -171,9 +171,9 @@ async function renderExplorer(panel) {
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px" id="src-roots"></div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
       <input type="file" id="src-zip-input" accept=".zip" style="display:none" />
-      <button class="taskbar-btn" id="src-zip-btn" title="ZIP in den aktuellen Ordner extrahieren (überschreibt vorhandene Dateien). Projekt-ZIPs mit frontend/backend/agent landen automatisch im Projekt-Root.">⬆️ ZIP hochladen & extrahieren</button>
-      <button class="taskbar-btn" id="src-new-dir" title="Neuen Ordner im aktuellen Verzeichnis anlegen">📁+ Neuer Ordner</button>
-      <button class="taskbar-btn" id="src-new-file" title="Neue leere Datei im aktuellen Verzeichnis anlegen">📄+ Neue Datei</button>
+      <button class="taskbar-btn" id="src-zip-btn" title="${t("src_zip_tip")}">${t("src_zip_btn")}</button>
+      <button class="taskbar-btn" id="src-new-dir" title="${t("src_newdir_tip")}">${t("src_newdir_btn")}</button>
+      <button class="taskbar-btn" id="src-new-file" title="${t("src_newfile_tip")}">${t("src_newfile_btn")}</button>
       <span id="src-zip-status" style="font-size:12px;color:var(--subtext)"></span>
     </div>
     <div style="display:flex;gap:10px;min-height:0">
@@ -187,7 +187,7 @@ async function renderExplorer(panel) {
           <button class="btn-primary" id="src-file-save" style="width:auto;margin:0;display:none">Speichern</button>
         </div>
         <textarea id="src-file-content" spellcheck="false"
-          style="flex:1;min-height:360px;border:0;background:#0b0f14;color:#e6edf3;font-family:monospace;font-size:12px;padding:10px;resize:none;outline:none" placeholder="Datei links auswählen…"></textarea>
+          style="flex:1;min-height:360px;border:0;background:#0b0f14;color:#e6edf3;font-family:monospace;font-size:12px;padding:10px;resize:none;outline:none" placeholder="${t("src_pick_file")}"></textarea>
       </div>
     </div>
   `;
@@ -216,7 +216,7 @@ async function renderExplorer(panel) {
       loadDir(curDir);   // Ansicht aktualisieren
     } catch (e) {
       zipStatus.textContent = "";
-      window.notify?.("ZIP-Extraktion fehlgeschlagen: " + e.message, "error", 10000);
+      window.notify?.(t("src_zip_fail", { err: e.message }), "error", 10000);
     } finally {
       zipInput.value = "";   // gleiche Datei erneut wählbar machen
     }
@@ -225,28 +225,28 @@ async function renderExplorer(panel) {
 
   // --- Neuer Ordner / Neue Datei im aktuellen Verzeichnis ---
   panel.querySelector("#src-new-dir").addEventListener("click", async () => {
-    const name = await uiPrompt("Neuen Ordner anlegen", {
-      description: "Ordnername (wird in /" + (curDir || "Projekt-Wurzel") + " angelegt):",
+    const name = await uiPrompt(t("src_newdir"), {
+      description: t("src_foldername", { path: curDir || t("src_root") }),
       placeholder: "z.B. scripts" });
     if (!name || !name.trim()) return;
     try {
       await api.sourceMkdir(joinPath(curDir, name.trim()));
-      window.notify?.("Ordner angelegt: " + name.trim(), "success");
+      window.notify?.(t("src_dir_created", { name: name.trim() }), "success");
       loadDir(curDir);
-    } catch (e) { window.notify?.("Ordner anlegen fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_dir_create_fail", { err: e.message }), "error"); }
   });
   panel.querySelector("#src-new-file").addEventListener("click", async () => {
-    const name = await uiPrompt("Neue Datei anlegen", {
-      description: "Dateiname (wird in /" + (curDir || "Projekt-Wurzel") + " angelegt):",
+    const name = await uiPrompt(t("src_newfile"), {
+      description: t("src_filename", { path: curDir || t("src_root") }),
       placeholder: "z.B. notes.txt" });
     if (!name || !name.trim()) return;
     try {
       const p = joinPath(curDir, name.trim());
       await api.sourceNewFile(p);
-      window.notify?.("Datei angelegt: " + name.trim(), "success");
+      window.notify?.(t("src_file_created", { name: name.trim() }), "success");
       await loadDir(curDir);
       openFile(p);   // direkt im Editor öffnen
-    } catch (e) { window.notify?.("Datei anlegen fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_file_create_fail", { err: e.message }), "error"); }
   });
 
   try {
@@ -275,7 +275,7 @@ async function renderExplorer(panel) {
           <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${icon} ${esc(e.name)}</span>
           ${sub}
           <button class="taskbar-btn" data-ren="${esc(full)}" title="Umbenennen / Verschieben" style="padding:1px 5px;font-size:10px">✏️</button>
-          <button class="taskbar-btn" data-del="${esc(full)}" data-isdir="${e.type === "dir" ? "1" : ""}" title="Löschen" style="padding:1px 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
+          <button class="taskbar-btn" data-del="${esc(full)}" data-isdir="${e.type === "dir" ? "1" : ""}" title="${t("delete")}" style="padding:1px 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
         </div>`;
       }).join("");
       entriesEl.querySelectorAll("[data-dir]").forEach((el) =>
@@ -295,7 +295,7 @@ async function renderExplorer(panel) {
             window.notify?.("Umbenannt: " + src + " → " + dst.trim(), "success");
             if (openPath === src) { openPath = dst.trim(); nameEl.textContent = "/" + openPath; }
             loadDir(curDir);
-          } catch (e) { window.notify?.("Umbenennen fehlgeschlagen: " + e.message, "error"); }
+          } catch (e) { window.notify?.(t("src_rename_fail", { err: e.message }), "error"); }
         }));
       // Löschen (Ordner rekursiv -> doppelte Nachfrage)
       entriesEl.querySelectorAll("[data-del]").forEach((btn) =>
@@ -305,16 +305,16 @@ async function renderExplorer(panel) {
           const isDir = btn.dataset.isdir === "1";
           const ok = isDir
             ? await uiConfirmTwice(`Ordner "/${target}" löschen?`, {
-                description: "Der Ordner wird mit ALLEN Inhalten rekursiv gelöscht.",
-                okText: "Ordner löschen" })
-            : await uiConfirm(`Datei "/${target}" löschen?`, { okText: "Löschen", danger: true });
+                description: t("src_folder_del_desc"),
+                okText: t("src_folder_del") })
+            : await uiConfirm(t("src_file_del_q", { path: target }), { okText: t("delete"), danger: true });
           if (!ok) return;
           try {
             await api.sourceDelete(target);
-            window.notify?.("Gelöscht: /" + target, "success");
-            if (openPath === target) { openPath = null; nameEl.textContent = "Keine Datei geöffnet"; contentEl.value = ""; saveBtn.style.display = "none"; }
+            window.notify?.(t("src_deleted", { path: target }), "success");
+            if (openPath === target) { openPath = null; nameEl.textContent = t("src_no_file"); contentEl.value = ""; saveBtn.style.display = "none"; }
             loadDir(curDir);
-          } catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
+          } catch (e) { window.notify?.(t("src_delete_fail", { err: e.message }), "error"); }
         }));
     } catch (e) {
       entriesEl.innerHTML = `<div style="padding:8px;color:var(--danger)">${esc(e.message)}</div>`;
@@ -338,8 +338,8 @@ async function renderExplorer(panel) {
     if (!openPath) return;
     try {
       await api.sourceWrite(openPath, contentEl.value);
-      window.notify?.("Datei gespeichert: /" + openPath, "success");
-    } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+      window.notify?.(t("src_file_saved", { path: openPath }), "success");
+    } catch (e) { window.notify?.(t("src_save_fail", { err: e.message }), "error"); }
   });
 
   loadDir("backend");
@@ -353,8 +353,8 @@ function joinPath(dir, name) { return dir ? `${dir}/${name}` : name; }
 async function renderDb(panel) {
   panel.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-      <button class="taskbar-btn" id="src-db-reload" title="Tabellenliste und aktuelle Tabelle neu laden">🔄 Neu laden</button>
-      <button class="taskbar-btn" id="src-db-newtable" title="Neue Tabelle anlegen">🗄️+ Tabelle erstellen</button>
+      <button class="taskbar-btn" id="src-db-reload" title="${t("src_reload_tables")}">🔄 ${t("exp_refresh")}</button>
+      <button class="taskbar-btn" id="src-db-newtable" title="${t("src_newtable_tip")}">${t("src_newtable_btn")}</button>
       <button class="taskbar-btn" id="src-db-backup" title="Konsistente Kopie der Datenbank als backend/data.sqlite.bak erstellen">💾 Backup (data.sqlite.bak)</button>
       <span style="font-size:11px;color:var(--subtext)">Doppelklick = Zelle editieren · Rechtsklick = Zelle löschen (NULL) · Buttons je Zeile/Tabelle</span>
     </div>
@@ -365,15 +365,15 @@ async function renderDb(panel) {
       </div>
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;gap:6px">
-          <input id="src-sql" placeholder="SQL ausführen, z.B. SELECT * FROM settings"
+          <input id="src-sql" placeholder="${t("src_sql_ph")}"
             style="flex:1;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-family:monospace;font-size:12px" />
           <button class="btn-primary" id="src-sql-run" style="width:auto;margin:0">Ausführen</button>
         </div>
         <div id="src-db-toolbar" style="display:none;gap:6px;align-items:center">
           <strong id="src-db-tname" style="font-size:12px"></strong>
           <span style="flex:1"></span>
-          <button class="taskbar-btn" id="src-db-addrow" title="Leere Zeile einfügen (Defaults/NULL)">➕ Zeile</button>
-          <button class="taskbar-btn" id="src-db-droptable" style="border-color:var(--danger);color:var(--danger)" title="Komplette Tabelle löschen">🗑 Tabelle löschen</button>
+          <button class="taskbar-btn" id="src-db-addrow" title="${t("src_row_insert")}">${t("src_row_btn")}</button>
+          <button class="taskbar-btn" id="src-db-droptable" style="border-color:var(--danger);color:var(--danger)" title="${t("src_table_drop")}">${t("src_droptable_btn")}</button>
         </div>
         <div id="src-db-result" style="border:1px solid var(--border);border-radius:8px;overflow:auto;max-height:400px"></div>
       </div>
@@ -388,8 +388,8 @@ async function renderDb(panel) {
 
   async function loadTables() {
     try {
-      const t = await api.sourceDbTables();
-      tablesEl.innerHTML = t.tables.map((x) =>
+      const res = await api.sourceDbTables();
+      tablesEl.innerHTML = res.tables.map((x) =>
         `<div class="src-row" data-table="${esc(x.name)}" style="padding:6px 8px;cursor:pointer;font-size:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between">
           <span>${esc(x.name)}</span><span style="color:var(--subtext)">${x.count ?? "?"}</span></div>`).join("");
       tablesEl.querySelectorAll("[data-table]").forEach((el) =>
@@ -409,19 +409,19 @@ async function renderDb(panel) {
 
   // ---- Backup ----
   panel.querySelector("#src-db-backup").addEventListener("click", async () => {
-    const ok = await uiConfirm("Datenbank-Backup erstellen?", {
-      description: "Erstellt eine konsistente Kopie als backend/data.sqlite.bak (überschreibt ein vorhandenes Backup).",
-      okText: "Backup erstellen" });
+    const ok = await uiConfirm(t("src_backup_q"), {
+      description: t("src_backup_desc"),
+      okText: t("src_backup_ok") });
     if (!ok) return;
     try {
       const r = await api.sourceDbBackup();
       window.notify?.(`Backup erstellt: ${r.path} (${formatBytes(r.size)})`, "success", 8000);
-    } catch (e) { window.notify?.("Backup fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_backup_fail", { err: e.message }), "error"); }
   });
 
   // ---- Tabelle erstellen ----
   panel.querySelector("#src-db-newtable").addEventListener("click", async () => {
-    const name = await uiPrompt("Neue Tabelle - Name", { placeholder: "z.B. my_table" });
+    const name = await uiPrompt(t("src_newtable_name"), { placeholder: t("src_newtable_ph") });
     if (!name || !name.trim()) return;
     const cols = await uiPrompt("Spalten-Definition (SQL)", {
       description: 'z.B.:  id INTEGER PRIMARY KEY, name TEXT, created_at INTEGER',
@@ -429,28 +429,28 @@ async function renderDb(panel) {
     if (!cols || !cols.trim()) return;
     try {
       await api.sourceDbCreateTable(name.trim(), cols.trim());
-      window.notify?.("Tabelle erstellt: " + name.trim(), "success");
+      window.notify?.(t("src_table_created", { name: name.trim() }), "success");
       loadTables();
       loadTable(name.trim());
-    } catch (e) { window.notify?.("Erstellen fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_create_fail", { err: e.message }), "error"); }
   });
 
   // ---- Tabelle löschen (doppelte Nachfrage) ----
   panel.querySelector("#src-db-droptable").addEventListener("click", async () => {
     if (!curTable) return;
     const ok = await uiConfirmTwice(`Tabelle "${curTable}" komplett löschen?`, {
-      description: "ALLE Zeilen und die Struktur der Tabelle werden entfernt.",
-      okText: "Tabelle löschen",
+      description: t("src_table_drop_desc"),
+      okText: t("src_table_drop"),
       secondTitle: `"${curTable}" endgültig löschen?`,
-      secondDescription: "Letzte Warnung - die Tabelle und alle Daten sind danach unwiderruflich weg." });
+      secondDescription: t("src_table_drop_warn") });
     if (!ok) return;
     try {
       await api.sourceDbDropTable(curTable);
-      window.notify?.("Tabelle gelöscht: " + curTable, "success");
+      window.notify?.(t("src_table_dropped", { name: curTable }), "success");
       curTable = null; toolbarEl.style.display = "none";
       resultEl.innerHTML = "";
       loadTables();
-    } catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_delete_fail", { err: e.message }), "error"); }
   });
 
   // ---- Zeile einfügen ----
@@ -458,9 +458,9 @@ async function renderDb(panel) {
     if (!curTable) return;
     try {
       await api.sourceDbInsertRow(curTable, {});
-      window.notify?.("Zeile eingefügt.", "success");
+      window.notify?.(t("src_row_inserted"), "success");
       loadTable(curTable); loadTables();
-    } catch (e) { window.notify?.("Einfügen fehlgeschlagen: " + e.message, "error"); }
+    } catch (e) { window.notify?.(t("src_insert_fail", { err: e.message }), "error"); }
   });
 
   function renderTable(columns, rows, rowids = null, editable = false) {
@@ -472,7 +472,7 @@ async function renderDb(panel) {
       let disp = v === null ? '<span style="color:var(--subtext)">NULL</span>' : esc(String(v));
       return `<td data-col="${ci}" style="padding:5px 8px;border-bottom:1px solid var(--border);font-family:monospace;font-size:11px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${canEdit ? "cursor:cell" : ""}" title="${v === null ? "" : esc(String(v))}">${disp}</td>`;
     }).join("")}${canEdit ? `<td style="padding:2px 6px;border-bottom:1px solid var(--border);white-space:nowrap">
-        <button class="taskbar-btn" data-delrow="${rowids[ri]}" title="Zeile löschen" style="padding:1px 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
+        <button class="taskbar-btn" data-delrow="${rowids[ri]}" title="${t("src_row_delete")}" style="padding:1px 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>
       </td>` : ""}</tr>`).join("");
     resultEl.innerHTML = `<table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 
@@ -483,13 +483,13 @@ async function renderDb(panel) {
       btn.addEventListener("click", async () => {
         const rid = Number(btn.dataset.delrow);
         const ok = await uiConfirmTwice(`Zeile (rowid ${rid}) aus "${curTable}" löschen?`, {
-          okText: "Zeile löschen" });
+          okText: t("src_row_delete") });
         if (!ok) return;
         try {
           await api.sourceDbDeleteRow(curTable, rid);
-          window.notify?.("Zeile gelöscht.", "success");
+          window.notify?.(t("src_row_deleted"), "success");
           loadTable(curTable); loadTables();
-        } catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
+        } catch (e) { window.notify?.(t("src_delete_fail", { err: e.message }), "error"); }
       }));
 
     // Zelle per RECHTSKLICK löschen (auf NULL setzen) - mit doppelter Nachfrage.
@@ -500,12 +500,12 @@ async function renderDb(panel) {
         const rid = Number(tr.dataset.rowid);
         const colName = columns[Number(td.dataset.col)];
         const ok = await uiConfirmTwice(`Zelle "${curTable}"."${colName}" (rowid ${rid}) löschen?`, {
-          description: "Der Inhalt der Zelle wird entfernt (NULL gesetzt).",
-          okText: "Zelle löschen" });
+          description: t("src_cell_del_desc"),
+          okText: t("src_cell_delete") });
         if (!ok) return;
         try {
           await api.sourceDbSetCell(curTable, rid, colName, null);
-          window.notify?.("Zelle gelöscht (NULL).", "success");
+          window.notify?.(t("src_cell_deleted"), "success");
           loadTable(curTable);
         } catch (err) { window.notify?.("Löschen fehlgeschlagen: " + err.message, "error"); }
       }));
@@ -518,7 +518,7 @@ async function renderDb(panel) {
         const colName = columns[Number(td.dataset.col)];
         const oldVal = td.title;
         const val = await uiPrompt(`"${curTable}"."${colName}" (rowid ${rid}) bearbeiten`, {
-          description: "Leer lassen + Übernehmen = Zelle leeren (NULL).", value: oldVal });
+          description: t("src_cell_hint"), value: oldVal });
         if (val === null) return;
         let newVal = val;
         if (val === "") {
@@ -530,7 +530,7 @@ async function renderDb(panel) {
           await api.sourceDbSetCell(curTable, rid, colName, newVal);
           window.notify?.("Zelle gespeichert.", "success");
           loadTable(curTable);
-        } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+        } catch (e) { window.notify?.(t("src_save_fail", { err: e.message }), "error"); }
       }));
   }
 

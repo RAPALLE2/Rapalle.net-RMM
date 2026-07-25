@@ -55,6 +55,7 @@ from app.routers import (
     calendar_routes,
     todos_routes,
     privacy_routes,
+    patch_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -78,6 +79,12 @@ except Exception as e:
 
 # 2) FastAPI-App erstellen und alle Routen-Module einhängen
 api = FastAPI(title="RAPALLE.net RMM Backend")
+
+# Host-Sperre: Zugriff nur über die in den Einstellungen hinterlegten
+# Adressen. Steht ganz vorne, damit unerlaubte Hosts nicht einmal
+# CORS-Header zu sehen bekommen. Standardmäßig ausgeschaltet.
+from app.hostlock import HostLockMiddleware as _HostLock
+api.add_middleware(_HostLock)
 
 api.add_middleware(
     CORSMiddleware,
@@ -114,6 +121,7 @@ api.include_router(calendar_routes.router)    # Organigramm + Kalender
 api.include_router(media_routes.router)       # Medien-Bibliothek des Audio-Players
 api.include_router(todos_routes.router)       # Persönliche Todo-Liste (privat)
 api.include_router(privacy_routes.router)     # DSGVO: Auskunft, Löschung, Fristen
+api.include_router(patch_routes.router)       # Software-Patching
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
@@ -438,6 +446,8 @@ async def _start_background_tasks():
     _asyncio.create_task(_db_sync_engine())
     _asyncio.create_task(_relay_expiry_engine())
     _asyncio.create_task(_privacy_purge_engine())
+    from app import patching as _patching
+    _asyncio.create_task(_patching.engine())
 
 
 async def _relay_expiry_engine():

@@ -10,6 +10,7 @@ import { api } from "../api.js";
 import { state, isAdmin, hasGlobalPerm } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
 import { isUnmanagedGroup } from "../subjectpicker.js";
+import { t } from "../i18n.js";
 
 const K = (n) => `${n.type}:${n.id}`;
 
@@ -25,11 +26,11 @@ export function renderOrgChart(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:var(--panel)">
       <div class="explorer-toolbar" style="gap:8px;flex-wrap:wrap">
-        <input type="text" id="og-search" placeholder="Person oder Gruppe suchen…" style="flex:1;min-width:160px" />
+        <input type="text" id="og-search" placeholder="${t("u_person_oder_gruppe_suchen")}" style="flex:1;min-width:160px" />
         <label style="display:flex;gap:5px;align-items:center;font-size:12px;color:var(--subtext)">
           <input type="checkbox" id="og-byws" /> nach Arbeitsbereich
         </label>
-        <button class="taskbar-btn" id="og-view" title="Zwischen Liste und Baumdiagramm wechseln">🌳 Baumdiagramm</button>
+        <button class="taskbar-btn" id="og-view" title="${t("u_zwischen_liste_und_baumdiagramm_we")}">🌳 Baumdiagramm</button>
         <button class="taskbar-btn" id="og-expand">Alle aufklappen</button>
         <button class="taskbar-btn" id="og-collapse">Alle zuklappen</button>
       </div>
@@ -95,7 +96,7 @@ export function renderOrgChart(body, win) {
     const head = document.createElement("div");
     head.style.cssText = "cursor:pointer;font-size:12px;color:var(--subtext);user-select:none";
     head.textContent = `${adFolderOpen ? "▾" : "▸"} 📂 Unverwaltete AD-Gruppen (${groups.length})`;
-    head.title = "Aus dem Verzeichnis importiert, im RMM ohne Rechte und ohne Einordnung";
+    head.title = t("u_aus_dem_verzeichnis_importiert_im_");
     head.addEventListener("click", () => { adFolderOpen = !adFolderOpen; draw(); });
     wrap.appendChild(head);
     if (adFolderOpen) {
@@ -127,8 +128,8 @@ export function renderOrgChart(body, win) {
   function draw() {
     byKey = nodeByKey();
     hintEl.textContent = mayManage()
-      ? "Ziehen und auf eine Person/Gruppe fallen lassen = unterstellen. Auf „Oberste Ebene“ ziehen löst die Zuordnung."
-      : "Nur Ansicht – zum Ändern fehlt das Recht „Organigramm bearbeiten“.";
+      ? t("u_ziehen_und_auf_eine_person_gruppe_")
+      : t("u_nur_ansicht_zum_andern_fehlt_das_r");
 
     if (search) return drawSearch();
     if (groupByWorkspace) return drawByWorkspace();

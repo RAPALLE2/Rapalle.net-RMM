@@ -20,6 +20,7 @@ import {
   attachHoverTip, scaleToContainer, buildFleetDonut, showFleetTip, hideFleetTip,
   timeSeriesChart,
 } from "./fleetcharts.js";
+import { t } from "./i18n.js";
 
 const m = (c) => (c && c.metrics) || {};
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
@@ -43,17 +44,17 @@ function ramModuleDesc(mod) {
 
 export const CLIENT_PRESETS = [
   // =============== CPU ===============
-  { id: "c.cpuLoad", group: "CPU", label: "CPU-Auslastung",
+  { id: "c.cpuLoad", group: "CPU", get label() { return t("mk_c_cpuLoad"); },
     charts: ["gauge", "donut", "line", "number"], unit: "%", format: fmtPct, max: 100,
     value: (c) => num(m(c).cpuLoad) },
-  { id: "c.cpuFreq", group: "CPU", label: "CPU-Takt",
+  { id: "c.cpuFreq", group: "CPU", get label() { return t("mk_c_cpuFreq"); },
     charts: ["gauge", "line", "number"], format: fmtMHz,
     max: (c) => num(m(c).cpuMaxFreq) || 5000,
     value: (c) => num(m(c).cpuFreq) },
-  { id: "c.cpuTemp", group: "CPU", label: "CPU-Temperatur",
+  { id: "c.cpuTemp", group: "CPU", get label() { return t("mk_c_cpuTemp"); },
     charts: ["gauge", "line", "number"], format: fmtC, max: 100,
     value: (c) => num(m(c).cpuTemp) },
-  { id: "c.load", group: "CPU", label: "Load Average (1/5/15 min)",
+  { id: "c.load", group: "CPU", get label() { return t("mk_c_load"); },
     charts: ["info", "line"],
     value: (c) => num(m(c).load1),
     rows: (c) => [
@@ -61,41 +62,41 @@ export const CLIENT_PRESETS = [
       { label: "5 min", raw: m(c).load5 != null ? String(m(c).load5) : "—" },
       { label: "15 min", raw: m(c).load15 != null ? String(m(c).load15) : "—" },
     ] },
-  { id: "c.cores", group: "CPU", label: "Kerne / Threads",
+  { id: "c.cores", group: "CPU", get label() { return t("mk_c_cores"); },
     charts: ["info", "number"], value: (c) => num(m(c).cpuThreads),
     rows: (c) => [
       { label: "Physische Kerne", raw: String(m(c).cpuCores ?? "—") },
       { label: "Threads (logisch)", raw: String(m(c).cpuThreads ?? "—") },
       { label: "Max. Takt", raw: m(c).cpuMaxFreq ? fmtMHz(m(c).cpuMaxFreq) : "—" },
     ] },
-  { id: "c.procs", group: "CPU", label: "Prozessanzahl",
+  { id: "c.procs", group: "CPU", get label() { return t("mk_c_procs"); },
     charts: ["number", "line"], value: (c) => num(m(c).procCount) },
-  { id: "c.cpuPerCore", group: "CPU", label: "Auslastung je Kern",
+  { id: "c.cpuPerCore", group: "CPU", get label() { return t("mk_c_cpuPerCore"); },
     charts: ["bars", "info"],
     rows: (c) => (m(c).cpuPerCore || []).map((v, i) => ({
       label: `Kern ${i + 1}`, value: v, raw: `${Math.round(v)}%`,
     })) },
-  { id: "c.cpuFreqPerCore", group: "CPU", label: "Takt je Kern",
+  { id: "c.cpuFreqPerCore", group: "CPU", get label() { return t("mk_c_cpuFreqPerCore"); },
     charts: ["bars", "info"],
     rows: (c) => (m(c).cpuFreqPerCore || []).map((v, i) => ({
       label: `Kern ${i + 1}`, value: v, raw: fmtMHz(v),
     })) },
 
   // =============== GPU ===============
-  { id: "c.gpuLoad", group: "GPU", label: "GPU-Auslastung",
+  { id: "c.gpuLoad", group: "GPU", get label() { return t("mk_c_gpuLoad"); },
     charts: ["gauge", "donut", "line", "number"], unit: "%", format: fmtPct, max: 100,
     value: (c) => num((m(c).gpus || [])[0]?.load) },
-  { id: "c.gpuTemp", group: "GPU", label: "GPU-Temperatur",
+  { id: "c.gpuTemp", group: "GPU", get label() { return t("mk_c_gpuTemp"); },
     charts: ["gauge", "line", "number"], format: fmtC, max: 100,
     value: (c) => num((m(c).gpus || [])[0]?.temp) },
-  { id: "c.gpuPower", group: "GPU", label: "GPU-Leistung",
+  { id: "c.gpuPower", group: "GPU", get label() { return t("mk_c_gpuPower"); },
     charts: ["number", "line", "gauge"], format: fmtW, max: 400,
     value: (c) => num((m(c).gpus || [])[0]?.power) },
-  { id: "c.gpuMem", group: "GPU", label: "GPU-Speicher",
+  { id: "c.gpuMem", group: "GPU", get label() { return t("mk_c_gpuMem"); },
     charts: ["donut", "number", "line"], format: formatBytes,
     max: (c) => num((m(c).gpus || [])[0]?.memTotal) || 1,
     value: (c) => num((m(c).gpus || [])[0]?.memUsed) },
-  { id: "c.gpus", group: "GPU", label: "GPUs (alle, Auslastung)",
+  { id: "c.gpus", group: "GPU", get label() { return t("mk_c_gpus"); },
     charts: ["bars", "info"],
     rows: (c) => (m(c).gpus || []).map((g, i) => ({
       label: g.name || `GPU ${i + 1}`,
@@ -108,20 +109,20 @@ export const CLIENT_PRESETS = [
     })) },
 
   // =============== RAM ===============
-  { id: "c.ramPct", group: "RAM", label: "RAM-Auslastung",
+  { id: "c.ramPct", group: "RAM", get label() { return t("mk_c_ramPct"); },
     charts: ["gauge", "donut", "line", "number"], unit: "%", format: fmtPct, max: 100,
     value: (c) => num(pct(m(c).memUsed, m(c).memTotal)) },
-  { id: "c.ramUsed", group: "RAM", label: "RAM belegt",
+  { id: "c.ramUsed", group: "RAM", get label() { return t("mk_c_ramUsed"); },
     charts: ["number", "line", "donut"], format: formatBytes,
     max: (c) => num(m(c).memTotal) || 1,
     value: (c) => num(m(c).memUsed) },
-  { id: "c.ramFree", group: "RAM", label: "RAM frei",
+  { id: "c.ramFree", group: "RAM", get label() { return t("mk_c_ramFree"); },
     charts: ["number", "line"], format: formatBytes,
     value: (c) => num(m(c).memAvailable ?? (m(c).memTotal - m(c).memUsed)) },
-  { id: "c.swap", group: "RAM", label: "Swap-Auslastung",
+  { id: "c.swap", group: "RAM", get label() { return t("mk_c_swap"); },
     charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
     value: (c) => num(pct(m(c).swapUsed, m(c).swapTotal)) },
-  { id: "c.ramInfo", group: "RAM", label: "RAM-Übersicht",
+  { id: "c.ramInfo", group: "RAM", get label() { return t("mk_c_ramInfo"); },
     charts: ["info"],
     rows: (c) => [
       { label: "Gesamt", raw: m(c).memTotal ? formatBytes(m(c).memTotal) : "—" },
@@ -133,23 +134,23 @@ export const CLIENT_PRESETS = [
     ].filter((r) => r.raw != null) },
 
   // =============== Disk ===============
-  { id: "c.diskPct", group: "Disk", label: "Disk-Auslastung (System)",
+  { id: "c.diskPct", group: "Disk", get label() { return t("mk_c_diskPct"); },
     charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
     value: (c) => num(pct(m(c).diskUsed, m(c).diskTotal)) },
-  { id: "c.disks", group: "Disk", label: "Datenträger (alle)",
+  { id: "c.disks", group: "Disk", get label() { return t("mk_c_disks"); },
     charts: ["bars", "info"],
     rows: (c) => (m(c).disks || []).map((d) => ({
       label: d.device || d.mountpoint || "Disk",
       value: d.total ? (d.used / d.total) * 100 : 0,
       raw: `${formatBytes(d.used)} / ${formatBytes(d.total)}`,
     })) },
-  { id: "c.diskRead", group: "Disk", label: "Disk-Leserate (R-Speed)",
+  { id: "c.diskRead", group: "Disk", get label() { return t("mk_c_diskRead"); },
     charts: ["number", "line"], format: fmtBps,
     value: (c) => num(m(c).diskRead) },
-  { id: "c.diskWrite", group: "Disk", label: "Disk-Schreibrate (W-Speed)",
+  { id: "c.diskWrite", group: "Disk", get label() { return t("mk_c_diskWrite"); },
     charts: ["number", "line"], format: fmtBps,
     value: (c) => num(m(c).diskWrite) },
-  { id: "c.diskIO", group: "Disk", label: "Disk-Durchsatz (R+W)",
+  { id: "c.diskIO", group: "Disk", get label() { return t("mk_c_diskIO"); },
     charts: ["number", "line", "info"], format: fmtBps,
     value: (c) => (m(c).diskRead != null ? (m(c).diskRead || 0) + (m(c).diskWrite || 0) : null),
     rows: (c) => [
@@ -158,78 +159,78 @@ export const CLIENT_PRESETS = [
     ] },
 
   // =============== Netzwerk ===============
-  { id: "c.netIn", group: "Netzwerk", label: "Netzwerk ↓ (Empfang)",
+  { id: "c.netIn", group: "Netzwerk", get label() { return t("mk_c_netIn"); },
     charts: ["number", "line"], format: fmtBps, value: (c) => num(m(c).netIn) },
-  { id: "c.netOut", group: "Netzwerk", label: "Netzwerk ↑ (Senden)",
+  { id: "c.netOut", group: "Netzwerk", get label() { return t("mk_c_netOut"); },
     charts: ["number", "line"], format: fmtBps, value: (c) => num(m(c).netOut) },
-  { id: "c.netBoth", group: "Netzwerk", label: "Netzwerk gesamt (↓+↑)",
+  { id: "c.netBoth", group: "Netzwerk", get label() { return t("mk_c_netBoth"); },
     charts: ["number", "line", "info"], format: fmtBps,
     value: (c) => (m(c).netIn != null ? (m(c).netIn || 0) + (m(c).netOut || 0) : null),
     rows: (c) => [
       { label: "↓ Empfang", raw: m(c).netIn != null ? fmtBps(m(c).netIn) : "—" },
       { label: "↑ Senden", raw: m(c).netOut != null ? fmtBps(m(c).netOut) : "—" },
     ] },
-  { id: "c.pingGoogle", group: "Netzwerk", label: "Ping Google (8.8.8.8)",
+  { id: "c.pingGoogle", group: "Netzwerk", get label() { return t("mk_c_pingGoogle"); },
     charts: ["number", "line", "gauge"], format: fmtMs, max: 200,
     value: (c) => num(m(c).ping?.google) },
-  { id: "c.pingCf", group: "Netzwerk", label: "Ping Cloudflare (1.1.1.1)",
+  { id: "c.pingCf", group: "Netzwerk", get label() { return t("mk_c_pingCf"); },
     charts: ["number", "line", "gauge"], format: fmtMs, max: 200,
     value: (c) => num(m(c).ping?.cloudflare) },
 
   // =============== Strom & Sensoren ===============
-  { id: "c.power", group: "Strom & Sensoren", label: "Stromverbrauch",
+  { id: "c.power", group: "Strom & Sensoren", get label() { return t("mk_c_power"); },
     charts: ["number", "line", "gauge"], format: fmtW, max: 300,
     value: (c) => num(m(c).powerWatts) },
-  { id: "c.fan", group: "Strom & Sensoren", label: "Lüfterdrehzahl",
+  { id: "c.fan", group: "Strom & Sensoren", get label() { return t("mk_c_fan"); },
     charts: ["number", "line", "gauge"], format: fmtRpm, max: 5000,
     value: (c) => num(m(c).fanSpeed) },
-  { id: "c.fansAll", group: "Strom & Sensoren", label: "Lüfter (alle)",
+  { id: "c.fansAll", group: "Strom & Sensoren", get label() { return t("mk_c_fansAll"); },
     charts: ["bars", "info"],
     rows: (c) => {
       const f = m(c).fans || {};
       const keys = Object.keys(f);
       return keys.length ? keys.map((k) => ({ label: k, value: f[k], raw: fmtRpm(f[k]) }))
-                         : [{ label: "Lüfter", raw: "nicht verfügbar" }];
+                         : [{ label: t("u_lufter"), raw: t("u_nicht_verfugbar") }];
     } },
-  { id: "c.tempsAll", group: "Strom & Sensoren", label: "Temperaturen (alle Sensoren)",
+  { id: "c.tempsAll", group: "Strom & Sensoren", get label() { return t("mk_c_tempsAll"); },
     charts: ["bars", "info"],
     rows: (c) => {
       const tps = m(c).temps || {};
       const keys = Object.keys(tps);
       return keys.length ? keys.map((k) => ({ label: k, value: tps[k], raw: fmtC(tps[k]) }))
-                         : [{ label: "Sensoren", raw: "nicht verfügbar" }];
+                         : [{ label: t("u_sensoren"), raw: t("u_nicht_verfugbar") }];
     } },
-  { id: "c.battery", group: "Strom & Sensoren", label: "Akku",
+  { id: "c.battery", group: "Strom & Sensoren", get label() { return t("mk_c_battery"); },
     charts: ["gauge", "donut", "number", "info"], unit: "%", format: fmtPct, max: 100,
     value: (c) => num(m(c).battery?.percent),
     rows: (c) => {
       const b = m(c).battery;
-      if (!b) return [{ label: "Akku", raw: "nicht vorhanden" }];
+      if (!b) return [{ label: t("u_akku"), raw: t("u_nicht_vorhanden") }];
       return [
-        { label: "Ladestand", raw: `${b.percent}%` },
+        { label: t("u_ladestand"), raw: `${b.percent}%` },
         { label: "Netzteil", raw: b.plugged ? "angeschlossen ⚡" : "getrennt" },
         { label: "Restlaufzeit", raw: b.secsleft ? formatUptime(b.secsleft) : "—" },
       ];
     } },
 
   // =============== Hardware (statisch) ===============
-  { id: "c.cpuModel", group: "Hardware", label: "CPU-Modell",
+  { id: "c.cpuModel", group: "Hardware", get label() { return t("mk_c_cpuModel"); },
     charts: ["info"], text: (c) => m(c).cpuModel || "—" },
-  { id: "c.gpuModel", group: "Hardware", label: "GPU-Modell(e)",
+  { id: "c.gpuModel", group: "Hardware", get label() { return t("mk_c_gpuModel"); },
     charts: ["info"],
     rows: (c) => {
       const g = m(c).gpuModels || [];
       return g.length ? g.map((x, i) => ({ label: `GPU ${i + 1}`, raw: x })) : [{ label: "GPU", raw: "—" }];
     } },
-  { id: "c.ramModules", group: "Hardware", label: "RAM-Module",
+  { id: "c.ramModules", group: "Hardware", get label() { return t("mk_c_ramModules"); },
     charts: ["info"],
     rows: (c) => {
       const mods = m(c).ramModules || [];
       return mods.length ? mods.map((x, i) => ({ label: `Modul ${i + 1}`, raw: ramModuleDesc(x) })) : [{ label: "RAM", raw: "—" }];
     } },
-  { id: "c.arch", group: "Hardware", label: "Architektur",
+  { id: "c.arch", group: "Hardware", get label() { return t("mk_c_arch"); },
     charts: ["info"], text: (c) => m(c).arch || c.arch || "—" },
-  { id: "c.sysinfo", group: "Hardware", label: "Systeminfo (kompakt)",
+  { id: "c.sysinfo", group: "Hardware", get label() { return t("mk_c_sysinfo"); },
     charts: ["info"],
     rows: (c) => [
       { label: "CPU", raw: m(c).cpuModel || "—" },
@@ -242,24 +243,24 @@ export const CLIENT_PRESETS = [
     ] },
 
   // =============== System ===============
-  { id: "c.uptime", group: "System", label: "Uptime",
+  { id: "c.uptime", group: "System", get label() { return t("mk_c_uptime"); },
     charts: ["number"], format: (v) => formatUptime(v),
     value: (c) => num(m(c).uptime) },
 
   // =============== Netzwerk-Identität (statisch) ===============
-  { id: "c.ipAddr", group: "Identität", label: "IP-Adresse",
+  { id: "c.ipAddr", group: "Identität", get label() { return t("mk_c_ipAddr"); },
     charts: ["info"], text: (c) => c.ip || m(c).ip || "—" },
-  { id: "c.macAddr", group: "Identität", label: "MAC-Adresse",
+  { id: "c.macAddr", group: "Identität", get label() { return t("mk_c_macAddr"); },
     charts: ["info"], text: (c) => m(c).mac || "—" },
-  { id: "c.hostnameId", group: "Identität", label: "Hostname",
+  { id: "c.hostnameId", group: "Identität", get label() { return t("mk_c_hostnameId"); },
     charts: ["info"], text: (c) => m(c).hostname || c.hostname || "—" },
-  { id: "c.osFull", group: "Identität", label: "Betriebssystem",
+  { id: "c.osFull", group: "Identität", get label() { return t("mk_c_osFull"); },
     charts: ["info"], text: (c) => `${c.platform || "?"} ${c.release || ""}`.trim() || "—" },
-  { id: "c.agentVer", group: "Identität", label: "Agent-Version",
+  { id: "c.agentVer", group: "Identität", get label() { return t("mk_c_agentVer"); },
     charts: ["info"], text: (c) => c.agent_version || "—" },
-  { id: "c.deviceType", group: "Identität", label: "Gerätetyp",
-    charts: ["info"], text: (c) => ({ vm: "Virtuelle Maschine", lxc: "LXC-Container", physical: "Physisches Gerät" }[c.device_type || "physical"]) },
-  { id: "c.interfaces", group: "Identität", label: "Netzwerk-Interfaces",
+  { id: "c.deviceType", group: "Identität", get label() { return t("mk_c_deviceType"); },
+    charts: ["info"], text: (c) => ({ vm: t("u_vm_full"), lxc: t("u_lxc_full"), physical: t("u_physisch_full") }[c.device_type || "physical"]) },
+  { id: "c.interfaces", group: "Identität", get label() { return t("mk_c_interfaces"); },
     charts: ["info"],
     rows: (c) => {
       const ifs = m(c).interfaces || [];
@@ -267,7 +268,7 @@ export const CLIENT_PRESETS = [
         ? ifs.map((n) => ({ label: n.name, raw: [n.ipv4, n.mac].filter(Boolean).join("  ·  ") || "—" }))
         : [{ label: "Interfaces", raw: "—" }];
     } },
-  { id: "c.netIdentity", group: "Identität", label: "Netzwerk-Übersicht",
+  { id: "c.netIdentity", group: "Identität", get label() { return t("mk_c_netIdentity"); },
     charts: ["info"],
     rows: (c) => [
       { label: "Hostname", raw: m(c).hostname || c.hostname || "—" },
@@ -275,7 +276,7 @@ export const CLIENT_PRESETS = [
       { label: "MAC-Adresse", raw: m(c).mac || "—" },
       { label: "Interfaces", raw: String((m(c).interfaces || []).length || "—") },
       { label: "OS", raw: `${c.platform || "?"} ${c.release || ""}`.trim() || "—" },
-      { label: "Gerätetyp", raw: ({ vm: "VM", lxc: "LXC", physical: "Physisch" }[c.device_type || "physical"]) },
+      { label: t("u_geraetetyp"), raw: ({ vm: "VM", lxc: "LXC", physical: t("u_physisch") }[c.device_type || "physical"]) },
     ] },
 ];
 
@@ -804,4 +805,14 @@ export function renderClientMetric(target, client, panel) {
     target.innerHTML = `<div class="widget-text" style="width:${NAT_W}px;font-size:16px;line-height:1.45;text-align:center">${esc(preset.text ? preset.text(client) : formatClientValue(preset, v))}</div>`;
   }
   scaleToContainer(holder);
+}
+
+// Gruppennamen werden NUR für die Anzeige übersetzt. Der Wert von
+// preset.group bleibt unverändert, weil er als Schlüssel dient:
+// presetAvailable() prüft ihn gegen HIDE_GROUPS_VM/_LXC. Würde man ihn
+// übersetzen, greifen diese Filter still nicht mehr und VMs bekämen
+// plötzlich GPU- und Hardware-Panels angeboten.
+export function groupLabel(group) {
+  const keys = {"CPU": "mg_cpu", "GPU": "mg_gpu", "RAM": "mg_ram", "Disk": "mg_disk", "Netzwerk": "mg_netzwerk", "Strom & Sensoren": "mg_strom_sensoren", "Hardware": "mg_hardware", "System": "mg_system", "Identität": "mg_identit_t", "Flotte": "mg_flotte", "Verteilung": "mg_verteilung", "Strom": "mg_strom", "Sensorik": "mg_sensorik", "Temperatur": "mg_temperatur", "Updates": "mg_updates"};
+  return keys[group] ? t(keys[group]) : group;
 }

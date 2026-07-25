@@ -15,6 +15,7 @@
 
 import { uiPrompt, uiConfirm } from "./utils.js";
 import { getDashEdit } from "./persist.js";
+import { t } from "./i18n.js";
 
 let CATALOG = {};          // id -> { id, icon, label }
 let CATALOG_ORDER = [];    // Reihenfolge aus dem DOM (für Neu-Apps)
@@ -199,7 +200,7 @@ function appTile(id) {
   el.dataset.app = id;
   el.draggable = editMode;
   el.innerHTML = `<span class="app-icon">${c.icon || ""}</span><span class="sm-label">${c.label}</span>`
-    + (editMode ? `<span class="sm-remove" title="Aus dem Menü entfernen">✕</span>` : "");
+    + (editMode ? `<span class="sm-remove" title="${t("u_aus_dem_menu_entfernen")}">✕</span>` : "");
   if (!isAllowed(id)) el.style.display = "none";
   return el;
 }
@@ -216,7 +217,7 @@ function folderTile(folder) {
     <span class="app-icon sm-folder-icon">${preview || "📁"}</span>
     <span class="sm-folder-name">${folder.name}</span>
     <span class="sm-folder-count">${count} App${count === 1 ? "" : "s"}</span>
-    ${editMode ? `<span class="sm-remove" title="Ordner löschen">✕</span>` : ""}`;
+    ${editMode ? `<span class="sm-remove" title=t("src_folder_del")>✕</span>` : ""}`;
   return el;
 }
 
@@ -309,7 +310,7 @@ function folderDrawer(folder) {
   head.innerHTML = `<b>${folder.name}</b>
     <span class="sm-drawer-tools">
       ${editMode ? `<button class="sm-ren" title="Umbenennen">Umbenennen</button>` : ""}
-      <button class="sm-close" title="Schließen">Schließen</button>
+      <button class="sm-close" title="${t("close")}">Schließen</button>
     </span>`;
   head.querySelector(".sm-close").addEventListener("click", () => {
     folder.open = false; save(); render();
@@ -536,7 +537,7 @@ async function deleteFolder(idx) {
   if (apps.length) {
     const ok = await uiConfirm(`Ordner „${it.name}" löschen?`, {
       description: `Die ${apps.length} enthaltene(n) App(s) wandern zurück ins Menü.`,
-      okText: "Löschen", danger: true,
+      okText: t("delete"), danger: true,
     });
     if (!ok) return;
   }

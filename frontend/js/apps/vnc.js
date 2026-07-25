@@ -16,6 +16,7 @@ import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc, mapKeyboardText, uiPrompt } from "../utils.js";
 import { renderTerminal } from "./terminal.js";
+import { t } from "../i18n.js";
 
 export function renderVnc(body, win) {
   const { clientId, clientName } = win.props;
@@ -32,11 +33,11 @@ export function renderVnc(body, win) {
           <input type="checkbox" id="vnc-control-${win.key}" checked /> Steuerung aktiv
         </label>
         <select id="vnc-monitor-${win.key}" style="display:none;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px"
-          title="Bildschirm des Remote-PCs auswählen"></select>
+          title="${t("u_bildschirm_des_remote_pcs_auswahle")}"></select>
         <span style="width:1px;height:16px;background:var(--border)"></span>
-        <button class="taskbar-btn" id="vnc-mod-ctrl-${win.key}" title="Strg gedrückt halten (Toggle) - wirkt auf folgende Tasten">Strg</button>
-        <button class="taskbar-btn" id="vnc-mod-alt-${win.key}" title="Alt gedrückt halten (Toggle) - wirkt auf folgende Tasten">Alt</button>
-        <button class="taskbar-btn" id="vnc-mod-win-${win.key}" title="Windows-Taste gedrückt halten (Toggle) - wirkt auf folgende Tasten">Win</button>
+        <button class="taskbar-btn" id="vnc-mod-ctrl-${win.key}" title="${t("u_strg_gedruckt_halten_toggle_wirkt_")}">Strg</button>
+        <button class="taskbar-btn" id="vnc-mod-alt-${win.key}" title="${t("u_alt_gedruckt_halten_toggle_wirkt_a")}">Alt</button>
+        <button class="taskbar-btn" id="vnc-mod-win-${win.key}" title="${t("u_windows_taste_gedruckt_halten_togg")}">Win</button>
         <button class="taskbar-btn" id="vnc-key-tab-${win.key}" title="Tab senden">Tab</button>
         <button class="taskbar-btn" id="vnc-key-esc-${win.key}" title="Esc senden">Esc</button>
         <button class="taskbar-btn" id="vnc-ctrlaltdel-${win.key}">Strg+Alt+Entf</button>
@@ -57,7 +58,7 @@ export function renderVnc(body, win) {
           <option value="us">US-Layout</option>
           <option value="de">DE-Layout</option>
         </select>
-        <input type="text" id="vnc-text-${win.key}" placeholder="Text eingeben, dann Senden oder Enter..."
+        <input type="text" id="vnc-text-${win.key}" placeholder="${t("guac_text_ph")}"
           style="flex:1;padding:5px 8px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text)" />
         <button class="taskbar-btn" id="vnc-send-${win.key}">Senden</button>
       </div>
@@ -159,7 +160,7 @@ export function renderVnc(body, win) {
     let text = "";
     try { text = await navigator.clipboard.readText(); } catch {}
     if (!text) {
-      window.notify?.("Lokale Zwischenablage ist leer oder Zugriff verweigert (HTTPS nötig).", "warn");
+      window.notify?.(t("guac_clip_empty"), "warn");
       return;
     }
     dashboardSocket.emit("screen-input", { clientId, type: "clipboard-set", text });
@@ -175,12 +176,12 @@ export function renderVnc(body, win) {
     const text = data.text || "";
     try {
       await navigator.clipboard.writeText(text);
-      window.notify?.("Remote-Zwischenablage übernommen (" + text.length + " Zeichen)", "success");
+      window.notify?.(t("u_remote_zwischenablage_ubernommen") + text.length + " Zeichen)", "success");
     } catch {
       // Clipboard-API blockiert (z.B. HTTP): Text zum manuellen Kopieren zeigen.
       uiPrompt("Remote-Zwischenablage", {
-        description: "Text markieren und mit Strg+C kopieren:",
-        value: text, okText: "Schließen" });
+        description: t("guac_copy_manual"),
+        value: text, okText: t("close") });
     }
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
@@ -231,10 +232,10 @@ export function renderVnc(body, win) {
     banner.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border);flex-wrap:wrap";
     const label = document.createElement("span");
     label.style.flex = "1";
-    label.textContent = "🖥️ → ⌨️ " + (reason || "Kein grafischer Bildschirm – Shell geöffnet.");
+    label.textContent = "🖥️ → ⌨️ " + (reason || t("u_kein_grafischer_bildschirm_shell_g"));
     const guacBtn = document.createElement("button");
     guacBtn.className = "taskbar-btn";
-    guacBtn.textContent = "🕹️ Über Guacamole (RDP/VNC/SSH)";
+    guacBtn.textContent = t("u_uber_guacamole_rdp_vnc_ssh");
     guacBtn.addEventListener("click", openGuacWindow);
     banner.appendChild(label);
     banner.appendChild(guacBtn);
@@ -285,11 +286,11 @@ export function renderVnc(body, win) {
     if (data.consent_denied) {
       // Der Benutzer am Gerät hat nicht zugestimmt - das ist KEIN technischer
       // Fehler, deshalb ohne Alternativen-Angebot anzeigen.
-      statusEl.textContent = "Am Gerät abgelehnt — keine Bestätigung durch den Benutzer";
+      statusEl.textContent = t("u_am_gerat_abgelehnt_keine_bestatigu");
       statusEl.style.color = "var(--danger)";
       return;
     }
-    statusEl.textContent = "Kein Bildschirm verfügbar";
+    statusEl.textContent = t("u_kein_bildschirm_verfugbar");
     statusEl.style.color = "var(--danger)";
     showRdpOffer(data.error);
   }
@@ -300,7 +301,7 @@ export function renderVnc(body, win) {
     if (data.mode === "shell") switchToShell(data.reason);
     if (data.mode === "consent") {
       // Am Gerät wird gerade um Zustimmung gebeten.
-      statusEl.textContent = "Warte auf Bestätigung am Gerät…";
+      statusEl.textContent = t("u_warte_auf_bestatigung_am_gerat");
       statusEl.style.color = "var(--subtext)";
     }
   }
@@ -345,7 +346,7 @@ export function renderVnc(body, win) {
 
     // Shell im selben Fenster öffnen (funktioniert immer, auch headless)
     overlay.querySelector(`#rdp-shell-${win.key}`).addEventListener("click", () => {
-      switchToShell("Shell geöffnet.");
+      switchToShell(t("u_shell_geoffnet"));
     });
 
     // Über Guacamole verbinden (RDP/VNC/SSH über guacd) - eigenes Fenster

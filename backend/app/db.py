@@ -775,6 +775,74 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_erasure_status
             ON erasure_requests(status, created_at);
+
+        -- ----------------------------------------------------------
+        -- SOFTWARE-PATCHING
+        -- patches = Bestand je Client aus dem letzten Scan. Wird bei jedem
+        -- Scan für den Client ersetzt, nicht ergänzt - sonst stehen längst
+        -- installierte Updates ewig in der Liste.
+        -- level: security | critical | important | moderate | low | feature | other
+        -- source: windows-update | winget | apt | dnf
+        -- ----------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS patches (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            uid TEXT NOT NULL,              -- Kennung beim Paketmanager
+            name TEXT NOT NULL,
+            current_version TEXT NOT NULL DEFAULT '',
+            available_version TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            level TEXT NOT NULL DEFAULT 'other',
+            size INTEGER NOT NULL DEFAULT 0,
+            needs_reboot INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',  -- pending | installing | installed | failed | excluded
+            error TEXT NOT NULL DEFAULT '',
+            found_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_patches_client
+            ON patches(client_id, status, level);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_patches_unique
+            ON patches(client_id, source, uid);
+
+        -- Auto-Patch-Regeln. scope='global' gilt für alle Clients, die auf
+        -- 'global' stehen; scope='client' mit client_id sticht die globale
+        -- Regel. Gleiche Logik wie beim Agent-Auto-Update.
+        CREATE TABLE IF NOT EXISTS patch_rules (
+            id TEXT PRIMARY KEY,
+            scope TEXT NOT NULL DEFAULT 'global',   -- 'global' | 'client'
+            client_id TEXT,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            levels TEXT NOT NULL DEFAULT 'security,critical',  -- kommagetrennt
+            sources TEXT NOT NULL DEFAULT '',       -- leer = alle Quellen
+            window_start TEXT NOT NULL DEFAULT '02:00',
+            window_end TEXT NOT NULL DEFAULT '05:00',
+            weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',    -- 1=Mo
+            auto_reboot INTEGER NOT NULL DEFAULT 0,
+            exclusions TEXT NOT NULL DEFAULT '',    -- kommagetrennte uids
+            scan_interval_hours INTEGER NOT NULL DEFAULT 24,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_patch_rules_client
+            ON patch_rules(scope, COALESCE(client_id, ''));
+
+        -- Verlauf: was wurde wann von wem (oder automatisch) installiert.
+        CREATE TABLE IF NOT EXISTS patch_runs (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            trigger TEXT NOT NULL DEFAULT 'manual',  -- 'manual' | 'auto'
+            actor TEXT NOT NULL DEFAULT '',
+            requested INTEGER NOT NULL DEFAULT 0,
+            installed INTEGER NOT NULL DEFAULT 0,
+            failed INTEGER NOT NULL DEFAULT 0,
+            needs_reboot INTEGER NOT NULL DEFAULT 0,
+            detail TEXT NOT NULL DEFAULT '',
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_patch_runs_client
+            ON patch_runs(client_id, started_at);
         """
     )
     _conn.commit()
@@ -786,6 +854,14 @@ def init_db() -> None:
     # Arbeitsbereich / Abteilung eines Benutzers (frei wählbarer Text).
     _migrate_add_column("users", "workspace", "TEXT")
     _migrate_add_column("erasure_requests", "note", "TEXT NOT NULL DEFAULT ''")
+    # Patch-Zusammenfassung direkt am Client: list_clients() macht SELECT *,
+    # damit stehen die Werte ohne Zusatzabfrage in jedem Dashboard-Widget.
+    _migrate_add_column("clients", "patch_policy", "TEXT NOT NULL DEFAULT 'global'")
+    _migrate_add_column("clients", "patch_count", "INTEGER NOT NULL DEFAULT 0")
+    _migrate_add_column("clients", "patch_security", "INTEGER NOT NULL DEFAULT 0")
+    _migrate_add_column("clients", "patch_critical", "INTEGER NOT NULL DEFAULT 0")
+    _migrate_add_column("clients", "patch_reboot", "INTEGER NOT NULL DEFAULT 0")
+    _migrate_add_column("clients", "patch_last_scan", "INTEGER")
     _migrate_add_column("note_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _migrate_add_column("ticket_comment_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _conn.commit()
@@ -1401,7 +1477,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
-        "device_type_ack", "fav_dir", "warranty_until",
+        "device_type_ack", "fav_dir", "warranty_until", "patch_policy",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -1657,6 +1733,8 @@ GLOBAL_PERM_KEYS = [
     "use_chat",
     # Persönliche Todo-Liste (streng privat, keine Freigaben)
     "use_todos",
+    # Software-Patching: Bestand sehen und Updates anstoßen bzw. Regeln setzen.
+    "patching", "manage_patching",
     # Datenschutz: Fristen setzen, Auskunft über Dritte, Löschung ausführen.
     # Bewusst NICHT in 'admin_settings' enthalten - wer Server-Einstellungen
     # ändern darf, muss nicht automatisch fremde Personendaten einsehen.
@@ -1696,6 +1774,7 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_taskmanager_view", "c_taskmanager_kill",
     "c_relay", "c_relay_unlimited",
     "c_notes_view", "c_notes_edit",
+    "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
     "c_websites_view", "c_websites_edit",
     "c_screen_silent",      # Remote-Bildschirm ohne Anfrage (pro Client)
     "set_warranty",         # Garantie-Datum dieses Clients setzen/ändern
@@ -1754,6 +1833,8 @@ _PERM_IMPLIES = {
     "manage_permissions": ["see_permissions"],
     "manage_org": ["see_org"],
     "manage_calendar": ["use_calendar"],
+    "manage_patching": ["patching"],
+    "c_patch_apply": ["c_patch_view"],
     "edit_source": ["see_source"],
     "delete_source": ["see_source", "edit_source"],
     "relay_unlimited": ["use_relay"],
@@ -2109,6 +2190,18 @@ DEFAULT_SETTINGS = {
     # 0 = UNBEGRENZT: es wird nie automatisch gelöscht - die Graphen zeigen
     # nach einem Browser-Reload immer die komplette bisherige Historie.
     "metrics_retention_hours": "0",
+    # --- Host-Sperre: Zugriff nur über die hinterlegten Adressen ---
+    # "0" = aus (Standard). Bewusst aus, weil eine falsch gesetzte Sperre
+    # den Zugang kostet; siehe hostlock.py.
+    "host_lock_enabled": "0",
+    # 'ui'  = nur Oberfläche/API sperren, Agenten kommen weiter durch
+    # 'all' = auch Agenten-Verbindungen (Socket.IO) prüfen
+    "host_lock_scope": "ui",
+    # Zusätzlich erlaubte Adressen, kommagetrennt (z.B. interner DNS-Name).
+    "host_lock_extra": "",
+    # X-Forwarded-Host vertrauen? Nur einschalten, wenn wirklich ein
+    # Reverse Proxy davorsteht - sonst hebelt jeder die Sperre selbst aus.
+    "host_lock_trust_proxy": "0",
     # --- Aufbewahrungsfristen (DSGVO Art. 5 Abs. 1 lit. e) ---
     # Überall gilt: 0 = unbegrenzt. Das ist eine bewusste Entscheidung und
     # sollte begründet sein - "aus Versehen für immer" ist kein Rechtsgrund.
@@ -2146,6 +2239,12 @@ DEFAULT_SETTINGS = {
     # beim Verbinden selbst (Clients mit auto_update='global' folgen dieser
     # Einstellung; 'on'/'off' pro Client hat Vorrang). Default aus.
     "agent_auto_update": "0",
+    # --- Software-Patching ---
+    # Wie oft die Agenten nach Aktualisierungen suchen (Stunden).
+    "patch_scan_interval_hours": "24",
+    # Master-Schalter fürs automatische Einspielen. Clients mit
+    # patch_policy='global' folgen ihm; 'on'/'off' pro Client sticht.
+    "patch_auto_enabled": "0",
     # --- SMTP (E-Mail-Benachrichtigungen) ---
     "smtp_host": "",
     "smtp_port": "587",

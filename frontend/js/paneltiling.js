@@ -1,3 +1,4 @@
+import { t } from "./i18n.js";
 // paneltiling.js
 // --------------
 // Geteilte, komplett modulare Resize-Engine für Kachel-Layouts (Dashboard-
@@ -38,14 +39,14 @@ export function attachEdgeResizers(card, host, opts = {}) {
 
   const gx = document.createElement("div");
   gx.className = "tile-grip tile-grip-x";
-  gx.title = "Ziehen: Breite ändern · Linksklick = alle angrenzenden · Rechtsklick = nur diese beiden";
+  gx.title = t("u_ziehen_breite_andern_linksklick_al");
   gx.addEventListener("contextmenu", (e) => e.preventDefault());
   gx.addEventListener("mousedown", (e) => startWidth(e));
   card.appendChild(gx);
 
   const gy = document.createElement("div");
   gy.className = "tile-grip tile-grip-y";
-  gy.title = "Ziehen: Höhe ändern · Linksklick = alle angrenzenden · Rechtsklick = nur diese beiden";
+  gy.title = t("u_ziehen_hohe_andern_linksklick_alle");
   gy.addEventListener("contextmenu", (e) => e.preventDefault());
   gy.addEventListener("mousedown", (e) => startHeight(e));
   card.appendChild(gy);

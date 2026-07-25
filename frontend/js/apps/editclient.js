@@ -8,6 +8,8 @@ import { state, findClient } from "../state.js";
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
 import { closeWindow, openWindow } from "../windowmanager.js";
+// t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
+import { t as tr } from "../i18n.js";
 
 // Wird von app.js gesetzt, um nach Änderungen alles neu zu laden
 let onChanged = null;
@@ -243,7 +245,7 @@ export function renderEditClient(body, win) {
   });
 
   body.querySelector("#ec-delete").addEventListener("click", async () => {
-    if (!(await uiConfirm(`Client "${client.hostname}" wirklich löschen?`, { okText: "Client löschen", danger: true }))) return;
+    if (!(await uiConfirm(`Client "${client.hostname}" wirklich löschen?`, { okText: tr("u_client_loschen"), danger: true }))) return;
     await api.deleteClient(client.id);
     state.selection = null;
     closeWindow(win.key);

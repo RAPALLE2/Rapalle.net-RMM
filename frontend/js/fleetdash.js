@@ -20,10 +20,11 @@ import {
   getFleetWidgets, setFleetWidgets, getDashEdit, setDashEdit, scheduleSave,
   getOrgDefaultFleet,
 } from "./persist.js";
-import { presetsByGroup, presetById } from "./metriccatalog.js";
+import { presetsByGroup, presetById, groupLabel } from "./metriccatalog.js";
 import { renderWidgetBody, widgetTitle, pushWidgetHistory, availableKinds } from "./dashwidgets.js";
 import { openWindow } from "./windowmanager.js";
 import { api } from "./api.js";
+import { t } from "./i18n.js";
 // GEMEINSAME Raster-Engine (identisch mit der Client-Ansicht/dashlayout.js).
 import {
   COLS, BASE_ROWS, ROW_H, GAP, clamp, overlap, clampTile, compact, neededRows,
@@ -145,13 +146,13 @@ export function renderFleetWidgets(host, toolbar) {
     // Gleiche Werkzeuge/Wording wie die Client-Ansicht (dashlayout).
     toolbar.innerHTML = edit ? `<span class="dash-edit-tools">
           <button data-add-panel>+ Panel</button>
-          <button data-reset title="Auf Standard zurücksetzen">↺ Standard</button>
-          ${isAdmin() ? `<button data-set-default title="Aktuelle Dashboard-Widgets als Standard für ALLE Nutzer speichern">💾 Als Standard für alle</button>` : ""}
+          <button data-reset title="${t("dl_reset")}">↺ Standard</button>
+          ${isAdmin() ? `<button data-set-default title="${t("u_aktuelle_dashboard_widgets_als_sta")}">💾 Als Standard für alle</button>` : ""}
           <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="Bearbeiten-Modus verlassen">✓ Bearbeiten beenden</button>
         </span>` : "";
     toolbar.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddDialog(host, toolbar, null));
     toolbar.querySelector("[data-reset]")?.addEventListener("click", async () => {
-      const ok = await uiConfirm("Layout auf Standard zurücksetzen?", { okText: "Zurücksetzen", danger: true });
+      const ok = await uiConfirm(t("dl_reset_q"), { okText: t("dl_reset_ok"), danger: true });
       if (!ok) return;
       setFleetWidgets(defaults()); save(); renderFleetWidgets(host, toolbar);
     });
@@ -161,13 +162,13 @@ export function renderFleetWidgets(host, toolbar) {
       try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
     });
     toolbar.querySelector("[data-set-default]")?.addEventListener("click", async () => {
-      if (!(await uiConfirm("Aktuelle Dashboard-Widgets als Standard für ALLE Nutzer setzen?", {
-        description: "Neue Nutzer und alle, die auf \"Standard\" zurücksetzen, bekommen diese Widgets. Bestehende eigene Anordnungen bleiben unangetastet.",
+      if (!(await uiConfirm(t("u_aktuelle_dashboard_widgets_als_sta_2"), {
+        description: t("u_neue_nutzer_und_alle_die_auf_stand"),
         okText: "Als Standard speichern" }))) return;
       try {
         await api.setDefaultLayout("fleet", widgets());
         window.notify?.("Als organisationsweiter Standard gespeichert.", "success");
-      } catch (e) { window.notify?.("Speichern fehlgeschlagen: " + e.message, "error"); }
+      } catch (e) { window.notify?.(t("u_speichern_fehlgeschlagen") + e.message, "error"); }
     });
   }
 
@@ -242,7 +243,7 @@ function renderEmptyCells(host, list, rows, ctx) {
       cell.className = "grid-empty-cell";
       cell.style.gridColumn = `${x + 1} / span 1`;
       cell.style.gridRow = `${y + 1} / span 1`;
-      cell.title = "Hier ein Panel einfügen";
+      cell.title = t("dl_cell_hint");
       cell.innerHTML = "<span>+</span>";
       cell.addEventListener("click", () => openAddDialog(host, ctx.toolbar, { gx: x, gy: y }));
       host.appendChild(cell);
@@ -300,7 +301,7 @@ function buildWidget(wdg, ctx) {
     // Flotten-Aggregate.
     const scopeSel = document.createElement("select");
     scopeSel.className = "dash-w-kind";
-    scopeSel.title = "Welche Geräte zählt dieses Widget?";
+    scopeSel.title = t("u_welche_gerate_zahlt_dieses_widget");
     scopeSel.innerHTML = `
       <option value="all" ${(wdg.scope || "all") === "all" ? "selected" : ""}>alle Geräte</option>
       <option value="physical" ${wdg.scope === "physical" ? "selected" : ""}>nur physische</option>
@@ -311,16 +312,16 @@ function buildWidget(wdg, ctx) {
 
 
   const pop = document.createElement("button");
-  pop.className = "dash-w-btn"; pop.title = "Als Fenster herauslösen"; pop.textContent = "↗️";
+  pop.className = "dash-w-btn"; pop.title = t("u_als_fenster_herauslosen"); pop.textContent = "↗️";
   pop.addEventListener("click", (e) => { e.stopPropagation(); detachWidget(wdg); });
   tools.appendChild(pop);
 
   if (edit) {
     const ren = document.createElement("button");
-    ren.className = "dash-w-btn"; ren.title = "Titel ändern"; ren.textContent = "✏️";
+    ren.className = "dash-w-btn"; ren.title = t("u_titel_andern"); ren.textContent = "✏️";
     ren.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const name = await uiPrompt("Widget-Titel ändern", {
+      const name = await uiPrompt(t("u_widget_titel_andern"), {
         description: "Leer lassen = Standard-Titel des Presets.", value: wdg.title || "" });
       if (name !== null) { wdg.title = name.trim() || null; save(); head.querySelector(".dash-w-title").textContent = widgetTitle(wdg); }
     });
@@ -420,7 +421,7 @@ function openAddDialog(host, toolbar, atCell) {
           </button>
         </div>
         ${groups.map(([group, presets]) => `
-          <div class="wp-group-title">${esc(group)}</div>
+          <div class="wp-group-title">${esc(groupLabel(group))}</div>
           <div class="wp-grid">
             ${presets.map((p) => `
               <button class="wp-item" data-preset="${esc(p.id)}" data-kind="${esc((p.charts || ["number"])[0])}">
@@ -438,7 +439,7 @@ function openAddDialog(host, toolbar, atCell) {
     b.addEventListener("click", () => {
       const arr = widgets();
       const w = b.dataset.textWidget
-        ? { id: nid(), kind: "text", text: "Neuer Text – im Bearbeiten-Modus anklicken zum Ändern.", gw: 1, gh: 1 }
+        ? { id: nid(), kind: "text", text: t("u_neuer_text_im_bearbeiten_modus_ank"), gw: 1, gh: 1 }
         : { id: nid(), preset: b.dataset.preset, kind: b.dataset.kind,
             // Listen-/Tabellen-artige Darstellungen brauchen von Anfang an
             // mehr Platz, sonst sieht man nur zwei Zeilen.

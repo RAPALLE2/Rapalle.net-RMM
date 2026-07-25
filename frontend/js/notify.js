@@ -1,3 +1,4 @@
+import { t } from "./i18n.js";
 // notify.js
 // ---------
 // Zeigt schöne, von oben einfahrende Benachrichtigungen/Fehlermeldungen.
@@ -182,7 +183,7 @@ export function notifyError(message, level = "error", context = null, durationMs
   const expectedDetails = context ? `[${context}] ${message}` : message;
   const opts = logged ? {
     action: {
-      label: "📋 Im Audit öffnen",
+      label: t("u_im_audit_offnen"),
       onClick: () => {
         import("./windowmanager.js").then(({ openWindow }) => {
           openWindow({ singleton: true, key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });

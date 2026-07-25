@@ -12,11 +12,14 @@ import { api } from "../api.js";
 import { state, isAdmin, hasGlobalPerm } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker, splitGroups } from "../subjectpicker.js";
+// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
+// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+import { t as tr } from "../i18n.js";
 
 const STATUS = {
   open:        { label: "Offen",         color: "#4da6ff" },
   in_progress: { label: "In Bearbeitung", color: "#ffd166" },
-  resolved:    { label: "Gelöst",        color: "#3ecf8e" },
+  resolved:    { label: tr("u_gelost"),        color: "#3ecf8e" },
   closed:      { label: "Geschlossen",   color: "#8892a6" },
 };
 const PRIO = {
@@ -269,14 +272,14 @@ export function renderTickets(body, win) {
       const visibility = visSel?.value || "all";
       const shared = readSubjectPicker(usersBox);
       if (visibility === "custom" && !shared.length) {
-        window.notify?.("Bitte mindestens einen Benutzer auswählen", "warn"); return;
+        window.notify?.(tr("note_pick_user"), "warn"); return;
       }
       try { drawDetail(await api.addTicketComment(t.id, ta.value, visibility, shared)); }
       catch (e) { window.notify?.(e.message, "error"); }
     });
     detailEl.querySelectorAll("[data-cdel]").forEach((b) =>
       b.addEventListener("click", async () => {
-        if (!(await uiConfirm("Kommentar löschen?", { okText: "Löschen", danger: true }))) return;
+        if (!(await uiConfirm(tr("u_kommentar_loschen"), { okText: tr("delete"), danger: true }))) return;
         try { drawDetail(await api.deleteTicketComment(t.id, b.dataset.cdel)); }
         catch (e) { window.notify?.(e.message, "error"); }
       }));
@@ -444,7 +447,7 @@ export function renderTickets(body, win) {
         <div id="tke-error" class="hidden" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
           <button class="taskbar-btn" id="tke-cancel">Abbrechen</button>
-          <button class="btn-primary" id="tke-save" style="margin:0;width:auto">${isEdit ? "Speichern" : "Erstellen"}</button>
+          <button class="btn-primary" id="tke-save" style="margin:0;width:auto">${isEdit ? tr("save") : "Erstellen"}</button>
         </div>
       </div>`;
     const q = (sel) => editorEl.querySelector(sel);

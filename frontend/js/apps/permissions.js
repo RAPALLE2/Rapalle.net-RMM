@@ -22,6 +22,7 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { esc, uiConfirm, uiPrompt } from "../utils.js";
+import { t } from "../i18n.js";
 
 export function renderPermissions(body, win) {
   // ---- lokaler Zustand des Fensters ----
@@ -117,7 +118,7 @@ export function renderPermissions(body, win) {
 
   function updateSaveBar() {
     saveBar.style.display = selected ? "flex" : "none";
-    dirtyEl.textContent = dirty ? "● Ungespeicherte Änderungen" : "Gespeichert";
+    dirtyEl.textContent = dirty ? t("u_ungespeicherte_anderungen") : "Gespeichert";
     dirtyEl.style.color = dirty ? "var(--warn)" : "var(--subtext)";
   }
 
@@ -179,7 +180,7 @@ export function renderPermissions(body, win) {
       const isAdm = s.is_admin ?? (s.role === "admin");
       const role = isAdm
         ? ` <span style="color:var(--warn);font-size:10px"
-             title="${s.admin_via === "permission" ? "Vollzugriff über das Recht super_admin" : "Rolle admin"}"
+             title="${s.admin_via === "permission" ? t("u_vollzugriff_uber_das_recht_super_a") : "Rolle admin"}"
              >ADMIN${s.admin_via === "permission" ? "*" : ""}</span>`
         : "";
       return `${esc(s.display_name || s.username)} <span style="color:var(--subtext);font-size:11px">@${esc(s.username)}</span>${ad}${role}`;
@@ -280,7 +281,7 @@ export function renderPermissions(body, win) {
   }
 
   async function selectSubject(type, id, name) {
-    if (dirty && !(await uiConfirm("Ungespeicherte Änderungen verwerfen?", { okText: "Verwerfen", danger: true }))) return;
+    if (dirty && !(await uiConfirm(t("u_ungespeicherte_anderungen_verwerfe"), { okText: "Verwerfen", danger: true }))) return;
     // Rolle mitführen, damit der Hinweis "hat bereits Rolle admin" greifen kann.
     const subj = (subjects[type] || []).find((x) => x.id === id) || {};
     selected = { type, id, name, role: subj.role, is_admin: subj.is_admin };
@@ -302,7 +303,7 @@ export function renderPermissions(body, win) {
         <button class="taskbar-btn" id="pm-del-group" style="margin-left:12px;font-size:11px">Gruppe löschen</button>`;
     }
     headEl.innerHTML = `<div style="font-weight:600">${esc(name)}${type === "group" ? headExtra : ""}</div>
-      <div style="color:var(--subtext);font-size:12px">${type === "user" ? "Benutzer" : "Gruppe"} · Rechte hier gelten zusätzlich zu Gruppen-Rechten (Verbieten gewinnt)</div>`;
+      <div style="color:var(--subtext);font-size:12px">${type === "user" ? t("tab_users") : "Gruppe"} · Rechte hier gelten zusätzlich zu Gruppen-Rechten (Verbieten gewinnt)</div>`;
     if (type === "group") {
       headEl.querySelector("#pm-unmanaged")?.addEventListener("change", async (e) => {
         try {
@@ -312,12 +313,12 @@ export function renderPermissions(body, win) {
           window.notify?.(e.target.checked ? "In AD-Ordner verschoben" : "Aus AD-Ordner geholt", "success");
           drawSubjects();
         } catch (err2) {
-          window.notify?.("Fehler: " + err2.message, "error");
+          window.notify?.(t("u_fehler_2") + err2.message, "error");
           e.target.checked = !e.target.checked;
         }
       });
       headEl.querySelector("#pm-del-group")?.addEventListener("click", async () => {
-        if (!(await uiConfirm(`Gruppe „${name}" löschen?`, { okText: "Löschen", danger: true }))) return;
+        if (!(await uiConfirm(`Gruppe „${name}" löschen?`, { okText: t("delete"), danger: true }))) return;
         try {
           await api.deleteGroup(id);
           subjects.group = await api.getGroups();
@@ -327,8 +328,8 @@ export function renderPermissions(body, win) {
           tabsEl.style.display = "none";
           updateSaveBar();
           drawSubjects();
-          window.notify?.("Gruppe gelöscht", "success");
-        } catch (e) { window.notify?.("Löschen fehlgeschlagen: " + e.message, "error"); }
+          window.notify?.(t("u_gruppe_geloscht"), "success");
+        } catch (e) { window.notify?.(t("u_loschen_fehlgeschlagen") + e.message, "error"); }
       });
     }
     contentEl.innerHTML = `<div style="color:var(--subtext)">Lade Rechte…</div>`;
@@ -537,7 +538,7 @@ export function renderPermissions(body, win) {
         await refreshPermissionsUi();
       } catch (e) { try { console.error("[perms] UI-Refresh:", e); } catch {} }
     } catch (e) {
-      window.notify?.("Speichern fehlgeschlagen: " + e.message, "error");
+      window.notify?.(t("u_speichern_fehlgeschlagen") + e.message, "error");
     }
   });
   body.querySelector("#pm-reset").addEventListener("click", () => {

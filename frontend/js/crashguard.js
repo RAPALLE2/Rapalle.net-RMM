@@ -17,6 +17,8 @@
 //      Sitzung abgestürzt/eingefroren -> es wird nachträglich protokolliert.
 
 import { api } from "./api.js";
+// t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
+import { t as tr } from "./i18n.js";
 
 let _cfg = { onPanic: null };
 let _key = "rmm-cg:anon";
@@ -72,12 +74,12 @@ function _heartbeat() {
 }
 
 function _onError(ev) {
-  const msg = (ev && (ev.message || (ev.reason && (ev.reason.message || ev.reason)))) || "Unbekannter Fehler";
+  const msg = (ev && (ev.message || (ev.reason && (ev.reason.message || ev.reason)))) || tr("u_unbekannter_fehler");
   const now = Date.now();
   _errTimes = _errTimes.filter((t) => now - t < ERROR_WINDOW_MS);
   _errTimes.push(now);
   _report(msg);
-  if (_errTimes.length >= ERROR_PANIC_COUNT) _panic("wiederholte Fehler");
+  if (_errTimes.length >= ERROR_PANIC_COUNT) _panic(tr("u_wiederholte_fehler"));
 }
 
 // „Panik" wurde bewusst ENTSCHÄRFT: Früher wurden hier bei einem Fehler-Sturm
@@ -108,7 +110,7 @@ export function initCrashGuard({ username, onPanic } = {}) {
       const prev = JSON.parse(raw);
       if (prev && prev.clean === false) {
         api.logError(
-          "Vorherige Sitzung wurde nicht sauber beendet (Absturz/Einfrieren erkannt).",
+          tr("u_vorherige_sitzung_wurde_nicht_saub"),
           "error", "frontend", "frontend.crash_recovered");
       }
     }

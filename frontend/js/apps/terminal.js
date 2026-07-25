@@ -15,6 +15,7 @@ import { state } from "../state.js";
 import { dashboardSocket } from "../socket.js";
 import { registerCleanup } from "../windowmanager.js";
 import { MiniTerm } from "./miniterm.js";
+import { t } from "../i18n.js";
 
 export function renderTerminal(body, win) {
   const { clientId, clientName } = win.props;
@@ -40,18 +41,18 @@ export function renderTerminal(body, win) {
         <span style="font-size:11px;color:var(--subtext)">gilt beim (Neu-)Start</span>
         <span style="flex:1"></span>
         <span style="position:relative;display:inline-flex">
-          <button class="taskbar-btn" id="term-script-${win.key}" title="Gespeichertes Skript wählen (mit Suche und Ordnern)" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 Skript…</button>
+          <button class="taskbar-btn" id="term-script-${win.key}" title="${t("term_pick_script")}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t("term_script_btn")}</button>
           <div id="term-script-menu-${win.key}" class="hidden" style="position:absolute;top:calc(100% + 4px);right:0;z-index:60;width:280px;max-height:320px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
-            <input type="text" id="term-script-search-${win.key}" placeholder="🔍 Skript suchen…" style="margin:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
+            <input type="text" id="term-script-search-${win.key}" placeholder="${t("term_script_search")}" style="margin:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
             <div id="term-script-list-${win.key}" style="overflow-y:auto;padding:0 6px 8px"></div>
           </div>
         </span>
-        <button class="taskbar-btn" id="term-script-run-${win.key}" title="Gewähltes Skript ausführen">▶</button>
-        <button class="taskbar-btn" id="term-agentcon-${win.key}" title="Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten">🤖 Agent-Konsole</button>
+        <button class="taskbar-btn" id="term-script-run-${win.key}" title="${t("term_run_script")}">▶</button>
+        <button class="taskbar-btn" id="term-agentcon-${win.key}" title="${t("term_toggle")}">${t("term_agentcon_btn")}</button>
         <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
           <option value="json">JSON</option><option value="xml">XML</option><option value="txt">TXT</option>
         </select>
-        <button class="taskbar-btn" id="term-export-${win.key}" title="Kompletten Terminal-Log herunterladen">⬇ Export</button>
+        <button class="taskbar-btn" id="term-export-${win.key}" title="${t("term_export")}">⬇ Export</button>
         <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet cls/clear)">🧹 Clear</button>
         <button class="taskbar-btn" id="term-restart-${win.key}">🔄 Neustart</button>
         </span>
@@ -60,21 +61,21 @@ export function renderTerminal(body, win) {
         <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
         <button class="taskbar-btn term-fs-btn" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
         <span class="bar-opts">
-        <span style="font-size:11px;color:var(--subtext)">Interaktive Shell auf ${esc(clientName || "Client")}</span>
+        <span style="font-size:11px;color:var(--subtext)">${t("term_shell_on", { host: esc(clientName || "Client") })}</span>
         <span style="flex:1"></span>
         <span style="position:relative;display:inline-flex">
-          <button class="taskbar-btn" id="term-script-${win.key}" title="Gespeichertes Skript wählen (mit Suche und Ordnern)" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 Skript…</button>
+          <button class="taskbar-btn" id="term-script-${win.key}" title="${t("term_pick_script")}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t("term_script_btn")}</button>
           <div id="term-script-menu-${win.key}" class="hidden" style="position:absolute;top:calc(100% + 4px);right:0;z-index:60;width:280px;max-height:320px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
-            <input type="text" id="term-script-search-${win.key}" placeholder="🔍 Skript suchen…" style="margin:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
+            <input type="text" id="term-script-search-${win.key}" placeholder="${t("term_script_search")}" style="margin:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
             <div id="term-script-list-${win.key}" style="overflow-y:auto;padding:0 6px 8px"></div>
           </div>
         </span>
-        <button class="taskbar-btn" id="term-script-run-${win.key}" title="Gewähltes Skript ausführen">▶</button>
-        <button class="taskbar-btn" id="term-agentcon-${win.key}" title="Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten">🤖 Agent-Konsole</button>
+        <button class="taskbar-btn" id="term-script-run-${win.key}" title="${t("term_run_script")}">▶</button>
+        <button class="taskbar-btn" id="term-agentcon-${win.key}" title="${t("term_toggle")}">${t("term_agentcon_btn")}</button>
         <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
           <option value="json">JSON</option><option value="xml">XML</option><option value="txt">TXT</option>
         </select>
-        <button class="taskbar-btn" id="term-export-${win.key}" title="Kompletten Terminal-Log herunterladen">⬇ Export</button>
+        <button class="taskbar-btn" id="term-export-${win.key}" title="${t("term_export")}">⬇ Export</button>
         <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet clear)">🧹 Clear</button>
         <button class="taskbar-btn" id="term-restart-${win.key}">🔄 Neustart</button>
         </span>
@@ -88,15 +89,15 @@ export function renderTerminal(body, win) {
       <div id="term-status-${win.key}" style="flex:none;font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">Verbinde…</div>
       <div class="bar-optrow" style="flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border);flex-wrap:wrap">
         <span style="color:var(--subtext)">Text senden:</span>
-        <select id="term-layout-${win.key}" title="Tastaturlayout: Text wird 1:1 als Zeichen an die Shell (PTY) gesendet - die Layout-Auswahl entspricht dem Remote-Screen und ist nur für Sonderfälle relevant"
+        <select id="term-layout-${win.key}" title="${t("term_layout_full")}"
           style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
           <option value="raw">1:1 (empfohlen)</option>
           <option value="us">US-Layout</option>
           <option value="de">DE-Layout</option>
         </select>
-        <input type="text" id="term-text-${win.key}" placeholder="Text eingeben, dann Senden oder Enter..."
+        <input type="text" id="term-text-${win.key}" placeholder="${t("guac_text_ph")}"
           style="flex:1;padding:5px 8px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text)" />
-        <label style="color:var(--subtext);display:flex;align-items:center;gap:4px" title="Nach dem Text zusätzlich Enter senden">
+        <label style="color:var(--subtext);display:flex;align-items:center;gap:4px" title="${t("guac_send_enter")}">
           <input type="checkbox" id="term-enter-${win.key}" /> +Enter
         </label>
         <button class="taskbar-btn" id="term-send-${win.key}">Senden</button>
@@ -164,21 +165,16 @@ export function renderTerminal(body, win) {
     setTimeout(() => {
       if (gotOutput || !term) return;
       if (!gotAck) {
-        term.write("\x1b[31m[Backend antwortet nicht auf das Terminal]\x1b[0m\r\n" +
-          "Das laufende Backend kennt die Terminal-Funktion nicht.\r\n" +
-          "-> Backend mit der aktuellen Version NEU STARTEN.\r\n");
-        statusEl.textContent = "Backend veraltet / nicht neu gestartet.";
+        term.write(t("term_no_backend") + t("term_no_backend2") + t("term_restart_hint"));
+        statusEl.textContent = t("term_backend_old");
       } else if (!agentOnline) {
         term.write("\x1b[31m[Client ist offline]\x1b[0m\r\n" +
-          "Der Agent dieses Clients ist nicht verbunden.\r\n");
+          t("term_agent_off"));
         statusEl.textContent = "Client offline.";
       } else {
-        term.write("\x1b[33m[Agent antwortet nicht auf die Shell]\x1b[0m\r\n" +
-          "Backend + Client sind verbunden, aber der Agent startet keine Shell.\r\n" +
-          "-> Auf dem Client läuft vermutlich noch die alte Agent-Version.\r\n" +
-          "   Agent stoppen und neu ausrollen. (Windows: pywinpty wird beim\r\n" +
-          "   Agentenstart automatisch nachinstalliert.)\r\n");
-        statusEl.textContent = "Agent ohne Terminal-Unterstützung — neu ausrollen.";
+        term.write(t("term_no_shell") + t("term_no_shell2") + t("term_no_shell3")
+          + t("term_no_shell4") + t("term_no_shell5"));
+        statusEl.textContent = t("term_agent_nosupport");
       }
     }, 3000);
   }
@@ -218,7 +214,7 @@ export function renderTerminal(body, win) {
   function onAgentConsoleAck(p) {
     if (!p || p.id !== clientId || !agentTerm) return;
     if (!p.agent_online) {
-      agentTerm.write("\r\n\x1b[31m[Client ist offline - Agent-Konsole nicht verfuegbar]\x1b[0m\r\n");
+      agentTerm.write(t("term_offline"));
     }
   }
   dashboardSocket.on("agent-console-history", onAgentConsoleHistory);
@@ -243,7 +239,7 @@ export function renderTerminal(body, win) {
       setTimeout(() => { try { agentTerm.fit(); } catch {} }, 30);
     } else {
       dashboardSocket.emit("agent-console-close", { clientId });
-      statusEl.textContent = "Shell aktiv. Klicke ins Terminal und tippe.";
+      statusEl.textContent = t("term_shell_active");
       setTimeout(() => { try { term.fit(); term.focus(); } catch {} }, 30);
     }
   }

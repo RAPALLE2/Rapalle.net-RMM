@@ -7,6 +7,7 @@
 import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
+import { t } from "../i18n.js";
 
 export function renderScripts(body, win) {
   function draw() {
@@ -49,7 +50,7 @@ export function renderScripts(body, win) {
       const folder = body.querySelector("#sc-folder").value.trim();
       const err = body.querySelector("#sc-error");
       err.classList.add("hidden");
-      if (!name || !command) { err.textContent = "Name und Befehl erforderlich"; err.classList.remove("hidden"); return; }
+      if (!name || !command) { err.textContent = t("u_name_und_befehl_erforderlich"); err.classList.remove("hidden"); return; }
       try {
         await api.createScript({ name, command, os, folder });
         draw();
@@ -154,8 +155,8 @@ export function renderScripts(body, win) {
           const targetSel = listEl.querySelector(`[data-run-target="${scriptId}"]`);
           const resultEl = listEl.querySelector(`[data-result="${scriptId}"]`);
           const clientId = targetSel.value;
-          if (!clientId) { resultEl.textContent = "Bitte Client wählen"; return; }
-          resultEl.textContent = "Läuft...";
+          if (!clientId) { resultEl.textContent = t("u_bitte_client_wahlen"); return; }
+          resultEl.textContent = t("u_lauft_3");
           try {
             const res = await api.execOnClient(clientId, script.command);
             const ok = res.code === 0;
@@ -170,7 +171,7 @@ export function renderScripts(body, win) {
                 "border-radius:6px;margin:8px 0 0;font-size:12px;white-space:pre-wrap;overflow:auto;max-height:240px";
               resultEl.closest(".panel")?.appendChild(pre);
             }
-            pre.textContent = out || "(keine Ausgabe)";
+            pre.textContent = out || t("u_keine_ausgabe");
           } catch (e) {
             resultEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
           }
@@ -180,7 +181,7 @@ export function renderScripts(body, win) {
       // Löschen
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!(await uiConfirm("Skript löschen?", { okText: "Löschen", danger: true }))) return;
+          if (!(await uiConfirm(t("u_skript_loschen"), { okText: t("delete"), danger: true }))) return;
           await api.deleteScript(btn.dataset.del);
           loadList();
         })
