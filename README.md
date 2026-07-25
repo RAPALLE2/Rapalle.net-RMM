@@ -22,7 +22,7 @@ By using RAPALLE.net RMM, you acknowledge that:
 
 This project is best suited for learning, experimentation, homelabs, and personal infrastructure environments where users are comfortable managing and accepting the risks associated with self-hosted software.
 
-Please keep in mind that parts of this project were vibe-coded.
+Please keep in mind that parts of this project were vibe-coded, which means that it was done with artificial intelligenz.
 
 
 
@@ -30,7 +30,7 @@ Please keep in mind that parts of this project were vibe-coded.
 
 ## Installation
 
-To install RAPALLE.net RMM on your own server, download the latest release as a ZIP archive and extract it to a directory of your choice.
+To install RAPALLE.net RMM on your own server, download the latest release as a ZIP archive and extract it to a directory of your choice, and run the run.py file.
 
 ### Requirements
 
@@ -41,7 +41,7 @@ To install RAPALLE.net RMM on your own server, download the latest release as a 
 ### Installation Steps
 
 1. Download and extract the latest release.
-2. Open a terminal in the backend sub-directory.
+2. Open a terminal with admin/root privilages in the backend sub-directory.
 3. Start the application using: python run.py
 4. On first startup, RAPALLE.net RMM automatically creates all required files, initializes the database, and installs any missing Python dependencies.
 5. Open a browsertab with http://YOUR-SERVERS-IP:4000; standart account is user: admin, password: admin.
@@ -56,7 +56,7 @@ To install RAPALLE.net RMM on your own server, download the latest release as a 
 
 ## Support & Feedback
 
-If you need help, have questions, would like to report a bug, or want to share feedback, feel free to join the RAPALLE.net Discord community:
+Feel free to join the RAPALLE.net Discord community:
 
 https://dc.rapalle.net
 
