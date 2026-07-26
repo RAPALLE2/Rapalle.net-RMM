@@ -134,11 +134,22 @@ class HostLockMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         try:
             ok, host = check(request)
-        except Exception:
-            # Fällt die Prüfung aus (z.B. DB kurz nicht lesbar), wird
-            # durchgelassen. Ein kaputter Filter darf den Dienst nicht
-            # lahmlegen - er ist eine Hürde, keine Sicherheitsgrenze.
-            return await call_next(request)
+        except Exception as e:
+            # Früher wurde hier still durchgelassen. Das ist die schlechteste
+            # aller Varianten: die Sperre sieht eingeschaltet aus, wirkt aber
+            # nicht, und niemand erfährt davon. Jetzt wird der Fehler laut
+            # protokolliert. Durchgelassen wird nur, solange die Sperre AUS
+            # ist - ist sie an, wird im Zweifel blockiert.
+            print(f"[hostlock] Prüfung fehlgeschlagen: {e!r}")
+            try:
+                enabled = is_enabled()
+            except Exception:
+                enabled = False
+            if not enabled:
+                return await call_next(request)
+            return PlainTextResponse(
+                "Host-Prüfung derzeit nicht möglich - Zugriff vorsorglich "
+                "abgelehnt. Details im Server-Log.", status_code=503)
 
         if ok:
             return await call_next(request)
@@ -151,3 +162,28 @@ class HostLockMiddleware(BaseHTTPMiddleware):
             "http://localhost erreichbar; dort lässt sich die Sperre unter\n"
             "Einstellungen > Allgemein wieder abschalten.",
             status_code=403)
+
+
+def diagnostics(request) -> dict:
+    """
+    Was sieht der Server tatsächlich? Ohne diese Auskunft ist eine nicht
+    greifende Sperre kaum zu debuggen: man weiß weder, welchen Host-Header
+    der Browser schickt, noch welche Adressen gerade erlaubt sind.
+    """
+    ok, host = check(request)
+    return {
+        "enabled": is_enabled(),
+        "scope": db.get_setting("host_lock_scope", "ui"),
+        "trust_proxy": db.get_setting("host_lock_trust_proxy", "0") == "1",
+        "raw_host_header": request.headers.get("host", ""),
+        "x_forwarded_host": request.headers.get("x-forwarded-host", ""),
+        "seen_as": host,
+        "allowed": sorted(allowed_hosts()),
+        "would_pass": ok,
+        "sources": {
+            "server_url": db.get_setting("server_url", "") or "",
+            "server_domain": db.get_setting("server_domain", "") or "",
+            "server_host": db.get_setting("server_host", "") or "",
+            "host_lock_extra": db.get_setting("host_lock_extra", "") or "",
+        },
+    }

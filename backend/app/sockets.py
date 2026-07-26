@@ -203,11 +203,62 @@ async def request_fs_read(client_id: str, path: str, timeout_seconds: float = 30
     return payload
 
 
-async def request_patch_scan(client_id: str, timeout_seconds: float = 600.0) -> dict:
+async def request_patch_ping(client_id: str, timeout_seconds: float = 8.0) -> dict:
+    """
+    Fragt den Agenten, ob er Patching überhaupt beherrscht. Antwortet er
+    nicht innerhalb weniger Sekunden, läuft dort ein Agent ohne die
+    Patch-Handler - dann hat es keinen Zweck, einen Scan zu schicken.
+    """
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Client ist offline")
+
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+    await sio.emit("patch-ping", {"requestId": request_id}, to=sid, namespace="/agent")
+    try:
+        return await asyncio.wait_for(future, timeout=timeout_seconds)
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+
+async def request_patch_selftest(client_id: str, timeout_seconds: float = 90.0) -> dict:
+    """
+    Kurzer Funktionstest auf dem Client: sind die Update-Quellen ansprechbar,
+    läuft der Agent erhöht? Dauert Sekunden statt Minuten und beantwortet
+    die Frage "liegt es am Agenten oder am System?".
+    """
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Client ist offline")
+
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+    await sio.emit("patch-selftest", {"requestId": request_id},
+                   to=sid, namespace="/agent")
+    try:
+        payload = await asyncio.wait_for(future, timeout=timeout_seconds)
+    finally:
+        state.pending_requests.pop(request_id, None)
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+    return payload
+
+
+async def request_patch_scan(client_id: str, timeout_seconds: float = 900.0) -> dict:
     """
     Lässt einen Agenten nach verfügbaren Aktualisierungen suchen.
-    Großzügiger Timeout: die Windows-Update-Abfrage braucht auf trägen
-    Systemen regelmäßig mehrere Minuten.
+
+    Grosszügiger Timeout: die Windows-Update-Abfrage braucht auf trägen
+    Systemen regelmässig mehrere Minuten. Ein Agent ab Patch-Protokoll 2
+    antwortet in jedem Fall - notfalls mit einer Fehlermeldung; bleibt er
+    trotzdem stumm, steht auf dem Client etwas.
+
+    Anders als früher wird eine Fehlerantwort hier NICHT in eine Ausnahme
+    verwandelt: der Aufrufer will auch bei einem Fehler die mitgelieferten
+    Zusatzangaben (Quellen, Fähigkeiten) auswerten.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
@@ -220,20 +271,16 @@ async def request_patch_scan(client_id: str, timeout_seconds: float = 600.0) -> 
     await sio.emit("patch-scan", {"requestId": request_id}, to=sid, namespace="/agent")
 
     try:
-        payload = await asyncio.wait_for(future, timeout=timeout_seconds)
+        return await asyncio.wait_for(future, timeout=timeout_seconds)
     finally:
         state.pending_requests.pop(request_id, None)
 
-    if payload.get("error"):
-        raise RuntimeError(payload["error"])
-    return payload
-
 
 async def request_patch_apply(client_id: str, items: list[dict],
-                              timeout_seconds: float = 3600.0) -> dict:
+                              timeout_seconds: float = 7200.0) -> dict:
     """
     Lässt einen Agenten die benannten Aktualisierungen installieren.
-    Sehr langer Timeout - Feature-Updates laufen durchaus eine Stunde.
+    Sehr langer Timeout - Feature-Updates laufen durchaus zwei Stunden.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
@@ -247,13 +294,9 @@ async def request_patch_apply(client_id: str, items: list[dict],
                    to=sid, namespace="/agent")
 
     try:
-        payload = await asyncio.wait_for(future, timeout=timeout_seconds)
+        return await asyncio.wait_for(future, timeout=timeout_seconds)
     finally:
         state.pending_requests.pop(request_id, None)
-
-    if payload.get("error"):
-        raise RuntimeError(payload["error"])
-    return payload
 
 
 async def request_fs_op(client_id: str, event: str, data: dict,
@@ -308,6 +351,54 @@ _threshold_check: dict[str, float] = {}
 # Pfad zur ausgelieferten Agent-Version (…/backend/app/sockets.py -> …/agent/version.txt)
 from pathlib import Path as _Path
 _AGENT_VERSION_FILE = _Path(__file__).resolve().parents[2] / "agent" / "version.txt"
+_AGENT_PY_FILE = _Path(__file__).resolve().parents[2] / "agent" / "agent.py"
+
+# Was jeder Client beim Anmelden über sich gesagt hat: Code-Prüfsumme und
+# Patch-Fähigkeit. Nur im Arbeitsspeicher - die Werte kommen bei jedem
+# 'register' frisch herein, und ohne Verbindung sind sie bedeutungslos.
+_agent_code_hashes: dict[str, str] = {}
+_agent_caps: dict[str, dict] = {}
+
+
+def agent_capabilities(client_id: str) -> dict:
+    """
+    Selbstauskunft eines verbundenen Agenten.
+
+    Ersetzt das frühere Raten per Ping: Wer patchen kann, sagt es beim
+    Anmelden. Ein leeres Ergebnis heisst "hat nichts gemeldet" - also
+    Agent-Code ohne Patch-Modul.
+    """
+    return dict(_agent_caps.get(client_id) or {})
+
+# Prüfsumme der ausgelieferten agent.py, zwischengespeichert nach mtime.
+_latest_hash_cache: tuple[float, str] = (0.0, "")
+
+
+def _latest_agent_hash() -> str:
+    """
+    Prüfsumme der agent.py, die dieses Backend ausliefert.
+
+    Grund für dieses ganze Verfahren: version.txt ist die einzige Quelle, aus
+    der bisher hervorging, ob ein Agent veraltet ist. Wird sie beim Ändern von
+    agent.py nicht mit hochgezählt - und das passiert regelmäßig -, hält das
+    Backend jeden Client für aktuell und stößt NIE ein Update an. Auf den
+    Clients lief dadurch monatealter Code; neue Fähigkeiten wie 'patch-ping'
+    fehlten dort schlicht, obwohl sie im Projekt vorhanden waren.
+    """
+    global _latest_hash_cache
+    try:
+        mtime = _AGENT_PY_FILE.stat().st_mtime
+    except OSError:
+        return ""
+    if _latest_hash_cache[0] == mtime and _latest_hash_cache[1]:
+        return _latest_hash_cache[1]
+    try:
+        import hashlib
+        digest = hashlib.sha256(_AGENT_PY_FILE.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+    _latest_hash_cache = (mtime, digest)
+    return digest
 
 
 def _latest_agent_version() -> str:
@@ -329,19 +420,40 @@ def _version_tuple(v: str):
     return tuple(parts) if parts else (0,)
 
 
-def _agent_outdated(agent_v: str, latest_v: str) -> bool:
-    if not agent_v or not latest_v:
+def _agent_outdated(agent_v: str, latest_v: str, client_id: str | None = None) -> bool:
+    """
+    Ist der Agent auf dem Client älter als der ausgelieferte?
+
+    Zwei Kriterien, in dieser Reihenfolge:
+      1. Kleinere Versionsnummer -> veraltet (wie bisher).
+      2. Gleiche Versionsnummer, aber ANDERER Code -> ebenfalls veraltet.
+         Erkannt an der Prüfsumme, die der Agent beim Anmelden meldet.
+         Meldet er gar keine, läuft dort eine Fassung von vor dieser
+         Änderung - also ebenfalls alter Code.
+
+    Kriterium 2 greift nur, wenn dieses Backend eine eigene Prüfsumme bilden
+    kann; ohne agent.py auf der Platte bleibt es beim reinen Versionsvergleich.
+    """
+    if agent_v and latest_v:
+        try:
+            if _version_tuple(agent_v) < _version_tuple(latest_v):
+                return True
+        except Exception:
+            if agent_v.strip() != latest_v.strip():
+                return True
+
+    if client_id is None:
         return False
-    try:
-        return _version_tuple(agent_v) < _version_tuple(latest_v)
-    except Exception:
-        return agent_v.strip() != latest_v.strip()
+    latest_hash = _latest_agent_hash()
+    if not latest_hash:
+        return False
+    return _agent_code_hashes.get(client_id, "") != latest_hash
 
 
 async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
     """Stößt bei veralteter Version das Selbst-Update an, falls Auto-Update greift."""
     latest = _latest_agent_version()
-    if not _agent_outdated(agent_version or "", latest):
+    if not _agent_outdated(agent_version or "", latest, client_id):
         _auto_update_last.pop(client_id, None)   # aktuell -> Cooldown zurücksetzen
         return
 
@@ -398,6 +510,18 @@ async def on_register(sid, payload):
 
     state.client_id_to_sid[client_id] = sid
     state.sid_to_client_id[sid] = client_id
+    # Gemeldete Code-Prüfsumme merken - MUSS vor jeder Veraltet-Prüfung
+    # weiter unten passieren, sonst hielte die erste Prüfung nach dem
+    # Verbinden jeden Agenten für veraltet.
+    _agent_code_hashes[client_id] = str(payload.get("agent_code_hash") or "")
+    # Selbstauskunft zum Patching. Fehlt sie, läuft dort Agent-Code ohne
+    # Patch-Modul - das ist eine Feststellung, keine Vermutung.
+    _agent_caps[client_id] = {
+        "protocol": int(payload.get("patch_protocol") or 0),
+        "sources": list(payload.get("patch_sources") or []),
+        "agent_version": payload.get("agent_version") or "",
+        "agent_code_hash": payload.get("agent_code_hash") or "",
+    }
 
     # Kommt der Agent frisch aus einem Update? Dann Zeitpunkt merken, damit der
     # Update-Endpunkt das Update als erfolgreich bestätigen kann, und das
@@ -429,7 +553,8 @@ async def on_register(sid, payload):
     _pending_client = db.get_client(client_id)
     if _pending_client and _pending_client.get("pending_agent_update"):
         db.set_pending_agent_update(client_id, False)
-        if _agent_outdated(payload.get("agent_version") or "", _latest_agent_version()):
+        if _agent_outdated(payload.get("agent_version") or "",
+                           _latest_agent_version(), client_id):
             ok = await send_to_agent(client_id, "update-agent", {})
             if ok:
                 db.add_audit_entry(None, "agent.pending_update_triggered", target=client_id,
@@ -636,6 +761,58 @@ async def on_fs_result(sid, payload):
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
+
+
+@sio.on("patch-ping-result", namespace="/agent")
+async def on_patch_ping_result(sid, payload):
+    """
+    Antwort auf die Fähigkeitsabfrage. Die gemeldeten Fähigkeiten werden
+    gleich mit übernommen - so ist der Stand auch dann aktuell, wenn sich
+    auf dem Client nach dem Anmelden etwas geändert hat (winget nachträglich
+    installiert, Rechte geändert).
+    """
+    client_id = state.sid_to_client_id.get(sid)
+    if client_id and payload.get("protocol"):
+        _agent_caps[client_id] = {
+            "protocol": int(payload.get("protocol") or 0),
+            "sources": list(payload.get("sources") or []),
+            "agent_version": payload.get("agent_version") or "",
+            "agent_code_hash": payload.get("agent_code_hash") or "",
+            "elevated": bool(payload.get("elevated")),
+            "winget": payload.get("winget") or "",
+        }
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("patch-selftest-result", namespace="/agent")
+async def on_patch_selftest_result(sid, payload):
+    """Antwort auf den Funktionstest."""
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("patch-progress", namespace="/agent")
+async def on_patch_progress(sid, payload):
+    """
+    Zwischenstand eines laufenden Scans oder einer Installation.
+
+    Ohne diese Meldungen war ein Patch-Auftrag eine Blackbox: minutenlang
+    Stille, danach entweder ein Ergebnis oder eine Zeitüberschreitung - ohne
+    jeden Hinweis, wo es geklemmt hat.
+    """
+    client_id = state.sid_to_client_id.get(sid) or payload.get("id")
+    if not client_id:
+        return
+    try:
+        from app import patching
+        patching.on_progress(client_id, payload)
+    except Exception:
+        pass
+    await sio.emit("patch:progress", {"id": client_id, **payload},
+                   namespace="/dashboard")
 
 
 @sio.on("patch-scan-result", namespace="/agent")

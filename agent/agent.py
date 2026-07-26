@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import io
 import json
 import logging
 import os
 import platform
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -272,9 +274,22 @@ def _no_window_kwargs() -> dict:
 
 
 def _run(cmd, **kwargs):
-    """subprocess.run-Ersatz, der unter Windows kein Fenster aufblitzen lässt."""
+    """
+    subprocess.run-Ersatz, der unter Windows kein Fenster aufblitzen lässt.
+
+    WICHTIG - Zeichensatz: text=True allein benutzt die Locale-Codepage
+    (auf deutschen Systemen cp1252). winget und PowerShell schreiben aber
+    UTF-8 bzw. Zeichen, die es in cp1252 gar nicht gibt (0x81, 0x8d, 0x90,
+    0x9d ...). Das Ergebnis war ein UnicodeDecodeError MITTEN im Scan -
+    die aufrufende Funktion fing ihn ab und meldete brav "0 Aktualisierungen
+    gefunden". Deshalb hier fest UTF-8 mit errors='replace': lieber ein
+    kaputtes Zeichen im Namen als ein stillschweigend leeres Scan-Ergebnis.
+    """
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
+    if kwargs.get("text"):
+        kwargs.setdefault("encoding", "utf-8")
+        kwargs.setdefault("errors", "replace")
     for k, v in _no_window_kwargs().items():
         kwargs.setdefault(k, v)
     return subprocess.run(cmd, **kwargs)
@@ -381,6 +396,27 @@ def _read_agent_version() -> str:
 
 
 AGENT_VERSION = _read_agent_version()
+
+
+def _read_agent_code_hash() -> str:
+    """
+    Prüfsumme des eigenen Quellcodes.
+
+    version.txt wird beim Entwickeln regelmäßig vergessen. Steht dort weiter
+    dieselbe Nummer, hält das Backend einen uralten Agenten für aktuell und
+    schickt nie ein Update - genau deshalb fehlten auf den Clients zuletzt
+    die Patch-Handler, obwohl agent.py im Projekt längst neuer war. Die
+    Prüfsumme sagt dagegen die Wahrheit über den Code, der wirklich läuft.
+    """
+    try:
+        import hashlib
+        data = Path(__file__).resolve().read_bytes()
+        return hashlib.sha256(data).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+AGENT_CODE_HASH = _read_agent_code_hash()
 
 # Der Socket.IO-Client, über den die gesamte Kommunikation läuft
 # EINEN festen Event-Loop erzeugen und als aktuellen setzen, BEVOR der
@@ -523,6 +559,12 @@ async def connect():
             "enrollment_token": ENROLLMENT_TOKEN,  # nur beim ersten Mal relevant
             "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
             "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
+            "agent_code_hash": AGENT_CODE_HASH,     # Prüfsumme des laufenden Codes
+            # Patch-Fähigkeit ungefragt mitteilen. Das Backend muss dadurch
+            # nicht erst einen Ping schicken, um zu wissen, ob ein
+            # Patch-Auftrag auf diesem Client überhaupt Sinn ergibt.
+            "patch_protocol": PATCH_PROTOCOL,
+            "patch_sources": _patch_sources(),
             "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (Auto-Erkennung)
             "last_crash": _read_and_clear_last_crash(),  # Traceback des letzten Absturzes (falls vorhanden)
         },
@@ -3289,6 +3331,793 @@ async def main():
         await asyncio.sleep(3)
 
 
+# ==========================================================================
+# SOFTWARE-PATCHING  (Protokoll 2)
+# --------------------------------------------------------------------------
+# Leitgedanke dieser Fassung: Der Agent sagt von sich aus, was er kann und
+# was er tut. Die vorige Fassung schwieg im Fehlerfall - jede Quelle, die
+# nicht ansprang, lieferte einfach eine leere Liste zurück. Ob "keine
+# Updates vorhanden" oder "winget gar nicht erst gestartet" gemeint war,
+# liess sich von aussen nicht unterscheiden. Deshalb jetzt:
+#
+#   * Jede Quelle liefert ein Ergebnis MIT Zustand (ok / Fehlertext), nie
+#     nur eine leere Liste.
+#   * Der Agent meldet seine Fähigkeiten schon beim Anmelden mit
+#     (PATCH_PROTOCOL im 'register'), nicht erst auf Nachfrage. Das Backend
+#     weiss dadurch VOR jedem Auftrag, ob der Client überhaupt patchen kann.
+#   * Jeder Handler antwortet IMMER - auch wenn er selbst scheitert.
+#     Ein stiller Handler ist von aussen nicht von einem fehlenden zu
+#     unterscheiden, und genau diese Verwechslung hat zuletzt viel Zeit
+#     gekostet.
+#   * Während eines Scans laufend Fortschrittsmeldungen, damit niemand
+#     minutenlang auf einen stehenden Balken schaut.
+#
+# Quellen: Windows Update (COM-API), winget, apt, dnf.
+# Stufen:  security | critical | important | moderate | low | feature | other
+# ==========================================================================
+
+# Fähigkeitsstufe dieses Agenten. Wird beim Anmelden mitgeschickt; das
+# Backend entscheidet daran, ob es einen Patch-Auftrag überhaupt schickt.
+#   1 = erste Fassung (patch-scan/patch-apply, kein patch-ping)
+#   2 = diese Fassung (Selbstauskunft, Fortschritt, Fehler je Quelle)
+PATCH_PROTOCOL = 2
+
+PATCH_EVENTS = ("patch-ping", "patch-scan", "patch-apply", "patch-selftest")
+
+_PATCH_LEVELS = ("security", "critical", "important", "moderate",
+                 "low", "feature", "other")
+
+
+def _patch_log(msg: str) -> None:
+    _print(f"[patch] {msg}")
+
+
+# --------------------------------------------------------------------------
+# Werkzeuge
+# --------------------------------------------------------------------------
+
+def _winget_exe() -> "str | None":
+    """
+    Pfad zu winget.exe.
+
+    Der Agent läuft als Dienst unter SYSTEM. Dort liegt winget NICHT im PATH:
+    die App-Execution-Aliase unter %LOCALAPPDATA%\\Microsoft\\WindowsApps gibt
+    es nur für angemeldete Benutzer. Ein blosses "winget" endete deshalb im
+    FileNotFoundError - der früher stillschweigend zu "keine Updates" wurde.
+    """
+    if not IS_WINDOWS:
+        return None
+    found = shutil.which("winget")
+    if found:
+        return found
+    base = Path(os.environ.get("ProgramW6432") or r"C:\Program Files") / "WindowsApps"
+    try:
+        for pattern in ("Microsoft.DesktopAppInstaller_*_x64__*/winget.exe",
+                        "Microsoft.DesktopAppInstaller_*/winget.exe"):
+            for cand in sorted(base.glob(pattern), reverse=True):
+                if cand.exists():
+                    return str(cand)
+    except Exception:
+        pass
+    return None
+
+
+def _source(name: str, ok: bool, patches=None, error: str = "",
+            note: str = "") -> dict:
+    """
+    Einheitliches Ergebnis EINER Quelle.
+
+    'ok=False' heisst: die Quelle konnte nicht befragt werden. Das ist
+    ausdrücklich etwas anderes als 'ok=True' mit leerer Liste ("befragt,
+    nichts gefunden"). Genau diese Unterscheidung fehlte vorher.
+    """
+    return {"source": name, "ok": bool(ok), "patches": patches or [],
+            "count": len(patches or []), "error": error[:500], "note": note[:300]}
+
+
+def _is_admin() -> bool:
+    """Läuft der Agent mit den Rechten, die zum Installieren nötig sind?"""
+    try:
+        if IS_WINDOWS:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        return os.geteuid() == 0
+    except Exception:
+        return False
+
+
+# --------------------------------------------------------------------------
+# Windows Update (COM)
+# --------------------------------------------------------------------------
+# Über die COM-API statt über das Modul PSWindowsUpdate: das ist auf den
+# meisten Systemen nicht installiert, und eine Ferninstallation richtet mehr
+# Schaden an als sie hilft.
+
+_WU_SEARCH_PS = r"""
+$ErrorActionPreference = 'Stop'
+try {
+  $session  = New-Object -ComObject Microsoft.Update.Session
+  $searcher = $session.CreateUpdateSearcher()
+  $result   = $searcher.Search("IsInstalled=0 and IsHidden=0")
+  $out = @()
+  foreach ($u in $result.Updates) {
+    $cats = @()
+    foreach ($c in $u.Categories) { $cats += $c.Name }
+    $kb = @()
+    foreach ($k in $u.KBArticleIDs) { $kb += "KB$k" }
+    $out += [PSCustomObject]@{
+      id        = $u.Identity.UpdateID
+      name      = $u.Title
+      version   = ($kb -join ',')
+      severity  = [string]$u.MsrcSeverity
+      categories= ($cats -join ',')
+      size      = [int64]$u.MaxDownloadSize
+      reboot    = [int]$u.InstallationBehavior.RebootBehavior
+    }
+  }
+  # Immer ein Array ausgeben: ohne den Komma-Operator macht PowerShell aus
+  # einem einzelnen Element ein Objekt und aus null Elementen gar nichts.
+  ConvertTo-Json -InputObject @($out) -Compress -Depth 3
+} catch {
+  Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
+}
+"""
+
+_WU_INSTALL_PS = r"""
+$ErrorActionPreference = 'Stop'
+$wanted = '__IDS__'.Split(',') | Where-Object { $_ -ne '' }
+try {
+  $session  = New-Object -ComObject Microsoft.Update.Session
+  $searcher = $session.CreateUpdateSearcher()
+  $result   = $searcher.Search("IsInstalled=0 and IsHidden=0")
+  $coll = New-Object -ComObject Microsoft.Update.UpdateColl
+  foreach ($u in $result.Updates) {
+    if ($wanted -contains $u.Identity.UpdateID) {
+      if (-not $u.EulaAccepted) { $u.AcceptEula() | Out-Null }
+      $coll.Add($u) | Out-Null
+    }
+  }
+  if ($coll.Count -eq 0) {
+    Write-Output '{"installed":0,"reboot":false,"code":0,"note":"nichts passendes gefunden"}'
+    exit
+  }
+  $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll; $dl.Download() | Out-Null
+  $inst = $session.CreateUpdateInstaller(); $inst.Updates = $coll
+  $r = $inst.Install()
+  $reboot = [bool]$r.RebootRequired
+  Write-Output ('{"installed":' + $coll.Count + ',"reboot":' + $reboot.ToString().ToLower() + ',"code":' + $r.ResultCode + '}')
+} catch {
+  Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
+}
+"""
+
+
+def _ps(script: str, timeout: int = 600):
+    """
+    PowerShell ausführen.
+
+    Die Ausgabekodierung wird ausdrücklich auf UTF-8 gestellt. Ohne das
+    liefert PowerShell die Konsolen-Codepage (deutsch: cp850) - Update-Titel
+    mit Umlauten kamen als Buchstabensalat an oder brachten das Einlesen
+    ganz zum Scheitern.
+    """
+    prelude = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+    return _run(["powershell", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-Command", prelude + script],
+                timeout=timeout)
+
+
+def _level_from_windows(severity: str, categories: str) -> str:
+    """
+    Schweregrad einer Windows-Aktualisierung bestimmen.
+
+    Die Kategorie hat Vorrang vor MsrcSeverity: Microsoft lässt den
+    Schweregrad bei vielen Sicherheitsupdates leer. Wer nur nach
+    MsrcSeverity filtert, verpasst genau die Updates, die er wollte.
+    """
+    cats = (categories or "").lower()
+    sev = (severity or "").strip().lower()
+    if "security" in cats:
+        return "security"
+    if "critical" in cats:
+        return "critical"
+    if sev in ("critical", "important", "moderate", "low"):
+        return sev
+    if "definition" in cats:
+        return "security"          # Virendefinitionen: sicherheitsrelevant
+    if "driver" in cats:
+        return "other"
+    if "feature pack" in cats or "upgrade" in cats:
+        return "feature"
+    return "other"
+
+
+def _scan_windows_os() -> dict:
+    if not IS_WINDOWS:
+        return _source("windows-update", True, note="kein Windows")
+    try:
+        res = _ps(_WU_SEARCH_PS, timeout=420)
+    except subprocess.TimeoutExpired:
+        return _source("windows-update", False,
+                       error="Zeitüberschreitung bei der Windows-Update-Abfrage (>7 min)")
+    except Exception as e:
+        return _source("windows-update", False, error=f"{e.__class__.__name__}: {e}")
+
+    raw = (res.stdout or "").strip()
+    if not raw:
+        err = (res.stderr or "").strip()[:400]
+        if err:
+            return _source("windows-update", False,
+                           error=f"PowerShell meldete: {err}")
+        return _source("windows-update", True, note="keine Ausgabe - nichts gefunden")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return _source("windows-update", False,
+                       error=f"Antwort war kein JSON: {raw[:200]}")
+
+    if isinstance(data, dict):
+        if data.get("__error__"):
+            return _source("windows-update", False, error=str(data["__error__"]))
+        data = [data]
+
+    out = []
+    for u in data or []:
+        uid = str(u.get("id") or "").strip()
+        if not uid:
+            continue
+        out.append({
+            "uid": uid,
+            "name": u.get("name") or "Unbenannte Aktualisierung",
+            "current_version": "",
+            "available_version": u.get("version") or "",
+            "source": "windows-update",
+            "level": _level_from_windows(u.get("severity"), u.get("categories")),
+            "size": int(u.get("size") or 0),
+            # RebootBehavior: 0 = nie, 1 = immer, 2 = kann sein
+            "needs_reboot": 1 if int(u.get("reboot") or 0) else 0,
+        })
+    return _source("windows-update", True, out)
+
+
+# --------------------------------------------------------------------------
+# winget
+# --------------------------------------------------------------------------
+
+def _winget_columns(header: str) -> "dict | None":
+    """
+    Spaltenanfänge aus der Kopfzeile ableiten - ohne die Spalten beim Namen
+    zu nennen.
+
+    Der frühere Weg suchte die Wörter "Id" und "Available". Auf einem
+    deutschen Windows heissen die Spalten "Kennung" und "Verfügbar", auf
+    einem französischen wieder anders: die Kopfzeile wurde nie erkannt und
+    der Scan meldete grundsätzlich null Anwendungsupdates.
+
+    Womit man rechnen kann, ist die Formatierung: winget trennt seine
+    Spalten immer durch MINDESTENS zwei Leerzeichen und richtet die Werte
+    darunter linksbündig an derselben Position aus. Wir lesen also nur die
+    Startspalten ab und ignorieren, was in der Überschrift steht.
+
+    Spaltenfolge bei winget stabil: Name, Kennung, Version, Verfügbar, Quelle.
+    """
+    starts = [m.start() for m in re.finditer(r"(?<=\s)\S", "  " + header)]
+    # "  " vorangestellt, damit auch die erste Spalte erkannt wird; die
+    # Verschiebung um zwei Zeichen wieder herausrechnen.
+    starts = sorted({max(0, s - 2) for s in starts})
+    # Nur echte Spaltenanfänge behalten: solche, vor denen zwei Leerzeichen
+    # stehen (innerhalb einer Überschrift wie "Verfügbare Version" steht nur
+    # eines).
+    cols = [0] + [s for s in starts if s >= 2 and header[s - 2:s] == "  "]
+    cols = sorted(set(cols))
+    if len(cols) < 4:
+        return None
+    return {"name": cols[0], "id": cols[1], "cur": cols[2],
+            "avail": cols[3], "end": cols[4] if len(cols) > 4 else None}
+
+
+def _scan_winget() -> dict:
+    if not IS_WINDOWS:
+        return _source("winget", True, note="kein Windows")
+    exe = _winget_exe()
+    if not exe:
+        return _source("winget", False, error=(
+            "winget wurde nicht gefunden. Unter dem Dienstkonto SYSTEM liegt es "
+            "nicht im PATH; auch das Paket 'App Installer' kann fehlen."))
+    try:
+        res = _run([exe, "upgrade", "--include-unknown",
+                    "--accept-source-agreements", "--disable-interactivity"],
+                   timeout=240)
+    except subprocess.TimeoutExpired:
+        return _source("winget", False, error="Zeitüberschreitung bei winget (>4 min)")
+    except Exception as e:
+        return _source("winget", False, error=f"{e.__class__.__name__}: {e}")
+
+    lines = [l.rstrip() for l in (res.stdout or "").splitlines()]
+    # Die Trennzeile dient nur dazu, die Kopfzeile zu FINDEN: sie besteht in
+    # jeder Sprache aus Bindestrichen. Die Spaltenpositionen kommen dann aus
+    # der Zeile darüber.
+    sep_idx = next((i for i, l in enumerate(lines)
+                    if l.strip() and set(l.strip()) == {"-"}
+                    and len(l.strip()) > 20), None)
+    if sep_idx is None or sep_idx == 0:
+        # Kein Tabellenkopf: entweder wirklich nichts zu tun, oder winget hat
+        # sich beschwert. Beides unterscheidbar machen statt zu schweigen.
+        text = " ".join(l.strip() for l in lines if l.strip())
+        if res.returncode != 0:
+            return _source("winget", False,
+                           error=f"winget endete mit Code {res.returncode}: {text[:300]}")
+        return _source("winget", True,
+                       note="keine Tabelle in der Ausgabe - nichts zu aktualisieren")
+
+    cols = _winget_columns(lines[sep_idx - 1])
+    if not cols:
+        return _source("winget", False, error=(
+            "Spaltenaufteilung der winget-Tabelle nicht erkannt. Kopfzeile: "
+            f"{lines[sep_idx - 1][:160]}"))
+
+    out = []
+    for line in lines[sep_idx + 1:]:
+        if not line.strip() or set(line.strip()) <= {"-", " "}:
+            continue
+        name = line[cols["name"]:cols["id"]].strip()
+        pkg = line[cols["id"]:cols["cur"]].strip()
+        cur = line[cols["cur"]:cols["avail"]].strip()
+        avail_field = line[cols["avail"]:cols["end"]] if cols["end"] else line[cols["avail"]:]
+        avail = avail_field.strip().split(" ")[0] if avail_field.strip() else ""
+        # Fusszeilen ("2 Upgrades verfügbar.") laufen quer über die Spalten:
+        # in der Kennung-Spalte stünde dann Text mit Leerzeichen.
+        if not pkg or not name or " " in pkg:
+            continue
+        if not avail or avail.lower() in ("unknown", "unbekannt"):
+            continue
+        out.append({
+            "uid": pkg, "name": name,
+            "current_version": cur, "available_version": avail,
+            "source": "winget",
+            # winget kennt keine Schweregrade. Als 'security' zu raten wäre
+            # gefährlich - dann würden Sicherheitsregeln beliebige Apps
+            # mitaktualisieren.
+            "level": "other",
+            "size": 0, "needs_reboot": 0,
+        })
+    return _source("winget", True, out)
+
+
+# --------------------------------------------------------------------------
+# apt / dnf
+# --------------------------------------------------------------------------
+
+def _has(binary: str) -> bool:
+    return bool(shutil.which(binary))
+
+
+def _scan_apt() -> dict:
+    """
+    LC_ALL=C erzwingt englische Ausgabe - sonst heisst es auf deutschen
+    Systemen "aktualisierbar von:" statt "upgradable from:". Beide
+    Schreibweisen werden trotzdem erkannt, falls die Locale nicht greift.
+    """
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C",
+           "DEBIAN_FRONTEND": "noninteractive"}
+    note = ""
+    try:
+        upd = _run(["apt-get", "update", "-qq"], timeout=240, env=env)
+        if upd.returncode != 0:
+            # Kein Abbruch: die Paketliste kann veraltet, aber brauchbar sein.
+            note = f"apt-get update meldete Code {upd.returncode}"
+    except Exception as e:
+        note = f"apt-get update übersprungen ({e})"
+    try:
+        res = _run(["apt", "list", "--upgradable"], timeout=180, env=env)
+    except Exception as e:
+        return _source("apt", False, error=f"{e.__class__.__name__}: {e}")
+
+    pattern = re.compile(
+        r"^(?P<pkg>[^/\s]+)/(?P<repo>\S+)\s+(?P<avail>\S+)\s+\S+"
+        r"\s+\[(?:upgradable from|aktualisierbar von):\s*(?P<cur>[^\]]+)\]")
+    out = []
+    for line in (res.stdout or "").splitlines():
+        m = pattern.match(line.strip())
+        if not m:
+            continue
+        out.append({
+            "uid": m.group("pkg"), "name": m.group("pkg"),
+            "current_version": m.group("cur").strip(),
+            "available_version": m.group("avail"),
+            "source": "apt",
+            # Debian/Ubuntu kennzeichnen Sicherheitsaktualisierungen über die
+            # Quelle ("...-security"). Das ist die einzige verlässliche Angabe.
+            "level": "security" if "security" in m.group("repo").lower() else "other",
+            "size": 0, "needs_reboot": 0,
+        })
+    return _source("apt", True, out, note=note)
+
+
+def _scan_dnf() -> dict:
+    try:
+        # check-update endet planmässig mit Code 100, wenn es Updates gibt.
+        res = _run(["dnf", "-q", "check-update"], timeout=240)
+    except Exception as e:
+        return _source("dnf", False, error=f"{e.__class__.__name__}: {e}")
+    if res.returncode not in (0, 100):
+        return _source("dnf", False, error=(
+            f"dnf check-update endete mit Code {res.returncode}: "
+            f"{(res.stderr or '').strip()[:300]}"))
+
+    sec = set()
+    try:
+        s = _run(["dnf", "-q", "updateinfo", "list", "security"], timeout=240)
+        for line in (s.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                sec.add(parts[-1].rsplit("-", 2)[0])
+    except Exception:
+        pass
+
+    out = []
+    for line in (res.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 3 or line.startswith(("Last metadata", "Obsoleting", "Security")):
+            continue
+        pkg = parts[0].rsplit(".", 1)[0]
+        out.append({
+            "uid": pkg, "name": pkg, "current_version": "",
+            "available_version": parts[1], "source": "dnf",
+            "level": "security" if pkg in sec else "other",
+            "size": 0, "needs_reboot": 0,
+        })
+    return _source("dnf", True, out)
+
+
+# --------------------------------------------------------------------------
+# Selbstauskunft
+# --------------------------------------------------------------------------
+
+def _patch_sources() -> list:
+    """Welche Quellen kommen auf DIESEM System überhaupt in Frage?"""
+    if IS_WINDOWS:
+        src = ["windows-update"]
+        if _winget_exe():
+            src.append("winget")
+        return src
+    src = []
+    if _has("apt"):
+        src.append("apt")
+    elif _has("dnf"):
+        src.append("dnf")
+    return src
+
+
+def _patch_capabilities() -> dict:
+    """
+    Wozu ist dieser Agent in Sachen Patching in der Lage? Wird beim Anmelden
+    und bei jedem 'patch-ping' gemeldet - das Backend muss dadurch nicht mehr
+    raten, ob ein Auftrag überhaupt Sinn ergibt.
+    """
+    return {
+        "protocol": PATCH_PROTOCOL,
+        "agent_version": AGENT_VERSION,
+        "agent_code_hash": AGENT_CODE_HASH,
+        "platform": platform.system(),
+        "release": OS_RELEASE,
+        "sources": _patch_sources(),
+        "winget": _winget_exe() or "",
+        "elevated": _is_admin(),
+        "events": list(PATCH_EVENTS),
+    }
+
+
+# --------------------------------------------------------------------------
+# Sammeln und Installieren
+# --------------------------------------------------------------------------
+
+def _collect_patches(progress=None) -> dict:
+    """
+    Alle Quellen befragen (blockierend, läuft im Thread).
+
+    'progress' ist ein Rückruf(stage, detail, done, total) für die
+    Fortschrittsmeldungen. Er darf niemals eine Ausnahme nach aussen tragen -
+    ein kaputter Fortschrittsbalken darf keinen Scan abbrechen.
+    """
+    def tell(stage, detail, done, total):
+        if not progress:
+            return
+        try:
+            progress(stage, detail, done, total)
+        except Exception:
+            pass
+
+    scanners = []
+    if IS_WINDOWS:
+        scanners.append(("windows-update", _scan_windows_os))
+        scanners.append(("winget", _scan_winget))
+    elif _has("apt"):
+        scanners.append(("apt", _scan_apt))
+    elif _has("dnf"):
+        scanners.append(("dnf", _scan_dnf))
+
+    total = len(scanners)
+    sources, patches = [], []
+    for idx, (name, fn) in enumerate(scanners):
+        tell("scanning", name, idx, total)
+        try:
+            result = fn()
+        except Exception as e:
+            result = _source(name, False, error=f"{e.__class__.__name__}: {e}")
+        sources.append({k: v for k, v in result.items() if k != "patches"})
+        patches += result["patches"]
+        state = f"{result['count']}" if result["ok"] else f"FEHLER: {result['error'][:120]}"
+        _patch_log(f"{name}: {state}")
+        tell("scanned", name, idx + 1, total)
+
+    # Doppelte (gleiche Quelle + gleiche Kennung) entfernen.
+    seen, unique = set(), []
+    for p in patches:
+        key = (p["source"], p["uid"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+
+    return {
+        "patches": unique,
+        "sources": sources,
+        "capabilities": _patch_capabilities(),
+        "scanned_at": int(time.time() * 1000),
+    }
+
+
+def _apply_patches(items: list, progress=None) -> dict:
+    """
+    Ausgewählte Aktualisierungen installieren.
+
+    'items' sind Einträge aus dem letzten Scan ({uid, source, name}). Es wird
+    NIE etwas installiert, das nicht ausdrücklich benannt wurde - kein
+    "alles aktualisieren" per Fernsteuerung.
+    """
+    def tell(stage, detail, done, total):
+        if not progress:
+            return
+        try:
+            progress(stage, detail, done, total)
+        except Exception:
+            pass
+
+    installed, failed, reboot = [], [], False
+    total = len(items)
+    done = 0
+
+    # --- Windows Update: alle in EINEM Durchgang, das ist deutlich schneller
+    wu = [i for i in items if i.get("source") == "windows-update"]
+    if wu and IS_WINDOWS:
+        names = ", ".join(str(i.get("name") or i.get("uid"))[:40] for i in wu[:3])
+        tell("installing", f"Windows Update ({len(wu)}): {names}", done, total)
+        try:
+            ids = ",".join(str(i["uid"]) for i in wu)
+            res = _ps(_WU_INSTALL_PS.replace("__IDS__", ids), timeout=5400)
+            lines = [l for l in (res.stdout or "").strip().splitlines() if l.strip()]
+            data = json.loads(lines[-1]) if lines else {}
+            if data.get("__error__"):
+                for i in wu:
+                    failed.append({"name": i.get("name") or i.get("uid"),
+                                   "error": str(data["__error__"])})
+            else:
+                installed += [i.get("name") or i.get("uid") for i in wu]
+                reboot = reboot or bool(data.get("reboot"))
+        except Exception as e:
+            for i in wu:
+                failed.append({"name": i.get("name") or i.get("uid"),
+                               "error": f"{e.__class__.__name__}: {e}"})
+        done += len(wu)
+        tell("installed", f"Windows Update: {len(wu)}", done, total)
+
+    # --- alles Übrige einzeln
+    for item in items:
+        src = item.get("source")
+        uid = item.get("uid")
+        name = item.get("name") or uid or "?"
+        if src == "windows-update":
+            continue
+        tell("installing", str(name), done, total)
+        try:
+            if src == "winget":
+                exe = _winget_exe()
+                if not exe:
+                    raise RuntimeError("winget ist auf diesem Client nicht verfügbar")
+                r = _run([exe, "upgrade", "--id", uid, "--exact", "--silent",
+                          "--accept-package-agreements", "--accept-source-agreements",
+                          "--disable-interactivity"], timeout=3600)
+            elif src == "apt":
+                env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive",
+                       "LC_ALL": "C", "LANG": "C"}
+                r = _run(["apt-get", "install", "-y", "--only-upgrade", uid],
+                         timeout=3600, env=env)
+            elif src == "dnf":
+                r = _run(["dnf", "-y", "upgrade", uid], timeout=3600)
+            else:
+                raise RuntimeError(f"Unbekannte Quelle: {src}")
+
+            if r.returncode == 0:
+                installed.append(name)
+            else:
+                err = (r.stderr or r.stdout or "").strip()[-400:]
+                failed.append({"name": name, "error": err or f"Code {r.returncode}"})
+        except Exception as e:
+            failed.append({"name": name, "error": f"{e.__class__.__name__}: {e}"})
+        done += 1
+        tell("installed", str(name), done, total)
+
+    if IS_WINDOWS:
+        # Ein ausstehender Neustart lässt sich zuverlässig an diesem
+        # Registrierungsschlüssel ablesen.
+        try:
+            chk = _ps("if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\"
+                      "CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired')"
+                      " { 'yes' } else { 'no' }", timeout=60)
+            if "yes" in (chk.stdout or ""):
+                reboot = True
+        except Exception:
+            pass
+    elif Path("/var/run/reboot-required").exists():
+        reboot = True
+
+    return {"installed": installed, "failed": failed, "needs_reboot": reboot}
+
+
+# --------------------------------------------------------------------------
+# Ereignis-Handler
+# --------------------------------------------------------------------------
+# Grundregel: JEDER Handler antwortet, auch wenn er selbst scheitert. Ein
+# stiller Handler ist von aussen nicht von einem fehlenden zu unterscheiden -
+# das Backend meldet dann fälschlich "Agent zu alt", obwohl in Wahrheit eine
+# Ausnahme geflogen ist.
+
+async def _patch_reply(event: str, payload: dict) -> None:
+    try:
+        await sio.emit(event, payload, namespace="/agent")
+    except Exception as e:
+        _patch_log(f"Antwort '{event}' konnte nicht gesendet werden: {e}")
+
+
+def _patch_progress_sender(request_id: str, kind: str):
+    """
+    Baut einen Rückruf, der aus dem Arbeits-Thread heraus Fortschritt meldet.
+    Die Emission muss zurück auf den Event-Loop - deshalb
+    run_coroutine_threadsafe.
+    """
+    loop = _AGENT_LOOP
+
+    def send(stage: str, detail: str, done: int, total: int) -> None:
+        payload = {"id": DEVICE_ID, "requestId": request_id, "kind": kind,
+                   "stage": stage, "detail": detail, "done": done, "total": total}
+        try:
+            asyncio.run_coroutine_threadsafe(
+                sio.emit("patch-progress", payload, namespace="/agent"), loop)
+        except Exception:
+            pass
+    return send
+
+
+@sio.on("patch-ping", namespace="/agent")
+async def on_patch_ping(data):
+    """Selbstauskunft. Antwortet sofort, ohne irgendetwas zu starten."""
+    request_id = (data or {}).get("requestId")
+    _patch_log("Fähigkeitsabfrage empfangen")
+    try:
+        caps = _patch_capabilities()
+    except Exception as e:
+        caps = {"protocol": PATCH_PROTOCOL, "error": f"{e.__class__.__name__}: {e}"}
+    await _patch_reply("patch-ping-result",
+                       {"requestId": request_id, "ok": True, **caps})
+
+
+@sio.on("patch-selftest", namespace="/agent")
+async def on_patch_selftest(data):
+    """
+    Kurzer Funktionstest OHNE vollständigen Scan: prüft, ob die Quellen
+    ansprechbar sind. Dauert Sekunden statt Minuten und beantwortet die
+    Frage "liegt es am Agenten oder am System?".
+    """
+    request_id = (data or {}).get("requestId")
+    _patch_log("Selbsttest angefordert")
+    checks = []
+
+    def check(name, fn):
+        try:
+            checks.append({"name": name, **fn()})
+        except Exception as e:
+            checks.append({"name": name, "ok": False,
+                           "detail": f"{e.__class__.__name__}: {e}"})
+
+    if IS_WINDOWS:
+        def wu():
+            r = _ps("try { $s = New-Object -ComObject Microsoft.Update.Session; "
+                    "if ($s) { 'ok' } } catch { 'ERR ' + $_.Exception.Message }",
+                    timeout=90)
+            txt = (r.stdout or "").strip()
+            return {"ok": txt.startswith("ok"), "detail": txt[:300] or "keine Ausgabe"}
+        check("Windows-Update-COM", wu)
+
+        def wg():
+            exe = _winget_exe()
+            if not exe:
+                return {"ok": False, "detail": "winget.exe nicht gefunden"}
+            r = _run([exe, "--version"], timeout=60)
+            return {"ok": r.returncode == 0,
+                    "detail": (r.stdout or r.stderr or "").strip()[:200] or exe}
+        check("winget", wg)
+    else:
+        for tool in ("apt", "dnf"):
+            if _has(tool):
+                check(tool, lambda t=tool: {
+                    "ok": True, "detail": shutil.which(t) or t})
+
+    check("Rechte", lambda: {"ok": _is_admin(),
+                             "detail": "erhöht" if _is_admin() else
+                                       "NICHT erhöht - Installieren wird scheitern"})
+
+    await _patch_reply("patch-selftest-result", {
+        "requestId": request_id, "ok": True,
+        "capabilities": _patch_capabilities(), "checks": checks})
+
+
+@sio.on("patch-scan", namespace="/agent")
+async def on_patch_scan(data):
+    """Nach verfügbaren Aktualisierungen suchen und melden."""
+    request_id = (data or {}).get("requestId")
+    _patch_log("Suche nach Aktualisierungen gestartet")
+    progress = _patch_progress_sender(request_id, "scan")
+    try:
+        result = await _AGENT_LOOP.run_in_executor(
+            None, functools.partial(_collect_patches, progress))
+        _patch_log(f"Suche beendet: {len(result['patches'])} Aktualisierung(en)")
+        await _patch_reply("patch-scan-result", {"requestId": request_id, **result})
+    except Exception as e:
+        _patch_log(f"Suche fehlgeschlagen: {e.__class__.__name__}: {e}")
+        await _patch_reply("patch-scan-result", {
+            "requestId": request_id,
+            "error": f"{e.__class__.__name__}: {e}",
+            "capabilities": _patch_capabilities()})
+
+
+@sio.on("patch-apply", namespace="/agent")
+async def on_patch_apply(data):
+    """Benannte Aktualisierungen installieren."""
+    request_id = (data or {}).get("requestId")
+    items = (data or {}).get("items") or []
+    if not items:
+        await _patch_reply("patch-apply-result", {
+            "requestId": request_id, "error": "Keine Aktualisierungen angegeben"})
+        return
+
+    _patch_log(f"Installiere {len(items)} Aktualisierung(en)")
+    await _emit_action_log("patch", "started", f"{len(items)} Aktualisierung(en)")
+    progress = _patch_progress_sender(request_id, "apply")
+    try:
+        result = await _AGENT_LOOP.run_in_executor(
+            None, functools.partial(_apply_patches, items, progress))
+        note = (f"{len(result['installed'])} installiert, "
+                f"{len(result['failed'])} fehlgeschlagen")
+        _patch_log(note)
+        await _emit_action_log("patch", "finished", note)
+        await _patch_reply("patch-apply-result", {"requestId": request_id, **result})
+    except Exception as e:
+        msg = f"{e.__class__.__name__}: {e}"
+        _patch_log(f"Installation fehlgeschlagen: {msg}")
+        await _emit_action_log("patch", "failed", msg)
+        await _patch_reply("patch-apply-result", {"requestId": request_id, "error": msg})
+
+
+# Beim Laden einmal ausgeben, WELCHE Patch-Ereignisse dieser Agent kennt.
+# Damit steht in der Agent-Konsole schwarz auf weiss, ob die neue Fassung
+# wirklich läuft - genau die Frage, die sich aus der Ferne sonst nicht
+# beantworten lässt.
+_patch_log(f"Modul geladen - Protokoll {PATCH_PROTOCOL}, "
+           f"Ereignisse: {', '.join(PATCH_EVENTS)}")
+
+
 if __name__ == "__main__":
     # WICHTIG: auf dem OBEN gesetzten Loop laufen (nicht asyncio.run(), das einen
     # neuen Loop anlegen würde) -> derselbe Loop, auf dem 'sio' erstellt wurde.
@@ -3323,399 +4152,3 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-
-# ==========================================================================
-# SOFTWARE-PATCHING
-# --------------------------------------------------------------------------
-# Zwei Quellen, weil keine allein reicht:
-#   * Betriebssystem-Updates - unter Windows über die Windows-Update-COM-API
-#     (liefert als einzige Quelle die Schweregrade und Kategorien, die für
-#     "nur Sicherheitsupdates automatisch" gebraucht werden), unter Linux
-#     über apt/dnf.
-#   * Anwendungs-Updates - über winget (Windows) bzw. denselben Paketmanager
-#     (Linux). Anwendungsupdates tragen KEINEN Schweregrad, deshalb landen
-#     sie bewusst in der Stufe 'other' und werden von reinen
-#     Sicherheits-Regeln nicht angefasst.
-#
-# Stufen (level), einheitlich über alle Plattformen:
-#   security | critical | important | moderate | low | feature | other
-# ==========================================================================
-
-# Windows-Update-Abfrage. Läuft über die COM-API statt über das Modul
-# PSWindowsUpdate, weil das auf den meisten Systemen nicht installiert ist
-# und eine Installation aus der Ferne mehr kaputt macht als sie hilft.
-_WU_SEARCH_PS = r"""
-$ErrorActionPreference = 'Stop'
-try {
-  $session  = New-Object -ComObject Microsoft.Update.Session
-  $searcher = $session.CreateUpdateSearcher()
-  $result   = $searcher.Search("IsInstalled=0 and IsHidden=0")
-  $out = @()
-  foreach ($u in $result.Updates) {
-    $cats = @()
-    foreach ($c in $u.Categories) { $cats += $c.Name }
-    $kb = @()
-    foreach ($k in $u.KBArticleIDs) { $kb += "KB$k" }
-    $out += [PSCustomObject]@{
-      id        = $u.Identity.UpdateID
-      name      = $u.Title
-      version   = ($kb -join ',')
-      severity  = [string]$u.MsrcSeverity
-      categories= ($cats -join ',')
-      size      = [int64]$u.MaxDownloadSize
-      reboot    = [bool]$u.InstallationBehavior.RebootBehavior
-    }
-  }
-  $out | ConvertTo-Json -Compress -Depth 3
-} catch {
-  Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
-}
-"""
-
-# Installation ausgewählter Updates. IDs kommen als Kommaliste herein; es
-# wird ausschliesslich installiert, was vorher auch gemeldet wurde.
-_WU_INSTALL_PS = r"""
-$ErrorActionPreference = 'Stop'
-$wanted = '__IDS__'.Split(',') | Where-Object { $_ -ne '' }
-try {
-  $session  = New-Object -ComObject Microsoft.Update.Session
-  $searcher = $session.CreateUpdateSearcher()
-  $result   = $searcher.Search("IsInstalled=0 and IsHidden=0")
-  $coll = New-Object -ComObject Microsoft.Update.UpdateColl
-  foreach ($u in $result.Updates) {
-    if ($wanted -contains $u.Identity.UpdateID) {
-      if (-not $u.EulaAccepted) { $u.AcceptEula() | Out-Null }
-      $coll.Add($u) | Out-Null
-    }
-  }
-  if ($coll.Count -eq 0) { Write-Output '{"installed":0,"reboot":false}'; exit }
-  $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll; $dl.Download() | Out-Null
-  $inst = $session.CreateUpdateInstaller(); $inst.Updates = $coll
-  $r = $inst.Install()
-  $reboot = [bool]$r.RebootRequired
-  Write-Output ('{"installed":' + $coll.Count + ',"reboot":' + $reboot.ToString().ToLower() + ',"code":' + $r.ResultCode + '}')
-} catch {
-  Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
-}
-"""
-
-
-def _ps(script: str, timeout: int = 600):
-    """PowerShell-Skript ausführen und stdout zurückgeben."""
-    return _run(["powershell", "-NoProfile", "-NonInteractive",
-                 "-ExecutionPolicy", "Bypass", "-Command", script],
-                timeout=timeout)
-
-
-def _level_from_windows(severity: str, categories: str) -> str:
-    """
-    Schweregrad einer Windows-Aktualisierung bestimmen.
-
-    Die Kategorie hat Vorrang vor MsrcSeverity: Microsoft lässt den
-    Schweregrad bei vielen Sicherheitsupdates leer. Wer nur nach
-    MsrcSeverity filtert, verpasst genau die Updates, die er wollte.
-    """
-    cats = (categories or "").lower()
-    sev = (severity or "").strip().lower()
-    if "security" in cats:
-        return "security"
-    if "critical" in cats:
-        return "critical"
-    if sev == "critical":
-        return "critical"
-    if sev == "important":
-        return "important"
-    if sev == "moderate":
-        return "moderate"
-    if sev == "low":
-        return "low"
-    if "definition" in cats:
-        return "security"     # Virendefinitionen: sicherheitsrelevant
-    if "driver" in cats:
-        return "other"
-    if "feature pack" in cats or "upgrade" in cats:
-        return "feature"
-    return "other"
-
-
-def _scan_windows_os() -> list[dict]:
-    try:
-        res = _ps(_WU_SEARCH_PS, timeout=420)
-    except Exception as e:
-        _print(f"[patch] Windows-Update-Abfrage fehlgeschlagen: {e}")
-        return []
-    raw = (res.stdout or "").strip()
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        _print("[patch] Windows-Update-Antwort war kein gültiges JSON")
-        return []
-    if isinstance(data, dict):
-        if data.get("__error__"):
-            _print(f"[patch] Windows Update: {data['__error__']}")
-            return []
-        data = [data]
-    out = []
-    for u in data:
-        out.append({
-            "uid": str(u.get("id") or ""),
-            "name": u.get("name") or "Unbenannte Aktualisierung",
-            "current_version": "",
-            "available_version": u.get("version") or "",
-            "source": "windows-update",
-            "level": _level_from_windows(u.get("severity"), u.get("categories")),
-            "size": int(u.get("size") or 0),
-            "needs_reboot": 1 if u.get("reboot") else 0,
-        })
-    return out
-
-
-def _scan_winget() -> list[dict]:
-    """
-    Anwendungs-Updates über winget. Die Ausgabe ist eine Tabelle ohne
-    Maschinenformat, deshalb wird über die Kopfzeile gespaltet statt über
-    feste Spaltenbreiten - die verschieben sich je nach Sprache und
-    Namenslänge.
-    """
-    try:
-        res = _run(["winget", "upgrade", "--include-unknown",
-                    "--accept-source-agreements", "--disable-interactivity"],
-                   timeout=180)
-    except FileNotFoundError:
-        return []
-    except Exception as e:
-        _print(f"[patch] winget fehlgeschlagen: {e}")
-        return []
-
-    lines = [l.rstrip() for l in (res.stdout or "").splitlines()]
-    header_idx = next((i for i, l in enumerate(lines)
-                       if l.lstrip().startswith(("Name", "Nom", "Nombre"))
-                       and ("Id" in l or "ID" in l)), None)
-    if header_idx is None:
-        return []
-    header = lines[header_idx]
-    try:
-        c_id = header.index("Id") if "Id" in header else header.index("ID")
-        rest = header[c_id + 2:]
-        c_ver = c_id + 2 + rest.index("Version") if "Version" in rest else None
-        c_avail = header.index("Verfügbar") if "Verfügbar" in header else (
-            header.index("Available") if "Available" in header else None)
-    except ValueError:
-        return []
-    if c_ver is None or c_avail is None:
-        return []
-
-    out = []
-    for line in lines[header_idx + 2:]:
-        if not line.strip() or line.lstrip().startswith("-"):
-            continue
-        if "upgrade" in line.lower() and "available" in line.lower():
-            continue           # Zusammenfassungszeile am Ende
-        try:
-            name = line[:c_id].strip()
-            pkg = line[c_id:c_ver].strip()
-            cur = line[c_ver:c_avail].strip()
-            avail = line[c_avail:].strip().split()[0]
-        except (IndexError, ValueError):
-            continue
-        if not pkg or not name or avail in ("", "Unknown"):
-            continue
-        out.append({
-            "uid": pkg, "name": name,
-            "current_version": cur, "available_version": avail,
-            "source": "winget",
-            # winget kennt keine Schweregrade. Als 'security' zu raten wäre
-            # gefährlich - dann würden Sicherheitsregeln beliebige Apps
-            # mitaktualisieren.
-            "level": "other",
-            "size": 0, "needs_reboot": 0,
-        })
-    return out
-
-
-def _scan_apt() -> list[dict]:
-    """
-    apt-Updates einlesen. LC_ALL=C erzwingt englische Ausgabe - sonst heißt
-    es auf deutschen Systemen "aktualisierbar von:" statt "upgradable from:"
-    und der Parser übersieht fast alles. Zur Sicherheit werden trotzdem
-    beide Schreibweisen erkannt, falls die Locale nicht greift.
-    """
-    env = {**os.environ, "LC_ALL": "C", "LANG": "C", "DEBIAN_FRONTEND": "noninteractive"}
-    try:
-        _run(["apt-get", "update", "-qq"], timeout=180, env=env)
-        res = _run(["apt", "list", "--upgradable"], timeout=120, env=env)
-    except Exception as e:
-        _print(f"[patch] apt fehlgeschlagen: {e}")
-        return []
-
-    # paket/quelle  neue-version  arch  [upgradable from: alte-version]
-    pattern = re.compile(
-        r"^(?P<pkg>[^/\s]+)/(?P<repo>\S+)\s+(?P<avail>\S+)\s+\S+"
-        r"\s+\[(?:upgradable from|aktualisierbar von):\s*(?P<cur>[^\]]+)\]")
-    out = []
-    for line in (res.stdout or "").splitlines():
-        m = pattern.match(line.strip())
-        if not m:
-            continue
-        repo = m.group("repo")
-        out.append({
-            "uid": m.group("pkg"), "name": m.group("pkg"),
-            "current_version": m.group("cur").strip(),
-            "available_version": m.group("avail"),
-            "source": "apt",
-            # Debian/Ubuntu kennzeichnen Sicherheitsaktualisierungen über die
-            # Quelle ("...-security"). Das ist die einzige verlässliche Angabe.
-            "level": "security" if "security" in repo.lower() else "other",
-            "size": 0, "needs_reboot": 0,
-        })
-    return out
-
-
-def _scan_dnf() -> list[dict]:
-    try:
-        res = _run(["dnf", "-q", "check-update"], timeout=180)
-    except Exception:
-        return []
-    sec = set()
-    try:
-        s = _run(["dnf", "-q", "updateinfo", "list", "security"], timeout=180)
-        for line in (s.stdout or "").splitlines():
-            parts = line.split()
-            if len(parts) >= 3:
-                sec.add(parts[-1].rsplit("-", 2)[0])
-    except Exception:
-        pass
-    out = []
-    for line in (res.stdout or "").splitlines():
-        parts = line.split()
-        if len(parts) < 3 or line.startswith(("Last metadata", "Obsoleting")):
-            continue
-        pkg = parts[0].rsplit(".", 1)[0]
-        out.append({
-            "uid": pkg, "name": pkg, "current_version": "",
-            "available_version": parts[1], "source": "dnf",
-            "level": "security" if pkg in sec else "other",
-            "size": 0, "needs_reboot": 0,
-        })
-    return out
-
-
-def _collect_patches() -> dict:
-    """Alle verfügbaren Aktualisierungen sammeln (blockierend)."""
-    patches: list[dict] = []
-    if IS_WINDOWS:
-        patches += _scan_windows_os()
-        patches += _scan_winget()
-    else:
-        if Path("/usr/bin/apt").exists() or Path("/usr/bin/apt-get").exists():
-            patches += _scan_apt()
-        elif Path("/usr/bin/dnf").exists():
-            patches += _scan_dnf()
-    # Doppelte (gleiche Quelle + gleiche Kennung) entfernen.
-    seen, unique = set(), []
-    for p in patches:
-        key = (p["source"], p["uid"])
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(p)
-    return {"patches": unique, "scanned_at": int(time.time() * 1000)}
-
-
-def _apply_patches(items: list[dict]) -> dict:
-    """
-    Ausgewählte Aktualisierungen installieren.
-    'items' sind Einträge aus dem letzten Scan ({uid, source, name}).
-    Es wird NIE etwas installiert, das nicht ausdrücklich benannt wurde -
-    kein "alles aktualisieren" per Fernsteuerung.
-    """
-    installed, failed, reboot = [], [], False
-
-    wu_ids = [i["uid"] for i in items if i.get("source") == "windows-update"]
-    if wu_ids and IS_WINDOWS:
-        try:
-            res = _ps(_WU_INSTALL_PS.replace("__IDS__", ",".join(wu_ids)), timeout=3600)
-            raw = (res.stdout or "").strip().splitlines()
-            data = json.loads(raw[-1]) if raw else {}
-            if data.get("__error__"):
-                failed.append({"name": "Windows Update", "error": data["__error__"]})
-            else:
-                installed += [i["name"] for i in items if i.get("source") == "windows-update"]
-                reboot = reboot or bool(data.get("reboot"))
-        except Exception as e:
-            failed.append({"name": "Windows Update", "error": str(e)})
-
-    for item in items:
-        src, uid, name = item.get("source"), item.get("uid"), item.get("name", "")
-        if src == "windows-update":
-            continue
-        try:
-            if src == "winget":
-                r = _run(["winget", "upgrade", "--id", uid, "--silent",
-                          "--accept-package-agreements", "--accept-source-agreements",
-                          "--disable-interactivity"], timeout=2400)
-            elif src == "apt":
-                env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-                r = _run(["apt-get", "install", "-y", "--only-upgrade", uid],
-                         timeout=2400, env=env)
-            elif src == "dnf":
-                r = _run(["dnf", "-y", "upgrade", uid], timeout=2400)
-            else:
-                failed.append({"name": name, "error": f"Unbekannte Quelle: {src}"})
-                continue
-            if r.returncode == 0:
-                installed.append(name or uid)
-            else:
-                err = (r.stderr or r.stdout or "").strip()[-400:]
-                failed.append({"name": name or uid, "error": err or f"Code {r.returncode}"})
-        except Exception as e:
-            failed.append({"name": name or uid, "error": str(e)})
-
-    if not IS_WINDOWS and Path("/var/run/reboot-required").exists():
-        reboot = True
-
-    return {"installed": installed, "failed": failed, "needs_reboot": reboot}
-
-
-@sio.on("patch-scan", namespace="/agent")
-async def on_patch_scan(data):
-    """Nach verfügbaren Aktualisierungen suchen und melden."""
-    request_id = data.get("requestId")
-    _print("[patch] Suche nach Aktualisierungen...")
-    loop = asyncio.get_event_loop()
-    try:
-        result = await loop.run_in_executor(None, _collect_patches)
-        _print(f"[patch] {len(result['patches'])} Aktualisierung(en) gefunden")
-        await sio.emit("patch-scan-result", {"requestId": request_id, **result},
-                       namespace="/agent")
-    except Exception as e:
-        await sio.emit("patch-scan-result", {"requestId": request_id, "error": str(e)},
-                       namespace="/agent")
-
-
-@sio.on("patch-apply", namespace="/agent")
-async def on_patch_apply(data):
-    """Benannte Aktualisierungen installieren."""
-    request_id = data.get("requestId")
-    items = data.get("items") or []
-    if not items:
-        await sio.emit("patch-apply-result",
-                       {"requestId": request_id, "error": "Keine Aktualisierungen angegeben"},
-                       namespace="/agent")
-        return
-    _print(f"[patch] Installiere {len(items)} Aktualisierung(en)...")
-    await _emit_action_log("patch", "started", f"{len(items)} Aktualisierung(en)")
-    loop = asyncio.get_event_loop()
-    try:
-        result = await loop.run_in_executor(None, _apply_patches, items)
-        await _emit_action_log(
-            "patch", "finished",
-            f"{len(result['installed'])} installiert, {len(result['failed'])} fehlgeschlagen")
-        await sio.emit("patch-apply-result", {"requestId": request_id, **result},
-                       namespace="/agent")
-    except Exception as e:
-        await _emit_action_log("patch", "failed", str(e))
-        await sio.emit("patch-apply-result", {"requestId": request_id, "error": str(e)},
-                       namespace="/agent")

@@ -1,15 +1,22 @@
 """
 routers/patch_routes.py
 -----------------------
-Software-Patching als API.
+Software-Patching als API. Dünn gehalten: alles Fachliche steckt in
+app/patching.py, damit Automatik und Handbetrieb denselben Code benutzen.
 
 Rechte:
   'patching'        - Bestand sehen, scannen, installieren
   'manage_patching' - zusätzlich Regeln der Automatik ändern
                       (impliziert 'patching', siehe _PERM_IMPLIES in db.py)
 
-Sichtbarkeit: Clients werden über visibility.may_see gefiltert - wer einen
-Client nicht sehen darf, sieht auch dessen Updates nicht.
+Sichtbarkeit: über auth.can_access_client bzw. auth.visible_client_ids -
+wer einen Client nicht sehen darf, sieht auch dessen Updates nicht.
+
+Langläufer (Suche, Installation) laufen NIE am offenen HTTP-Request: ein
+vorgelagerter Reverse Proxy bricht lange vorher ab (Cloudflare nach rund
+100 s mit Fehler 524, nginx nach 60 s). Beide Endpunkte nehmen den Auftrag
+an und antworten sofort; den Fortschritt holt sich die Oberfläche über
+/job.
 """
 
 import asyncio
@@ -25,6 +32,7 @@ router = APIRouter(prefix="/api/patches", tags=["patches"])
 
 
 def _visible_client(user: dict, client_id: str) -> dict:
+    """Client holen und Sichtbarkeit prüfen."""
     client = db.get_client(client_id)
     if not client:
         raise HTTPException(404, "Client nicht gefunden")
@@ -49,8 +57,13 @@ async def overview(user: dict = Depends(get_current_user)):
     data["clients"] = [c for c in data["clients"] if c["id"] in visible]
     # Nach der Sichtbarkeitsfilterung neu zählen - sonst zeigt die Übersicht
     # Zahlen aus Clients, die der Benutzer gar nicht sehen darf.
-    data["affected_clients"] = sum(1 for c in data["clients"] if (c.get("patch_count") or 0) > 0)
-    data["never_scanned"] = sum(1 for c in data["clients"] if not c.get("patch_last_scan"))
+    data["affected_clients"] = sum(
+        1 for c in data["clients"] if (c.get("patch_count") or 0) > 0)
+    data["never_scanned"] = sum(
+        1 for c in data["clients"] if not c.get("patch_last_scan"))
+    data["unsupported_clients"] = sum(
+        1 for c in data["clients"]
+        if c.get("online") and c.get("patch_protocol", 0) < patching.REQUIRED_PROTOCOL)
     data["levels_meta"] = patching.LEVELS
     return data
 
@@ -58,42 +71,105 @@ async def overview(user: dict = Depends(get_current_user)):
 @router.get("/client/{client_id}")
 async def client_patches(client_id: str, status: str = "pending",
                          user: dict = Depends(get_current_user)):
-    """Alle Updates eines Clients, plus die für ihn geltende Regel."""
+    """Alle Updates eines Clients, plus Zustand, Fähigkeiten und Regel."""
     require_perm(user, "patching")
     client = _visible_client(user, client_id)
     rule = patching.effective_rule(client_id)
     return {
-        "client": {"id": client["id"], "hostname": client.get("hostname"),
-                   "online": bool(client.get("online")),
-                   "patch_policy": client.get("patch_policy") or "global",
-                   "patch_last_scan": client.get("patch_last_scan"),
-                   "patch_reboot": bool(client.get("patch_reboot"))},
+        "client": {
+            "id": client["id"],
+            "hostname": client.get("hostname"),
+            # ACHTUNG: die Tabelle 'clients' hat KEINE online-Spalte. Der
+            # Status kommt ausschliesslich aus der Socket-Verbindungsliste.
+            "online": sockets.state.is_online(client_id),
+            "patch_policy": client.get("patch_policy") or "global",
+            "patch_last_scan": client.get("patch_last_scan"),
+            "patch_reboot": bool(client.get("patch_reboot")),
+            "agent_version": client.get("agent_version"),
+        },
         "patches": patching.list_patches(client_id=client_id, status=status),
-        # None heißt: für diesen Client patcht die Automatik nicht.
+        # Sagt der Oberfläche VOR dem Klick, ob der Auftrag Sinn ergibt.
+        "readiness": patching.readiness(client_id),
+        "job": patching.job(client_id),
+        # None heisst: für diesen Client patcht die Automatik nicht.
         "auto_rule": rule,
         "auto_preview": patching.selectable(client_id, rule) if rule else [],
     }
 
 
-@router.post("/client/{client_id}/scan")
-async def scan_client(client_id: str, user: dict = Depends(get_current_user)):
-    """Sucht auf dem Client nach Updates. Dauert je nach System Minuten."""
+@router.get("/client/{client_id}/job")
+async def client_job(client_id: str, user: dict = Depends(get_current_user)):
+    """Fortschritt des laufenden (oder letzten) Auftrags."""
     require_perm(user, "patching")
-    client = _visible_client(user, client_id)
+    _visible_client(user, client_id)
+    return patching.job(client_id)
+
+
+@router.get("/client/{client_id}/readiness")
+async def client_readiness(client_id: str, user: dict = Depends(get_current_user)):
+    """Kann dieser Client patchen - und wenn nein, warum nicht?"""
+    require_perm(user, "patching")
+    _visible_client(user, client_id)
+    return patching.readiness(client_id)
+
+
+@router.post("/client/{client_id}/selftest")
+async def client_selftest(client_id: str, user: dict = Depends(get_current_user)):
+    """
+    Kurzer Funktionstest auf dem Client (Sekunden, kein voller Scan).
+
+    Beantwortet die Frage, die sich aus der Ferne sonst nicht beantworten
+    lässt: liegt es am Agenten, an den Rechten oder an den Update-Quellen?
+    """
+    require_perm(user, "patching")
+    _visible_client(user, client_id)
     if not sockets.state.is_online(client_id):
         raise HTTPException(400, "Client ist offline")
     try:
-        result = await sockets.request_patch_scan(client_id)
+        result = await sockets.request_patch_selftest(client_id, timeout_seconds=90.0)
     except asyncio.TimeoutError:
-        raise HTTPException(504, "Der Client hat nicht rechtzeitig geantwortet")
-    except RuntimeError as e:
-        raise HTTPException(502, str(e))
-    summary = patching.store_scan(client_id, result.get("patches") or [])
-    db.add_audit_entry(user.get("username"), "patch.scan",
-                       target=client.get("hostname"),
-                       details=f"{summary['total']} Update(s) gefunden")
-    return summary
+        raise HTTPException(504, (
+            "Der Agent hat den Selbsttest nicht beantwortet. Entweder kennt er "
+            "das Kommando nicht (alter Agent-Code), oder sein Event-Loop steht."))
+    except Exception as e:
+        raise HTTPException(502, f"{e.__class__.__name__}: {e}")
+    result["readiness"] = patching.readiness(client_id)
+    return result
 
+
+# ------------------------------------------------------------------
+# Suche
+# ------------------------------------------------------------------
+
+@router.post("/client/{client_id}/scan")
+async def scan_client(client_id: str, user: dict = Depends(get_current_user)):
+    """
+    Stösst die Suche an und kehrt SOFORT zurück. Fortschritt über /job.
+    """
+    require_perm(user, "patching")
+    _visible_client(user, client_id)
+
+    ready = patching.readiness(client_id)
+    if ready["reason"] in ("offline", "no_protocol", "no_sources"):
+        # Klar benennen statt in eine Zeitüberschreitung laufen zu lassen.
+        raise HTTPException(409, ready["message"])
+    if patching.job_running(client_id):
+        return {"started": False, "already_running": True,
+                "job": patching.job(client_id)}
+
+    # Reihenfolge ist wichtig: ERST den Zustand setzen, DANN die Aufgabe
+    # starten. Die Oberfläche fragt den Stand unmittelbar nach dieser Antwort
+    # ab - täte das erst die Aufgabe selbst, läse die erste Abfrage
+    # "läuft nicht" und die Suche wirkte wirkungslos.
+    patching.job_start(client_id, "scan", user.get("username", ""))
+    patching.track(asyncio.create_task(
+        patching.run_scan(client_id, user.get("username", ""))))
+    return {"started": True, "job": patching.job(client_id), "hint": ready["message"]}
+
+
+# ------------------------------------------------------------------
+# Installation
+# ------------------------------------------------------------------
 
 class ApplyBody(BaseModel):
     # Liste von {uid, source, name}. Leer = alle offenen des Clients.
@@ -106,12 +182,16 @@ async def apply_patches(client_id: str, body: ApplyBody,
     """
     Benannte Updates installieren. Ohne Auswahl werden ALLE offenen
     installiert - das ist eine bewusste Aktion des Benutzers, keine
-    Automatik.
+    Automatik. Läuft im Hintergrund; Fortschritt über /job.
     """
     require_perm(user, "patching")
     client = _visible_client(user, client_id)
-    if not sockets.state.is_online(client_id):
-        raise HTTPException(400, "Client ist offline")
+
+    ready = patching.readiness(client_id)
+    if not ready["ready"]:
+        raise HTTPException(409, ready["message"])
+    if patching.job_running(client_id):
+        raise HTTPException(409, "Für diesen Client läuft bereits ein Auftrag.")
 
     items = body.items
     if not items:
@@ -120,28 +200,11 @@ async def apply_patches(client_id: str, body: ApplyBody,
     if not items:
         raise HTTPException(400, "Keine offenen Aktualisierungen")
 
-    run_id = patching.start_run(client_id, "manual", user.get("username", ""), len(items))
-    try:
-        result = await sockets.request_patch_apply(client_id, items)
-    except asyncio.TimeoutError:
-        patching.finish_run(run_id, 0, len(items), False, "Zeitüberschreitung")
-        raise HTTPException(504, "Der Client hat nicht rechtzeitig geantwortet")
-    except RuntimeError as e:
-        patching.finish_run(run_id, 0, len(items), False, str(e))
-        raise HTTPException(502, str(e))
-
-    installed = result.get("installed") or []
-    failed = result.get("failed") or []
-    detail = "; ".join(
-        [f"OK: {n}" for n in installed[:25]]
-        + [f"FEHLER: {f.get('name')} - {str(f.get('error', ''))[:120]}" for f in failed[:25]])
-    patching.finish_run(run_id, len(installed), len(failed),
-                        bool(result.get("needs_reboot")), detail)
-    patching.apply_result(client_id, items, result)
-    db.add_audit_entry(user.get("username"), "patch.apply",
-                       target=client.get("hostname"),
-                       details=f"{len(installed)} installiert, {len(failed)} fehlgeschlagen")
-    return result
+    patching.job_start(client_id, "apply", user.get("username", ""), total=len(items))
+    patching.track(asyncio.create_task(patching.run_apply(
+        client_id, items, user.get("username", ""),
+        trigger="manual", hostname=client.get("hostname") or "")))
+    return {"started": True, "count": len(items), "job": patching.job(client_id)}
 
 
 class ExcludeBody(BaseModel):

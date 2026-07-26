@@ -14,8 +14,7 @@ import { t } from "./i18n.js";
 import { esc, uiPrompt, uiConfirm } from "./utils.js";
 import {
   renderStatusPart, renderActionsPart, renderWebsitesPart, clientHasWebsites,
-  renderOverviewSub, OVERVIEW_SUBS, renderChildrenPart,
-} from "./panel.js";
+  renderOverviewSub, OVERVIEW_SUBS, renderChildrenPart, renderPatchesPart } from "./panel.js";
 import { openWindow } from "./windowmanager.js";
 import { clientPresetsByGroup, clientPresetById, renderClientMetric, presetAvailable, availableClientKinds, groupLabel } from "./clientmetrics.js";
 import {
@@ -54,6 +53,7 @@ const LEAF_LABEL = {
   text: () => "Text",
   warranty: () => t("dl_warranty"),
   children: () => t("dl_children"),
+  patches: () => t("dl_patches"),
 };
 
 // Standard-Größe (in Rasterzellen) je Panel-Typ.
@@ -83,6 +83,7 @@ const ADDABLE = [
     { type: "websites", label: "Websites" },
     { type: "warranty", label: t("dl_warranty") },
     { type: "children", label: t("dl_children_full") },
+    { type: "patches", label: t("dl_patches") },
   ]],
   ["Container", [
     { type: "folder", label: "Ordner (Tabs)" },
@@ -617,6 +618,7 @@ function fillPanelBody(bodyEl, panel, client, ctx) {
   if (panel.type === "text") return renderTextPanel(bodyEl, panel, client, ctx);
   if (panel.type === "warranty") return renderWarrantyPart(bodyEl, panel, client, ctx);
   if (panel.type === "children") { bodyEl.classList.add("actions-panel"); return renderChildrenPart(bodyEl, client); }
+  if (panel.type === "patches") { bodyEl.classList.add("actions-panel"); return renderPatchesPart(bodyEl, client); }
   if (panel.type === "cmetric") return renderCMetric(bodyEl, panel, client, ctx);
   if (panel.type === "folder") return renderFolder(bodyEl, panel, client, ctx);
 }

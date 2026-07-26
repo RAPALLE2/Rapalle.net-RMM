@@ -237,6 +237,13 @@ export const api = {
   getClientPatches: (id, status) => request(
     `/api/patches/client/${id}${status ? `?status=${status}` : ""}`),
   scanPatches: (id) => request(`/api/patches/client/${id}/scan`, { method: "POST" }),
+  // Suche und Installation laufen im Hintergrund weiter; hier wird der
+  // Fortschritt geholt. Wichtig hinter Reverse Proxies: eine synchrone
+  // Antwort würde dort in einen Gateway-Timeout laufen (Cloudflare 524).
+  getPatchJob: (id) => request(`/api/patches/client/${id}/job`),
+  getPatchReadiness: (id) => request(`/api/patches/client/${id}/readiness`),
+  // Kurzer Funktionstest auf dem Client (Sekunden, kein voller Scan).
+  patchSelftest: (id) => request(`/api/patches/client/${id}/selftest`, { method: "POST" }),
   applyPatches: (id, items) => request(`/api/patches/client/${id}/apply`, {
     method: "POST", body: JSON.stringify({ items: items || [] }) }),
   excludePatch: (patchId, excluded) => request(`/api/patches/${patchId}/exclude`, {

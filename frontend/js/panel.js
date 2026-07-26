@@ -1158,3 +1158,141 @@ function renderAggregateView(el, type, id) {
     })
   );
 }
+
+
+// ==========================================================================
+// PATCH-PANEL: verfügbare Software-Updates eines Clients
+// --------------------------------------------------------------------------
+// Suchen, Liste der Programme mit verfügbarer neuer Version, Installieren.
+// Der Scan läuft im Hintergrund (Reverse Proxies brechen lange Anfragen ab),
+// deshalb wird der Fortschritt abgefragt statt auf eine Antwort zu warten.
+// ==========================================================================
+
+const PATCH_LEVEL_COLORS = {
+  security: "#ff4d6d", critical: "#f5a524", important: "#facc15",
+  moderate: "#4da6ff", low: "#64748b", feature: "#a78bfa", other: "#7f93ad",
+};
+
+export function renderPatchesPart(bodyEl, client) {
+  let pollTimer = null;
+  let busy = false;
+
+  const stop = () => { clearTimeout(pollTimer); pollTimer = null; };
+  // Wird das Panel neu aufgebaut, darf kein Timer weiterlaufen.
+  bodyEl.addEventListener("DOMNodeRemovedFromDocument", stop);
+
+  async function load() {
+    let data;
+    try {
+      data = await api.getClientPatches(client.id);
+    } catch (e) {
+      bodyEl.innerHTML = `<div style="color:var(--danger);font-size:12px;padding:6px">${esc(e.message)}</div>`;
+      return;
+    }
+    const patches = data.patches || [];
+    const online = data.client?.online;
+    const sec = patches.filter((p) => p.level === "security").length;
+
+    bodyEl.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:100%;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:18px;font-weight:600">${patches.length}</span>
+          <span style="font-size:11px;color:var(--subtext)">${t("patch_open")}</span>
+          ${sec ? `<span style="font-size:10px;padding:1px 6px;border-radius:99px;
+            background:#ff4d6d22;color:#ff4d6d;border:1px solid #ff4d6d55">
+            ${sec} ${t("patch_col_security")}</span>` : ""}
+          <span style="flex:1"></span>
+          <button class="taskbar-btn" data-scan style="padding:1px 7px;font-size:11px"
+            ${online ? "" : "disabled"} title="${esc(t("patch_scan_btn"))}">🔍</button>
+          <button class="taskbar-btn" data-all style="padding:1px 7px;font-size:11px"
+            ${online && patches.length ? "" : "disabled"}>${t("patch_install_all")}</button>
+        </div>
+        <div data-status style="font-size:10px;color:var(--subtext);min-height:12px"></div>
+        <div data-list style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:3px">
+          ${patches.length ? patches.map((p) => `
+            <div style="display:flex;align-items:center;gap:6px;padding:3px 5px;
+                 border:1px solid var(--border);border-radius:6px;background:var(--panel-2)">
+              <span style="width:6px;height:6px;border-radius:99px;flex:none;
+                background:${PATCH_LEVEL_COLORS[p.level] || PATCH_LEVEL_COLORS.other}"></span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:11px;overflow:hidden;text-overflow:ellipsis;
+                     white-space:nowrap" title="${esc(p.name)}">${esc(p.name)}</div>
+                <div style="font-size:9px;color:var(--subtext)">
+                  ${esc(p.current_version || "—")} → ${esc(p.available_version || "?")}</div>
+              </div>
+              <button class="taskbar-btn" data-one="${esc(p.id)}" data-uid="${esc(p.uid)}"
+                data-src="${esc(p.source)}" data-name="${esc(p.name)}"
+                style="padding:0 5px;font-size:10px;flex:none"
+                ${online ? "" : "disabled"}>⬆</button>
+            </div>`).join("")
+            : `<div style="font-size:11px;color:var(--subtext);padding:4px">${
+                 data.client?.patch_last_scan ? t("patch_none_open") : t("patch_never_scanned")}</div>`}
+        </div>
+      </div>`;
+
+    const statusEl = bodyEl.querySelector("[data-status]");
+    const setStatus = (txt) => { if (statusEl) statusEl.textContent = txt || ""; };
+
+    bodyEl.querySelector("[data-scan]")?.addEventListener("click", async () => {
+      if (busy) return;
+      busy = true;
+      setStatus(t("patch_scanning"));
+      try {
+        const r = await api.scanPatches(client.id);
+        if (r.hint) window.notify?.(r.hint, "warn", 8000);
+      } catch (e) {
+        busy = false; setStatus(""); return window.notify?.(e.message, "error");
+      }
+      poll();
+    });
+
+    const install = async (items) => {
+      if (busy || !items.length) return;
+      busy = true;
+      setStatus(t("patch_installing", { what: items.length }));
+      try {
+        const r = await api.applyPatches(client.id, items);
+        window.notify?.(t("patch_result", {
+          ok: (r.installed || []).length, failed: (r.failed || []).length }),
+          (r.failed || []).length ? "warn" : "success");
+      } catch (e) {
+        window.notify?.(e.message, "error");
+      }
+      busy = false; setStatus(""); load();
+    };
+
+    bodyEl.querySelector("[data-all]")?.addEventListener("click", () =>
+      install(patches.map((p) => ({ uid: p.uid, source: p.source, name: p.name }))));
+    bodyEl.querySelectorAll("[data-one]").forEach((b) =>
+      b.addEventListener("click", () => install([{
+        uid: b.dataset.uid, source: b.dataset.src, name: b.dataset.name }])));
+
+    function poll() {
+      const started = Date.now();
+      const tick = async () => {
+        let job = null;
+        try { job = await api.getPatchJob(client.id); } catch {}
+        // Nur abbrechen, wenn das Backend den Auftrag KENNT. Eine leere
+        // Antwort heisst "noch nicht eingetragen", nicht "schon fertig".
+        if (job && job.known && !job.running) {
+          busy = false; setStatus("");
+          if (job.error) window.notify?.(job.error, "error", 9000);
+          return load();
+        }
+        if (job && job.running) {
+          setStatus(job.detail ? `${job.phase} - ${job.detail}` : (job.phase || ""));
+        }
+        if (Date.now() - started > 1800000) { busy = false; setStatus(""); return load(); }
+        pollTimer = setTimeout(tick, 2500);
+      };
+      pollTimer = setTimeout(tick, 600);
+    }
+
+    // War beim Öffnen schon ein Auftrag unterwegs, direkt mitverfolgen.
+    api.getPatchJob(client.id).then((job) => {
+      if (job && job.running) { busy = true; setStatus(t("patch_scanning")); poll(); }
+    }).catch(() => {});
+  }
+
+  load();
+}

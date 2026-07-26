@@ -774,6 +774,17 @@ ADMIN_SETTING_KEYS = {
 }
 
 
+@router.get("/hostlock/status")
+async def hostlock_status(request: Request, user: dict = Depends(get_current_user)):
+    """
+    Zeigt, welchen Host der Server bei DIESER Anfrage sieht und welche
+    Adressen erlaubt sind. Erste Anlaufstelle, wenn die Sperre nicht greift.
+    """
+    require_perm(user, "see_settings")
+    from app import hostlock
+    return hostlock.diagnostics(request)
+
+
 @router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
     require_perm(user, "see_settings")
