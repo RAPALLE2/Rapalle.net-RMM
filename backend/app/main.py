@@ -519,6 +519,8 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 # frontend-Ordner read-only ist.
 from fastapi.responses import FileResponse as _FileResponse
 from fastapi import HTTPException as _HTTPException
+from fastapi import Depends as _Depends
+from app.auth import get_current_user as _current_user
 from app.routers.admin_routes import branding_path as _branding_path
 
 
@@ -534,7 +536,77 @@ async def _serve_image(name: str):
     return _FileResponse(str(p), headers={"Cache-Control": "no-cache"})
 
 
-api.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+@api.get("/api/frontend-version")
+async def _frontend_version(user: dict = _Depends(_current_user)):
+    """
+    Was liegt WIRKLICH im frontend-Ordner dieses Servers?
+
+    Trennt zwei Fälle, die im Browser identisch aussehen und schon einmal
+    eine ganze Fehlersuche gekostet haben:
+
+      * Die Datei auf der Platte ist noch die alte -> das Deployment ist
+        nicht angekommen. Die hier gemeldete Prüfsumme ändert sich dann
+        nicht, egal wie oft man neu lädt.
+      * Die Datei ist neu, der Browser bekommt sie aber nicht -> es cacht
+        etwas dazwischen (Browser selbst, nginx, Cloudflare).
+
+    Vergleich: diesen Endpunkt aufrufen und die gemeldete Prüfsumme mit der
+    vergleichen, die der Browser tatsächlich geladen hat (Entwicklertools ->
+    Netzwerk -> die .js-Datei ansehen). Stimmen sie nicht überein, cacht
+    etwas dazwischen.
+    """
+    import hashlib
+    watched = ["js/app.js", "js/api.js", "js/i18n.js", "js/apps/webbrowser.js"]
+    out = {}
+    for rel in watched:
+        p = FRONTEND_DIR / rel
+        try:
+            data = p.read_bytes()
+            out[rel] = {
+                "sha256": hashlib.sha256(data).hexdigest()[:16],
+                "bytes": len(data),
+                "mtime": int(p.stat().st_mtime),
+                # Handfestes Merkmal statt blosser Prüfsumme: enthält die
+                # Datei noch Code des ausgebauten Seitenproxys?
+                "has_webproxy": b"webproxy" in data,
+            }
+        except OSError as e:
+            out[rel] = {"error": str(e)}
+    return {"frontend_dir": str(FRONTEND_DIR), "files": out}
+
+
+class _RevalidatingStatic(StaticFiles):
+    """
+    StaticFiles, das für App-Dateien 'Cache-Control: no-cache' setzt.
+
+    StaticFiles schickt von Haus aus NUR Last-Modified und ETag, aber kein
+    Cache-Control. Ohne Cache-Control cachen Browser heuristisch - je nach
+    Alter der Datei durchaus stundenlang, ohne auch nur nachzufragen. Bei
+    ES-Modulen ist das besonders tückisch: nach einem Update lief im Browser
+    weiter der alte Code und rief Endpunkte auf, die es serverseitig gar
+    nicht mehr gibt (404/405 im Log, während die Datei auf der Platte längst
+    neu war). Genau dieser Fall hat schon einmal eine halbe Fehlersuche
+    gekostet.
+
+    'no-cache' heisst NICHT "nicht cachen", sondern "vor Benutzung
+    rückfragen". Ist die Datei unverändert, antwortet der Server mit 304
+    ohne Rumpf - der Preis ist also eine kleine Anfrage, nicht der erneute
+    Download.
+
+    Bilder, Schriften und Ähnliches bleiben aussen vor: die ändern sich
+    selten, und dort ist Caching genau das, was man will.
+    """
+
+    REVALIDATE = (".js", ".mjs", ".css", ".html", ".json", ".map")
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.lower().endswith(self.REVALIDATE):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+api.mount("/", _RevalidatingStatic(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
 # 4) Socket.IO und FastAPI zu einer einzigen ASGI-Anwendung zusammenfügen.

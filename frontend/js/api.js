@@ -403,6 +403,8 @@ export const api = {
 
   // --- Source-Tab (Admin): Explorer + Datenbank ---
   sourceRoots: () => request("/api/source/roots"),
+  // Installationsart: Docker-Container oder natives Programm
+  sourceRuntime: () => request("/api/source/runtime"),
   sourceList: (path = "") => request(`/api/source/list?path=${encodeURIComponent(path)}`),
   sourceRead: (path) => request(`/api/source/read?path=${encodeURIComponent(path)}`),
   sourceWrite: (path, content) =>

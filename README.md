@@ -48,6 +48,40 @@ To install RAPALLE.net RMM on your own server, download the latest release as a 
 
 6. Please consider changing the AGENT_TOKEN and JWT_SECRET in the env file inside the backend and agent folders.
 
+### Installation with Docker
+
+A `Dockerfile` and a complete `docker-compose.yml` are included.
+
+```
+cp .env.example .env        # optional: change port / timezone
+docker compose up -d --build
+```
+
+Then open `http://YOUR-SERVERS-IP:4000` (default login `admin` / `admin`).
+
+The project folders `backend/`, `frontend/` and `agent/` are mounted into the
+container as bind mounts. This keeps the database, recordings and your `.env`
+outside the image and keeps the built-in source editor and the self-update
+feature working.
+
+An optional `guacd` service is included for browser-based RDP/VNC/SSH sessions.
+Remove it from `docker-compose.yml` if you do not need remote sessions.
+
+#### What cannot be changed at runtime in a container
+
+Inside a container some settings are fixed the moment the container starts:
+
+- **PORT** and **HOST** — the port mapping is defined in `docker-compose.yml`.
+  Changing `PORT` in `backend/.env` will lock you out, because the container
+  keeps forwarding the old port. To change the port, edit `RMM_PORT` in `.env`
+  and run `docker compose up -d` again.
+- **Volumes / data paths** — anything not stored in a mounted folder is lost
+  when the image is rebuilt.
+
+The web interface shows this as well: **Settings → Source** displays whether
+the backend is *installed as a Docker container* or *installed as a program*,
+which address it is bound to, and which settings are locked.
+
 
 
 

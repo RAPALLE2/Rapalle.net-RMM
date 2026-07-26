@@ -509,3 +509,23 @@ async def db_backup(user: dict = Depends(get_current_user)):
     db.add_audit_entry(user["username"], "source.db_backup",
                        target=str(bak_path.name), details=f"{size} bytes")
     return {"ok": True, "path": "backend/data.sqlite.bak", "size": size}
+
+# ------------------------------------------------------------------
+# Installationsart (Docker-Container oder natives Programm)
+# ------------------------------------------------------------------
+
+@router.get("/runtime")
+async def get_runtime(user: dict = Depends(get_current_user)):
+    """
+    Sagt der Oberfläche, WIE dieses Backend installiert ist:
+
+      install_kind = "docker"  -> läuft als Container. Port/Host hängen am
+                                  Container und sind zur Laufzeit gesperrt.
+      install_kind = "native"  -> normal per "python run.py" installiert,
+                                  alles frei über backend/.env änderbar.
+
+    Wird im Source-Tab als Hinweisleiste angezeigt.
+    """
+    require_perm(user, "see_source")
+    from app import runtime_env
+    return runtime_env.runtime_info()

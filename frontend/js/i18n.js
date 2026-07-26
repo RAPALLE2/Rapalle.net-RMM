@@ -211,6 +211,11 @@ const translations = {
     patch_scanning: "Suche läuft… kann einige Minuten dauern",
     patch_found: "{n} Update(s) gefunden",
     patch_job_scan: "Suche nach Aktualisierungen",
+    wb_loading: "Seite wird geladen…",
+    wb_hint_direct: "Direkt geladen – echte Seite, echte Anmeldung. Links mit „in neuem Tab öffnen\" gehen in einen echten Browser-Tab; das lässt sich von hier aus nicht umlenken.",
+    wb_blank_warn: "Die Seite meldet sich nicht.",
+    wb_open_tab: "In echtem Tab öffnen",
+    wb_blank_cert: "Möglich: {host} nutzt ein selbstsigniertes Zertifikat. Einmal im echten Tab öffnen, dort bestätigen – danach lädt die Seite auch hier. Oder die Seite verbietet das Einbetten (X-Frame-Options).",
     patch_job_apply: "Installation",
     patch_failed: "Fehlgeschlagen",
     patch_cannot_scan: "Suche nicht möglich",
@@ -343,6 +348,14 @@ const translations = {
     agent_uninstall_run: "Deinstalliere Agent auf {host}… (bis zu 60 s, bitte warten)",
     error_prefix: "Fehler: {err}",
     exp_fav_first: "Zuerst in einen Ordner wechseln, den du als Arbeitsordner merken willst.",
+
+    // --- Source: Installationsart (Docker / natives Programm) ---
+    src_install_docker: "Als Docker-Container installiert",
+    src_install_docker_desc: "Dieses Backend läuft in einem Container. Port-Mapping, Volumes und die gebundene Adresse werden beim Container-Start festgelegt und lassen sich hier nicht mehr ändern - dafür docker-compose.yml (bzw. RMM_PORT in der .env) anpassen und \"docker compose up -d\" ausführen.",
+    src_install_native: "Als Programm installiert",
+    src_install_native_desc: "Dieses Backend läuft direkt auf dem Host über run.py. Port, Adresse und alle weiteren Einstellungen sind frei über backend/.env änderbar; danach das Backend neu starten.",
+    src_install_bound: "Gebunden an",
+    src_install_locked: "Im Container gesperrt (Änderung in der .env wirkt nicht)",
 
     // --- Source-Browser / DB-Werkzeug ---
     src_no_log: "\x1b[31m[Backend antwortet nicht auf die Log-Anbindung]\x1b[0m\r\n",
@@ -1054,6 +1067,11 @@ const translations = {
     patch_scanning: "Scanning… this can take several minutes",
     patch_found: "{n} update(s) found",
     patch_job_scan: "Scanning for updates",
+    wb_loading: "Loading page…",
+    wb_hint_direct: "Loaded directly – real page, real login. \"Open in new tab\" links go to a real browser tab; that cannot be redirected from here.",
+    wb_blank_warn: "The page is not responding.",
+    wb_open_tab: "Open in real tab",
+    wb_blank_cert: "Possibly {host} uses a self-signed certificate. Open it once in a real tab, accept it there – it will then load here too. Or the site forbids embedding (X-Frame-Options).",
     patch_job_apply: "Installation",
     patch_failed: "Failed",
     patch_cannot_scan: "Cannot scan",
@@ -1186,6 +1204,14 @@ const translations = {
     agent_uninstall_run: "Uninstalling agent on {host}… (up to 60 s, please wait)",
     error_prefix: "Error: {err}",
     exp_fav_first: "Switch to a folder first that you want to remember as your working folder.",
+
+    // --- Source: installation kind (Docker / native program) ---
+    src_install_docker: "Installed as a Docker container",
+    src_install_docker_desc: "This backend runs inside a container. Port mapping, volumes and the bound address are fixed when the container starts and cannot be changed here - edit docker-compose.yml (or RMM_PORT in the .env) and run \"docker compose up -d\" instead.",
+    src_install_native: "Installed as a program",
+    src_install_native_desc: "This backend runs directly on the host via run.py. Port, address and all other settings can be changed freely in backend/.env; restart the backend afterwards.",
+    src_install_bound: "Bound to",
+    src_install_locked: "Locked inside the container (changing it in .env has no effect)",
 
     // --- Source browser / DB tool ---
     src_no_log: "\x1b[31m[Backend is not responding on the log connection]\x1b[0m\r\n",

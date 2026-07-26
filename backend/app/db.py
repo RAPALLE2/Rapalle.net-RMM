@@ -843,6 +843,22 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_patch_runs_client
             ON patch_runs(client_id, started_at);
+
+        -- Hosts, deren Zertifikat ein Benutzer im internen Browser
+        -- ausdrücklich akzeptiert hat. Bewusst PRO BENUTZER: eine
+        -- Ausnahme, die einer setzt, darf nicht stillschweigend für alle
+        -- anderen gelten. 'reason' hält fest, WAS am Zertifikat nicht
+        -- stimmte, damit später nachvollziehbar bleibt, wofür die
+        -- Ausnahme einmal gedacht war.
+        CREATE TABLE IF NOT EXISTS webproxy_trusted_hosts (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            host TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_webproxy_trust
+            ON webproxy_trusted_hosts(username, host);
         """
     )
     _conn.commit()

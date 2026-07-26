@@ -16,6 +16,7 @@ import { t } from "../i18n.js";
 
 export function renderSource(container) {
   container.innerHTML = `
+    <div id="src-runtime" style="margin-bottom:10px"></div>
     <div style="display:flex;gap:6px;margin-bottom:10px">
       <button class="tab-btn active" data-src="log">🖥️ Backend-Ausgabe</button>
       <button class="tab-btn" data-src="explorer">📁 Explorer</button>
@@ -23,6 +24,7 @@ export function renderSource(container) {
     </div>
     <div id="src-panel" style="min-height:420px"></div>
   `;
+  renderRuntimeBanner(container.querySelector("#src-runtime"));
   const panel = container.querySelector("#src-panel");
   const tabs = container.querySelectorAll("[data-src]");
 
@@ -40,6 +42,52 @@ export function renderSource(container) {
 
   // Aufräumen, wenn der Container aus dem DOM verschwindet (Tab-Wechsel/Fenster zu).
   return () => { if (cleanup) { try { cleanup(); } catch {} } };
+}
+
+// ---------------------------------------------------------------
+// 0) Installationsart: Docker-Container oder natives Programm
+//
+// Im Container sind Port und gebundene Adresse beim Container-Start fest
+// verdrahtet. Wer sie in backend/.env ändert, sperrt sich aus (der Container
+// mappt weiter den alten Port). Darum steht der Hinweis hier ganz oben.
+// ---------------------------------------------------------------
+async function renderRuntimeBanner(host) {
+  if (!host) return;
+  let info;
+  try {
+    info = await api.sourceRuntime();
+  } catch {
+    // Älteres Backend ohne /api/source/runtime -> einfach nichts anzeigen.
+    host.innerHTML = "";
+    return;
+  }
+
+  const docker = !!info.is_docker;
+  const color = docker ? "var(--accent)" : "var(--ok, var(--accent))";
+  const icon = docker ? "🐳" : "💻";
+  const title = docker ? t("src_install_docker") : t("src_install_native");
+  const desc = docker ? t("src_install_docker_desc") : t("src_install_native_desc");
+  const locked = (info.locked_settings || []).join(", ");
+
+  host.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;
+                border:1px solid ${color};border-radius:8px;background:var(--panel-2)">
+      <div style="font-size:18px;line-height:1.2">${icon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px;color:${color}">${esc(title)}</div>
+        <div style="font-size:11px;color:var(--subtext);margin-top:2px">${esc(desc)}</div>
+        <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+          ${t("src_install_bound")}: <code>${esc(info.host || "?")}:${esc(String(info.port || "?"))}</code>
+          · Python <code>${esc(info.python || "?")}</code>
+          ${info.container_name ? ` · Container <code>${esc(info.container_name)}</code>` : ""}
+        </div>
+        ${locked ? `
+        <div style="font-size:11px;color:var(--warn);margin-top:4px">
+          ⚠ ${t("src_install_locked")}: <code>${esc(locked)}</code>
+        </div>` : ""}
+      </div>
+    </div>
+  `;
 }
 
 // ---------------------------------------------------------------

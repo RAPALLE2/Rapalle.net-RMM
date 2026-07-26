@@ -1,0 +1,32 @@
+# Nicht ins Image kopieren - hält den Build klein und schnell.
+
+.git
+.gitignore
+*.md
+!README.md
+
+# Python-Müll
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Laufzeit-Daten (kommen per Volume, nicht ins Image)
+backend/data.sqlite
+backend/data.sqlite.bak
+backend/recordings/
+backend/media_files/
+*.jsonl
+agent.log
+.device-id
+
+# Geheimnisse niemals ins Image backen
+.env
+backend/.env
+agent/.env
+
+# Betriebssystem / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

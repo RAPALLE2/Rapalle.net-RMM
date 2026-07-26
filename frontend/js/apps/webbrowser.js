@@ -8,10 +8,30 @@
 // Startmenü (Icon + Name) und öffnet direkt in ihrem eigenen Fenster.
 // Gespeichert pro Benutzer (localStorage, serverseitig gesynct).
 //
-// Hinweis: Manche Seiten verbieten das Einbetten per X-Frame-Options/CSP
-// (z.B. google.com) - dafür gibt es den "Extern öffnen"-Knopf.
+// KEIN Proxy. Die Seite wird direkt in den iframe geladen, also von der
+// echten Browser-Engine des Benutzers gerendert - Anmeldung, Cookies,
+// WebSocket-Konsolen, alles genau wie in einem normalen Tab. Ein
+// umschreibender Proxy davorzuschalten war der Versuch, Klicks auf
+// target="_blank" abzufangen; er hat dabei zuverlässig mehr zerstört als
+// gewonnen (Anmeldungen scheiterten, Bilder fehlten).
+//
+// Preis dieser Entscheidung, bewusst bezahlt: ein Klick auf einen Link mit
+// target="_blank" öffnet einen echten Browser-Tab. Das lässt sich von aussen
+// NICHT abfangen - fremde Seiten liegen in einem anderen Origin, ihr DOM ist
+// unerreichbar, kein Klick darin kommt bei uns an.
+//
+// Zwei Dinge, die auch ein direkt geladener Rahmen nicht kann:
+//   * Seiten mit X-Frame-Options/CSP frame-ancestors verweigern das
+//     Einbetten (google.com etwa). Proxmox, OPNsense, die meisten
+//     Geräte-Oberflächen setzen das NICHT und laufen problemlos.
+//   * Ein noch nicht akzeptiertes selbstsigniertes Zertifikat lässt der
+//     Browser im Rahmen still scheitern - er kann seine Warnseite dort
+//     nicht anzeigen. Dafür gibt es unten die Erkennung mit dem Hinweis,
+//     die Seite einmal in einem echten Tab zu öffnen und das Zertifikat
+//     dort zu bestätigen. Danach lädt sie auch im Fenster.
 import { esc, uiConfirm } from "../utils.js";
 import { state } from "../state.js";
+import { registerCleanup } from "../windowmanager.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
@@ -72,14 +92,16 @@ export function renderWebBrowser(body, win) {
         <button class="taskbar-btn" id="wb-ext" title="${tr("u_in_neuem_browser_tab_offnen")}">🔗</button>
       </div>
       <div id="wb-stage" style="flex:1;position:relative;background:#fff">
+        <!-- KEIN sandbox-Attribut: die Seite soll sich exakt so verhalten
+             wie in einem normalen Tab. Jede Einschränkung hier ist eine
+             Abweichung vom echten Browser - und genau die hat zuletzt
+             Anmeldungen und Konsolen gekostet. -->
         <iframe id="wb-frame" style="position:absolute;inset:0;width:100%;height:100%;border:0;display:none"
-          allow="clipboard-read; clipboard-write; fullscreen; autoplay"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals"></iframe>
+          allow="clipboard-read; clipboard-write; fullscreen; autoplay; camera; microphone; display-capture"
+          referrerpolicy="no-referrer-when-downgrade"></iframe>
         <div id="wb-home" style="position:absolute;inset:0;overflow:auto;background:var(--panel);padding:22px"></div>
       </div>
-      <div id="wb-hint" style="display:none;padding:5px 12px;font-size:11px;color:var(--subtext);background:var(--panel-2);border-top:1px solid var(--border)">
-        Seite bleibt weiß/leer? Dann verbietet sie das Einbetten (X-Frame-Options/CSP) → mit 🔗 extern öffnen.
-      </div>
+      <div id="wb-hint" style="display:none;padding:5px 12px;font-size:11px;color:var(--subtext);background:var(--panel-2);border-top:1px solid var(--border)"></div>
       <div id="wb-dialog" style="display:none;position:absolute;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:5"></div>
     </div>
   `;
@@ -93,6 +115,43 @@ export function renderWebBrowser(body, win) {
 
   function currentUrl() { return idx >= 0 ? history[idx] : ""; }
 
+  // Konnte der Rahmen die Seite laden? Direkt beantworten lässt sich das
+  // nicht - bei einer fremden Seite ist selbst der Ladezustand tabu. Was
+  // bleibt: 'load' feuert bei Erfolg. Feuert es nach einigen Sekunden
+  // nicht, steckt fast immer eines von zwei Dingen dahinter, und beides
+  // gehört benannt statt als weisse Fläche stehengelassen.
+  let loadTimer = null;
+  let loaded = false;
+
+  function watchLoad(url) {
+    clearTimeout(loadTimer);
+    loaded = false;
+    hint.style.display = "block";
+    hint.innerHTML = tr("wb_loading");
+    loadTimer = setTimeout(() => {
+      if (loaded) return;
+      const isHttps = /^https:/i.test(url);
+      let host = url;
+      try { host = new URL(url).host; } catch {}
+      hint.innerHTML = `
+        <span style="color:var(--warn,#f5a524)">${tr("wb_blank_warn")}</span>
+        <button class="taskbar-btn" id="wb-tab" style="padding:0 7px;font-size:11px;margin-left:6px">
+          ${tr("wb_open_tab")}</button>
+        <span style="margin-left:8px">${isHttps ? tr("wb_blank_cert", { host: esc(host) }) : ""}</span>`;
+      hint.querySelector("#wb-tab")?.addEventListener("click", () => {
+        window.open(url, "_blank", "noopener");
+      });
+    }, 6000);
+  }
+
+  frame.addEventListener("load", () => {
+    // Feuert auch bei about:blank - das ist kein geglückter Seitenaufbau.
+    if ((frame.getAttribute("src") || "") === "about:blank") return;
+    loaded = true;
+    clearTimeout(loadTimer);
+    hint.innerHTML = tr("wb_hint_direct");
+  });
+
   function navigate(raw, pushHistory = true) {
     const url = normalizeUrl(raw);
     if (!url) return;
@@ -104,9 +163,11 @@ export function renderWebBrowser(body, win) {
     urlEl.value = url;
     home.style.display = "none";
     frame.style.display = "block";
-    hint.style.display = "block";
-    frame.src = url;
     updateNav();
+    // Direkt laden. Kein Umweg, keine Umschreibung - die Seite bekommt
+    // genau das, was sie in einem normalen Tab auch bekäme.
+    frame.src = url;
+    watchLoad(url);
   }
 
   function updateNav() {
@@ -116,6 +177,10 @@ export function renderWebBrowser(body, win) {
 
   // ---------------- Startseite (Web-Apps + Schnellzugriff) ----------------
   function showHome() {
+    // Wichtig: den Ladewächter abbrechen. Sonst schlägt er wenige Sekunden
+    // später zu und meldet "Seite meldet sich nicht" für eine Seite, die
+    // längst gar nicht mehr geladen werden soll.
+    clearTimeout(loadTimer);
     frame.style.display = "none";
     frame.src = "about:blank";
     hint.style.display = "none";
@@ -146,6 +211,7 @@ export function renderWebBrowser(body, win) {
           || `<div style="color:var(--subtext);font-size:12px">Noch keine - öffne eine Seite und klicke ⭐ „Als App".</div>`}
         </div>
       </div>`;
+
     home.querySelectorAll("[data-open]").forEach((b) =>
       b.addEventListener("click", () => {
         const a = getWebApps().find((x) => x.id === b.dataset.open);
@@ -208,6 +274,12 @@ export function renderWebBrowser(body, win) {
   }
 
   // ---------------- Verkabelung ----------------
+
+  // Hinweis zur Fensterbereinigung: hier gibt es nichts mehr abzumelden.
+  // Der frühere postMessage-Listener gehörte zum Proxy-Protokoll; ohne
+  // Proxy meldet sich keine Seite mehr bei uns.
+  if (win?.key) registerCleanup(win.key, () => clearTimeout(loadTimer));
+
   body.querySelector("#wb-go").addEventListener("click", () => navigate(urlEl.value));
   urlEl.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(urlEl.value); });
   body.querySelector("#wb-back").addEventListener("click", () => {
@@ -217,7 +289,7 @@ export function renderWebBrowser(body, win) {
     if (idx < history.length - 1) { idx++; navigate(history[idx], false); }
   });
   body.querySelector("#wb-reload").addEventListener("click", () => {
-    if (currentUrl()) frame.src = currentUrl();
+    if (currentUrl()) navigate(currentUrl(), false);
   });
   body.querySelector("#wb-ext").addEventListener("click", () => {
     const u = currentUrl() || normalizeUrl(urlEl.value);

@@ -1,37 +1,93 @@
-version: "3.9"
+# ─────────────────────────────────────────────────────────────────────────────
+# RAPALLE.net RMM - docker compose
+#
+# Start:      docker compose up -d --build
+# Logs:       docker compose logs -f rmm
+# Stop:       docker compose down
+# Update:     git pull  (oder neues Release entpacken)  &&  docker compose up -d --build
+#
+# WICHTIG - was im Container NICHT mehr zur Laufzeit änderbar ist:
+#   * PORT und HOST. Beides wird beim Container-Start festgelegt (Port-Mapping
+#     unten + Umgebungsvariablen). Wer PORT/HOST in backend/.env ändert, sperrt
+#     sich aus: der Container mappt weiterhin den alten Port.
+#     -> Port ändern heißt: RMM_PORT unten (bzw. in .env) ändern und
+#        "docker compose up -d" erneut ausführen.
+#   * Alles, was nicht in einem Volume liegt, ist nach einem Rebuild weg.
+#     Deshalb sind backend/ frontend/ agent/ als Bind-Mounts eingehängt.
+# Die Oberfläche zeigt das unter Einstellungen -> Source ebenfalls an.
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  app:
-    image: python:3.12
-    container_name: RAPALLE.net-RMM
+  rmm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rapallenet/rmm:local
+    container_name: rapalle-rmm
 
-    working_dir: /app/backend
+    # Der Container darf sich selbst neu starten (Settings -> Source ->
+    # "Backend neu starten" und das Selbst-Update beenden den Prozess).
+    restart: unless-stopped
+
+    environment:
+      # Installationsart - wird in der Oberfläche angezeigt. Nicht ändern.
+      RMM_INSTALL_KIND: docker
+      # Im Container immer 0.0.0.0, sonst ist das Dashboard von außen nicht
+      # erreichbar. NICHT auf eine LAN-IP setzen.
+      HOST: 0.0.0.0
+      # Interner Port. Muss zum Port-Mapping unten passen.
+      PORT: "${RMM_PORT:-4000}"
+      TZ: "${TZ:-Europe/Berlin}"
+      # Guacamole-Proxy (RDP/VNC/SSH im Browser). Zeigt auf den guacd-Dienst
+      # unten; ist der auskommentiert, bleibt das ohne Wirkung.
+      GUACD_HOST: guacd
+      GUACD_PORT: "4822"
+      # Geheimnisse: unbedingt in einer .env neben dieser Datei setzen!
+      # AGENT_TOKEN: "${AGENT_TOKEN}"
+      # JWT_SECRET:  "${JWT_SECRET}"
+
+    ports:
+      # links = Port auf dem Host (im Browser), rechts = Port im Container.
+      # Beide über RMM_PORT steuerbar; nach Änderung "docker compose up -d".
+      - "${RMM_PORT:-4000}:${RMM_PORT:-4000}"
 
     volumes:
+      # Der komplette Projektcode liegt als Bind-Mount im Container.
+      # Nur so funktionieren: Source-Editor (Dateien speichern),
+      # Selbst-Update (Code austauschen), Datenbank/Aufzeichnungen dauerhaft.
       - ./backend:/app/backend
       - ./frontend:/app/frontend
       - ./agent:/app/agent
+      # Zeitzone vom Host übernehmen (read-only).
+      - /etc/localtime:/etc/localtime:ro
 
-    command: >
-      sh -c "
-      pip install --no-cache-dir
-      fastapi
-      uvicorn[standard]
-      python-socketio
-      python-dotenv
-      PyJWT
-      bcrypt
-      pydantic
-      psutil
-      cryptography
-      python-multipart
-      Pillow
-      ldap3
-      &&
-      python run.py
-      "
+    # Netzwerk-Scanner und Ping brauchen rohe Sockets.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
 
-    ports:
-      - "4000:4000"
+    depends_on:
+      - guacd
 
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Apache guacd - Proxy für RDP / VNC / SSH im Browser.
+  # Wird nur gebraucht, wenn Remote-Sitzungen im Browser genutzt werden.
+  # Nicht benötigt? Diesen Block und "depends_on" oben auskommentieren.
+  # ───────────────────────────────────────────────────────────────────────────
+  guacd:
+    image: guacamole/guacd:1.5.5
+    container_name: rapalle-rmm-guacd
     restart: unless-stopped
+    # Kein Port nach außen: nur der RMM-Container spricht mit guacd.
+    expose:
+      - "4822"
+    volumes:
+      # Aufzeichnungen der Sitzungen landen im gleichen Ordner wie beim
+      # nativen Betrieb, damit sie im Dashboard auftauchen.
+      - ./backend/recordings:/recordings
