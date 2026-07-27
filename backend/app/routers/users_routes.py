@@ -63,6 +63,15 @@ async def create_user(body: CreateUserBody, user: dict = Depends(get_current_use
 
     # Entweder das vom Admin vorgegebene Passwort nehmen, oder eins generieren
     plain_password = body.password or _generate_one_time_password()
+    # Selbst gesetzte Passwoerter muessen der Richtlinie genuegen (ORP.4.A8).
+    # Automatisch erzeugte Einmalpasswoerter sind davon ausgenommen: Sie werden
+    # beim ersten Login ohnehin sofort ersetzt.
+    if body.password:
+        from app import security_policy
+        problems = security_policy.check_password(body.password, body.username)
+        if problems:
+            raise HTTPException(
+                400, "Das Passwort erfüllt die Richtlinie nicht: " + "; ".join(problems))
 
     new_user = db.create_user(
         username=body.username,

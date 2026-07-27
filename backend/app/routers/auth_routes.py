@@ -11,7 +11,7 @@ Endpunkte:
   PUT  /api/auth/profile          -> eigenen Anzeigenamen/Sprache/Theme ändern
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
@@ -89,7 +89,27 @@ async def public_realms():
 
 
 @router.post("/login")
-async def login(body: LoginBody):
+async def login(body: LoginBody, request: Request = None):
+    # --- Schutz gegen Erraten von Passwoertern (BSI ORP.4.A9) -------------
+    # Die Sperre wird VOR der Passwortpruefung ausgewertet: Sonst koennte man
+    # trotz Sperre unbegrenzt weiterprobieren und aus den Antwortzeiten
+    # Rueckschluesse ziehen.
+    client_ip = ""
+    try:
+        client_ip = (request.client.host if request and request.client else "") or ""
+    except Exception:
+        pass
+
+    from app import security_policy
+    blocked, remaining = security_policy.lock_status(body.username, client_ip)
+    if blocked:
+        db.add_audit_entry(body.username, "login.blocked",
+                           details=f"gesperrt, noch {remaining}s, ip:{client_ip}")
+        raise HTTPException(
+            429,
+            f"Zu viele Fehlversuche. Bitte in {max(1, remaining // 60)} Minuten "
+            f"erneut versuchen.")
+
     # Lokale Anmeldung oder Anmeldung gegen ein Verzeichnis (AD)?
     if body.realm and body.realm != "local":
         user = authenticate_realm(body.username, body.password, body.realm)
@@ -97,7 +117,11 @@ async def login(body: LoginBody):
         user = authenticate_local(body.username, body.password)
 
     if not user:
-        db.add_audit_entry(body.username, "login.failed", details=f"realm:{body.realm}")
+        locked_now, lock_secs = security_policy.note_failure(body.username, client_ip)
+        db.add_audit_entry(
+            body.username, "login.failed",
+            details=f"realm:{body.realm}, ip:{client_ip}"
+                    + (f", KONTO GESPERRT fuer {lock_secs // 60} Minuten" if locked_now else ""))
         # Benachrichtigungs-Regel: fehlgeschlagene Anmeldung
         try:
             from app import notifier
@@ -110,6 +134,11 @@ async def login(body: LoginBody):
                 dedupe_key=f"login_failed:{body.username}")
         except Exception:
             pass
+        if locked_now:
+            raise HTTPException(
+                429,
+                f"Zu viele Fehlversuche - der Zugang ist fuer "
+                f"{lock_secs // 60} Minuten gesperrt.")
         raise HTTPException(401, "Benutzername oder Passwort falsch")
 
     # Rechteprüfung: wer nicht das Recht 'login' hat (und kein Super-Admin ist),
@@ -118,7 +147,9 @@ async def login(body: LoginBody):
         db.add_audit_entry(user["username"], "login.denied", details="fehlendes Recht 'login'")
         raise HTTPException(403, "Keine Berechtigung zur Anmeldung an diesem System")
 
-    db.add_audit_entry(user["username"], "login.success", details=f"realm:{body.realm}")
+    security_policy.note_success(body.username, client_ip)
+    db.add_audit_entry(user["username"], "login.success",
+                       details=f"realm:{body.realm}, ip:{client_ip}")
     # Benachrichtigungs-Regel: Benutzer-Anmeldung
     try:
         from app import notifier
@@ -152,8 +183,16 @@ async def change_password(body: ChangePasswordBody, user: dict = Depends(get_cur
     # Beim allerersten Pflicht-Passwortwechsel ist current_password="admin" (o.ä.) zu prüfen
     if not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(400, "Aktuelles Passwort ist falsch")
-    if len(body.new_password) < 8:
-        raise HTTPException(400, "Neues Passwort muss mindestens 8 Zeichen haben")
+    # Passwort-Richtlinie serverseitig durchsetzen (BSI ORP.4.A8/A22).
+    # Die feste Grenze von 8 Zeichen reicht dafuer nicht aus; die geltenden
+    # Werte stehen in den Einstellungen und sind dokumentiert.
+    from app import security_policy
+    problems = security_policy.check_password(body.new_password, user["username"])
+    if problems:
+        raise HTTPException(
+            400, "Das Passwort erfüllt die Richtlinie nicht: " + "; ".join(problems))
+    if body.new_password == body.current_password:
+        raise HTTPException(400, "Das neue Passwort muss sich vom alten unterscheiden")
 
     db.update_user_password(user["id"], hash_password(body.new_password), must_change_pw=False)
     # HA1 fürs Netzlaufwerk mit dem neuen Passwort aktualisieren.
@@ -292,3 +331,16 @@ async def update_profile(body: ProfileBody, user: dict = Depends(get_current_use
         new_name = user.get("display_name")
     db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent)
     return _public_user(db.get_user_by_id(user["id"]))
+
+
+@router.get("/password-policy")
+async def password_policy():
+    """
+    Die geltende Passwort-Richtlinie - ohne Anmeldung abrufbar, weil sie schon
+    beim erzwungenen ersten Passwortwechsel gebraucht wird. Sie verrät nichts
+    Schützenswertes, sondern nur die Regeln, die ohnehin beim Speichern
+    greifen.
+    """
+    from app import security_policy
+    return {"policy": security_policy.policy(),
+            "text": security_policy.describe_policy()}
