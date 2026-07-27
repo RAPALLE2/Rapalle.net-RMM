@@ -17,7 +17,7 @@ import { setLanguage, getLanguage, applyStaticTranslations } from "./i18n_apply.
 
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
-import { renderTaskbar, initTaskbar } from "./taskbar.js";
+import { renderTaskbar, initTaskbar, consumeFreshStart } from "./taskbar.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll, closeWindow } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
@@ -326,9 +326,25 @@ async function startSession(user) {
   // Zusätzlich durch das globale Recht 'restore_session' gegated: fehlt es, wird
   // immer sauber vom Dashboard gestartet.
   const mayRestore = hasGlobalPerm("restore_session");
-  const restorePrefs = mayRestore
-    ? ((saved && saved.restorePrefs) || { client: true, folder: true, apps: true })
-    : { client: false, folder: false, apps: false };
+  // Sauberer Neustart über den Reload-Knopf in der Taskleiste: dieser eine
+  // Start ignoriert die gespeicherten Fenster/Apps und die Client-Auswahl.
+  // Der Merker wird dabei verbraucht - der naechste Reload verhaelt sich
+  // wieder normal.
+  const freshStart = consumeFreshStart();
+  const savedPrefs = (saved && saved.restorePrefs) || { client: true, folder: true, apps: true };
+  let restorePrefs;
+  if (!mayRestore) {
+    restorePrefs = { client: false, folder: false, apps: false };
+  } else if (freshStart) {
+    // Aufgeklappte Ordner der Sidebar bleiben erhalten - nur der ausgewählte
+    // Client und die offenen Apps/Fenster werden bewusst weggelassen.
+    restorePrefs = { client: false, folder: !!savedPrefs.folder, apps: false };
+  } else {
+    restorePrefs = savedPrefs;
+  }
+  if (freshStart) {
+    try { console.info("[startSession] Sauberer Neustart: offene Fenster werden nicht wiederhergestellt."); } catch {}
+  }
   // WICHTIG: Restore/Crash-Guard-Init defensiv kapseln. Ein Fehler hier darf den
   // Login/das Dashboard NIEMALS blockieren (sonst bleibt man im leeren, „blurry"
   // App-Screen hängen, weil das Login schon ausgeblendet ist).

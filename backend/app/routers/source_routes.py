@@ -201,6 +201,44 @@ async def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
 # Datenbank
 # ------------------------------------------------------------------
 
+def _cursor_columns(cur, rows: list | None = None) -> list[str]:
+    """
+    Liefert die Spaltennamen eines Abfrage-Ergebnisses.
+
+    Die App nutzt einen thread-sicheren Wrapper um SQLite (db._SafeConn), der
+    ein _CursorResult zurückgibt. Je nach Backend/Version hat das Objekt
+    entweder .description (wie sqlite3), .keys() (wie SQLAlchemy) - oder gar
+    nichts. Dann holen wir die Namen aus der ersten Zeile (sqlite3.Row.keys()).
+    Ohne diesen Fallback endete die Tabellenansicht in einem 500er
+    ("'_CursorResult' object has no attribute 'description'").
+    """
+    desc = getattr(cur, "description", None)
+    if desc:
+        return [d[0] for d in desc]
+    keys = getattr(cur, "keys", None)
+    if callable(keys):
+        try:
+            names = list(keys())
+            if names:
+                return [str(n) for n in names]
+        except Exception:
+            pass
+    for r in (rows or []):
+        rk = getattr(r, "keys", None)
+        if callable(rk):
+            try:
+                return [str(n) for n in rk()]
+            except Exception:
+                pass
+        break
+    return []
+
+
+def _has_result_set(cur, rows: list | None = None) -> bool:
+    """True, wenn die Abfrage eine Ergebnismenge geliefert hat (SELECT/PRAGMA)."""
+    return bool(_cursor_columns(cur, rows)) or bool(rows)
+
+
 @router.get("/db/tables")
 async def db_tables(user: dict = Depends(get_current_user)):
     """Alle Tabellen mit Zeilenanzahl."""
@@ -235,15 +273,21 @@ async def db_table(name: str, limit: int = 200, offset: int = 0,
     try:
         cur = db._conn.execute(f'SELECT rowid AS __rowid__, * FROM "{name}" LIMIT ? OFFSET ?',
                                (limit, offset))
-        cols = [d[0] for d in cur.description][1:]
         raw = cur.fetchall()
+        cols = _cursor_columns(cur, raw)[1:]
         rowids = [r[0] for r in raw]
         rows = [list(r)[1:] for r in raw]
+        if not cols:
+            raise ValueError("keine Spalten ermittelbar")
     except Exception:
         cur = db._conn.execute(f'SELECT * FROM "{name}" LIMIT ? OFFSET ?', (limit, offset))
-        cols = [d[0] for d in cur.description]
-        rows = [list(r) for r in cur.fetchall()]
+        raw = cur.fetchall()
+        cols = _cursor_columns(cur, raw)
+        rows = [list(r) for r in raw]
         rowids = [None] * len(rows)
+    if not cols:
+        # Letzte Rettung: Spalten direkt aus dem Tabellen-Schema lesen.
+        cols = [r[1] for r in db._conn.execute(f'PRAGMA table_info("{name}")').fetchall()]
     total = db._conn.execute(f'SELECT COUNT(*) AS c FROM "{name}"').fetchone()["c"]
     return {"name": name, "columns": cols, "rows": rows, "rowids": rowids,
             "total": total, "limit": limit, "offset": offset}
@@ -358,9 +402,10 @@ async def db_query(body: SqlBody, user: dict = Depends(get_current_user)):
         raise HTTPException(400, "Leeres SQL")
     try:
         cur = db._conn.execute(sql)
-        if cur.description:  # SELECT / PRAGMA mit Ergebnismenge
-            cols = [d[0] for d in cur.description]
-            rows = [list(r) for r in cur.fetchall()]
+        raw = cur.fetchall()
+        if _has_result_set(cur, raw):  # SELECT / PRAGMA mit Ergebnismenge
+            cols = _cursor_columns(cur, raw)
+            rows = [list(r) for r in raw]
             db._conn.commit()
             return {"kind": "rows", "columns": cols, "rows": rows, "count": len(rows)}
         else:

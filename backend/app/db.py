@@ -55,11 +55,19 @@ class _CursorResult:
     """Ergebnis eines execute(): Zeilen sind bereits (unter Lock) geladen und
     daher thread-sicher weiterverwendbar (fetchone/fetchall/Iteration)."""
 
-    def __init__(self, rows, rowcount, lastrowid):
+    def __init__(self, rows, rowcount, lastrowid, description=None):
         self._rows = rows
         self._i = 0
         self.rowcount = rowcount
         self.lastrowid = lastrowid
+        # Spalten-Beschreibung des echten Cursors (7-Tupel je Spalte, wie bei
+        # sqlite3). Wird gebraucht, um Spaltennamen zu ermitteln - z.B. im
+        # Source-DB-Werkzeug. Ohne das schlug "cur.description" fehl.
+        self.description = description
+
+    def keys(self):
+        """Spaltennamen als Liste (wie bei sqlite3.Row / SQLAlchemy-Result)."""
+        return [d[0] for d in (self.description or [])]
 
     def fetchone(self):
         if self._i < len(self._rows):
@@ -103,7 +111,13 @@ class _SafeConn:
                 rows = cur.fetchall()
             except Exception:
                 rows = []
-            return _CursorResult(rows, cur.rowcount, cur.lastrowid)
+            # description MUSS hier (noch unter dem Lock) gelesen werden -
+            # nach dem nächsten execute() auf derselben Verbindung ist sie weg.
+            try:
+                desc = cur.description
+            except Exception:
+                desc = None
+            return _CursorResult(rows, cur.rowcount, cur.lastrowid, desc)
 
     def execute(self, sql, params=None):
         import sqlite3 as _sq

@@ -65,50 +65,90 @@ export const appIcon = (appId) => APP_ICON[appId] || "◻";
 const ICON_ONLY_FROM = 7;
 const MIN_LABEL_WIDTH = 108;   // px, die ein Button mit Text mindestens braucht
 
+// Bereits gebaute Knöpfe: Fenster-Key -> Button-Element.
+// Damit wird die Leiste NICHT bei jedem Klick komplett neu aufgebaut. Früher
+// wurde container.innerHTML geleert und alles neu erzeugt - dadurch flackerte
+// die Leiste bei jedem Klick (Hereingleit-Animation lief erneut, der Tooltip
+// verschwand und der Knopf unter der Maus war für einen Moment ein anderes
+// Element). Jetzt werden vorhandene Knöpfe wiederverwendet und nur die Dinge
+// angefasst, die sich wirklich geändert haben.
+const _btnCache = new Map();
+
 export function renderTaskbar() {
   const container = document.getElementById("taskbar-windows");
-  container.innerHTML = "";
+  if (!container) return;
 
   const activeKey = state.focusOrder[state.focusOrder.length - 1];
   const count = state.windows.length;
   const avail = container.clientWidth || 0;
   const iconOnly = count >= ICON_ONLY_FROM
     || (avail > 0 && count * MIN_LABEL_WIDTH > avail);
+  const modeChanged = container.classList.contains("icons-only") !== iconOnly;
   container.classList.toggle("icons-only", iconOnly);
 
-  state.windows.forEach((win) => {
-    const btn = document.createElement("button");
-    const isActive = win.key === activeKey && !win.minimized;
-    btn.className = "taskbar-window-btn"
-      + (isActive ? " active" : "")
-      + (win.minimized ? " minimized" : "");
+  // Knöpfe von Fenstern entfernen, die es nicht mehr gibt.
+  const alive = new Set(state.windows.map((w) => w.key));
+  for (const [key, btn] of [..._btnCache]) {
+    if (!alive.has(key)) {
+      btn.remove();
+      _btnCache.delete(key);
+    }
+  }
 
+  state.windows.forEach((win, index) => {
+    const isActive = win.key === activeKey && !win.minimized;
+    let btn = _btnCache.get(win.key);
+
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.className = "taskbar-window-btn";
+      btn.dataset.winKey = win.key;
+      // Klick-Logik EINMAL binden. Der aktuelle Zustand wird im Handler frisch
+      // aus state gelesen - so bleibt der Handler auch nach Änderungen gültig.
+      btn.addEventListener("click", () => {
+        const cur = state.windows.find((w) => w.key === win.key);
+        if (!cur) return;
+        const topKey = state.focusOrder[state.focusOrder.length - 1];
+        if (cur.key === topKey && !cur.minimized) {
+          toggleMinimize(cur.key);   // schon vorne -> wegklappen
+        } else {
+          if (cur.minimized) toggleMinimize(cur.key);
+          focusWindow(cur.key);
+        }
+        renderTaskbar();
+      });
+      bindTaskbarTip(btn, win.title);
+      _btnCache.set(win.key, btn);
+      // Neue Knöpfe dürfen einmalig hereingleiten.
+      btn.classList.add("is-new");
+      setTimeout(() => btn.classList.remove("is-new"), 250);
+    }
+
+    // --- Inhalt nur schreiben, wenn er sich geändert hat ---
     const dot = win.clientColor
       ? `<span class="client-dot" style="background:${esc(win.clientColor)}"></span>`
       : "";
     const icon = appIcon(win.appId);
-
-    // Im Icon-Modus bleibt der Titel als Tooltip erhalten (nativ + eigener
-    // Hover-Tooltip weiter unten, weil der native erst nach ~1 s erscheint).
-    btn.innerHTML = iconOnly
+    const html = iconOnly
       ? `${dot}<span class="tb-icon">${icon}</span>`
       : `${dot}<span class="tb-icon">${icon}</span><span class="tb-label">${esc(win.title)}</span>`;
-    btn.title = win.title;
-    btn.setAttribute("aria-label", win.title);
+    if (btn._html !== html || modeChanged) {
+      btn.innerHTML = html;
+      btn._html = html;
+    }
+    if (btn.title !== win.title) {
+      btn.title = win.title;
+      btn.setAttribute("aria-label", win.title);
+      btn._tipText = win.title;
+    }
 
-    if (iconOnly) bindTaskbarTip(btn, win.title);
+    // --- Zustandsklassen (billig, ändern nur Farben) ---
+    btn.classList.toggle("active", isActive);
+    btn.classList.toggle("minimized", !!win.minimized);
 
-    btn.addEventListener("click", () => {
-      if (isActive) {
-        toggleMinimize(win.key); // schon vorne -> wegklappen
-      } else {
-        if (win.minimized) toggleMinimize(win.key);
-        focusWindow(win.key);
-      }
-      renderTaskbar();
-    });
-
-    container.appendChild(btn);
+    // --- Reihenfolge sicherstellen, ohne alles neu einzuhängen ---
+    const at = container.children[index];
+    if (at !== btn) container.insertBefore(btn, at || null);
   });
 }
 
@@ -131,9 +171,12 @@ function taskbarTip() {
   return tipEl;
 }
 function bindTaskbarTip(btn, text) {
+  btn._tipText = text;
   btn.addEventListener("mouseenter", () => {
+    // Nur im Icon-Modus nötig - mit Beschriftung steht der Titel ja schon da.
+    if (!btn.closest(".taskbar-windows")?.classList.contains("icons-only")) return;
     const tip = taskbarTip();
-    tip.textContent = text;
+    tip.textContent = btn._tipText || text;
     tip.style.display = "block";
     const r = btn.getBoundingClientRect();
     // Erst einblenden, dann messen (sonst ist die Breite 0) und mittig
@@ -151,10 +194,36 @@ function hideTaskbarTip() {
   if (tipEl) tipEl.style.display = "none";
 }
 
+// Merker für den "sauberen Neustart": wird vom Reload-Knopf gesetzt und beim
+// nächsten Start in app.js EINMAL ausgewertet (und sofort gelöscht). Steht er,
+// werden offene Fenster/Apps und die Client-Auswahl NICHT wiederhergestellt.
+export const FRESH_START_KEY = "rapalle-ui:fresh-start";
+
+export function requestFreshReload() {
+  try { sessionStorage.setItem(FRESH_START_KEY, "1"); } catch {}
+  window.location.reload();
+}
+
+/** True, wenn dieser Start ein "sauberer Neustart" ist. Verbraucht den Merker. */
+export function consumeFreshStart() {
+  try {
+    const on = sessionStorage.getItem(FRESH_START_KEY) === "1";
+    sessionStorage.removeItem(FRESH_START_KEY);
+    return on;
+  } catch {
+    return false;
+  }
+}
+
 export function initTaskbar() {
   document.getElementById("taskbar-minimize-all-btn").addEventListener("click", () => {
     minimizeAll();
     renderTaskbar();
+  });
+
+  // Neu laden, ohne offene Fenster/Apps wiederherzustellen.
+  document.getElementById("taskbar-reload-btn")?.addEventListener("click", () => {
+    requestFreshReload();
   });
 
   // Fensterbreite ändert sich -> ggf. zwischen Text- und Icon-Modus wechseln.
