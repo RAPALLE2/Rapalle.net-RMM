@@ -34,6 +34,7 @@ class LoginBody(BaseModel):
     username: str
     password: str
     realm: str = "local"   # "local" oder eine Realm-ID (AD)
+    code: str = ""         # Einmalcode der Authenticator-App (falls aktiviert)
 
 
 class ChangePasswordBody(BaseModel):
@@ -140,6 +141,34 @@ async def login(body: LoginBody, request: Request = None):
                 f"Zu viele Fehlversuche - der Zugang ist fuer "
                 f"{lock_secs // 60} Minuten gesperrt.")
         raise HTTPException(401, "Benutzername oder Passwort falsch")
+
+    # --- Zweiter Faktor (TOTP) -------------------------------------------
+    # Erst NACH korrektem Passwort: Sonst liesse sich ueber die Rueckfrage
+    # herausfinden, welche Benutzernamen existieren.
+    if user.get("totp_enabled"):
+        from app import totp as _totp
+        code = (body.code or "").strip()
+        if not code:
+            # Kein Fehler, sondern eine Rueckfrage: Die Oberflaeche blendet
+            # daraufhin das Code-Feld ein und schickt die Anmeldung erneut.
+            raise HTTPException(401, "2fa_required")
+
+        ok = _totp.verify(user.get("totp_secret") or "", code,
+                          user_key=str(user["id"]))
+        if not ok:
+            # Wiederherstellungscode? Der wird dabei verbraucht.
+            used, rest = _totp.use_backup_code(user.get("totp_backup") or "", code)
+            if used:
+                db.set_user_totp(user["id"], backup=rest)
+                db.add_audit_entry(user["username"], "login.2fa_backup_used",
+                                   details=f"verbleibend: {len([x for x in rest.split(',') if x])}")
+                ok = True
+
+        if not ok:
+            security_policy.note_failure(body.username, client_ip)
+            db.add_audit_entry(user["username"], "login.2fa_failed",
+                               details=f"ip:{client_ip}")
+            raise HTTPException(401, "Der Einmalcode ist falsch oder abgelaufen")
 
     # Rechteprüfung: wer nicht das Recht 'login' hat (und kein Super-Admin ist),
     # darf sich trotz korrektem Passwort NICHT anmelden.
@@ -344,3 +373,97 @@ async def password_policy():
     from app import security_policy
     return {"policy": security_policy.policy(),
             "text": security_policy.describe_policy()}
+
+
+# ==================================================================
+# ZWEI-FAKTOR-ANMELDUNG (TOTP)
+# ------------------------------------------------------------------
+# Jeder Benutzer richtet sie selbst im Profil ein:
+#   1. POST /api/auth/2fa/setup    -> Geheimnis + QR-Code (noch NICHT aktiv)
+#   2. Authenticator-App scannt den QR-Code
+#   3. POST /api/auth/2fa/activate -> Code aus der App bestaetigt die Einrichtung
+#      und liefert einmalig die Wiederherstellungscodes
+#   4. POST /api/auth/2fa/disable  -> abschalten (Passwort erforderlich)
+#
+# Der zweite Schritt ist wichtig: Erst wenn ein Code aus der App wirklich
+# passt, wird die Anmeldung darauf umgestellt. Sonst koennte sich jemand
+# aussperren, dessen App das Geheimnis gar nicht aufgenommen hat.
+# ==================================================================
+
+class TotpCodeBody(BaseModel):
+    code: str = ""
+
+
+class TotpDisableBody(BaseModel):
+    password: str = ""
+
+
+@router.get("/2fa/status")
+async def totp_status(user: dict = Depends(get_current_user)):
+    backup = (user.get("totp_backup") or "")
+    return {
+        "enabled": bool(user.get("totp_enabled")),
+        "backup_left": len([h for h in backup.split(",") if h]),
+    }
+
+
+@router.post("/2fa/setup")
+async def totp_setup(user: dict = Depends(get_current_user)):
+    """
+    Neues Geheimnis erzeugen und als QR-Code liefern. Noch nicht aktiv - die
+    Anmeldung bleibt unveraendert, bis der naechste Schritt bestaetigt ist.
+    """
+    from app import totp as _totp
+    secret = _totp.new_secret()
+    db.set_user_totp(user["id"], secret=secret, enabled=False)
+    uri = _totp.provisioning_uri(secret, user["username"])
+    qr = _totp.qr_data_uri(uri)
+    db.add_audit_entry(user["username"], "2fa.setup_started")
+    return {
+        "secret": secret,
+        "uri": uri,
+        "qr": qr,          # None -> Oberflaeche zeigt das Geheimnis zum Abtippen
+        "digits": _totp.DIGITS,
+        "period": _totp.PERIOD,
+    }
+
+
+@router.post("/2fa/activate")
+async def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_user)):
+    from app import totp as _totp
+    secret = user.get("totp_secret")
+    if not secret:
+        raise HTTPException(400, "Bitte zuerst die Einrichtung starten.")
+    if not _totp.verify(secret, body.code, user_key=str(user["id"])):
+        raise HTTPException(400, "Der Code stimmt nicht. Uhrzeit des Geräts prüfen "
+                                 "und den aktuellen Code aus der App eingeben.")
+    codes = _totp.new_backup_codes()
+    db.set_user_totp(user["id"], enabled=True, backup=_totp.hash_backup_codes(codes))
+    db.add_audit_entry(user["username"], "2fa.enabled")
+    # Die Klartextcodes gibt es GENAU EINMAL - danach liegen nur noch Hashes vor.
+    return {"ok": True, "backup_codes": codes}
+
+
+@router.post("/2fa/disable")
+async def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_user)):
+    """Abschalten nur mit dem eigenen Passwort - ein offener Browser genuegt nicht."""
+    if not verify_password(body.password or "", user["password_hash"]):
+        raise HTTPException(400, "Passwort ist falsch")
+    db.set_user_totp(user["id"], secret="", enabled=False, backup="")
+    db.add_audit_entry(user["username"], "2fa.disabled")
+    return {"ok": True}
+
+
+@router.post("/2fa/backup-codes")
+async def totp_new_backup_codes(body: TotpDisableBody,
+                                user: dict = Depends(get_current_user)):
+    """Neue Wiederherstellungscodes erzeugen; die alten verfallen dabei."""
+    if not user.get("totp_enabled"):
+        raise HTTPException(400, "Zwei-Faktor-Anmeldung ist nicht aktiv")
+    if not verify_password(body.password or "", user["password_hash"]):
+        raise HTTPException(400, "Passwort ist falsch")
+    from app import totp as _totp
+    codes = _totp.new_backup_codes()
+    db.set_user_totp(user["id"], backup=_totp.hash_backup_codes(codes))
+    db.add_audit_entry(user["username"], "2fa.backup_codes_renewed")
+    return {"ok": True, "backup_codes": codes}

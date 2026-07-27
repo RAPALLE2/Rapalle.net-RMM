@@ -927,6 +927,13 @@ def init_db() -> None:
     # Audio-Player: Favoriten-Markierung an Bibliothekseinträgen.
     _migrate_add_column("media_items", "favorite", "INTEGER NOT NULL DEFAULT 0")
 
+    # Zwei-Faktor-Anmeldung (TOTP). Das Geheimnis wird beim Einrichten erzeugt
+    # und erst nach erfolgreicher Prüfung scharf geschaltet (totp_enabled=1) -
+    # sonst könnte man sich aussperren, wenn die App den Code nicht liefert.
+    _migrate_add_column("users", "totp_secret", "TEXT")
+    _migrate_add_column("users", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
+    _migrate_add_column("users", "totp_backup", "TEXT")   # nur Hashes
+
     # Migration Metrik-Einstellungen: Wer die ALTEN Defaults (60 s Intervall /
     # 1 h Aufbewahrung) unverändert gespeichert hat, wird auf die neuen Werte
     # (10 s / unbegrenzt) gehoben. Bewusst abweichend gesetzte Werte bleiben.
@@ -1202,6 +1209,27 @@ def update_user_password(user_id: str, password_hash: str, must_change_pw: bool 
         "UPDATE users SET password_hash = ?, must_change_pw = ? WHERE id = ?",
         (password_hash, int(must_change_pw), user_id),
     )
+    _conn.commit()
+
+
+def set_user_totp(user_id: str, secret: str | None = None,
+                  enabled: bool | None = None, backup: str | None = None) -> None:
+    """
+    Zwei-Faktor-Felder eines Benutzers setzen. Nur die übergebenen Werte werden
+    geändert - so lässt sich z.B. ein verbrauchter Wiederherstellungscode
+    entfernen, ohne das Geheimnis anzufassen.
+    """
+    sets, args = [], []
+    if secret is not None:
+        sets.append("totp_secret = ?"); args.append(secret or None)
+    if enabled is not None:
+        sets.append("totp_enabled = ?"); args.append(int(bool(enabled)))
+    if backup is not None:
+        sets.append("totp_backup = ?"); args.append(backup or None)
+    if not sets:
+        return
+    args.append(user_id)
+    _conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", tuple(args))
     _conn.commit()
 
 

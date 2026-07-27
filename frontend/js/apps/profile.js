@@ -173,14 +173,24 @@ export function renderProfile(body, win) {
         <input type="password" id="pr-cur" />
       </div>
       <div class="form-row">
-        <label>Neues Passwort (min. 8 Zeichen)</label>
+        <label>Neues Passwort</label>
         <input type="password" id="pr-new" />
       </div>
       <div id="pr-msg" style="margin:8px 0;font-size:13px"></div>
       <button class="btn-primary" id="pr-changepw" style="margin-top:6px">Passwort ändern</button>
       `}
+
+      <h3 style="margin-top:26px">Zwei-Faktor-Anmeldung</h3>
+      <p style="color:var(--subtext);font-size:13px;max-width:560px">
+        Zusätzlich zum Passwort ein Einmalcode aus einer Authenticator-App
+        (Aegis, FreeOTP, Google/Microsoft Authenticator, 1Password, Bitwarden …).
+        Damit nützt ein gestohlenes Passwort allein nichts mehr.
+      </p>
+      <div id="pr-2fa" style="max-width:560px">Lade…</div>
     </div>
   `;
+
+  render2fa(body.querySelector("#pr-2fa"));
 
   // ---- Terminal: Rechtsklick-Verhalten (sofort wirksam, serverseitig gesynct) ----
   const termRc = body.querySelector("#pr-term-rc");
@@ -373,4 +383,147 @@ export function renderProfile(body, win) {
       msg.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
     }
   });
+}
+
+
+// ---------------------------------------------------------------
+// Zwei-Faktor-Anmeldung (TOTP)
+//
+// Ablauf bewusst dreistufig: Geheimnis erzeugen -> QR scannen -> mit einem
+// echten Code aus der App bestaetigen. Erst der letzte Schritt schaltet die
+// Anmeldung um. Ohne diese Bestaetigung koennte sich jemand aussperren,
+// dessen App den QR-Code gar nicht aufgenommen hat.
+// ---------------------------------------------------------------
+async function render2fa(host) {
+  if (!host) return;
+  let status;
+  try {
+    status = await api.totpStatus();
+  } catch {
+    host.innerHTML = `<div style="color:var(--subtext);font-size:13px">
+      Dieses Backend unterstützt die Zwei-Faktor-Anmeldung noch nicht.</div>`;
+    return;
+  }
+
+  if (status.enabled) {
+    host.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;padding:10px;
+                  border:1px solid var(--accent);border-radius:8px">
+        <span style="font-size:18px">🔐</span>
+        <div style="flex:1">
+          <div style="color:var(--accent);font-weight:600;font-size:13px">Aktiv</div>
+          <div style="font-size:12px;color:var(--subtext)">
+            Noch ${status.backup_left} Wiederherstellungscodes übrig.
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="action-btn" id="pr-2fa-new">Neue Wiederherstellungscodes</button>
+        <button class="action-btn" id="pr-2fa-off">Abschalten</button>
+      </div>
+      <div id="pr-2fa-out" style="margin-top:10px"></div>`;
+
+    host.querySelector("#pr-2fa-off").addEventListener("click", async () => {
+      const pw = prompt("Zum Abschalten bitte das eigene Passwort eingeben:");
+      if (!pw) return;
+      try {
+        await api.totpDisable(pw);
+        window.notify?.("Zwei-Faktor-Anmeldung abgeschaltet", "success");
+        render2fa(host);
+      } catch (e) { window.notify?.(e.message, "error"); }
+    });
+    host.querySelector("#pr-2fa-new").addEventListener("click", async () => {
+      const pw = prompt("Zum Erzeugen neuer Codes bitte das eigene Passwort eingeben:");
+      if (!pw) return;
+      try {
+        const r = await api.totpNewBackupCodes(pw);
+        showBackupCodes(host.querySelector("#pr-2fa-out"), r.backup_codes);
+      } catch (e) { window.notify?.(e.message, "error"); }
+    });
+    return;
+  }
+
+  host.innerHTML = `
+    <button class="btn-primary" id="pr-2fa-start" style="width:auto">
+      🔐 Jetzt einrichten</button>
+    <div id="pr-2fa-setup" style="margin-top:12px"></div>`;
+
+  host.querySelector("#pr-2fa-start").addEventListener("click", async () => {
+    const box = host.querySelector("#pr-2fa-setup");
+    box.innerHTML = `<div style="font-size:13px;color:var(--subtext)">Erzeuge Geheimnis…</div>`;
+    let setup;
+    try {
+      setup = await api.totpSetup();
+    } catch (e) {
+      box.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+        ${setup.qr
+          ? `<img src="${setup.qr}" alt="QR-Code" width="190" height="190"
+                  style="background:#fff;padding:8px;border-radius:8px" />`
+          : `<div style="font-size:12px;color:var(--warn,#f5a524);max-width:220px">
+               Der QR-Code konnte nicht erzeugt werden (Paket <code>qrcode</code> fehlt).
+               Das Geheimnis rechts lässt sich in der App auch von Hand eintragen.
+             </div>`}
+        <div style="flex:1;min-width:240px">
+          <ol style="margin:0 0 10px;padding-left:18px;font-size:13px;line-height:1.6">
+            <li>QR-Code in der Authenticator-App scannen</li>
+            <li>Den angezeigten 6-stelligen Code hier eintragen</li>
+          </ol>
+          <div style="font-size:12px;color:var(--subtext);margin-bottom:8px">
+            Zum Abtippen: <code style="user-select:all">${esc(setup.secret)}</code>
+          </div>
+          <div class="form-row" style="max-width:200px">
+            <label>Code aus der App</label>
+            <input type="text" id="pr-2fa-code" inputmode="numeric" maxlength="6"
+                   placeholder="123456" />
+          </div>
+          <button class="btn-primary" id="pr-2fa-confirm" style="width:auto;margin-top:6px">
+            Bestätigen und aktivieren</button>
+          <div id="pr-2fa-err" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
+        </div>
+      </div>`;
+
+    const confirm = box.querySelector("#pr-2fa-confirm");
+    confirm.addEventListener("click", async () => {
+      const code = box.querySelector("#pr-2fa-code").value;
+      const err = box.querySelector("#pr-2fa-err");
+      err.textContent = "";
+      confirm.disabled = true;
+      try {
+        const r = await api.totpActivate(code);
+        host.innerHTML = "";
+        showBackupCodes(host, r.backup_codes, true);
+        window.notify?.("Zwei-Faktor-Anmeldung ist aktiv", "success");
+      } catch (e) {
+        err.textContent = e.message;
+        confirm.disabled = false;
+      }
+    });
+  });
+}
+
+/** Wiederherstellungscodes anzeigen - sie erscheinen genau einmal. */
+function showBackupCodes(host, codes, activated = false) {
+  if (!host) return;
+  host.innerHTML = `
+    <div style="border:1px solid var(--warn,#f5a524);border-radius:8px;padding:12px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:4px">
+        ${activated ? "🔐 Aktiv – " : ""}Wiederherstellungscodes</div>
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:8px">
+        Jetzt sichern: Sie werden <b>nur dieses eine Mal</b> angezeigt. Mit einem
+        dieser Codes kommst du auch ohne Handy hinein – jeder gilt einmal.
+      </div>
+      <pre style="background:var(--panel-2);padding:10px;border-radius:6px;
+                  font-size:13px;letter-spacing:1px;margin:0">${codes.map(esc).join("\n")}</pre>
+      <button class="action-btn" id="pr-2fa-copy" style="margin-top:8px">Kopieren</button>
+      <button class="action-btn" id="pr-2fa-done" style="margin-top:8px">Fertig</button>
+    </div>`;
+  host.querySelector("#pr-2fa-copy").addEventListener("click", () => {
+    navigator.clipboard?.writeText(codes.join("\n"));
+    window.notify?.("Codes in die Zwischenablage kopiert", "success");
+  });
+  host.querySelector("#pr-2fa-done").addEventListener("click", () => render2fa(host));
 }

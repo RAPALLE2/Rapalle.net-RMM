@@ -40,6 +40,16 @@
         <label>Passwort</label>
         <input type="password" id="login-password" autocomplete="current-password" required />
 
+        <!-- Zwei-Faktor: wird erst eingeblendet, wenn das Backend danach fragt.
+             So sehen Benutzer ohne 2FA das Feld nie. -->
+        <div id="login-2fa-row" class="hidden">
+          <label for="login-code">Einmalcode aus der Authenticator-App</label>
+          <input type="text" id="login-code" inputmode="numeric" autocomplete="one-time-code"
+                 pattern="[0-9a-z\- ]*" maxlength="12" placeholder="123456" />
+          <div style="font-size:11px;opacity:.7;margin-top:4px">
+            Kein Zugriff auf die App? Einen Wiederherstellungscode eingeben.
+          </div>
+        </div>
         <div id="login-error" class="form-error hidden"></div>
 
         <button type="submit" class="btn-primary">Anmelden</button>

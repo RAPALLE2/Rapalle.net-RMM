@@ -56,8 +56,14 @@ export const api = {
     return res.blob();
   },
   // --- Auth ---
-  login: (username, password, realm = "local") =>
-    request("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, realm }) }),
+  login: (username, password, realm = "local", code = "") =>
+    request("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, realm, code }) }),
+  // --- Zwei-Faktor-Anmeldung (TOTP) ---
+  totpStatus: () => request("/api/auth/2fa/status"),
+  totpSetup: () => request("/api/auth/2fa/setup", { method: "POST" }),
+  totpActivate: (code) => request("/api/auth/2fa/activate", { method: "POST", body: JSON.stringify({ code }) }),
+  totpDisable: (password) => request("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify({ password }) }),
+  totpNewBackupCodes: (password) => request("/api/auth/2fa/backup-codes", { method: "POST", body: JSON.stringify({ password }) }),
   getLoginRealms: () => request("/api/auth/realms"),
   me: () => request("/api/auth/me"),
   // Serverseitig gespeicherte UI-Einstellungen (in jedem Browser gleich)

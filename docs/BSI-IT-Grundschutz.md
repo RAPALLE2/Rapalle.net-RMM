@@ -67,10 +67,12 @@ nötig · **[O]** rein organisatorisch, außerhalb der Software
   (Standard: 5 Versuche in 15 Minuten → 15 Minuten Sperre), Audit-Eintrag
 - **[S]** Einmalpasswort mit erzwungenem Wechsel beim ersten Login
 - **[S]** Anbindung an Active Directory / LDAP (zentrale Identitäten)
-- **[T]** **Zwei-Faktor-Authentisierung fehlt.** Für administrative Zugänge
-  fordert der Grundschutz bei hohem Schutzbedarf eine starke Authentisierung.
-  Bis das nachgerüstet ist: Zugang ausschließlich über ein vorgeschaltetes
-  System mit MFA (Reverse Proxy mit OIDC/SSO, VPN) zulassen.
+- **[S]** **Zwei-Faktor-Anmeldung (TOTP, RFC 6238)** — jeder Benutzer richtet
+  sie im Profil per QR-Code ein; Wiederherstellungscodes für den Verlustfall,
+  jeder Code nur einmal verwendbar. Erfüllt die Forderung nach starker
+  Authentisierung für administrative Zugänge.
+- **[O]** **Pflicht zur 2FA** für Administratoren ist organisatorisch
+  festzulegen — technisch erzwingt das RMM sie noch nicht.
 - **[O]** Regelmäßige Rechteüberprüfung, Vier-Augen-Prinzip bei Adminrechten,
   Aus- und Eintrittsprozesse
 
@@ -156,7 +158,7 @@ Rein organisatorisch — keine Zeile Code hilft hier:
 
 Priorisiert nach Nutzen für einen Grundschutz-konformen Betrieb:
 
-1. **Zwei-Faktor-Authentisierung** für administrative Konten (TOTP)
+1. **Erzwingbare 2FA-Pflicht** je Rolle (die Funktion selbst ist umgesetzt)
 2. **Protokollweiterleitung** an ein SIEM (Syslog/CEF)
 3. **Sitzungslaufzeit** und automatische Abmeldung konfigurierbar machen
    (aktuell fest: 12 Stunden Token-Laufzeit)

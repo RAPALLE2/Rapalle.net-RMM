@@ -498,7 +498,8 @@ function initLoginForm() {
       const res = await api.login(
         username,
         document.getElementById("login-password").value,
-        realmSelect.value
+        realmSelect.value,
+        document.getElementById("login-code")?.value || ""
       );
       // Benutzername + Realm merken (Passwort NICHT).
       try {
@@ -513,8 +514,22 @@ function initLoginForm() {
       // mehr anmelden. Token verwerfen und Fehler sichtbar anzeigen.
       try { clearToken(); } catch {}
       try { showOnly(loginScreen()); } catch {}
+      // Das Backend meldet "2fa_required", wenn Passwort und Benutzername
+      // stimmen, aber noch der Einmalcode fehlt. Dann NICHT als Fehler
+      // darstellen, sondern das Code-Feld einblenden und den Fokus setzen.
+      if (err && err.message === "2fa_required") {
+        const row = document.getElementById("login-2fa-row");
+        const code = document.getElementById("login-code");
+        row?.classList.remove("hidden");
+        errBox.classList.add("hidden");
+        code?.focus();
+        return;
+      }
       errBox.textContent = err && err.message ? err.message : "Anmeldung fehlgeschlagen";
       errBox.classList.remove("hidden");
+      // Nach einem Fehlversuch den alten Code verwerfen - er gilt ohnehin nur einmal.
+      const codeField = document.getElementById("login-code");
+      if (codeField) codeField.value = "";
     }
   });
 }
