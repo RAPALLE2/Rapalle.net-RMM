@@ -15,6 +15,7 @@ import { subjectPickerHtml, readSubjectPicker, initSubjectPicker, splitGroups } 
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
+import { condenseHints } from "../help.js";
 
 const STATUS = {
   open:        { label: "Offen",         color: "#4da6ff" },
@@ -41,6 +42,11 @@ const COMMENT_VIS = {
 };
 
 export function renderTickets(body, win) {
+  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
+  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  setTimeout(() => condenseHints(body), 0);
+  setTimeout(() => condenseHints(body), 400);
+
   const may = (p) => isAdmin() || hasGlobalPerm(p);
   let tickets = [];
   let subjects = { users: [], groups: [] };

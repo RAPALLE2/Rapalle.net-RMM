@@ -222,6 +222,7 @@ async function renderExplorer(panel) {
       <button class="taskbar-btn" id="src-zip-btn" title="${t("src_zip_tip")}">${t("src_zip_btn")}</button>
       <button class="taskbar-btn" id="src-new-dir" title="${t("src_newdir_tip")}">${t("src_newdir_btn")}</button>
       <button class="taskbar-btn" id="src-new-file" title="${t("src_newfile_tip")}">${t("src_newfile_btn")}</button>
+      <button class="taskbar-btn" id="src-clear-dist" title="${t("src_dist_tip")}">${t("src_dist_btn")}</button>
       <span id="src-zip-status" style="font-size:12px;color:var(--subtext)"></span>
     </div>
     <div style="display:flex;gap:10px;min-height:0">
@@ -247,6 +248,28 @@ async function renderExplorer(panel) {
   const contentEl = panel.querySelector("#src-file-content");
   let openPath = null;
   let curDir = "backend";   // aktuell geöffneter Ordner (für ZIP-Ziel)
+
+  // --- dist/ leeren ---
+  // Dort sammeln sich die gebauten Agent-Installationspakete: jeder Build legt
+  // neue Dateien ab, alte Versionen bleiben liegen.
+  panel.querySelector("#src-clear-dist").addEventListener("click", async () => {
+    if (!confirm(t("src_dist_confirm"))) return;
+    const status = panel.querySelector("#src-zip-status");
+    status.textContent = "…";
+    try {
+      const r = await api.sourceClearDist();
+      const kb = Math.round((r.freed || 0) / 1024);
+      status.textContent = r.note
+        ? r.note
+        : `${r.removed} Einträge gelöscht (${kb} KB frei)` +
+          (r.errors && r.errors.length ? ` — ${r.errors.length} Fehler` : "");
+      // Ansicht auffrischen, falls dist gerade offen ist.
+      if (curDir === "dist" || String(curDir).startsWith("dist/")) loadDir(curDir);
+    } catch (e) {
+      status.textContent = e.message;
+    }
+    setTimeout(() => { status.textContent = ""; }, 6000);
+  });
 
   // --- ZIP-Upload ---
   const zipInput = panel.querySelector("#src-zip-input");

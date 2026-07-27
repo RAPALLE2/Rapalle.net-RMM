@@ -11,6 +11,8 @@
 
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
+import { condenseHints } from "../help.js";
+import { buildSubTabs } from "../subtabs.js";
 import { t } from "../i18n.js";
 import { isAdmin, hasGlobalPerm } from "../state.js";
 import { renderSource } from "./source.js";
@@ -145,6 +147,7 @@ export function renderSettings(body, win) {
         }
       });
     });
+    condenseHints(root);
   }
 
   // ---------------- GENERAL ----------------
@@ -186,10 +189,11 @@ export function renderSettings(body, win) {
           <input type="text" id="ge-server-url" placeholder="https://rmm.meinefirma.de" value="${esc(s.server_url || "")}" />
         </div>
         <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
-          Öffentlicher Zugriff / Reverse-Proxy: Trage hier die <b>öffentliche Adresse</b> ein
-          (z.B. <code>https://rmm.meinefirma.de</code>), unter der Agenten das Backend erreichen.
-          Dieser Wert wird in die Agent-Installation eingebaut — sonst bekommt ein Agent die
-          interne IP (<code>http://ip:4000</code>), die ein externer Client nicht erreichen kann.
+          Öffentlicher Zugriff / Reverse-Proxy: Trage hier die öffentliche Adresse ein,
+          unter der Agenten das Backend erreichen. Dieser Wert wird in die
+          Agent-Installation eingebaut — sonst bekommt ein Agent die intern
+          erreichbare Adresse ${esc(window.location.origin)}, die ein externer
+          Client nicht erreichen kann.
         </p>
 
         <h3 style="margin-top:22px">Zugriff auf diese Adressen beschränken</h3>
@@ -526,9 +530,14 @@ export function renderSettings(body, win) {
       if (!spWarn) return;
       // Spotify erlaubt nur https:// oder die Loopback-Adresse 127.0.0.1.
       const loopback = /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/.test(uri);
+      // Den erlaubten Loopback-Vorschlag mit dem TATSAECHLICHEN Port dieser
+      // Installation zeigen - "PORT" als Platzhalter musste der Benutzer sonst
+      // selbst ersetzen.
+      const port = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+      const loopbackExample = `http://127.0.0.1:${port}/`;
       spWarn.innerHTML = (uri.startsWith("http://") && !loopback)
         ? `<span style="color:var(--warn,#f5a524)">⚠ Spotify akzeptiert diese Adresse nicht:
-             erlaubt sind nur <b>https://…</b> oder <code>http://127.0.0.1:PORT/</code>.
+             erlaubt sind nur <b>https://…</b> oder <code>${esc(loopbackExample)}</code>.
              Trage oben unter „Vollständige URL“ deine HTTPS-Adresse ein – oder öffne das
              Dashboard über <code>127.0.0.1</code>.</span><br>`
         : "";
@@ -812,6 +821,13 @@ export function renderSettings(body, win) {
     });
     refreshGuacStatus();
     } // Ende Admin-only Verkabelung (mayAdminSet)
+
+    // Zum Schluss die Seite aufraeumen:
+    //  1. Erklaertexte wandern in "?"-Symbole neben Ueberschrift/Beschriftung.
+    //  2. Aus den Ueberschriften werden Unterpunkte - sichtbar ist immer nur
+    //     einer, der Speichern-Knopf bleibt unten stehen.
+    condenseHints(root);
+    buildSubTabs(root, { key: "settings-general", pinned: ["#ge-error", "#ge-save"] });
   }
 
   // ---------------- USERS ----------------
@@ -1197,6 +1213,7 @@ export function renderSettings(body, win) {
     }
 
     await draw();
+    condenseHints(root);
   }
 
   // ---------------- NOTIFICATIONS (Webhook-Verwaltung) ----------------
@@ -1204,6 +1221,10 @@ export function renderSettings(body, win) {
   // in apps/notifications.js - hier nur noch delegieren.
   function renderNotifTab(root) {
     renderNotifications(root, win);
+    // Erklaertexte in "?"-Symbole umwandeln, sobald der Bereich steht.
+    // (renderNotifications laedt asynchron nach - deshalb zweimal.)
+    condenseHints(root);
+    setTimeout(() => condenseHints(root), 400);
   }
 
   draw();

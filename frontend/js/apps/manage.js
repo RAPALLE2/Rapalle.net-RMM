@@ -13,12 +13,18 @@ import { esc, uiConfirm } from "../utils.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
+import { condenseHints } from "../help.js";
 
 // Wird von app.js gesetzt, um nach Änderungen Hierarchie + Sidebar neu zu laden
 let onChanged = null;
 export function setManageOnChanged(fn) { onChanged = fn; }
 
 export function renderManage(body, win) {
+  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
+  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  setTimeout(() => condenseHints(body), 0);
+  setTimeout(() => condenseHints(body), 400);
+
   function draw() {
     const tenants = state.hierarchy.tenants;
 

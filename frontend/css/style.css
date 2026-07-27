@@ -1701,3 +1701,73 @@ button > .svgicon:only-child { vertical-align: middle; }
   color: var(--text); font-size: 12px; cursor: pointer;
 }
 .oc-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ==========================================================
+   Hilfe-Fragezeichen (help.js)
+   Ersetzt lange Erklaertexte unter den Einstellungen: kleines "?"
+   neben dem Feature, Erklaerung erscheint beim Ueberfahren.
+   ========================================================== */
+.help-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--subtext);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+  user-select: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.help-dot:hover,
+.help-dot:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0f14;
+  outline: none;
+}
+
+.help-tip {
+  position: fixed;
+  z-index: 99999;
+  display: none;
+  max-width: 340px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, #1b2740);
+  color: var(--text, #e6edf7);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+/* Unternavigation innerhalb eines Einstellungen-Reiters */
+.sub-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px 0;
+}
+.sub-nav button {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--subtext);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sub-nav button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}

@@ -18,6 +18,7 @@ import { setLanguage, getLanguage, applyStaticTranslations } from "./i18n_apply.
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
 import { renderTaskbar, initTaskbar, consumeFreshStart } from "./taskbar.js";
+import { initHelp } from "./help.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll, closeWindow } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
@@ -924,6 +925,7 @@ async function main() {
   initChangePwForm();
   initMenusAndButtons();
   initTaskbar();
+  initHelp();   // Hilfe-Fragezeichen der ganzen Oberflaeche verkabeln
   initLiveUpdates();
   initDesktopDrop();
 

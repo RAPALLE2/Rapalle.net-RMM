@@ -78,7 +78,7 @@ const translations = {
     general_server_url_advanced: "Vollständige URL (überschreibt IP/Domain/Port)",
     // Guacamole (extern gehostet)
     guac_title: "Remote-Gateway (Guacamole)",
-    guac_hint: "Für Remote-Desktop im Browser (RDP/VNC/SSH) wird ein extern gehosteter guacd-Dienst genutzt. Host und Port hier eintragen (z.B. eine separate VM mit 'docker run -d -p 4822:4822 guacamole/guacd').",
+    guac_hint: "Für Remote-Desktop im Browser (RDP/VNC/SSH) wird ein guacd-Dienst genutzt. Trage hier dessen Host und Port ein.",
     guac_host: "guacd Host / IP", guac_port: "guacd Port",
     guac_test: "Verbindung testen",
     guac_loading: "Status wird geladen…",
@@ -348,6 +348,11 @@ const translations = {
     agent_uninstall_run: "Deinstalliere Agent auf {host}… (bis zu 60 s, bitte warten)",
     error_prefix: "Fehler: {err}",
     exp_fav_first: "Zuerst in einen Ordner wechseln, den du als Arbeitsordner merken willst.",
+
+    // --- Source: dist-Ordner (gebaute Installationspakete) ---
+    src_dist_btn: "🧹 dist leeren",
+    src_dist_tip: "Alle gebauten Agent-Installationspakete im Ordner dist/ löschen",
+    src_dist_confirm: "Alle Dateien im Ordner dist/ löschen? Die gebauten Installationspakete müssen danach neu erzeugt werden.",
 
     // --- Source: Installationsart (Docker / natives Programm) ---
     src_install_docker: "Als Docker-Container installiert",
@@ -939,7 +944,7 @@ const translations = {
     general_server_url_advanced: "Full URL (overrides IP/domain/port)",
     // Guacamole (externally hosted)
     guac_title: "Remote gateway (Guacamole)",
-    guac_hint: "Remote desktop in the browser (RDP/VNC/SSH) uses an externally hosted guacd service. Enter its host and port here (e.g. a separate VM running 'docker run -d -p 4822:4822 guacamole/guacd').",
+    guac_hint: "Remote desktop in the browser (RDP/VNC/SSH) uses a guacd service. Enter its host and port here.",
     guac_host: "guacd host / IP", guac_port: "guacd port",
     guac_test: "Test connection",
     guac_loading: "Loading status…",
@@ -1204,6 +1209,11 @@ const translations = {
     agent_uninstall_run: "Uninstalling agent on {host}… (up to 60 s, please wait)",
     error_prefix: "Error: {err}",
     exp_fav_first: "Switch to a folder first that you want to remember as your working folder.",
+
+    // --- Source: dist folder (built installer packages) ---
+    src_dist_btn: "🧹 Clear dist",
+    src_dist_tip: "Delete all built agent installer packages in the dist/ folder",
+    src_dist_confirm: "Delete all files in the dist/ folder? The built installer packages will have to be rebuilt.",
 
     // --- Source: installation kind (Docker / native program) ---
     src_install_docker: "Installed as a Docker container",

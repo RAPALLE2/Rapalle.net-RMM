@@ -1,0 +1,18 @@
+# Bau-Abhaengigkeiten fuer tools/build_installers.py
+# ---------------------------------------------------
+# NUR noetig, wenn Windows-Installationspakete gebaut werden sollen. Das
+# Build-Skript installiert diese Pakete bei Bedarf selbst nach - wer das lieber
+# vorab erledigt (z.B. ohne Internet zur Bauzeit), nimmt:
+#
+#     pip install -r tools/requirements-build.txt
+#
+# Fuer die MSI wird zusaetzlich WiX v3 gebraucht. Das ist KEIN Python-Paket;
+# build_installers.py laedt die offiziellen Binaries (candle.exe/light.exe)
+# einmalig nach %LOCALAPPDATA%\.rmm-build\wix314 herunter - ohne Setup und ohne
+# Administratorrechte. Alternativ WiX v3 normal installieren, dann werden
+# candle/light aus dem PATH benutzt.
+#
+# Die Linux-Pakete (.deb/.rpm/.run) brauchen KEINE Python-Pakete, nur
+# dpkg-deb bzw. rpmbuild - und das .run gar nichts.
+
+pyinstaller>=6.0        # baut RapalleRmmAgent-Setup.exe (Onefile, --uac-admin)

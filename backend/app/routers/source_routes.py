@@ -574,3 +574,41 @@ async def get_runtime(user: dict = Depends(get_current_user)):
     require_perm(user, "see_source")
     from app import runtime_env
     return runtime_env.runtime_info()
+
+
+# ------------------------------------------------------------------
+# dist-Ordner leeren (gebaute Agent-Installationspakete)
+# ------------------------------------------------------------------
+
+@router.post("/dist/clear")
+async def clear_dist(user: dict = Depends(get_current_user)):
+    """
+    Löscht alle Dateien im Ordner dist/ - dort liegen die mit
+    tools/build_installers.py gebauten Installationspakete (.exe/.msi/.bat/
+    .ps1/.sh/.tar.gz/.deb/.rpm/.pkg.tar.xz).
+
+    Nützlich, weil jeder Build alte Stände liegen lässt: andere Versionen,
+    andere Backend-Adressen. Der Ordner selbst bleibt bestehen, Unterordner
+    werden mit entfernt.
+    """
+    require_perm(user, "edit_source")
+    dist = PROJECT_ROOT / "dist"
+    if not dist.is_dir():
+        return {"ok": True, "removed": 0, "freed": 0, "note": "dist-Ordner existiert nicht"}
+
+    removed, freed, errors = 0, 0, []
+    for entry in list(dist.iterdir()):
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                freed += sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                shutil.rmtree(entry)
+            else:
+                freed += entry.stat().st_size
+                entry.unlink()
+            removed += 1
+        except Exception as e:
+            errors.append(f"{entry.name}: {e}")
+
+    db.add_audit_entry(user["username"], "source.dist_clear",
+                       details=f"{removed} Einträge, {freed // 1024} KB")
+    return {"ok": not errors, "removed": removed, "freed": freed, "errors": errors}

@@ -362,6 +362,10 @@ export const api = {
   // --- Onboarding ---
   createEnrollmentToken: (tenant_id, location_id, client_name) =>
     request("/api/enrollment/tokens", { method: "POST", body: JSON.stringify({ tenant_id, location_id, client_name }) }),
+  // Fertige Installationspakete (.exe/.msi/.deb/.rpm/.run) auflisten bzw. bauen
+  listInstallers: () => request("/api/enrollment/installers"),
+  buildInstallers: (targets = "auto") =>
+    request("/api/enrollment/installers/build", { method: "POST", body: JSON.stringify({ targets }) }),
 
   // --- Audit-Log ---
   getAuditLog: () => request("/api/audit"),
@@ -405,6 +409,8 @@ export const api = {
   sourceRoots: () => request("/api/source/roots"),
   // Installationsart: Docker-Container oder natives Programm
   sourceRuntime: () => request("/api/source/runtime"),
+  // dist/ leeren (gebaute Agent-Installationspakete)
+  sourceClearDist: () => request("/api/source/dist/clear", { method: "POST" }),
   sourceList: (path = "") => request(`/api/source/list?path=${encodeURIComponent(path)}`),
   sourceRead: (path) => request(`/api/source/read?path=${encodeURIComponent(path)}`),
   sourceWrite: (path, content) =>

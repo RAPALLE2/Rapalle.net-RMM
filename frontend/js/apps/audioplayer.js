@@ -968,7 +968,8 @@ export function renderAudioPlayer(body, win) {
       ? esc(diag.uriError)
       : !diag.schemeOk
         ? `Spotify akzeptiert <code>${esc(uri)}</code> nicht. Erlaubt sind nur
-           <b>https://…</b> oder die Loopback-Adresse <code>http://127.0.0.1:PORT/</code>.`
+           <b>https://…</b> oder die Loopback-Adresse
+           <code>${esc(`http://127.0.0.1:${window.location.port || "80"}/`)}</code>.`
         : "";
     stage.innerHTML = `
       <div style="max-width:620px;width:100%;font-size:13px;line-height:1.6">
@@ -1016,7 +1017,7 @@ export function renderAudioPlayer(body, win) {
         <div style="color:#8ea2c6;font-size:12px">
           Die Redirect-URI wird aus <b>Einstellungen → Allgemein → „Vollständige URL“</b>
           gebildet. Läuft das Dashboard nur über HTTP im LAN, öffne es über
-          <code>http://127.0.0.1:PORT/</code> – Spotify lässt HTTP sonst nicht zu.
+          <code>${esc(`http://127.0.0.1:${window.location.port || "80"}/`)}</code> – Spotify lässt HTTP sonst nicht zu.
         </div>
         <div style="text-align:center;margin-top:14px">
           <button class="btn-primary" id="ap-sp-retry" style="width:auto;margin:0;border-radius:20px">

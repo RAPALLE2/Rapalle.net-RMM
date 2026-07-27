@@ -171,6 +171,23 @@ async def enrollment_landing_page(token: str, request: Request):
     _require_valid_token(token)
     backend_url = _backend_url(request)
 
+    # Fertige Installationspakete (falls lokal gebaut) direkt mit anbieten -
+    # der neue Rechner hat ja keinen Zugang zum Dashboard.
+    pkgs = _installer_entries()
+    if pkgs:
+        rows = []
+        for p in pkgs:
+            hint = _installer_hint(p["name"], token, backend_url)
+            rows.append(
+                f'<p><a class="btn" href="/enroll/{token}/installer/{p["name"]}">'
+                f'{p["icon"]} {p["label"]} ({p["size"] // 1024} KB)</a><br>'
+                f'<code>{hint}</code></p>'
+            )
+        packages_block = ("<h3>Option C — Fertiges Installationspaket</h3>"
+                          + "".join(rows))
+    else:
+        packages_block = ""
+
     html = f"""
     <!DOCTYPE html>
     <html lang="de">
@@ -203,6 +220,8 @@ async def enrollment_landing_page(token: str, request: Request):
 
       <h3>Option B — Ein-Zeiler (Windows PowerShell, als Administrator)</h3>
       <pre>iwr {backend_url}/enroll/{token}/install.ps1 -UseBasicParsing | iex</pre>
+
+      {packages_block}
 
       <p class="note">Dieser Link ist einmalig gültig und läuft nach der ersten
          erfolgreichen Verbindung des Agenten automatisch ab.</p>
@@ -279,6 +298,21 @@ async def install_script_linux(token: str, request: Request):
 # RAPALLE.net RMM - automatische Agent-Installation (Linux)
 set -e
 INSTALL_DIR="/opt/rapalle-rmm-agent"
+
+# --- Rootrechte: notfalls SELBST ueber sudo neu starten -------------------
+# Wird das Skript aus einer Pipe gelesen ("curl ... | bash"), gibt es kein $0
+# zum Neustarten - dann nur ein klarer Hinweis. Ansonsten starten wir uns
+# selbst mit sudo neu ("-E" haelt RMM_*-Variablen am Leben).
+if [ "$(id -u)" != "0" ]; then
+  if [ -f "$0" ] && command -v sudo >/dev/null 2>&1; then
+    echo "Starte mit Rootrechten neu (sudo) ..."
+    exec sudo -E "$0" "$@"
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "Bitte als root ausfuehren (sudo ist nicht installiert)."; exit 1
+  fi
+  echo "Hinweis: Aufruf ohne Rootrechte - die einzelnen Schritte nutzen sudo."
+fi
 
 # --- Systemvoraussetzungen automatisch installieren -----------------------
 # Benötigt: python3, python3-venv (ensurepip!), python3-pip, unzip, curl.
@@ -373,9 +407,28 @@ async def install_script_windows(token: str, request: Request):
     backend_url = _backend_url(request)
 
     script = f"""# RAPALLE.net RMM - automatische Agent-Installation (Windows)
-# Als Administrator ausfuehren!
 $ErrorActionPreference = "Stop"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+
+# --- Adminrechte: notfalls SELBST per UAC neu starten ---------------------
+# Wichtig fuer den Ein-Zeiler "iwr ... | iex": dabei gibt es keine Skriptdatei,
+# die man neu starten koennte. Deshalb laden wir das Skript in der erhoehten
+# Sitzung einfach noch einmal vom Server.
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
+    Write-Host "Starte mit Administratorrechten neu (UAC-Abfrage) ..." -ForegroundColor Yellow
+    $cmd = "iwr '{backend_url}/enroll/{token}/install.ps1' -UseBasicParsing | iex"
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    try {{
+        $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -PassThru -Wait `
+             -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $enc)
+        exit $p.ExitCode
+    }} catch {{
+        Write-Host "Rechteerhoehung abgelehnt - bitte PowerShell als Administrator oeffnen." -ForegroundColor Red
+        exit 1
+    }}
+}}
 
 # --- 1. Pruefen ob Python vorhanden ist, sonst automatisch installieren ---
 $python = Get-Command python -ErrorAction SilentlyContinue
@@ -530,6 +583,13 @@ async def agent_update_sh(request: Request):
 # RAPALLE.net RMM - Agent-Update (Linux)
 set -e
 INSTALL_DIR="/opt/rapalle-rmm-agent"
+
+# Rootrechte: notfalls selbst per sudo neu starten (wenn es eine Skriptdatei
+# gibt - beim Aufruf durch eine Pipe greifen die sudo-Aufrufe weiter unten).
+if [ "$(id -u)" != "0" ] && [ -f "$0" ] && command -v sudo >/dev/null 2>&1; then
+  exec sudo -E "$0" "$@"
+fi
+
 echo "Lade neueste Agent-Version..."
 curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/rapalle-agent.zip
 sudo mkdir -p "$INSTALL_DIR"
@@ -595,6 +655,16 @@ async def agent_update_ps1(request: Request):
     script = f"""# RAPALLE.net RMM - Agent-Update (Windows) - als Administrator ausfuehren
 $ErrorActionPreference = "Stop"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+# Adminrechte: notfalls per UAC neu starten (Program Files + Aufgabenplanung).
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
+    $cmd = "iwr '{backend_url}/agent-dist/update.ps1' -UseBasicParsing | iex"
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -PassThru -Wait `
+         -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $enc)
+    exit $p.ExitCode
+}}
 Write-Host "Lade neueste Agent-Version..."
 Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
 if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
@@ -820,6 +890,21 @@ async def agent_uninstall_ps1(request: Request):
 $ErrorActionPreference = "SilentlyContinue"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
 
+# Adminrechte: notfalls per UAC neu starten. Als SYSTEM-Task laeuft das Skript
+# ohnehin schon erhoeht - dann greift der Block nicht.
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Starte mit Administratorrechten neu (UAC-Abfrage) ..."
+    if ($PSCommandPath) {
+        $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -PassThru -Wait `
+             -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+        exit $p.ExitCode
+    }
+    Write-Host "Bitte PowerShell als Administrator oeffnen." -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "1) Stoppe und entferne Agent-Autostart..."
 schtasks /end /tn "RapalleRmmAgent" 2>$null | Out-Null
 schtasks /delete /tn "RapalleRmmAgent" /f 2>$null | Out-Null
@@ -865,3 +950,187 @@ if (Test-Path $InstallDir) {
 }
 """
     return PlainTextResponse(script, media_type="text/plain")
+
+
+# ==========================================================================
+# FERTIGE INSTALLATIONSPAKETE (.exe / .msi / .deb / .rpm / .run)
+# --------------------------------------------------------------------------
+# Gebaut werden sie lokal mit "python tools/build_installers.py" - die Pakete
+# landen im Ordner dist/ im Projekt-Root. Diese Routen machen sie im Dashboard
+# nutzbar: auflisten, per Knopfdruck bauen und über die Onboarding-Seite
+# herunterladen.
+#
+# Der Onboarding-Token steckt NICHT im Paket (das wäre pro Token ein eigener
+# Build). Stattdessen bekommt der Installer ihn beim Aufruf mit:
+#     Windows:  RapalleRmmAgent-Setup.exe /S /TOKEN=<token>
+#     Linux:    sudo RMM_ENROLLMENT_TOKEN=<token> ./rapalle-rmm-agent.run
+# Ohne Token landet das Gerät in "Uncategorized" und kann später zugeordnet
+# werden.
+# ==========================================================================
+
+def _installer_hint(name: str, token: str, backend_url: str = "") -> str:
+    """
+    Passender Aufrufbefehl je Paketart - mit den ECHTEN Werten dieser
+    Installation (Backend-Adresse, Onboarding-Token). Der Befehl laesst sich
+    also unveraendert kopieren; niemand muss noch Platzhalter ersetzen.
+    """
+    n = name.lower()
+    if n.endswith(".exe"):
+        return f"RapalleRmmAgent-Setup.exe /S /TOKEN={token}"
+    if n.endswith(".msi"):
+        # Der Windows Installer reicht eigene Eigenschaften nicht an die
+        # (deferred) Aktion durch -> das Geraet landet in "Uncategorized".
+        return f"msiexec /i {name} /qn"
+    if n.endswith(".bat"):
+        return f"{name} {backend_url} {token}"
+    if n.endswith(".ps1"):
+        return f"powershell -ExecutionPolicy Bypass -File {name} -Token {token}"
+    if n.endswith(".pkg.tar.xz"):
+        return f"sudo RMM_ENROLLMENT_TOKEN={token} pacman -U {name}"
+    if n.endswith(".deb"):
+        return f"sudo RMM_ENROLLMENT_TOKEN={token} apt install ./{name}"
+    if n.endswith(".rpm"):
+        return f"sudo RMM_ENROLLMENT_TOKEN={token} dnf install ./{name}"
+    if n.endswith((".tar.gz", ".tgz")):
+        return f"tar xzf {name} && cd */ && sudo RMM_ENROLLMENT_TOKEN={token} ./install.sh"
+    return f"sudo RMM_ENROLLMENT_TOKEN={token} ./{name}"
+
+
+PROJECT_ROOT_DIR = AGENT_SOURCE_DIR.parent
+INSTALLER_DIST_DIR = PROJECT_ROOT_DIR / "dist"
+BUILD_SCRIPT = PROJECT_ROOT_DIR / "tools" / "build_installers.py"
+
+# Dateiname-Muster -> Anzeige im Dashboard.
+# Reihenfolge zaehlt: die spezielleren Endungen zuerst pruefen.
+_INSTALLER_KINDS = [
+    (".exe", "Windows-Setup", "🪟", "exe"),
+    (".msi", "Windows MSI (GPO/Intune)", "🪟", "msi"),
+    (".bat", "Windows-Batch (Doppelklick)", "🪟", "bat"),
+    (".ps1", "Windows PowerShell-Skript", "🪟", "ps1"),
+    (".pkg.tar.xz", "Arch / Manjaro", "🐧", "pkg"),
+    (".deb", "Debian / Ubuntu", "🐧", "deb"),
+    (".rpm", "Fedora / RHEL / SUSE", "🐧", "rpm"),
+    (".tar.gz", "Linux-Archiv (tar.gz)", "🐧", "tgz"),
+    (".tgz", "Linux-Archiv (tgz)", "🐧", "tgz"),
+    (".sh", "Linux (selbstentpackend)", "🐧", "sh"),
+    (".run", "Linux (selbstentpackend, .run)", "🐧", "sh"),
+]
+
+
+def _installer_entries() -> list[dict]:
+    """Alle gebauten Pakete in dist/ (neueste zuerst)."""
+    out = []
+    if not INSTALLER_DIST_DIR.is_dir():
+        return out
+    for f in sorted(INSTALLER_DIST_DIR.iterdir()):
+        if not f.is_file():
+            continue
+        for suffix, label, icon, target in _INSTALLER_KINDS:
+            if f.name.lower().endswith(suffix):
+                st = f.stat()
+                out.append({
+                    "name": f.name,
+                    "label": label,
+                    "icon": icon,
+                    "target": target,
+                    "size": st.st_size,
+                    "built_at": int(st.st_mtime),
+                })
+                break
+    out.sort(key=lambda e: e["built_at"], reverse=True)
+    return out
+
+
+@router.get("/api/enrollment/installers")
+async def list_installers(user: dict = Depends(get_current_user)):
+    """
+    Was liegt an fertigen Paketen bereit - und was liesse sich hier bauen?
+    Wird vom "Client hinzufügen"-Fenster benutzt.
+    """
+    require_perm(user, "add_client")
+    can = {}
+    try:
+        import shutil as _sh
+        import platform as _pl
+        # exe/msi: die Werkzeuge zieht das Build-Skript bei Bedarf selbst nach
+        # (PyInstaller per pip, WiX als Download) - Windows genuegt also.
+        # Skript-/Archivpakete brauchen gar kein Werkzeug.
+        is_win = _pl.system() == "Windows"
+        can = {
+            "exe": is_win,
+            "msi": is_win,
+            "bat": True,
+            "ps1": True,
+            "sh": True,
+            "tgz": True,
+            "pkg": True,
+            "deb": bool(_sh.which("dpkg-deb")),
+            "rpm": bool(_sh.which("rpmbuild")),
+        }
+    except Exception:
+        can = {"sh": True}
+    return {
+        "installers": _installer_entries(),
+        "can_build": can,
+        "build_available": BUILD_SCRIPT.is_file(),
+        "dist_dir": str(INSTALLER_DIST_DIR),
+    }
+
+
+class BuildInstallersBody(BaseModel):
+    targets: str = "auto"       # "auto" oder z.B. "sh,deb"
+
+
+@router.post("/api/enrollment/installers/build")
+async def build_installers(body: BuildInstallersBody, request: Request,
+                           user: dict = Depends(get_current_user)):
+    """
+    Startet tools/build_installers.py und wartet auf das Ergebnis.
+
+    Absichtlich synchron: der Build dauert je nach Ziel Sekunden bis ~2 Minuten
+    und das Fenster zeigt danach direkt die neuen Downloads. Nur für Admins -
+    hier wird ein Prozess auf dem Server gestartet.
+    """
+    require_admin(user)
+    if not BUILD_SCRIPT.is_file():
+        raise HTTPException(404, "tools/build_installers.py nicht gefunden")
+
+    import subprocess
+    import sys as _sys
+
+    targets = (body.targets or "auto").strip()
+    if not all(c.isalnum() or c in ",_-" for c in targets):
+        raise HTTPException(400, "Ungültige Ziel-Angabe")
+
+    cmd = [_sys.executable, str(BUILD_SCRIPT),
+           "--targets", targets,
+           "--backend-url", _backend_url(request),
+           "--out", str(INSTALLER_DIST_DIR)]
+    try:
+        proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT_DIR), capture_output=True,
+                              text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Build-Zeitlimit (30 Minuten) überschritten")
+    except Exception as e:
+        raise HTTPException(500, f"Build konnte nicht gestartet werden: {e}")
+
+    log = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    db.add_audit_entry(user["username"], "enrollment.build_installers",
+                       details=f"targets={targets} rc={proc.returncode}")
+    return {"ok": proc.returncode == 0, "returncode": proc.returncode,
+            "log": log[-8000:], "installers": _installer_entries()}
+
+
+@router.get("/enroll/{token}/installer/{name}")
+async def download_installer(token: str, name: str):
+    """
+    Download eines fertigen Pakets über die Onboarding-URL (kein Login nötig -
+    der Token in der URL ist der Nachweis, genau wie bei agent.zip).
+    """
+    _require_valid_token(token)
+    # Kein Pfad-Ausbruch: nur genau die Dateien, die in dist/ als Paket gelten.
+    if name not in {e["name"] for e in _installer_entries()}:
+        raise HTTPException(404, "Paket nicht gefunden")
+    path = INSTALLER_DIST_DIR / name
+    from fastapi.responses import FileResponse
+    return FileResponse(path, filename=name, media_type="application/octet-stream")

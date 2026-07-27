@@ -7,8 +7,14 @@ import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
 import { t } from "../i18n.js";
+import { condenseHints } from "../help.js";
 
 export function renderAutomation(body, win) {
+  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
+  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  setTimeout(() => condenseHints(body), 0);
+  setTimeout(() => condenseHints(body), 400);
+
   async function draw() {
     const clients = state.clients;
     let scripts = [];

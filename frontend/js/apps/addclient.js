@@ -6,6 +6,7 @@
 import { state } from "../state.js";
 import { api } from "../api.js";
 import { esc } from "../utils.js";
+import { helpDot, condenseHints } from "../help.js";
 // t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
 import { t as tr } from "../i18n.js";
 
@@ -16,21 +17,14 @@ export function renderAddClient(body, win) {
 
   body.innerHTML = `
     <div class="settings-section">
-      <h3>Neuen Client hinzufügen</h3>
-
-      <div class="panel" style="background:var(--panel-2);font-size:13px;color:var(--subtext);line-height:1.5">
-        <b style="color:var(--text)">Was passiert bei der Installation?</b>
-        <ol style="margin:8px 0 0;padding-left:18px">
-          <li>Der Agent wird nach <code>C:\\Program Files\\RapalleRmmAgent</code> (Windows) bzw.
-              <code>/opt/rapalle-agent</code> (Linux) installiert.</li>
-          <li>Fehlt <b>Python</b>, wird es automatisch mitinstalliert (Windows: über winget
-              bzw. den offiziellen Installer; klappt das nicht, wird ein Download-Link gezeigt).</li>
-          <li>Die nötigen Bibliotheken werden in einer eigenen Umgebung installiert.</li>
-          <li>Der Agent wird als <b>unsichtbarer Autostart</b> eingerichtet und startet sofort —
-              du kannst das Installationsfenster danach schließen.</li>
-          <li>Der Client meldet sich dann selbstständig hier im Dashboard an.</li>
-        </ol>
-      </div>
+      <h3>Neuen Client hinzufügen ${helpDot(
+        "Was bei der Installation passiert: Der Agent wird nach " +
+        "C:\\Program Files\\RapalleRmmAgent (Windows) bzw. /opt/rapalle-rmm-agent (Linux) " +
+        "installiert. Fehlt Python, wird es automatisch mitinstalliert. Die nötigen " +
+        "Bibliotheken kommen in eine eigene Umgebung. Der Agent wird als Dienst " +
+        "eingerichtet, der beim Booten startet - auch ohne Anmeldung - und meldet sich " +
+        "danach selbstständig hier im Dashboard an."
+      )}</h3>
 
       <div class="form-row" style="margin-top:14px">
         <label>Wunschname für den Client (optional)</label>
@@ -54,6 +48,8 @@ export function renderAddClient(body, win) {
       <div id="ac-result" style="margin-top:20px"></div>
     </div>
   `;
+
+  condenseHints(body);
 
   const tenantSel = body.querySelector("#ac-tenant");
   // Live-Refresh: Wird irgendwo ein Tenant/Standort angelegt/gelöscht
@@ -125,7 +121,14 @@ export function renderAddClient(body, win) {
         <h3 style="font-size:13px;margin-top:16px">Weg 3 — Direkter Download</h3>
         <a class="btn-primary" style="display:inline-block;width:auto;text-decoration:none"
            href="${esc(downloadUrl)}">Agent .zip herunterladen</a>
+
+        <h3 style="font-size:13px;margin-top:16px">Weg 4 — Fertiges Installationspaket</h3>
+        <div id="ac-installers" style="font-size:12px;color:var(--subtext)">Lade Pakete…</div>
       `;
+
+      // Weg 4 nachladen: fertige .exe/.msi/.deb/.rpm/.run aus dem dist-Ordner.
+      renderInstallers(resultEl.querySelector("#ac-installers"), res.token, abs,
+                       res.base_url || window.location.origin);
 
       // Copy-Handler (navigator.clipboard braucht HTTPS/localhost -> Fallback
       // über verstecktes Textarea + execCommand für HTTP-Setups)
@@ -153,6 +156,101 @@ export function renderAddClient(body, win) {
       );
     } catch (e) {
       resultEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+    }
+  });
+}
+
+
+// ---------------------------------------------------------------
+// Weg 4: fertige Installationspakete (.exe / .msi / .deb / .rpm / .run)
+//
+// Gebaut werden sie serverseitig mit tools/build_installers.py; sie liegen im
+// Ordner dist/. Der Onboarding-Token steckt NICHT im Paket (das wäre pro Token
+// ein eigener Build) - er wird dem Installer beim Aufruf mitgegeben, damit das
+// Gerät direkt beim gewählten Tenant/Standort landet.
+// ---------------------------------------------------------------
+function fmtSize(bytes) {
+  return bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + " MB"
+                          : Math.round(bytes / 1024) + " KB";
+}
+
+// Passender Aufrufbefehl je Paketart - inklusive Onboarding-Token, damit das
+// Gerät direkt beim gewählten Tenant/Standort landet.
+function installHint(name, token, backendUrl) {
+  const n = name.toLowerCase();
+  if (n.endsWith(".exe")) return `RapalleRmmAgent-Setup.exe /S /TOKEN=${token}`;
+  // MSI: der Windows Installer reicht eigene Eigenschaften nicht an die
+  // (deferred) Aktion durch -> das Gerät landet in "Uncategorized".
+  if (n.endsWith(".msi")) return `msiexec /i ${name} /qn   (→ Uncategorized)`;
+  if (n.endsWith(".bat")) return `${name} ${backendUrl} ${token}`;
+  if (n.endsWith(".ps1")) return `powershell -ExecutionPolicy Bypass -File ${name} -Token ${token}`;
+  if (n.endsWith(".pkg.tar.xz")) return `sudo RMM_ENROLLMENT_TOKEN=${token} pacman -U ${name}`;
+  if (n.endsWith(".deb")) return `sudo RMM_ENROLLMENT_TOKEN=${token} apt install ./${name}`;
+  if (n.endsWith(".rpm")) return `sudo RMM_ENROLLMENT_TOKEN=${token} dnf install ./${name}`;
+  if (n.endsWith(".tar.gz") || n.endsWith(".tgz"))
+    return `tar xzf ${name} && cd */ && sudo RMM_ENROLLMENT_TOKEN=${token} ./install.sh`;
+  return `sudo RMM_ENROLLMENT_TOKEN=${token} ./${name}`;
+}
+
+async function renderInstallers(host, token, abs, backendUrl) {
+  if (!host) return;
+  let info;
+  try {
+    info = await api.listInstallers();
+  } catch {
+    host.textContent = "Installationspakete werden von diesem Backend noch nicht unterstützt.";
+    return;
+  }
+
+  const list = info.installers || [];
+  const rows = list.map((p) => {
+    const url = abs(`/enroll/${token}/installer/${encodeURIComponent(p.name)}`);
+    const hint = installHint(p.name, token, backendUrl);
+    return `
+      <div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="font-size:16px">${p.icon || "📦"}</span>
+        <div style="flex:1;min-width:0">
+          <div style="color:var(--text)">${esc(p.label || p.name)}</div>
+          <code style="font-size:11px">${esc(hint)}</code>
+        </div>
+        <span style="white-space:nowrap">${fmtSize(p.size || 0)}</span>
+        <a class="action-btn" style="text-decoration:none" href="${esc(url)}">⬇ Laden</a>
+      </div>`;
+  }).join("");
+
+  const buildable = Object.entries(info.can_build || {})
+    .filter(([, v]) => v).map(([k]) => k);
+
+  host.innerHTML = `
+    ${list.length ? rows : `<p style="margin:0">Noch keine Pakete gebaut.</p>`}
+    <p style="margin:8px 0 0">
+      Baubar auf diesem Server: <b>${buildable.length ? esc(buildable.join(", ")) : "—"}</b>
+    </p>
+    ${info.build_available ? `
+      <button class="action-btn" id="ac-build" style="margin-top:8px">🔨 Pakete jetzt bauen</button>
+      <pre id="ac-build-log" style="display:none;margin-top:8px;max-height:220px;overflow:auto;
+           background:var(--panel-2);padding:8px;border-radius:6px;font-size:11px"></pre>` : ""}
+  `;
+
+  const btn = host.querySelector("#ac-build");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const logEl = host.querySelector("#ac-build-log");
+    btn.disabled = true;
+    btn.textContent = "🔨 Baue… (kann 1-2 Minuten dauern)";
+    logEl.style.display = "block";
+    logEl.textContent = "Build läuft…";
+    try {
+      const r = await api.buildInstallers("auto");
+      logEl.textContent = r.log || "(keine Ausgabe)";
+      // Liste danach frisch aufbauen - der Build-Log bleibt darunter stehen.
+      await renderInstallers(host, token, abs, backendUrl);
+      const again = host.querySelector("#ac-build-log");
+      if (again) { again.style.display = "block"; again.textContent = r.log || ""; }
+    } catch (e) {
+      logEl.textContent = e.message;
+      btn.disabled = false;
+      btn.textContent = "🔨 Pakete jetzt bauen";
     }
   });
 }

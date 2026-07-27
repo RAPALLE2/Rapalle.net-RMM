@@ -21,3 +21,5 @@ memory.md
 
 # Notizen
 LIES-MICH.txt
+# Lokal gebaute Agent-Installationspakete (tools/build_installers.py)
+dist/

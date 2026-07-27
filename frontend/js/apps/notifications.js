@@ -14,11 +14,17 @@ import { esc, uiConfirm } from "../utils.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
+import { condenseHints } from "../help.js";
 
 const PLACEHOLDER_HELP =
   "Platzhalter: {head} {body} {message} {client} {tenant} {location} {service} {level} {timestamp}";
 
 export function renderNotifications(body, win) {
+  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
+  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  setTimeout(() => condenseHints(body), 0);
+  setTimeout(() => condenseHints(body), 400);
+
   let tab = "rules";
   let catalog = { triggers: [], channels: [] };
   let webhooks = [];

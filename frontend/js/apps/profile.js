@@ -13,8 +13,14 @@ import { renderSidebar } from "../sidebar.js";
 import { renderMainContent } from "../panel.js";
 import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePrefs } from "../persist.js";
 import { t } from "../i18n.js";
+import { condenseHints } from "../help.js";
 
 export function renderProfile(body, win) {
+  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
+  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  setTimeout(() => condenseHints(body), 0);
+  setTimeout(() => condenseHints(body), 400);
+
   const u = state.user;
   const _rp = getRestorePrefs();
   const mayEditName = hasGlobalPerm("edit_profile_name");

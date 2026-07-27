@@ -23,8 +23,14 @@ import { api } from "../api.js";
 import { state } from "../state.js";
 import { esc, uiConfirm, uiPrompt } from "../utils.js";
 import { t } from "../i18n.js";
+import { condenseHints } from "../help.js";
 
 export function renderPermissions(body, win) {
+  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
+  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  setTimeout(() => condenseHints(body), 0);
+  setTimeout(() => condenseHints(body), 400);
+
   // ---- lokaler Zustand des Fensters ----
   let subjectKind = "user";      // "user" | "group"
   let subjects = { user: [], group: [] };
