@@ -183,6 +183,15 @@ export const api = {
   addMedia: (data) => request("/api/media", { method: "POST", body: JSON.stringify(data) }),
   updateMedia: (id, data) => request(`/api/media/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteMedia: (id) => request(`/api/media/${id}`, { method: "DELETE" }),
+  // Favoriten (Stern) - darf jeder setzen, der den Eintrag sehen darf
+  toggleMediaFavorite: (id) => request(`/api/media/${id}/favorite`, { method: "POST" }),
+  getFavoriteMedia: () => request("/api/media?favorite=true"),
+  // Wiedergabelisten (Radio, lokale Dateien, Links - auch gemischt)
+  getPlaylists: (favOnly = false) => request(`/api/media/playlists${favOnly ? "?favorite=true" : ""}`),
+  createPlaylist: (data) => request("/api/media/playlists", { method: "POST", body: JSON.stringify(data) }),
+  updatePlaylist: (id, data) => request(`/api/media/playlists/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  setPlaylistItems: (id, item_ids) => request(`/api/media/playlists/${id}/items`, { method: "POST", body: JSON.stringify({ item_ids }) }),
+  deletePlaylist: (id) => request(`/api/media/playlists/${id}`, { method: "DELETE" }),
   mediaFileUrl: (id) => `/api/media/${id}/file?token=${encodeURIComponent(localStorage.getItem("rmm_token") || "")}`,
   uploadMedia: async (file, shared = false, onProgress) => {
     const token = localStorage.getItem("rmm_token");
@@ -409,6 +418,11 @@ export const api = {
   sourceRoots: () => request("/api/source/roots"),
   // Installationsart: Docker-Container oder natives Programm
   sourceRuntime: () => request("/api/source/runtime"),
+  // --- Container-Dienste (nur im Docker-Betrieb) ---
+  dockerServices: () => request("/api/admin/docker/services"),
+  dockerEnable: (key) => request(`/api/admin/docker/services/${key}/enable`, { method: "POST" }),
+  dockerDisable: (key) => request(`/api/admin/docker/services/${key}/disable`, { method: "POST" }),
+  dockerDbCredentials: () => request("/api/admin/docker/db-credentials"),
   // dist/ leeren (gebaute Agent-Installationspakete)
   sourceClearDist: () => request("/api/source/dist/clear", { method: "POST" }),
   sourceList: (path = "") => request(`/api/source/list?path=${encodeURIComponent(path)}`),

@@ -608,6 +608,10 @@ function initMenusAndButtons() {
   });
 
   // App aus dem Anwendungsmenü öffnen (von startmenu.js aufgerufen).
+  // Auch fuer Dashboard-Kacheln erreichbar: eine Kachel kann so eine App
+  // oeffnen (z.B. die Musik-Favoriten den Audio-Player).
+  window.openRmmApp = (app) => openAppFromMenu(app);
+
   function openAppFromMenu(app) {
     startMenu.classList.add("hidden");
     if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });

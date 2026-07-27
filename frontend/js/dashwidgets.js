@@ -25,6 +25,7 @@ import { esc } from "./utils.js";
 import { presetById } from "./metriccatalog.js";
 import { setHostScope, clearHostScope } from "./metriccatalog.js";
 import { t } from "./i18n.js";
+import { api } from "./api.js";
 import {
   buildFleetDonut, showFleetTip, hideFleetTip, attachHoverTip,
   scaleToContainer, timeSeriesChart,
@@ -131,6 +132,7 @@ export function availableKinds(preset) {
 export function renderWidgetBody(target, widget) {
   target.innerHTML = "";
   if (widget.kind === "text") return renderText(target, widget);
+  if (widget.kind === "media-fav") return renderMediaFavorites(target, widget);
 
   const preset = presetById(widget.preset);
   if (!preset) { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Unbekannte Metrik.</div>`; return; }
@@ -208,6 +210,7 @@ function renderWidgetInner(target, widget, preset) {
 export function widgetTitle(widget) {
   if (widget.title) return widget.title;
   if (widget.kind === "text") return "Text";
+  if (widget.kind === "media-fav") return "Musik-Favoriten";
   const p = presetById(widget.preset);
   return p ? p.label : widget.preset;
 }
@@ -864,4 +867,65 @@ function renderTable(target, widget, preset) {
     if (!row) return;
     bindRowHover(tr, () => `<b>${esc(row.label)}</b> — ${esc(row.raw != null ? row.raw : String(row.value))}`);
   });
+}
+
+
+// -------------------- Musik-Favoriten --------------------
+// Zeigt die im Audio-Player mit einem Stern markierten Sender, Titel und
+// Wiedergabelisten. Ein Klick oeffnet den Player und spielt den Eintrag
+// direkt ab - dafuer merkt sich der Player den Wunsch in sessionStorage und
+// arbeitet ihn beim Start ab.
+function renderMediaFavorites(target, widget) {
+  const box = document.createElement("div");
+  box.style.cssText = "width:100%;height:100%;overflow:auto;font-size:12px";
+  box.innerHTML = `<div style="color:var(--subtext)">Lade Favoriten…</div>`;
+  target.appendChild(box);
+
+  const icon = (it) => it.kind === "radio" ? "📻"
+    : it.kind === "youtube" ? "▶️"
+    : it.kind === "spotify" ? "🟢"
+    : (it.mime || "").startsWith("video") ? "🎬" : "🎵";
+
+  (async () => {
+    let items = [], lists = [];
+    try {
+      [items, lists] = await Promise.all([
+        api.getFavoriteMedia().catch(() => []),
+        api.getPlaylists(true).catch(() => []),
+      ]);
+    } catch {
+      box.innerHTML = `<div style="color:var(--subtext)">Favoriten nicht verfügbar.</div>`;
+      return;
+    }
+    if (!items.length && !lists.length) {
+      box.innerHTML = `<div style="color:var(--subtext);line-height:1.5">
+        Noch keine Favoriten. Im Audio-Player über das ☆ markieren.</div>`;
+      return;
+    }
+    const row = (id, type, ico, title, sub) => `
+      <div data-fav="${esc(id)}" data-type="${type}"
+           style="display:flex;gap:8px;align-items:center;padding:5px 6px;border-radius:6px;cursor:pointer">
+        <span>${ico}</span>
+        <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</span>
+          <span style="font-size:10.5px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub || "")}</span>
+        </span>
+        <span style="color:#f5c542">★</span>
+      </div>`;
+    box.innerHTML =
+      lists.map((pl) => row(pl.id, "playlist", "🗂", pl.name, `${pl.count} Einträge`)).join("") +
+      items.map((it) => row(it.id, "item", icon(it), it.title, it.subtitle || it.owner_name)).join("");
+
+    box.querySelectorAll("[data-fav]").forEach((el) => {
+      bindRowHover(el, () => esc(el.textContent.trim()));
+      el.addEventListener("click", () => {
+        try {
+          sessionStorage.setItem("rmm-play-request",
+            JSON.stringify({ type: el.dataset.type, id: el.dataset.fav }));
+        } catch {}
+        // Player oeffnen - er liest den Wunsch beim Start aus.
+        window.openRmmApp?.("audioplayer");
+      });
+    });
+  })();
 }

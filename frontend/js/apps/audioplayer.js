@@ -9,6 +9,7 @@ import { esc, uiConfirm, uiPrompt } from "../utils.js";
 import { registerCleanup } from "../windowmanager.js";
 import { api } from "../api.js";
 import { t } from "../i18n.js";
+import { hasGlobalPerm } from "../state.js";
 import { getSpotifyClientId, spotifyLogin, spotifyLoggedIn, spotifyLogout,
          getSpotifyToken, spotifyApi, spotifyDiagnostics } from "../spotify.js";
 
@@ -37,6 +38,8 @@ let _activePlayerStop = null;
 
 // Kategorien des Bibliotheks-Menüs (linke Schublade).
 const LIB_TABS = [
+  { key: "fav",     icon: "★",  label: "Favoriten" },
+  { key: "lists",   icon: "🗂",  label: "Listen" },
   { key: "radio",   icon: "📻", label: "Radio" },
   { key: "spotify", icon: "🟢", label: "Spotify" },
   { key: "youtube", icon: "▶️", label: "YouTube" },
@@ -109,6 +112,12 @@ export function renderAudioPlayer(body, win) {
   let progressTimer = null;
   let shuffleOn = false;
   let currentKind = null;
+  // Darf dieser Benutzer Medien für ALLE bereitstellen? Eigenes Recht, damit
+  // nicht jeder, der den Player nutzt, die gemeinsame Bibliothek verändert.
+  const canShare = hasGlobalPerm("share_media") || hasGlobalPerm("super_admin");
+  let playlists = [];          // Wiedergabelisten (eigene + freigegebene)
+  let plQueue = [];            // gerade laufende Liste
+  let plIndex = -1;            // Position darin
 
   body.innerHTML = `
     <div class="ap-root" style="display:flex;flex-direction:column;height:100%;
@@ -254,22 +263,204 @@ export function renderAudioPlayer(body, win) {
     style="width:24px;height:24px;font-size:11px;flex:none;${it.shared ? "background:rgba(62,207,142,.28);border-color:#3ecf8e" : ""}">
     ${it.shared ? "🌍" : "🔒"}</button>`;
 
-  // Aktions-Buttons eines Bibliotheks-Eintrags (nur für den Besitzer).
-  const itemActions = (it) => (it.can_edit ? shareBtn(it) + delBtn(it.id) : "");
+  // Stern: markiert einen Eintrag als Favorit. Das darf JEDER, der ihn sehen
+  // darf - auch bei fremden, freigegebenen Einträgen.
+  const favBtn = (it) => `<button class="ap-btn" data-libfav="${esc(it.id)}"
+    title="${it.favorite ? "Favorit – Klick entfernt den Stern" : "Als Favorit merken"}"
+    style="width:24px;height:24px;font-size:12px;flex:none;${it.favorite ? "background:rgba(245,197,66,.3);border-color:#f5c542" : ""}">
+    ${it.favorite ? "★" : "☆"}</button>`;
+
+  // Aktions-Buttons eines Bibliotheks-Eintrags. Der Stern immer, Freigabe und
+  // Löschen nur für den Besitzer.
+  const itemActions = (it) => favBtn(it) + (it.can_edit ? shareBtn(it) + delBtn(it.id) : "");
 
   async function loadLibItems() {
     try { libItems = await api.getMedia(); } catch { libItems = []; }
+    try { playlists = await api.getPlaylists(); } catch { playlists = []; }
   }
+
+  /** Alles, was der Benutzer mit einem Stern versehen hat. */
+  function favItems() { return libItems.filter((i) => i.favorite); }
+  function favPlaylists() { return playlists.filter((p) => p.favorite); }
 
   function itemsOf(kind) { return libItems.filter((i) => i.kind === kind); }
 
   async function drawLib() {
     drawLibTabs();
     libBodyEl.innerHTML = `<div style="color:#8ea2c6;font-size:12px;padding:8px">Lädt…</div>`;
+    if (libTab === "fav") return drawFavTab();
+    if (libTab === "lists") return drawListsTab();
     if (libTab === "radio") return drawRadioTab();
     if (libTab === "spotify") return drawSpotifyTab();
     if (libTab === "youtube") return drawYouTubeTab();
     if (libTab === "local") return drawLocalTab();
+  }
+
+
+  // ---- ★ Favoriten ---------------------------------------------------
+  // Sammelstelle fuer alles, was mit einem Stern markiert wurde: einzelne
+  // Titel, Radiosender, Links UND ganze Wiedergabelisten. Genau diese Auswahl
+  // zeigt auch die Dashboard-Kachel.
+  function drawFavTab() {
+    const items = favItems();
+    const lists = favPlaylists();
+    libBodyEl.innerHTML = `
+      ${lists.length ? `
+        <div style="font-size:11px;color:#8ea2c6;margin:4px 2px">Wiedergabelisten</div>
+        ${lists.map((pl) => `<div data-playlist="${esc(pl.id)}">${libRow("🗂", pl.name,
+          `${pl.count} Einträge${pl.shared ? " · geteilt" : ""}`,
+          `<button class="ap-btn" data-plfav="${esc(pl.id)}" title="Stern entfernen"
+             style="width:24px;height:24px;font-size:12px;flex:none;background:rgba(245,197,66,.3);border-color:#f5c542">★</button>`)}</div>`).join("")}` : ""}
+      ${items.length ? `
+        <div style="font-size:11px;color:#8ea2c6;margin:10px 2px 4px">Einzelne Titel & Sender</div>
+        ${items.map((it) => `<div data-favplay="${esc(it.id)}">${libRow(
+          kindIcon(it), it.title, it.subtitle || it.owner_name, itemActions(it))}</div>`).join("")}` : ""}
+      ${(!items.length && !lists.length) ? `
+        <div style="font-size:11.5px;color:#8ea2c6;padding:6px 4px;line-height:1.5">
+          Noch keine Favoriten. Über das ☆ neben einem Eintrag markierst du ihn –
+          er erscheint dann hier und auf dem Dashboard.
+        </div>` : ""}`;
+
+    libBodyEl.querySelectorAll("[data-favplay]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-libdel],[data-libshare],[data-libfav]")) return;
+        const it = libItems.find((x) => x.id === el.dataset.favplay);
+        if (it) playItem(it);
+      }));
+    libBodyEl.querySelectorAll("[data-playlist]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-plfav]")) return;
+        startPlaylist(playlists.find((p) => p.id === el.dataset.playlist));
+      }));
+    bindDelete();
+    bindPlaylistFav();
+  }
+
+  /** Symbol passend zur Art des Eintrags. */
+  function kindIcon(it) {
+    if (it.kind === "radio") return "📻";
+    if (it.kind === "youtube") return "▶️";
+    if (it.kind === "spotify") return "🟢";
+    return (it.mime || "").startsWith("video") ? "🎬" : "🎵";
+  }
+
+  /** Einen Bibliothekseintrag abspielen - egal welcher Art. */
+  function playItem(it, onEnded) {
+    if (!it) return;
+    if (it.kind === "radio") return playStream(it.url, `📻 ${it.title}`, it.subtitle || it.url);
+    if (it.kind === "local") return playServerFile(it, onEnded);
+    if (it.kind === "youtube") return playYouTube(parseSource(it.url));
+    if (it.kind === "spotify") return playSpotify(parseSource(it.url));
+  }
+
+  // ---- 🗂 Wiedergabelisten -------------------------------------------
+  // Eine Liste buendelt beliebige Eintraege - Radiosender, hochgeladene
+  // Dateien, Links - und wird der Reihe nach abgespielt.
+  function drawListsTab() {
+    libBodyEl.innerHTML = `
+      ${playlists.length ? playlists.map((pl) => `
+        <div data-playlist="${esc(pl.id)}">${libRow("🗂", pl.name,
+          `${pl.count} Einträge · ${pl.owner_name}${pl.shared ? " · geteilt" : ""}`,
+          `<button class="ap-btn" data-plfav="${esc(pl.id)}" title="Favorit"
+             style="width:24px;height:24px;font-size:12px;flex:none;${pl.favorite ? "background:rgba(245,197,66,.3);border-color:#f5c542" : ""}">${pl.favorite ? "★" : "☆"}</button>` +
+          (pl.can_edit ? `<button class="ap-btn" data-pledit="${esc(pl.id)}" title="Einträge wählen"
+             style="width:24px;height:24px;font-size:11px;flex:none">✎</button>
+            <button class="ap-btn" data-pldel="${esc(pl.id)}" title="Liste löschen"
+             style="width:24px;height:24px;font-size:11px;flex:none">🗑</button>` : ""))}</div>`).join("")
+        : `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Noch keine Wiedergabelisten.</div>`}
+      <button class="ap-chip" id="ap-add-list" style="width:100%;text-align:center;margin-top:8px;font-size:12px">
+        ＋ Neue Wiedergabeliste</button>
+      <div id="ap-pl-edit" style="margin-top:8px"></div>`;
+
+    libBodyEl.querySelectorAll("[data-playlist]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("[data-plfav],[data-pledit],[data-pldel]")) return;
+        startPlaylist(playlists.find((p) => p.id === el.dataset.playlist));
+      }));
+    libBodyEl.querySelectorAll("[data-pldel]").forEach((b) =>
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm("Diese Wiedergabeliste löschen? Die Einträge selbst bleiben erhalten.")) return;
+        try { await api.deletePlaylist(b.dataset.pldel); await loadLibItems(); drawLib(); }
+        catch (err) { window.notify?.(err.message, "error"); }
+      }));
+    libBodyEl.querySelectorAll("[data-pledit]").forEach((b) =>
+      b.addEventListener("click", (e) => { e.stopPropagation(); editPlaylist(b.dataset.pledit); }));
+    libBodyEl.querySelector("#ap-add-list").addEventListener("click", async () => {
+      const name = prompt("Name der Wiedergabeliste:");
+      if (!name) return;
+      try {
+        const pl = await api.createPlaylist({ name });
+        await loadLibItems(); drawLib(); editPlaylist(pl.id);
+      } catch (err) { window.notify?.(err.message, "error"); }
+    });
+    bindPlaylistFav();
+  }
+
+  /** Auswahl der Einträge einer Liste (Radiosender, Dateien, Links gemischt). */
+  function editPlaylist(pid) {
+    const pl = playlists.find((p) => p.id === pid);
+    const box = libBodyEl.querySelector("#ap-pl-edit");
+    if (!pl || !box) return;
+    const chosen = new Set((pl.items || []).map((i) => i.id));
+    box.innerHTML = `
+      <div style="border-top:1px solid rgba(255,255,255,.12);padding-top:8px">
+        <div style="font-size:11px;color:#8ea2c6;margin-bottom:5px">Einträge für „${esc(pl.name)}“</div>
+        ${libItems.map((it) => `
+          <label style="display:flex;gap:8px;align-items:center;padding:4px 6px;font-size:12px;cursor:pointer">
+            <input type="checkbox" data-plitem="${esc(it.id)}" ${chosen.has(it.id) ? "checked" : ""} />
+            <span>${kindIcon(it)}</span>
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.title)}</span>
+          </label>`).join("") || `<div style="font-size:11.5px;color:#8ea2c6">Die Bibliothek ist noch leer.</div>`}
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="ap-chip" id="ap-pl-save" style="flex:1;text-align:center;font-size:12px">Speichern</button>
+          <button class="ap-chip" id="ap-pl-cancel" style="flex:1;text-align:center;font-size:12px">Abbrechen</button>
+        </div>
+      </div>`;
+    box.querySelector("#ap-pl-cancel").addEventListener("click", () => { box.innerHTML = ""; });
+    box.querySelector("#ap-pl-save").addEventListener("click", async () => {
+      const ids = [...box.querySelectorAll("[data-plitem]")].filter((c) => c.checked).map((c) => c.dataset.plitem);
+      try {
+        await api.setPlaylistItems(pid, ids);
+        await loadLibItems(); drawLib();
+        window.notify?.("Wiedergabeliste gespeichert", "success");
+      } catch (err) { window.notify?.(err.message, "error"); }
+    });
+  }
+
+  function bindPlaylistFav() {
+    libBodyEl.querySelectorAll("[data-plfav]").forEach((b) =>
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const pl = playlists.find((p) => p.id === b.dataset.plfav);
+        if (!pl) return;
+        try {
+          await api.updatePlaylist(pl.id, { favorite: !pl.favorite });
+          await loadLibItems(); drawLib();
+        } catch (err) { window.notify?.(err.message, "error"); }
+      }));
+  }
+
+  /** Liste starten: der Reihe nach, am Ende eines Titels kommt der nächste. */
+  function startPlaylist(pl, index = 0) {
+    if (!pl || !pl.items || !pl.items.length) {
+      window.notify?.("Diese Wiedergabeliste ist leer", "warn");
+      return;
+    }
+    plQueue = pl.items;
+    plIndex = index;
+    playPlaylistIndex(index);
+  }
+
+  function playPlaylistIndex(i) {
+    if (i < 0 || i >= plQueue.length) return;
+    plIndex = i;
+    const it = plQueue[i];
+    // Nur bei Dateien lässt sich das Ende zuverlässig erkennen; Radio läuft
+    // endlos, dort bleibt es beim gewählten Sender.
+    playItem(it, () => {
+      if (plIndex + 1 < plQueue.length) playPlaylistIndex(plIndex + 1);
+    });
   }
 
   // ---- 📻 Radio -----------------------------------------------------
@@ -407,6 +598,11 @@ export function renderAudioPlayer(body, win) {
         <button class="ap-chip" id="ap-upload" style="flex:1;text-align:center;font-size:12px">⬆️ Hochladen</button>
         <button class="ap-chip" id="ap-openlocal" style="flex:1;text-align:center;font-size:12px">📂 Öffnen</button>
       </div>
+      ${canShare ? `
+      <label style="display:flex;gap:7px;align-items:center;margin-top:6px;font-size:11.5px;color:#8ea2c6;cursor:pointer">
+        <input type="checkbox" id="ap-up-shared" />
+        Für alle Benutzer bereitstellen (gemeinsame Bibliothek)
+      </label>` : ""}
       <div id="ap-up-progress" style="display:none;height:5px;border-radius:3px;background:rgba(255,255,255,.15);margin-top:6px">
         <div id="ap-up-bar" style="height:100%;width:0%;background:#3ecf8e;border-radius:3px"></div>
       </div>
@@ -451,7 +647,9 @@ export function renderAudioPlayer(body, win) {
       const bar = libBodyEl.querySelector("#ap-up-bar");
       box.style.display = "";
       try {
-        await api.uploadMedia(f, false, (p) => { bar.style.width = (p * 100).toFixed(0) + "%"; });
+        // Ohne das Recht 'share_media' bleibt der Upload privat.
+        const forAll = !!libBodyEl.querySelector("#ap-up-shared")?.checked;
+        await api.uploadMedia(f, forAll, (p) => { bar.style.width = (p * 100).toFixed(0) + "%"; });
         window.notify?.(`„${f.name}“ hochgeladen`, "success");
         await loadLibItems(); drawLib();
       } catch (e) {
@@ -462,6 +660,17 @@ export function renderAudioPlayer(body, win) {
   }
 
   function bindDelete() {
+    // Stern setzen/entfernen - erlaubt fuer jeden sichtbaren Eintrag.
+    libBodyEl.querySelectorAll("[data-libfav]").forEach((b) =>
+      b.addEventListener("click", async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        try {
+          const updated = await api.toggleMediaFavorite(b.dataset.libfav);
+          const it = libItems.find((x) => x.id === updated.id);
+          if (it) it.favorite = updated.favorite;
+          drawLib();
+        } catch (err) { window.notify?.(err.message, "error"); }
+      }));
     libBodyEl.querySelectorAll("[data-libshare]").forEach((b) =>
       b.addEventListener("click", async (e) => {
         e.preventDefault(); e.stopPropagation();
@@ -652,10 +861,14 @@ export function renderAudioPlayer(body, win) {
       await spotifyApi(`/me/player/play?device_id=${spDeviceId}`, {
         method: "PUT", body: JSON.stringify(body) });
       stage.innerHTML = `
-        <div style="text-align:center">
-          <img id="ap-sp-cover" style="width:250px;height:250px;border-radius:14px;object-fit:cover;
-            box-shadow:0 12px 44px rgba(0,0,0,.6);background:#132132" />
-          <div style="color:#1DB954;font-size:11px;margin-top:10px;font-weight:700">● Spotify Premium · Vollplayer</div>
+        <div style="display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap;justify-content:center">
+          <div style="text-align:center">
+            <img id="ap-sp-cover" style="width:250px;height:250px;border-radius:14px;object-fit:cover;
+              box-shadow:0 12px 44px rgba(0,0,0,.6);background:#132132" />
+            <div style="color:#1DB954;font-size:11px;margin-top:10px;font-weight:700">● Spotify Premium · Vollplayer</div>
+          </div>
+          <!-- Warteschlange: wird von drawSpotifyQueue() aus dem Player-Zustand gefüllt -->
+          <div id="ap-sp-queue" style="min-width:230px;max-width:320px;max-height:270px;overflow:auto;text-align:left"></div>
         </div>`;
       controls.style.display = "flex";
       progressRow.style.display = "flex";
@@ -685,6 +898,31 @@ export function renderAudioPlayer(body, win) {
     if (dur > 0 && !seeking) progressEl.value = Math.round((cur / dur) * 1000);
     curEl.textContent = fmtTime(cur);
     durEl.textContent = fmtTime(dur);
+    drawSpotifyQueue(st);
+  }
+
+  // Warteschlange: Das Spotify-SDK liefert die naechsten Titel im Zustand mit
+  // (track_window.next_tracks). Die zeigen wir unter dem Cover an - so sieht
+  // man, was noch kommt, ohne die Spotify-App zu oeffnen.
+  function drawSpotifyQueue(st) {
+    const box = stage.querySelector("#ap-sp-queue");
+    if (!box) return;
+    const next = st.track_window?.next_tracks || [];
+    if (!next.length) {
+      box.innerHTML = `<div style="font-size:11.5px;color:#8ea2c6">Warteschlange ist leer.</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <div style="font-size:11px;color:#8ea2c6;margin:0 2px 5px">Als Nächstes (${next.length})</div>
+      ${next.slice(0, 8).map((tr, i) => `
+        <div style="display:flex;gap:8px;align-items:center;padding:4px 6px;border-radius:8px;
+             background:rgba(255,255,255,.05);margin-bottom:4px">
+          <span style="font-size:11px;color:#8ea2c6;width:14px;text-align:right">${i + 1}</span>
+          <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2">
+            <span style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(tr.name || "")}</span>
+            <span style="font-size:10.5px;color:#8ea2c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((tr.artists || []).map((a) => a.name).join(", "))}</span>
+          </span>
+        </div>`).join("")}`;
   }
 
   let spProgressTimer = null;
@@ -720,7 +958,28 @@ export function renderAudioPlayer(body, win) {
     titleEl.textContent = title || "Stream";
     subEl.textContent = sub || url;
     controls.style.display = "flex";
-    progressRow.style.display = "none";   // Live-Radio hat keinen Fortschritt
+    // Zeitleiste: Ein echter Live-Stream hat keine Laenge (duration = Infinity),
+    // eine gestreamte DATEI dagegen schon. Deshalb wird nicht mehr pauschal
+    // ausgeblendet, sondern gefragt - sobald der Browser eine endliche Dauer
+    // meldet, erscheint die Leiste samt Spulen.
+    progressRow.style.display = "none";
+    mediaEl = audio;                       // Spulen/Fortschritt nutzen mediaEl
+    const updateStreamTimeline = () => {
+      const dur = audio.duration;
+      const finite = Number.isFinite(dur) && dur > 0;
+      progressRow.style.display = finite ? "flex" : "none";
+      if (finite) {
+        durEl.textContent = fmtTime(dur);
+        if (!seeking) progressEl.value = Math.round((audio.currentTime / dur) * 1000);
+      } else {
+        // Live: statt Restzeit die bereits laufende Zeit zeigen.
+        durEl.textContent = "live";
+      }
+      curEl.textContent = fmtTime(audio.currentTime || 0);
+    };
+    ["loadedmetadata", "durationchange", "timeupdate", "progress"].forEach((ev) =>
+      audio.addEventListener(ev, updateStreamTimeline));
+    updateStreamTimeline();
     playBtn.textContent = "⏸";
     audio.addEventListener("playing", () => {
       playBtn.textContent = "⏸";
@@ -803,9 +1062,9 @@ export function renderAudioPlayer(body, win) {
   }
 
   // Datei aus der Server-Bibliothek (mit Range-Support -> Spulen klappt).
-  function playServerFile(item) {
+  function playServerFile(item, onEnded) {
     playMedia(api.mediaFileUrl(item.id), item.title,
-      `Bibliothek · ${item.owner_name}`, (item.mime || "").startsWith("video"));
+      `Bibliothek · ${item.owner_name}`, (item.mime || "").startsWith("video"), onEnded);
     currentSource = null;
     saveBtn.style.display = "none";
   }
@@ -1089,7 +1348,26 @@ export function renderAudioPlayer(body, win) {
   })();
 
   // Bibliothek initial laden und zeichnen (unabhängig von der Bühne).
-  loadLibItems().then(drawLib);
+  loadLibItems().then(() => {
+    drawLib();
+    // Wunsch aus der Dashboard-Kachel "Musik-Favoriten" abarbeiten: dort wurde
+    // ein Favorit angeklickt, der Player soll ihn direkt abspielen.
+    let req = null;
+    try {
+      const raw = sessionStorage.getItem("rmm-play-request");
+      if (raw) { req = JSON.parse(raw); sessionStorage.removeItem("rmm-play-request"); }
+    } catch {}
+    if (!req) return;
+    if (req.type === "playlist") {
+      libTab = "lists";
+      startPlaylist(playlists.find((p) => p.id === req.id));
+    } else {
+      libTab = "fav";
+      playItem(libItems.find((i) => i.id === req.id));
+    }
+    drawLib();
+    toggleLib(true);
+  });
 
   // Beim Schließen des Fensters die Wiedergabe stoppen.
   if (win?.key) registerCleanup(win.key, () => {

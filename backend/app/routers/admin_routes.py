@@ -152,6 +152,7 @@ PERM_LABELS = {
     "manage_hierarchy": "Tenants/Locations/Ordner verwalten",
     "play_games": "Spiele spielen",
     "use_media": "Audio-Player & Medien-Bibliothek",
+    "share_media": "Medien für alle bereitstellen (Uploads, Links, Listen)",
     "manage_favorites": "Favoritenliste bearbeiten",
     "use_relay": "Relay benutzen",
     "use_chat": "Chat benutzen",

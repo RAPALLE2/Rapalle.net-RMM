@@ -69,19 +69,37 @@ def _may_edit(user: dict, item: dict) -> bool:
     return item["owner_id"] == user["id"] or is_super_admin(user)
 
 
+def _check_share(user: dict, shared: bool) -> int:
+    """
+    Etwas "für alle" bereitstellen ist ein eigenes Recht ('share_media').
+    Wer es nicht hat, darf trotzdem seine eigene Bibliothek pflegen - der
+    Eintrag bleibt dann eben privat, statt die Aktion ganz abzulehnen wäre
+    das aber irreführend. Deshalb: klare Fehlermeldung.
+    """
+    if not shared:
+        return 0
+    if not (is_super_admin(user) or user_has_permission(user, "share_media")):
+        raise HTTPException(403, "Fehlendes Recht: share_media "
+                                 "(Medien für alle bereitstellen)")
+    return 1
+
+
 # ------------------------------------------------------------------
 # Lesen
 # ------------------------------------------------------------------
 
 @router.get("")
-async def list_media(kind: str | None = None, user: dict = Depends(get_current_user)):
+async def list_media(kind: str | None = None, favorite: bool = False,
+                     user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     sql = ("SELECT * FROM media_items WHERE (owner_id = ? OR shared = 1)")
     args: list = [user["id"]]
     if kind:
         sql += " AND kind = ?"
         args.append(kind)
-    sql += " ORDER BY created_at DESC"
+    if favorite:
+        sql += " AND favorite = 1"
+    sql += " ORDER BY favorite DESC, created_at DESC"
     out = []
     for r in _conn().execute(sql, tuple(args)).fetchall():
         item = dict(r)
@@ -151,7 +169,7 @@ async def upload_media(request: Request, filename: str = "datei.mp3",
         " url, filename, size, mime, shared, created_at)"
         " VALUES (?, ?, ?, 'local', ?, '', '', ?, ?, ?, ?, ?)",
         (mid, user["id"], user["username"], pathlib.Path(safe_name).stem,
-         safe_name, len(data), MIME_BY_EXT[ext], int(bool(shared)), _now()))
+         safe_name, len(data), MIME_BY_EXT[ext], _check_share(user, shared), _now()))
     _conn().commit()
     return _row_or_404(mid)
 
@@ -234,6 +252,7 @@ class MediaPatch(BaseModel):
     title: str | None = None
     subtitle: str | None = None
     shared: bool | None = None
+    favorite: bool | None = None
 
 
 @router.patch("/{item_id}")
@@ -245,12 +264,30 @@ async def update_media(item_id: str, body: MediaPatch,
         raise HTTPException(403, "Nur der Besitzer darf diesen Eintrag ändern")
     fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     if "shared" in fields:
-        fields["shared"] = int(bool(fields["shared"]))
+        fields["shared"] = _check_share(user, bool(fields["shared"]))
+    if "favorite" in fields:
+        fields["favorite"] = int(bool(fields["favorite"]))
     if fields:
         clause = ", ".join(f"{k} = ?" for k in fields)
         _conn().execute(f"UPDATE media_items SET {clause} WHERE id = ?",
                         (*fields.values(), item_id))
         _conn().commit()
+    return _row_or_404(item_id)
+
+
+@router.post("/{item_id}/favorite")
+async def toggle_favorite(item_id: str, user: dict = Depends(get_current_user)):
+    """
+    Stern an/aus. Anders als das Bearbeiten darf das JEDER, der den Eintrag
+    sehen darf - auch bei fremden, freigegebenen Einträgen.
+    """
+    require_perm(user, "use_media")
+    item = _row_or_404(item_id)
+    if not _may_see(user, item):
+        raise HTTPException(403, "Kein Zugriff auf diesen Eintrag")
+    new_value = 0 if item.get("favorite") else 1
+    _conn().execute("UPDATE media_items SET favorite = ? WHERE id = ?", (new_value, item_id))
+    _conn().commit()
     return _row_or_404(item_id)
 
 
@@ -267,4 +304,168 @@ async def delete_media(item_id: str, user: dict = Depends(get_current_user)):
             (FILES_DIR / (item["owner_id"] or "") / item_id).unlink()
         except OSError:
             pass
+    return {"ok": True}
+
+
+# ==================================================================
+# WIEDERGABELISTEN
+# ------------------------------------------------------------------
+# Eine Liste bündelt beliebige Einträge der Bibliothek: Radiosender,
+# hochgeladene Dateien, YouTube- und Spotify-Links - auch gemischt.
+# Der Player spielt sie der Reihe nach ab.
+#
+#   GET    /api/media/playlists              -> eigene + freigegebene Listen
+#   POST   /api/media/playlists              -> Liste anlegen
+#   GET    /api/media/playlists/{id}         -> Liste samt Einträgen
+#   PATCH  /api/media/playlists/{id}         -> Name/Freigabe/Favorit
+#   POST   /api/media/playlists/{id}/items   -> Einträge setzen (ganze Reihenfolge)
+#   DELETE /api/media/playlists/{id}         -> Liste löschen (Einträge bleiben)
+# ==================================================================
+
+class PlaylistBody(BaseModel):
+    name: str
+    description: str = ""
+    shared: bool = False
+    item_ids: list[str] = []
+
+
+class PlaylistPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    shared: bool | None = None
+    favorite: bool | None = None
+
+
+class PlaylistItems(BaseModel):
+    item_ids: list[str] = []
+
+
+def _playlist_or_404(pid: str) -> dict:
+    row = _conn().execute("SELECT * FROM media_playlists WHERE id = ?", (pid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Wiedergabeliste nicht gefunden")
+    return dict(row)
+
+
+def _playlist_items(pid: str, user: dict) -> list[dict]:
+    """Einträge der Liste in der gespeicherten Reihenfolge - nur sichtbare."""
+    rows = _conn().execute(
+        "SELECT m.* FROM media_playlist_items p"
+        " JOIN media_items m ON m.id = p.item_id"
+        " WHERE p.playlist_id = ? ORDER BY p.position", (pid,)).fetchall()
+    return [dict(r) for r in rows if _may_see(user, dict(r))]
+
+
+def _set_items(pid: str, item_ids: list[str]) -> None:
+    _conn().execute("DELETE FROM media_playlist_items WHERE playlist_id = ?", (pid,))
+    for pos, iid in enumerate(item_ids):
+        _conn().execute(
+            "INSERT OR REPLACE INTO media_playlist_items (playlist_id, item_id, position)"
+            " VALUES (?, ?, ?)", (pid, iid, pos))
+    _conn().commit()
+
+
+@router.get("/playlists")
+async def list_playlists(favorite: bool = False, user: dict = Depends(get_current_user)):
+    require_perm(user, "use_media")
+    sql = "SELECT * FROM media_playlists WHERE (owner_id = ? OR shared = 1)"
+    args: list = [user["id"]]
+    if favorite:
+        sql += " AND favorite = 1"
+    sql += " ORDER BY favorite DESC, created_at DESC"
+    out = []
+    for r in _conn().execute(sql, tuple(args)).fetchall():
+        pl = dict(r)
+        pl["can_edit"] = pl["owner_id"] == user["id"] or is_super_admin(user)
+        pl["items"] = _playlist_items(pl["id"], user)
+        pl["count"] = len(pl["items"])
+        out.append(pl)
+    return out
+
+
+@router.post("/playlists")
+async def create_playlist(body: PlaylistBody, user: dict = Depends(get_current_user)):
+    require_perm(user, "use_media")
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Name erforderlich")
+    pid = uuid.uuid4().hex
+    _conn().execute(
+        "INSERT INTO media_playlists (id, owner_id, owner_name, name, description,"
+        " shared, favorite, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+        (pid, user["id"], user["username"], name, (body.description or "").strip(),
+         _check_share(user, body.shared), _now()))
+    _conn().commit()
+    if body.item_ids:
+        _set_items(pid, body.item_ids)
+    pl = _playlist_or_404(pid)
+    pl["items"] = _playlist_items(pid, user)
+    pl["count"] = len(pl["items"])
+    pl["can_edit"] = True
+    return pl
+
+
+@router.get("/playlists/{pid}")
+async def get_playlist(pid: str, user: dict = Depends(get_current_user)):
+    require_perm(user, "use_media")
+    pl = _playlist_or_404(pid)
+    if not (pl["shared"] or pl["owner_id"] == user["id"] or is_super_admin(user)):
+        raise HTTPException(403, "Kein Zugriff auf diese Wiedergabeliste")
+    pl["items"] = _playlist_items(pid, user)
+    pl["count"] = len(pl["items"])
+    pl["can_edit"] = pl["owner_id"] == user["id"] or is_super_admin(user)
+    return pl
+
+
+@router.patch("/playlists/{pid}")
+async def update_playlist(pid: str, body: PlaylistPatch,
+                          user: dict = Depends(get_current_user)):
+    require_perm(user, "use_media")
+    pl = _playlist_or_404(pid)
+    own = pl["owner_id"] == user["id"] or is_super_admin(user)
+    fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    # Den Stern darf jeder setzen, der die Liste sieht; alles andere nur der
+    # Besitzer.
+    if set(fields) - {"favorite"} and not own:
+        raise HTTPException(403, "Nur der Besitzer darf diese Liste ändern")
+    if "favorite" in fields:
+        if not (pl["shared"] or own):
+            raise HTTPException(403, "Kein Zugriff auf diese Wiedergabeliste")
+        fields["favorite"] = int(bool(fields["favorite"]))
+    if "shared" in fields:
+        fields["shared"] = _check_share(user, bool(fields["shared"]))
+    if fields:
+        clause = ", ".join(f"{k} = ?" for k in fields)
+        _conn().execute(f"UPDATE media_playlists SET {clause} WHERE id = ?",
+                        (*fields.values(), pid))
+        _conn().commit()
+    return await get_playlist(pid, user)
+
+
+@router.post("/playlists/{pid}/items")
+async def set_playlist_items(pid: str, body: PlaylistItems,
+                             user: dict = Depends(get_current_user)):
+    require_perm(user, "use_media")
+    pl = _playlist_or_404(pid)
+    if not (pl["owner_id"] == user["id"] or is_super_admin(user)):
+        raise HTTPException(403, "Nur der Besitzer darf diese Liste ändern")
+    # Nur Einträge aufnehmen, die dieser Benutzer auch sehen darf.
+    valid = []
+    for iid in body.item_ids:
+        row = _conn().execute("SELECT * FROM media_items WHERE id = ?", (iid,)).fetchone()
+        if row and _may_see(user, dict(row)):
+            valid.append(iid)
+    _set_items(pid, valid)
+    return await get_playlist(pid, user)
+
+
+@router.delete("/playlists/{pid}")
+async def delete_playlist(pid: str, user: dict = Depends(get_current_user)):
+    require_perm(user, "use_media")
+    pl = _playlist_or_404(pid)
+    if not (pl["owner_id"] == user["id"] or is_super_admin(user)):
+        raise HTTPException(403, "Nur der Besitzer darf diese Liste löschen")
+    _conn().execute("DELETE FROM media_playlist_items WHERE playlist_id = ?", (pid,))
+    _conn().execute("DELETE FROM media_playlists WHERE id = ?", (pid,))
+    _conn().commit()
     return {"ok": True}

@@ -287,7 +287,7 @@ function buildWidget(wdg, ctx) {
   const tools = document.createElement("span");
   tools.className = "dash-w-tools";
 
-  if (edit && wdg.kind !== "text" && presetById(wdg.preset)) {
+  if (edit && wdg.kind !== "text" && wdg.kind !== "media-fav" && presetById(wdg.preset)) {
     // Chart-Typ umschalten
     const p = presetById(wdg.preset);
     const sel = document.createElement("select");
@@ -419,6 +419,10 @@ function openAddDialog(host, toolbar, atCell) {
             <span class="wp-item-label">Text / Notiz</span>
             <span class="wp-item-kinds">frei beschreibbar</span>
           </button>
+          <button class="wp-item" data-media-widget="1">
+            <span class="wp-item-label">Musik-Favoriten</span>
+            <span class="wp-item-kinds">Sender · Titel · Listen</span>
+          </button>
         </div>
         ${groups.map(([group, presets]) => `
           <div class="wp-group-title">${esc(groupLabel(group))}</div>
@@ -440,6 +444,9 @@ function openAddDialog(host, toolbar, atCell) {
       const arr = widgets();
       const w = b.dataset.textWidget
         ? { id: nid(), kind: "text", text: t("u_neuer_text_im_bearbeiten_modus_ank"), gw: 1, gh: 1 }
+        // Musik-Favoriten: Liste aus dem Audio-Player, braucht etwas Hoehe.
+        : b.dataset.mediaWidget
+        ? { id: nid(), kind: "media-fav", gw: 1, gh: 2 }
         : { id: nid(), preset: b.dataset.preset, kind: b.dataset.kind,
             // Listen-/Tabellen-artige Darstellungen brauchen von Anfang an
             // mehr Platz, sonst sieht man nur zwei Zeilen.

@@ -12,7 +12,7 @@
 import { api } from "../api.js";
 import { esc, uiConfirm } from "../utils.js";
 import { condenseHints } from "../help.js";
-import { buildSubTabs } from "../subtabs.js";
+import { buildSubTabs, removeSubSection } from "../subtabs.js";
 import { t } from "../i18n.js";
 import { isAdmin, hasGlobalPerm } from "../state.js";
 import { renderSource } from "./source.js";
@@ -482,6 +482,18 @@ export function renderSettings(body, win) {
           inklusive Port und abschließendem <code>/</code>.
         </div>
 
+        <div data-adminsec id="ge-docker-box" style="display:none">
+        <h3 style="margin-top:24px">Container-Dienste</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Läuft das RMM als Container, lassen sich hier Zusatzdienste als
+          Nachbar-Container dazuschalten. Die passenden Adressen und
+          Zugangsdaten trägt das Dashboard danach automatisch in die Felder
+          weiter unten ein. Voraussetzung ist der eingehängte Docker-Socket;
+          fehlt er, steht das hier als Hinweis.
+        </p>
+        <div id="ge-docker-list" style="font-size:13px;color:var(--subtext)">Lade…</div>
+        </div>
+
         <h3 style="margin-top:26px" data-adminsec-h>${t("guac_title")}</h3>
         <div data-adminsec>
         <p style="color:var(--subtext);font-size:13px">${t("guac_hint")}</p>
@@ -820,6 +832,103 @@ export function renderSettings(body, win) {
       btn.disabled = false; btn.textContent = orig;
     });
     refreshGuacStatus();
+
+    // ---------------- Container-Dienste (nur im Docker-Betrieb) -----------
+    // Der Bereich bleibt versteckt, solange nicht sicher ist, dass wir in
+    // einem Container laufen - nativ waere er sinnlos.
+    const dockerBox = root.querySelector("#ge-docker-box");
+    const dockerList = root.querySelector("#ge-docker-list");
+
+    /** Guacamole- und Datenbank-Felder mit den Werten des Dienstes füllen. */
+    function prefillFromDocker(data) {
+      if (data && data.guacd && data.guacd.host) {
+        const h = root.querySelector("#ge-guacd-host");
+        const p = root.querySelector("#ge-guacd-port");
+        if (h) h.value = data.guacd.host;
+        if (p) p.value = String(data.guacd.port || 4822);
+      }
+      const c = data && data.db;
+      if (c && c.host) {
+        const set = (id, v) => { const el = root.querySelector(id); if (el && v != null) el.value = String(v); };
+        set("#dbx-type", c.type || "mysql");
+        set("#dbx-host", c.host);
+        set("#dbx-port", c.port);
+        set("#dbx-user", c.user);
+        set("#dbx-pass", c.password);
+        set("#dbx-name", c.database);
+        root.querySelector("#dbx-type")?.dispatchEvent(new Event("change"));
+      }
+    }
+
+    function drawDocker(info) {
+      // Nativ installiert gibt es hier nichts zu tun -> Unterpunkt komplett
+      // entfernen, damit kein leerer Knopf in der Leiste stehen bleibt.
+      if (!info || !info.is_docker) { removeSubSection(dockerBox); return; }
+      dockerBox.style.display = "";
+
+      if (!info.socket) {
+        dockerList.innerHTML = `
+          <div style="border:1px solid var(--warn,#f5a524);border-radius:8px;padding:10px">
+            ⚠ Der Docker-Socket ist nicht eingehängt — ohne ihn kann das Backend
+            keine Nachbar-Container starten. In <code>docker-compose.yml</code>
+            beim Dienst <code>rmm</code> unter <code>volumes</code> die Zeile
+            <code>/var/run/docker.sock:/var/run/docker.sock</code> aktivieren und
+            <code>docker compose up -d</code> ausführen.
+          </div>`;
+        return;
+      }
+
+      dockerList.innerHTML = info.services.map((sv) => {
+        const on = sv.running;
+        const state = on ? "läuft" : (sv.state === "absent" ? "nicht angelegt" : sv.state);
+        return `
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <span style="font-size:16px">${on ? "🟢" : "⚪"}</span>
+            <div style="flex:1;min-width:0">
+              <div style="color:var(--text)">${esc(sv.label)}</div>
+              <div style="font-size:11px">${esc(sv.purpose)} · ${esc(sv.image)} · ${esc(state)}</div>
+            </div>
+            <button class="taskbar-btn" data-dk="${esc(sv.key)}" data-on="${on ? "1" : "0"}">
+              ${on ? "Abschalten" : "Dazuschalten"}
+            </button>
+          </div>`;
+      }).join("");
+
+      dockerList.querySelectorAll("[data-dk]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const key = btn.dataset.dk;
+          const turnOff = btn.dataset.on === "1";
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = turnOff ? "…" : "Starte… (Image wird ggf. geladen)";
+          try {
+            const r = turnOff ? await api.dockerDisable(key) : await api.dockerEnable(key);
+            if (!turnOff) prefillFromDocker(r);
+            drawDocker(r.status);
+            window.notify?.(turnOff ? "Dienst abgeschaltet" : "Dienst läuft", "success");
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            window.notify?.(e.message, "error", 9000);
+          }
+        })
+      );
+    }
+
+    (async () => {
+      try {
+        const info = await api.dockerServices();
+        drawDocker(info);
+        // Bereits vorhandene Zugangsdaten gleich eintragen, damit das
+        // Datenbank-Formular nach einem Neuladen nicht wieder leer ist.
+        if (info.is_docker && info.socket) {
+          const creds = await api.dockerDbCredentials().catch(() => ({}));
+          if (creds && creds.host) prefillFromDocker({ db: creds });
+        }
+      } catch {
+        removeSubSection(dockerBox);
+      }
+    })();
     } // Ende Admin-only Verkabelung (mayAdminSet)
 
     // Zum Schluss die Seite aufraeumen:

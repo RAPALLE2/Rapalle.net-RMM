@@ -122,3 +122,24 @@ export function buildSubTabs(root, opts = {}) {
 
   select(current);
 }
+
+/**
+ * Entfernt den Unterpunkt, in dem `node` liegt - samt seines Knopfes in der
+ * Leiste. Wird gebraucht, wenn sich erst nach dem Zeichnen herausstellt, dass
+ * ein Bereich gar nicht angezeigt werden soll (z.B. Container-Dienste, wenn
+ * das RMM nicht im Container laeuft). Ohne das bliebe ein Knopf stehen, hinter
+ * dem nichts mehr ist.
+ */
+export function removeSubSection(node) {
+  const box = node?.closest?.(".sub-sec");
+  if (!box) { node?.remove?.(); return; }
+  const root = box.closest("[data-subtabbed='1']");
+  const idx = box.dataset.subIndex;
+  box.remove();
+  if (!root) return;
+  const nav = root.querySelector(".sub-nav");
+  const btn = nav?.querySelector(`[data-sub="${idx}"]`);
+  const wasActive = btn?.classList.contains("active");
+  btn?.remove();
+  if (wasActive) nav?.querySelector("[data-sub]")?.click();
+}

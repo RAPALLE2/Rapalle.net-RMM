@@ -60,6 +60,15 @@ services:
       - ./agent:/app/agent
       # Zeitzone vom Host übernehmen (read-only).
       - /etc/localtime:/etc/localtime:ro
+      # Docker-Socket: NUR nötig, wenn guacd und die SQL-Datenbank später
+      # bequem im Dashboard dazugeschaltet werden sollen
+      # (Einstellungen -> Allgemein -> Container-Dienste). Das Backend legt
+      # die beiden Container dann selbst als Nachbarn in diesem Netzwerk an.
+      #
+      # ACHTUNG: Wer den Socket erreicht, hat faktisch Rootrechte auf dem Host.
+      # Deshalb ist die Zeile bewusst auskommentiert - nur aktivieren, wenn die
+      # Funktion gewünscht ist, und den Dashboard-Zugang entsprechend schützen.
+      # - /var/run/docker.sock:/var/run/docker.sock
 
     # Netzwerk-Scanner und Ping brauchen rohe Sockets.
     cap_add:
@@ -79,6 +88,10 @@ services:
   # Apache guacd - Proxy für RDP / VNC / SSH im Browser.
   # Wird nur gebraucht, wenn Remote-Sitzungen im Browser genutzt werden.
   # Nicht benötigt? Diesen Block und "depends_on" oben auskommentieren.
+  #
+  # Alternative: den Docker-Socket oben einhängen und guacd im Dashboard unter
+  # Einstellungen -> Allgemein -> Container-Dienste dazuschalten. Dann legt das
+  # Backend den Container selbst an - hier ist dann nichts einzutragen.
   # ───────────────────────────────────────────────────────────────────────────
   guacd:
     image: guacamole/guacd:1.5.5

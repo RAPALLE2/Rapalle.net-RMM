@@ -665,6 +665,28 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_media_owner
             ON media_items(owner_id, kind, created_at);
 
+        -- Wiedergabelisten: buendeln beliebige Eintraege der Bibliothek -
+        -- Radiosender, hochgeladene Dateien, YouTube- und Spotify-Links.
+        CREATE TABLE IF NOT EXISTS media_playlists (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT,
+            owner_name TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            shared INTEGER NOT NULL DEFAULT 0,
+            favorite INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+        -- Zuordnung Liste -> Eintrag. "position" haelt die Reihenfolge fest.
+        CREATE TABLE IF NOT EXISTS media_playlist_items (
+            playlist_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (playlist_id, item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_pl_items
+            ON media_playlist_items(playlist_id, position);
+
         -- ----------------------------------------------------------
         -- ORGANISATIONS-HIERARCHIE
         -- Jeder Knoten (Benutzer ODER Gruppe) kann GENAU EINEN Vorgesetzten
@@ -901,6 +923,9 @@ def init_db() -> None:
     _migrate_add_column("realms", "port", "INTEGER")                 # NULL = Standard (389 / 636 bei SSL)
     _migrate_add_column("realms", "use_ssl", "INTEGER NOT NULL DEFAULT 0")  # 1 = LDAPS
     _migrate_add_column("realms", "user_filter", "TEXT")            # optionaler zusätzlicher LDAP-Filter
+
+    # Audio-Player: Favoriten-Markierung an Bibliothekseinträgen.
+    _migrate_add_column("media_items", "favorite", "INTEGER NOT NULL DEFAULT 0")
 
     # Migration Metrik-Einstellungen: Wer die ALTEN Defaults (60 s Intervall /
     # 1 h Aufbewahrung) unverändert gespeichert hat, wird auf die neuen Werte
@@ -1757,6 +1782,11 @@ GLOBAL_PERM_KEYS = [
     "play_games",
     # Audio-Player / Media-Hub (eigene Bibliothek, Uploads)
     "use_media",
+    # Medien fuer ALLE bereitstellen: Uploads, Links und Wiedergabelisten, die
+    # jeder Benutzer sieht. Bewusst ein eigenes Recht - wer den Player benutzen
+    # darf ("use_media"), soll nicht automatisch die gemeinsame Bibliothek
+    # veraendern koennen.
+    "share_media",
     "manage_favorites",
     "use_relay", "relay_unlimited",
     # Chat-App (Direktnachrichten & Gruppen)
@@ -1864,6 +1894,8 @@ _PERM_IMPLIES = {
     "manage_org": ["see_org"],
     "manage_calendar": ["use_calendar"],
     "manage_patching": ["patching"],
+    # Wer Medien fuer alle bereitstellen darf, darf den Player selbst nutzen.
+    "share_media": ["use_media"],
     "c_patch_apply": ["c_patch_view"],
     "edit_source": ["see_source"],
     "delete_source": ["see_source", "edit_source"],
