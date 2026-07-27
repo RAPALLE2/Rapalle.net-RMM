@@ -4,10 +4,13 @@
 //   - Shell:      Live-Konsole auf dem Backend-Host (PTY über Socket.IO).
 //   - Explorer:   Dateibaum über backend/frontend/agent inkl. Datei-Editor.
 //   - Datenbank:  Tabellen ansehen + beliebiges SQL (inkl. Key/Value & Arrays).
+//   - Migration:  Kompletten Stand exportieren und auf einer anderen Instanz
+//                 wieder einspielen (Datenbank + Aufzeichnungen + Medien).
 //
 // Wird vom Settings-Tab "Source" aufgerufen: renderSource(container).
 
 import { api, getToken } from "../api.js";
+import { helpDot } from "../help.js";
 import { state } from "../state.js";
 import { esc, formatBytes, uiConfirm, uiPrompt, uiConfirmTwice, downloadText } from "../utils.js";
 import { dashboardSocket } from "../socket.js";
@@ -21,6 +24,7 @@ export function renderSource(container) {
       <button class="tab-btn active" data-src="log">🖥️ Backend-Ausgabe</button>
       <button class="tab-btn" data-src="explorer">📁 Explorer</button>
       <button class="tab-btn" data-src="db">🗄️ Datenbank</button>
+      <button class="tab-btn" data-src="migrate">📦 Migration</button>
     </div>
     <div id="src-panel" style="min-height:420px"></div>
   `;
@@ -35,6 +39,7 @@ export function renderSource(container) {
     panel.innerHTML = "";
     if (which === "log") cleanup = renderBackendLog(panel);
     else if (which === "explorer") renderExplorer(panel);
+    else if (which === "migrate") renderMigrate(panel);
     else renderDb(panel);
   }
   tabs.forEach((b) => b.addEventListener("click", () => show(b.dataset.src)));
@@ -631,4 +636,182 @@ async function renderDb(panel) {
   }
   panel.querySelector("#src-sql-run").addEventListener("click", runSql);
   sqlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") runSql(); });
+}
+
+// ---------------------------------------------------------------
+// 4) Migration - komplette Instanz auf einen anderen Server umziehen
+//
+// Der Export nimmt die GESAMTE Datenbank mit (Clients, Benutzer, Rechte,
+// Einstellungen, Dashboard-Widgets, Tickets, Skripte, Audit-Log …) sowie die
+// Aufzeichnungen, die Medien-Bibliothek und das Branding. Auf dem Zielsystem
+// wird dasselbe Archiv wieder eingespielt.
+// ---------------------------------------------------------------
+async function renderMigrate(host) {
+  host.innerHTML = `<div style="padding:8px;color:var(--subtext);font-size:13px">Ermittle Umfang…</div>`;
+
+  let info;
+  try {
+    info = await api.migrateInfo();
+  } catch (e) {
+    host.innerHTML = `<div style="padding:8px;color:var(--danger)">${esc(e.message)}</div>`;
+    return;
+  }
+
+  const mb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + " MB"
+                                  : Math.max(1, Math.round(b / 1024)) + " KB");
+  const d = info.dirs || {};
+
+  host.innerHTML = `
+    <div style="max-width:760px">
+
+      <h3 style="margin:2px 0 4px;font-size:14px">Diese Instanz sichern / umziehen</h3>
+      <p style="color:var(--subtext);font-size:13px">
+        Erzeugt ein einziges Archiv mit dem kompletten Stand: Datenbank
+        (${info.database.tables} Tabellen, ${info.database.rows.toLocaleString("de-DE")} Zeilen –
+        Clients, Benutzer, Rechte, Einstellungen, Widgets, Tickets, Skripte, Audit-Log),
+        dazu die ausgewählten Ordner. Auf dem neuen Server unten wieder einspielen.
+      </p>
+
+      <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin:10px 0">
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0">
+          <input type="checkbox" checked disabled />
+          <span>Datenbank <span style="color:var(--subtext)">(${mb(info.database.size)}) – immer dabei</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" id="mg-rec" checked />
+          <span>Aufzeichnungen / Replays
+            <span style="color:var(--subtext)">(${d.recordings?.files || 0} Dateien, ${mb(d.recordings?.size || 0)})</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" id="mg-media" checked />
+          <span>Medien-Bibliothek
+            <span style="color:var(--subtext)">(${d.media_files?.files || 0} Dateien, ${mb(d.media_files?.size || 0)})</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" id="mg-brand" checked />
+          <span>Branding
+            <span style="color:var(--subtext)">(${d.branding?.files || 0} Dateien, ${mb(d.branding?.size || 0)})</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" id="mg-secrets" />
+          <span>Geheimnisse (.env: AGENT_TOKEN, JWT_SECRET)
+            ${helpDot("Mit den Geheimnissen erreichen die bestehenden Agenten den neuen Server " +
+                      "ohne Neuinstallation, und Anmeldungen bleiben gültig. Das Archiv enthält " +
+                      "dann allerdings die Schlüssel dieser Installation im Klartext - also nur " +
+                      "über einen sicheren Weg übertragen und danach löschen.")}</span>
+        </label>
+        <div style="font-size:12px;color:var(--subtext);margin-top:6px">
+          Geschätzte Größe: <b id="mg-size">${mb(info.total_size)}</b> (vor Komprimierung)
+        </div>
+        <button class="btn-primary" id="mg-export" style="width:auto;margin-top:10px">
+          ⬇ Archiv erstellen und herunterladen
+        </button>
+        <span id="mg-export-msg" style="margin-left:10px;font-size:12px;color:var(--subtext)"></span>
+      </div>
+
+      <h3 style="margin:18px 0 4px;font-size:14px">Archiv hier einspielen</h3>
+      <div style="background:var(--panel-2);border-left:3px solid var(--warn,#f5a524);
+                  border-radius:6px;padding:10px;font-size:13px;margin-bottom:10px">
+        <b>Der gesamte Bestand dieser Instanz wird ersetzt.</b> Der bisherige Stand
+        wird vorher automatisch nach <code>backend/backup-vor-migration-&lt;Zeitstempel&gt;/</code>
+        gesichert. Das Backend startet danach neu.
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+        <input type="checkbox" id="mg-in-secrets" />
+        <span>Enthaltene Geheimnisse ebenfalls übernehmen (.env überschreiben)</span>
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+        <input type="checkbox" id="mg-in-backup" checked />
+        <span>Vorher Sicherung des jetzigen Standes anlegen</span>
+      </label>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+        <button class="taskbar-btn" id="mg-pick">📂 Archiv wählen…</button>
+        <span id="mg-file" style="font-size:12px;color:var(--subtext)">Keine Datei gewählt</span>
+      </div>
+      <div id="mg-bar-box" style="display:none;height:6px;border-radius:3px;background:var(--panel-2);margin-top:10px">
+        <div id="mg-bar" style="height:100%;width:0%;background:var(--accent);border-radius:3px"></div>
+      </div>
+      <button class="btn-primary" id="mg-import" disabled
+              style="width:auto;margin-top:10px;background:var(--danger)">
+        ⚠ Diese Instanz überschreiben
+      </button>
+      <div id="mg-import-msg" style="font-size:12px;color:var(--subtext);margin-top:8px;white-space:pre-wrap"></div>
+      <input type="file" id="mg-input" accept=".zip" hidden />
+    </div>`;
+
+  // --- Export ---------------------------------------------------------
+  const opts = () => ({
+    recordings: host.querySelector("#mg-rec").checked,
+    media: host.querySelector("#mg-media").checked,
+    branding: host.querySelector("#mg-brand").checked,
+    secrets: host.querySelector("#mg-secrets").checked,
+  });
+
+  // Geschätzte Größe an die Auswahl anpassen.
+  const recalc = () => {
+    const o = opts();
+    let total = info.database.size;
+    if (o.recordings) total += d.recordings?.size || 0;
+    if (o.media) total += d.media_files?.size || 0;
+    if (o.branding) total += d.branding?.size || 0;
+    host.querySelector("#mg-size").textContent = mb(total);
+  };
+  ["#mg-rec", "#mg-media", "#mg-brand"].forEach((id) =>
+    host.querySelector(id).addEventListener("change", recalc));
+
+  host.querySelector("#mg-export").addEventListener("click", () => {
+    const msg = host.querySelector("#mg-export-msg");
+    msg.textContent = "Archiv wird gebaut – der Download startet gleich von selbst…";
+    // Der Server baut das Archiv erst beim Abruf; bei vielen Aufzeichnungen
+    // dauert das eine Weile. Deshalb ein einfacher Link statt fetch:
+    // der Browser zeigt den Fortschritt dann selbst an.
+    window.location.href = api.migrateExportUrl(opts());
+    setTimeout(() => { msg.textContent = ""; }, 20000);
+  });
+
+  // --- Import ---------------------------------------------------------
+  const fileIn = host.querySelector("#mg-input");
+  const importBtn = host.querySelector("#mg-import");
+  let chosen = null;
+
+  host.querySelector("#mg-pick").addEventListener("click", () => fileIn.click());
+  fileIn.addEventListener("change", () => {
+    chosen = fileIn.files[0] || null;
+    host.querySelector("#mg-file").textContent = chosen
+      ? `${chosen.name} (${mb(chosen.size)})` : "Keine Datei gewählt";
+    importBtn.disabled = !chosen;
+  });
+
+  importBtn.addEventListener("click", async () => {
+    if (!chosen) return;
+    const sure = await uiConfirm(
+      "Diese Instanz mit dem Archiv überschreiben?",
+      { description: "Datenbank, Aufzeichnungen, Medien und Branding werden ersetzt. "
+                   + "Der jetzige Stand wird vorher gesichert. Das Backend startet danach neu.",
+        okText: "Überschreiben", danger: true });
+    if (!sure) return;
+
+    const msg = host.querySelector("#mg-import-msg");
+    const box = host.querySelector("#mg-bar-box");
+    const bar = host.querySelector("#mg-bar");
+    importBtn.disabled = true;
+    box.style.display = "";
+    msg.textContent = "Archiv wird übertragen…";
+    try {
+      const r = await api.migrateImport(chosen, {
+        secrets: host.querySelector("#mg-in-secrets").checked,
+        backup: host.querySelector("#mg-in-backup").checked,
+      }, (p) => { bar.style.width = (p * 100).toFixed(0) + "%"; });
+      const m = r.manifest || {};
+      msg.textContent =
+        `Fertig. Übernommen: ${(r.restored || []).join(", ")}\n`
+        + `Quelle: ${m.created_iso || "?"} (Version ${m.version || "?"})\n`
+        + (r.backup ? `Sicherung: ${r.backup}\n` : "")
+        + "Das Backend startet jetzt neu – die Seite bitte in ein paar Sekunden neu laden.";
+      window.notify?.("Migration eingespielt – Backend startet neu", "success", 12000);
+    } catch (e) {
+      msg.textContent = "Fehlgeschlagen: " + e.message;
+      importBtn.disabled = false;
+    }
+  });
 }

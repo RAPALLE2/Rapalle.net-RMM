@@ -11,7 +11,10 @@ venv/
 agent.log
 
 # Aufzeichnungen (Session-Recordings)
-recordings/
+recordings/*json
+recordings/*term.jsonl
+recordings/*.webm
+*.webm
 *.jsonl
 
 # Betriebssystem
@@ -23,3 +26,6 @@ memory.md
 LIES-MICH.txt
 # Lokal gebaute Agent-Installationspakete (tools/build_installers.py)
 dist/
+
+# Startprotokoll des Containers (docker-entrypoint.sh)
+backend/startup.log

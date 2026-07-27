@@ -425,6 +425,36 @@ export const api = {
   dockerDbCredentials: () => request("/api/admin/docker/db-credentials"),
   // dist/ leeren (gebaute Agent-Installationspakete)
   sourceClearDist: () => request("/api/source/dist/clear", { method: "POST" }),
+  // --- Migration: komplette Instanz umziehen ---
+  migrateInfo: () => request("/api/source/migrate/info"),
+  migrateExportUrl: (opts = {}) => {
+    const q = new URLSearchParams({
+      recordings: opts.recordings !== false,
+      media: opts.media !== false,
+      branding: opts.branding !== false,
+      secrets: !!opts.secrets,
+      token: localStorage.getItem("rmm_token") || "",
+    });
+    return `/api/source/migrate/export?${q}`;
+  },
+  migrateImport: (file, opts = {}, onProgress) => new Promise((resolve, reject) => {
+    // XMLHttpRequest statt fetch: nur damit gibt es einen Fortschrittsbalken,
+    // und das Archiv kann durchaus mehrere Gigabyte gross sein.
+    const q = new URLSearchParams({ secrets: !!opts.secrets, backup: opts.backup !== false });
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/source/migrate/import?${q}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${localStorage.getItem("rmm_token") || ""}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText || "{}"); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.detail || `Fehler ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("Verbindung zum Server verloren"));
+    xhr.send(file);
+  }),
   sourceList: (path = "") => request(`/api/source/list?path=${encodeURIComponent(path)}`),
   sourceRead: (path) => request(`/api/source/read?path=${encodeURIComponent(path)}`),
   sourceWrite: (path, content) =>

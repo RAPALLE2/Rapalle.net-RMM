@@ -19,13 +19,37 @@ import shutil
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin, require_perm
+from app.auth import (get_current_user, require_admin, require_perm,
+                      decode_access_token)
 
 router = APIRouter(prefix="/api/source", tags=["source"])
+
+
+def _user_from_token_query(request: Request, token: str | None) -> dict:
+    """
+    Benutzer aus dem Token bestimmen - notfalls aus der Adresszeile.
+
+    Downloads laufen ueber einen normalen Link; der Browser kann dabei keinen
+    Authorization-Header mitschicken. Deshalb wird das Token bei solchen Routen
+    auch als Query-Parameter akzeptiert (gleiches Vorgehen wie bei den
+    Mediendateien).
+    """
+    raw = token
+    if not raw:
+        auth = request.headers.get("authorization") or ""
+        if auth.startswith("Bearer "):
+            raw = auth.removeprefix("Bearer ").strip()
+    if not raw:
+        raise HTTPException(401, "Nicht angemeldet")
+    payload = decode_access_token(raw)
+    user = db.get_user_by_id(payload["sub"])
+    if not user:
+        raise HTTPException(401, "Benutzer existiert nicht mehr")
+    return user
 
 # Projekt-Wurzel = Ordner, der backend/ frontend/ agent/ enthält.
 # source_routes.py liegt in backend/app/routers/ -> drei Ebenen hoch.
@@ -612,3 +636,143 @@ async def clear_dist(user: dict = Depends(get_current_user)):
     db.add_audit_entry(user["username"], "source.dist_clear",
                        details=f"{removed} Einträge, {freed // 1024} KB")
     return {"ok": not errors, "removed": removed, "freed": freed, "errors": errors}
+
+
+# ==================================================================
+# MIGRATION - komplette Instanz auf einen anderen Server umziehen
+# ------------------------------------------------------------------
+# Nimmt die GESAMTE Datenbank mit (Clients, Benutzer, Rechte, Einstellungen,
+# Dashboard-Widgets, Tickets, Skripte, Audit-Log …) plus Aufzeichnungen,
+# Medien-Bibliothek und Branding. Siehe app/migrate.py für die Technik.
+#
+#   GET  /api/source/migrate/info    -> Vorschau: was steckt drin, wie groß
+#   GET  /api/source/migrate/export  -> Archiv herunterladen
+#   POST /api/source/migrate/import  -> Archiv einspielen (Backend startet neu)
+#
+# Nur Administratoren: Das Archiv enthält alle Daten der Installation, und das
+# Einspielen überschreibt den kompletten Bestand des Zielsystems.
+# ==================================================================
+
+@router.get("/migrate/info")
+async def migrate_info(user: dict = Depends(get_current_user)):
+    require_admin(user)
+    from app import migrate
+    return migrate.preview()
+
+
+@router.get("/migrate/export")
+async def migrate_export(request: Request,
+                         recordings: bool = True,
+                         media: bool = True,
+                         branding: bool = True,
+                         secrets: bool = False,
+                         token: str | None = None):
+    """
+    Baut das Archiv und liefert es aus.
+
+    Das Token darf auch als Query-Parameter kommen: Der Download läuft über
+    einen normalen Link/`window.open`, und der kann keinen Authorization-Header
+    setzen.
+    """
+    user = _user_from_token_query(request, token)
+    require_admin(user)
+
+    import tempfile
+    import time as _time
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+    from app import migrate
+
+    stamp = _time.strftime("%Y%m%d-%H%M%S")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rmm-migrate-"))
+    archive = tmp_dir / f"rapalle-rmm-migration-{stamp}.zip"
+    try:
+        manifest = migrate.build_export(
+            archive, include_recordings=recordings, include_media=media,
+            include_branding=branding, include_secrets=secrets)
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(500, f"Export fehlgeschlagen: {e}")
+
+    db.add_audit_entry(user["username"], "source.migrate_export",
+                       details=f"{manifest.get('archive_size', 0) // 1024} KB, "
+                               f"Aufzeichnungen={recordings}, Medien={media}, "
+                               f"Geheimnisse={secrets}")
+    # Aufräumen erst NACH dem Senden - sonst zieht man die Datei unter dem
+    # laufenden Download weg.
+    return FileResponse(
+        archive, filename=archive.name, media_type="application/zip",
+        background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True))
+
+
+@router.post("/migrate/import")
+async def migrate_import(request: Request, secrets: bool = False,
+                         backup: bool = True,
+                         user: dict = Depends(get_current_user)):
+    """
+    Spielt ein Umzugs-Archiv ein (roher Body, wie beim ZIP-Upload).
+
+    Der bisherige Stand wird vorher zur Seite gelegt
+    (backend/backup-vor-migration-<Zeitstempel>/), damit ein Fehlgriff nicht
+    endgültig ist. Danach startet das Backend neu - die alte Datenbankdatei
+    ist ja ersetzt worden.
+    """
+    require_admin(user)
+
+    import tempfile
+    from app import migrate
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "Leeres Archiv")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rmm-migrate-in-"))
+    archive = tmp_dir / "migration.zip"
+    archive.write_bytes(data)
+    try:
+        report = migrate.apply_import(archive, restore_secrets=secrets,
+                                      keep_backup=backup)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Einspielen fehlgeschlagen: {e}")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    try:
+        db.add_audit_entry(user["username"], "source.migrate_import",
+                           details=f"Quelle: {report['manifest'].get('created_iso')}, "
+                                   f"Version {report['manifest'].get('version')}")
+    except Exception:
+        pass   # Die Datenbank ist gerade ausgetauscht worden - kein Beinbruch.
+
+    _schedule_restart_after_migration()
+    report["restart"] = True
+    return report
+
+
+def _schedule_restart_after_migration(delay: float = 2.0) -> None:
+    """
+    Backend nach dem Einspielen neu starten.
+
+    Nötig, weil die geöffnete SQLite-Verbindung noch auf die ersetzte Datei
+    zeigt. Der Neustart passiert verzögert, damit die Antwort den Browser
+    noch erreicht.
+    """
+    import asyncio
+    import os
+    import sys
+
+    def _restart():
+        print("[migrate] Starte Backend nach der Migration neu…")
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    try:
+        asyncio.get_event_loop().call_later(delay, _restart)
+    except Exception:
+        _restart()

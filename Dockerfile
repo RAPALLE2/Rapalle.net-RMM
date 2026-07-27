@@ -21,6 +21,17 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_ROOT_USER_ACTION=ignore \
     TZ=Europe/Berlin
 
+# Der Container muss auch unter einer FREMDEN UID laufen koennen - etwa bei
+# "user:" in docker-compose.yml, bei rootless Docker oder in einem
+# unprivilegierten LXC, wo Bind-Mounts UID-verschoben ankommen. Dafuer:
+#   HOME=/tmp        beschreibbar fuer jede UID (pip/Cache brauchen ein HOME)
+#   PYTHONPATH       findet das Paket "app" unabhaengig vom Arbeitsverzeichnis
+#   *_CACHE_DIR      keine Schreibversuche in nicht beschreibbare Ordner
+ENV HOME=/tmp \
+    PYTHONPATH=/app/backend \
+    PIP_CACHE_DIR=/tmp/.cache/pip \
+    XDG_CACHE_HOME=/tmp/.cache
+
 # Kennzeichnet die Installationsart. Wird von backend/app/runtime_env.py
 # gelesen und in der Oberfläche als "Als Docker-Container installiert" angezeigt.
 ENV RMM_INSTALL_KIND=docker
@@ -56,7 +67,11 @@ WORKDIR /app
 # nutzt Docker den Cache und ein Rebuild dauert Sekunden statt Minuten.
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --upgrade pip && \
-    pip install -r /app/backend/requirements.txt
+    pip install -r /app/backend/requirements.txt && \
+    # Pakete fuer JEDE UID lesbar machen. pip legt je nach umask 0700-Rechte
+    # an; laeuft der Container dann unter einer anderen UID, scheitert schon
+    # der Import ("ModuleNotFoundError") - obwohl alles installiert ist.
+    chmod -R a+rX "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" /usr/local/bin
 
 # --- Projektcode -------------------------------------------------------------
 # Wird beim Start i.d.R. vom Volume überlagert; im Image liegt er trotzdem,
@@ -67,7 +82,22 @@ COPY agent /app/agent
 
 # Marker-Datei: zweites, unabhängiges Signal für die Docker-Erkennung
 # (falls jemand die Umgebungsvariable überschreibt).
-RUN echo "docker" > /app/.docker-install
+RUN echo "docker" > /app/.docker-install \
+    # Projektdateien ebenfalls fuer jede UID les- und betretbar machen.
+    && chmod -R a+rX /app \
+    # Diese Ordner beschreibt das Backend im Betrieb (Datenbank, Aufzeichnungen,
+    # Uploads, Branding). Wird kein Volume eingehaengt, muessen sie auch fuer
+    # eine fremde UID beschreibbar sein.
+    && mkdir -p /app/backend/recordings /app/backend/media_files /app/backend/branding \
+    && chmod -R a+rwX /app/backend/recordings /app/backend/media_files \
+                      /app/backend/branding /tmp
+
+# Start-Skript: schreibt einen Umgebungsbericht ins Log, prueft die
+# Voraussetzungen und startet erst dann run.py. Damit steht bei einem
+# Fehlstart IMMER etwas in "docker compose logs".
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /app/backend
 
@@ -78,6 +108,8 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/" >/dev/null || exit 1
 
-# run.py kümmert sich selbst um fehlende Pakete und startet uvicorn
-# (inklusive Auto-Neustart nach Absturz).
-CMD ["python", "run.py"]
+# Absturzberichte von Python (auch bei harten Fehlern) ins Log.
+ENV PYTHONFAULTHANDLER=1
+
+# Das Start-Skript uebernimmt: Diagnose -> Pruefungen -> run.py.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

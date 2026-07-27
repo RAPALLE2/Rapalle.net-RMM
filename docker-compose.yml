@@ -38,6 +38,11 @@ services:
       # Interner Port. Muss zum Port-Mapping unten passen.
       PORT: "${RMM_PORT:-4000}"
       TZ: "${TZ:-Europe/Berlin}"
+      # Startet der Container nicht, zeigt "docker compose logs -f rmm" seit
+      # dem Start-Skript einen Umgebungsbericht und den genauen Grund.
+      # Zum Nachsehen IM Container: hier auf "1" setzen - dann bleibt er nach
+      # einem Fehler offen und "docker compose exec rmm sh" funktioniert.
+      RMM_KEEP_ALIVE: "${RMM_KEEP_ALIVE:-0}"
       # Guacamole-Proxy (RDP/VNC/SSH im Browser). Zeigt auf den guacd-Dienst
       # unten; ist der auskommentiert, bleibt das ohne Wirkung.
       GUACD_HOST: guacd
@@ -70,6 +75,18 @@ services:
       # Funktion gewünscht ist, und den Dashboard-Zugang entsprechend schützen.
       # - /var/run/docker.sock:/var/run/docker.sock
 
+    # Der Container laeuft standardmaessig als root IM Container - das ist
+    # nicht dasselbe wie root auf dem Host und in aller Regel richtig so.
+    # Soll er unter einer eigenen UID laufen (rootless Docker, strenge
+    # Vorgaben), hier setzen und die Bind-Mounts entsprechend freigeben:
+    #   user: "1000:1000"
+    #   und auf dem Host:  chmod -R a+rX backend frontend agent
+    #                      chmod -R u+rwX,a+rwX backend/recordings backend/media_files
+    # Wichtig bei UNPRIVILEGIERTEM LXC (z.B. Proxmox): dort werden die UIDs der
+    # Bind-Mounts verschoben (root wird zu 100000). Die Projektdateien muessen
+    # dann fuer "andere" les- UND betretbar sein (a+rX), sonst findet Python
+    # das Paket "app" nicht und meldet ModuleNotFoundError.
+
     # Netzwerk-Scanner und Ping brauchen rohe Sockets.
     cap_add:
       - NET_RAW
@@ -78,11 +95,20 @@ services:
     depends_on:
       - guacd
 
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
+    # HINWEIS Synology Container Manager: Wird hier ein eigener logging-Treiber
+    # gesetzt, zeigt die Weboberflaeche im Reiter "Protokoll" haeufig gar nichts
+    # mehr an ("Keine Protokolle verfuegbar"). Deshalb bleibt der Standard
+    # aktiv. Wer die Rotation braucht, kann den Block wieder einkommentieren -
+    # dann aber die Logs ueber "docker compose logs -f rmm" lesen.
+    #
+    # Unabhaengig davon schreibt der Container seinen Start immer zusaetzlich
+    # nach  backend/startup.log  - diese Datei ist ueber die Dateifreigabe
+    # bzw. Settings -> Source lesbar, auch wenn die Oberflaeche nichts zeigt.
+    # logging:
+    #   driver: json-file
+    #   options:
+    #     max-size: "20m"
+    #     max-file: "5"
 
   # ───────────────────────────────────────────────────────────────────────────
   # Apache guacd - Proxy für RDP / VNC / SSH im Browser.

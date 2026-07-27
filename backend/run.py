@@ -24,13 +24,53 @@ Für Entwicklung mit automatischem Neustart bei Code-Änderungen:
 # ist leer - dieser Import kann also nicht an einer fehlenden Fremd-Lib scheitern.
 # ─────────────────────────────────────────────────────────────────────────────
 import importlib
+import os
+import sys
 
-from app.bootstrap_deps import ensure_dependencies
+# Eigenes Verzeichnis (backend/) IMMER in den Suchpfad legen. Wird run.py aus
+# einem anderen Arbeitsverzeichnis heraus gestartet - im Container z.B. durch
+# einen abweichenden WORKDIR -, findet Python das Paket "app" sonst nicht.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+# Persoenlicher Paket-Ordner (~/.local/lib/...): existiert er erst seit dem
+# letzten pip-Lauf, kennt ihn dieser Prozess noch nicht.
+try:
+    import site as _site
+    _us = _site.getusersitepackages()
+    if _us and os.path.isdir(_us) and _us not in sys.path:
+        sys.path.append(_us)
+except Exception:
+    pass
+
+try:
+    from app.bootstrap_deps import ensure_dependencies
+except ImportError as _err:
+    # Das ist KEIN fehlendes Fremdpaket - hier scheitert schon der eigene Code.
+    # In unprivilegierten Containern liegt das fast immer an den Dateirechten.
+    print(f"[run] Eigene Module nicht importierbar: {_err}")
+    print(f"[run] Verzeichnis: {_HERE}")
+    try:
+        print(f"[run] Prozess laeuft als uid={os.getuid()}, gid={os.getgid()}")
+        app_dir = os.path.join(_HERE, "app")
+        print(f"[run] {app_dir}: "
+              f"{'lesbar' if os.access(app_dir, os.R_OK | os.X_OK) else 'NICHT LESBAR'}")
+    except Exception:
+        pass
+    print("[run] Abhilfe: chmod -R a+rX auf den Projektordner, oder den "
+          "Container als root starten. Bei unprivilegiertem LXC werden die "
+          "UIDs der Bind-Mounts verschoben - die Dateien muessen dann fuer "
+          "'andere' les- und betretbar sein.")
+    raise
 
 # 1) Kern-Libs testweise importieren; bei Fehler sofort alles nachinstallieren.
+# ACHTUNG: hier stehen IMPORT-Namen, nicht die Paketnamen von PyPI.
+# "python-multipart" heisst beim Import "multipart" - stand hier frueher der
+# Paketname, schlug die Pruefung bei JEDEM Start fehl und verdeckte damit,
+# ob wirklich etwas fehlt.
 _CORE_LIBS = (
     "fastapi", "uvicorn", "socketio", "dotenv", "jwt",
-    "bcrypt", "pydantic", "psutil", "cryptography", "python-multipart"
+    "bcrypt", "pydantic", "psutil", "cryptography", "multipart"
 )
 try:
     for _lib in _CORE_LIBS:
@@ -70,13 +110,26 @@ def _report_backend_crash(exc: BaseException) -> None:
         db.add_audit_entry("system", "backend.crash", details=report)
         db.set_setting("backend_crash_pending", "1")
     except Exception as e:
-        print(f"[run] Crash konnte nicht ins Audit-Log geschrieben werden: {e}")
+        # Scheitert der Import von app.main, existieren die Tabellen noch nicht.
+        # Das ist eine FOLGE des eigentlichen Fehlers - nicht laut wiederholen.
+        if "no such table" in str(e):
+            print("[run] (Audit-Log noch nicht verfügbar - die Datenbank wurde "
+                  "wegen des Startfehlers nie eingerichtet.)")
+        else:
+            print(f"[run] Crash konnte nicht ins Audit-Log geschrieben werden: {e}")
 
 
 if __name__ == "__main__":
     print(f"RAPALLE.net RMM Backend startet auf http://{HOST}:{PORT}")
     # Selbstheilung: Stürzt der Server-Prozess unerwartet ab, wird er
     # automatisch neu gestartet. Ein sauberes Beenden (Strg+C) beendet normal.
+    # Selbstheilung mit Grenze: Ein vorübergehender Fehler soll den Server nicht
+    # dauerhaft lahmlegen - ein DAUERHAFTER aber auch keine Endlosschleife
+    # auslösen. Genau das passierte zuletzt: eine fehlende Bibliothek ließ den
+    # Start immer wieder scheitern, das Log lief mit demselben Traceback voll
+    # und die Rückfallebenen des Start-Skripts wurden nie erreicht.
+    _MAX_RESTARTS = 5
+    _tries = 0
     while True:
         try:
             uvicorn.run("app.main:socket_app", host=HOST, port=PORT)
@@ -90,7 +143,15 @@ if __name__ == "__main__":
             raise
         except Exception as _exc:
             _report_backend_crash(_exc)
+            _tries += 1
+            if _tries >= _MAX_RESTARTS:
+                print(f"[run] {_tries} Fehlversuche in Folge - der Fehler geht "
+                      f"von allein nicht weg.")
+                print("[run] Gebe auf, damit der Aufrufer einen anderen Weg "
+                      "versuchen kann (im Container: Weg 2/3 des Start-Skripts).")
+                raise SystemExit(1)
             import time as _time
             _time.sleep(2)
-            print("[run] Starte Backend nach Absturz neu…")
+            print(f"[run] Starte Backend nach Absturz neu… "
+                  f"(Versuch {_tries} von {_MAX_RESTARTS})")
             # Schleife startet uvicorn erneut.
