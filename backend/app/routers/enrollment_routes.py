@@ -436,31 +436,50 @@ if ($LASTEXITCODE -ne 0) {{
     exit 1
 }}
 
-# --- 4. Autostart einrichten (versteckt, in der Benutzer-Sitzung) ---
-# WICHTIG: Der Agent muss in der INTERAKTIVEN Benutzer-Sitzung laufen, nicht als
-# SYSTEM - sonst kann er den Bildschirm nicht erfassen ("BitBlt: Access denied").
-# Deshalb: Trigger = AtLogOn des aktuell angemeldeten Benutzers, RunLevel Highest.
+# --- 4. Autostart als DIENST einrichten (SYSTEM, beim Systemstart) ---
+# WICHTIG (Server!): Frueher lief der Task unter dem installierenden Benutzer
+# mit Trigger "AtLogOn". Auf Servern, an denen sich niemand (oder ein anderer
+# Benutzer) anmeldet, startete der Agent dadurch NIE.
+# Jetzt: Principal = SYSTEM (LogonType ServiceAccount), Trigger = AtStartup.
+# Der Agent laeuft damit ab dem Boot - ganz ohne Anmeldung.
+#
+# Bildschirmaufnahme: SYSTEM sitzt in Session 0 und hat keinen Desktop. Der
+# Agent startet deshalb bei Bedarf selbst einen Helfer-Prozess in der aktiven
+# Benutzersitzung (agent.py --screen-helper, siehe session_bridge.py). Nur
+# SYSTEM darf das (WTSQueryUserToken) - der Dienst-Betrieb ist also sogar
+# Voraussetzung dafuer.
 # pythonw.exe = Python OHNE Konsolenfenster -> laeuft unsichtbar im Hintergrund.
-Write-Host "Richte Autostart ein (unsichtbar, in der Benutzer-Sitzung)..."
-$CurrentUser = "$env:USERDOMAIN\\$env:USERNAME"
+Write-Host "Richte Autostart als Dienst ein (SYSTEM, startet beim Booten)..."
 $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
-$Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
-Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+# Zwei Trigger: beim Systemstart + alle 5 Minuten als Wiederanlauf-Netz.
+# MultipleInstances=IgnoreNew verhindert dabei doppelte Agenten.
+$TrigBoot  = New-ScheduledTaskTrigger -AtStartup
+$TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
+# Alten (benutzergebundenen) Task entfernen, damit kein zweiter Agent startet.
+try {{ Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 
-# --- 5. Agent SOFORT starten (versteckt, in der aktuellen Sitzung) ---
+# --- 5. Agent SOFORT starten (unsichtbar, als SYSTEM) ---
 Start-ScheduledTask -TaskName "RapalleRmmAgent"
+Start-Sleep -Seconds 3
+$chk = Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue
+if ($chk -and $chk.Principal.UserId -notmatch "SYSTEM") {{
+    Write-Host "WARNUNG: Autostart laeuft nicht als SYSTEM - der Agent startet dann nur nach Anmeldung." -ForegroundColor Yellow
+}}
 
 # --- 6. Elevated Wartungs-Tasks (Update/Uninstall als SYSTEM, per Event) ---
-# Damit funktionieren Dashboard-Update/-Uninstall auch, obwohl der Agent selbst
-# in der (nicht-privilegierten) Benutzersitzung laeuft.
+# Rueckfallebene: der Agent laeuft zwar bereits als SYSTEM, aber diese Tasks
+# erlauben Update/Uninstall auch dann, wenn der Agent-Prozess selbst gerade
+# nicht mehr laeuft oder (Altinstallation) nur in einer Benutzersitzung haengt.
 Write-Host "Richte elevated Wartungs-Tasks (Update/Uninstall) ein..."
 try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (Wartungs-Tasks konnten nicht eingerichtet werden: $_)" }}
 
 Write-Host ""
 Write-Host "=== FERTIG! ===" -ForegroundColor Green
-Write-Host "Der Agent laeuft jetzt unsichtbar im Hintergrund und startet automatisch mit Windows."
+Write-Host "Der Agent laeuft jetzt als Dienst unter SYSTEM und startet beim Booten -"
+Write-Host "auch wenn sich NIEMAND anmeldet (Server)."
 Write-Host "Du kannst dieses Fenster schliessen - der Agent laeuft weiter."
 Write-Host "Der Client sollte in wenigen Sekunden im Dashboard erscheinen."
 Write-Host ""
@@ -600,15 +619,21 @@ if (Test-Path "$InstallDir\\venv\\Scripts\\pip.exe") {{
     & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt" --quiet
 }}
 
-# Autostart-Task neu registrieren, falls er fehlt.
+# Autostart-Task pruefen und ggf. auf den Dienst-Betrieb umstellen.
+# Alt-Installationen liefen unter dem angemeldeten Benutzer mit Trigger
+# "AtLogOn" - auf Servern ohne Anmeldung startete der Agent damit nie. Das
+# Update zieht solche Tasks automatisch auf SYSTEM/AtStartup nach.
 $task = Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue
-if (-not $task) {{
-    $CurrentUser = "$env:USERDOMAIN\\$env:USERNAME"
+$needsTask = (-not $task) -or ($task.Principal.UserId -notmatch "SYSTEM")
+if ($needsTask) {{
+    Write-Host "Stelle Autostart auf Dienst-Betrieb um (SYSTEM, beim Systemstart)..."
     $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
-    $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
-    $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
-    Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+    $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
+    $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit (sonst stiller Kill nach 72h)
+    try {{ Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+    Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 }}
 
 # NEU STARTEN.
@@ -626,10 +651,13 @@ async def agent_elevate_ps1(request: Request):
     die per Windows-Event ausgelöst werden:
         RapalleRmmUpdate    (EventID 812)  -> update.ps1
         RapalleRmmUninstall (EventID 811)  -> uninstall.ps1
-    Danach kann der (nicht-privilegierte) Agent Update/Uninstall auslösen, indem
-    er nur ein Event schreibt - die Aufgabenplanung führt das Skript dann als
-    SYSTEM (elevated) aus. Der Agent selbst bleibt in der Benutzersitzung (damit
-    Remote-Screen weiter funktioniert).
+    Danach kann der Agent Update/Uninstall auslösen, indem er nur ein Event
+    schreibt - die Aufgabenplanung führt das Skript dann als SYSTEM aus.
+
+    Hinweis: Seit der Agent selbst als SYSTEM-Dienst läuft (Autostart-Task mit
+    Trigger "AtStartup"), braucht er diesen Umweg nicht mehr zwingend. Die
+    Tasks bleiben als Rückfallebene bestehen - z.B. für Altinstallationen, die
+    noch in einer Benutzersitzung laufen.
 
     Aufruf auf dem Client (als Administrator):
         powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr '<BACKEND>/agent-dist/elevate.ps1' -UseBasicParsing | iex"
