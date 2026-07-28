@@ -581,32 +581,57 @@ async def _frontend_version(user: dict = _Depends(_current_user)):
 
 class _RevalidatingStatic(StaticFiles):
     """
-    StaticFiles, das für App-Dateien 'Cache-Control: no-cache' setzt.
+    StaticFiles mit passenden Cache-Headern fuer die Frontend-Dateien.
 
-    StaticFiles schickt von Haus aus NUR Last-Modified und ETag, aber kein
-    Cache-Control. Ohne Cache-Control cachen Browser heuristisch - je nach
-    Alter der Datei durchaus stundenlang, ohne auch nur nachzufragen. Bei
-    ES-Modulen ist das besonders tückisch: nach einem Update lief im Browser
-    weiter der alte Code und rief Endpunkte auf, die es serverseitig gar
-    nicht mehr gibt (404/405 im Log, während die Datei auf der Platte längst
-    neu war). Genau dieser Fall hat schon einmal eine halbe Fehlersuche
-    gekostet.
+    Ausgangslage: StaticFiles schickt von Haus aus NUR Last-Modified und ETag,
+    aber kein Cache-Control. Ohne Cache-Control cachen Browser heuristisch -
+    je nach Alter der Datei durchaus stundenlang, ohne auch nur nachzufragen.
+    Bei ES-Modulen ist das tueckisch: Nach einem Update lief im Browser weiter
+    der alte Code und rief Endpunkte auf, die es serverseitig nicht mehr gibt.
 
-    'no-cache' heisst NICHT "nicht cachen", sondern "vor Benutzung
-    rückfragen". Ist die Datei unverändert, antwortet der Server mit 304
-    ohne Rumpf - der Preis ist also eine kleine Anfrage, nicht der erneute
-    Download.
+    Deshalb stand hier ueberall 'no-cache' ("vor Benutzung rueckfragen").
+    Das hat aber einen Preis, der erst im Betrieb hinter einem Proxy auffiel:
+    Das Dashboard besteht aus mehreren Dutzend ES-Modulen. Bei JEDEM Laden
+    ergab das mehrere Dutzend Rueckfragen innerhalb weniger Sekunden - ein
+    Muster, das Rate-Limiter (Cloudflare & Co.) als Burst einstufen und mit
+    429 abweisen. Dann fehlen einzelne Module, und der Browser arbeitet mit
+    alten Resten weiter ("does not provide an export named ...").
 
-    Bilder, Schriften und Ähnliches bleiben aussen vor: die ändern sich
-    selten, und dort ist Caching genau das, was man will.
+    Kompromiss:
+      *.html                 -> no-cache. Das ist EINE Datei; sie muss immer
+                               frisch sein, denn sie zieht alles andere nach.
+      *.js/.mjs/.css/.json   -> kurzes max-age. Innerhalb dieser Zeitspanne
+                               kommt ein Reload ganz ohne Anfragen aus, was
+                               den Burst beseitigt. Danach wird wieder
+                               revalidiert, Updates kommen also weiter an.
+      alles andere           -> unveraendert (Bilder, Schriften).
+
+    Die Dauer laesst sich ueber die Einstellung 'static_cache_seconds' aendern;
+    0 stellt das alte Verhalten (immer rueckfragen) wieder her.
     """
 
-    REVALIDATE = (".js", ".mjs", ".css", ".html", ".json", ".map")
+    REVALIDATE = (".js", ".mjs", ".css", ".json", ".map")
+    ALWAYS_FRESH = (".html",)
+    DEFAULT_MAX_AGE = 60
+
+    def _max_age(self) -> int:
+        try:
+            raw = db.get_setting("static_cache_seconds")
+            if raw is None or str(raw).strip() == "":
+                return self.DEFAULT_MAX_AGE
+            return max(0, min(86400, int(str(raw).strip())))
+        except Exception:
+            return self.DEFAULT_MAX_AGE
 
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
-        if path.lower().endswith(self.REVALIDATE):
+        low = path.lower()
+        if low.endswith(self.ALWAYS_FRESH):
             response.headers["Cache-Control"] = "no-cache"
+        elif low.endswith(self.REVALIDATE):
+            secs = self._max_age()
+            response.headers["Cache-Control"] = (
+                f"private, max-age={secs}, must-revalidate" if secs else "no-cache")
         return response
 
 
