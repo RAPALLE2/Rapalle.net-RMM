@@ -6,7 +6,7 @@
 import { state } from "../state.js";
 import { hasGlobalPerm } from "../state.js";
 import { api } from "../api.js";
-import { esc } from "../utils.js";
+import { esc, uiPrompt } from "../utils.js";
 import { applyTheme, applyAccent, ACCENT_PALETTES } from "../theme.js";
 import { setLanguage, applyStaticTranslations } from "../i18n_apply.js";
 import { renderSidebar } from "../sidebar.js";
@@ -424,19 +424,21 @@ async function render2fa(host) {
       <div id="pr-2fa-out" style="margin-top:10px"></div>`;
 
     host.querySelector("#pr-2fa-off").addEventListener("click", async () => {
-      const pw = prompt("Zum Abschalten bitte das eigene Passwort eingeben:");
-      if (!pw) return;
+      const answer = await askConfirmation(status,
+        "Zwei-Faktor-Anmeldung abschalten");
+      if (!answer) return;
       try {
-        await api.totpDisable(pw);
+        await api.totpDisable(answer.password, answer.code);
         window.notify?.("Zwei-Faktor-Anmeldung abgeschaltet", "success");
         render2fa(host);
       } catch (e) { window.notify?.(e.message, "error"); }
     });
     host.querySelector("#pr-2fa-new").addEventListener("click", async () => {
-      const pw = prompt("Zum Erzeugen neuer Codes bitte das eigene Passwort eingeben:");
-      if (!pw) return;
+      const answer = await askConfirmation(status,
+        "Neue Wiederherstellungscodes erzeugen");
+      if (!answer) return;
       try {
-        const r = await api.totpNewBackupCodes(pw);
+        const r = await api.totpNewBackupCodes(answer.password, answer.code);
         showBackupCodes(host.querySelector("#pr-2fa-out"), r.backup_codes);
       } catch (e) { window.notify?.(e.message, "error"); }
     });
@@ -526,4 +528,37 @@ function showBackupCodes(host, codes, activated = false) {
     window.notify?.("Codes in die Zwischenablage kopiert", "success");
   });
   host.querySelector("#pr-2fa-done").addEventListener("click", () => render2fa(host));
+}
+
+
+/**
+ * Fragt nach der Bestätigung für sicherheitsrelevante Änderungen - im eigenen
+ * Dialog, nicht über das Browser-Fenster.
+ *
+ * Konten aus einem Verzeichnis (AD/LDAP/SSO) haben lokal kein Passwort. Für
+ * sie ist der Code aus der Authenticator-App der einfachere Weg, deshalb wird
+ * er dort zuerst angeboten.
+ */
+async function askConfirmation(status, title) {
+  const isRealm = !!status.realm;
+  const value = await uiPrompt(title, {
+    description: isRealm
+      ? "Dein Konto wird über ein Verzeichnis (AD/LDAP/SSO) verwaltet.\n"
+        + "Gib einen aktuellen Code aus der Authenticator-App ein – oder dein "
+        + "Verzeichnis-Passwort."
+      : "Zur Sicherheit bitte das eigene Passwort eingeben – "
+        + "ein aktueller Code aus der App geht auch.",
+    placeholder: isRealm ? "123456 oder Passwort" : "Passwort oder 123456",
+    type: "password",
+    okText: "Bestätigen",
+  });
+  if (!value) return null;
+  // Reine Ziffern in TOTP-Länge bzw. das Format der Wiederherstellungscodes
+  // gehen als Code durch, alles andere als Passwort. Das Backend prüft ohnehin
+  // beides, das hier spart nur einen unnötigen Fehlversuch.
+  const looksLikeCode = /^\d{6}$/.test(value.trim())
+    || /^[a-z0-9]{4}-[a-z0-9]{4}$/i.test(value.trim());
+  return looksLikeCode
+    ? { password: "", code: value.trim() }
+    : { password: value, code: "" };
 }

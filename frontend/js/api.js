@@ -62,8 +62,10 @@ export const api = {
   totpStatus: () => request("/api/auth/2fa/status"),
   totpSetup: () => request("/api/auth/2fa/setup", { method: "POST" }),
   totpActivate: (code) => request("/api/auth/2fa/activate", { method: "POST", body: JSON.stringify({ code }) }),
-  totpDisable: (password) => request("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify({ password }) }),
-  totpNewBackupCodes: (password) => request("/api/auth/2fa/backup-codes", { method: "POST", body: JSON.stringify({ password }) }),
+  // Bestaetigung wahlweise per Passwort ODER per Code aus der App - SSO-Konten
+  // haben lokal gar kein Passwort.
+  totpDisable: (password, code = "") => request("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify({ password, code }) }),
+  totpNewBackupCodes: (password, code = "") => request("/api/auth/2fa/backup-codes", { method: "POST", body: JSON.stringify({ password, code }) }),
   getLoginRealms: () => request("/api/auth/realms"),
   me: () => request("/api/auth/me"),
   // Serverseitig gespeicherte UI-Einstellungen (in jedem Browser gleich)

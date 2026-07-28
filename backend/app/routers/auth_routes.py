@@ -396,6 +396,59 @@ class TotpCodeBody(BaseModel):
 
 class TotpDisableBody(BaseModel):
     password: str = ""
+    code: str = ""       # Alternative: aktueller Code aus der App
+
+
+def _confirm_identity(user: dict, password: str = "", code: str = "") -> None:
+    """
+    Bestaetigt, dass wirklich der Kontoinhaber am Geraet sitzt - nicht nur ein
+    offener Browser.
+
+    Wichtig: Konten aus einem Verzeichnis (AD/LDAP/SSO) haben LOKAL gar kein
+    Passwort. Frueher wurde hier stur gegen den lokalen Hash geprueft, der bei
+    diesen Konten leer ist - die Antwort war deshalb immer "Passwort falsch",
+    egal was man eingab. Jetzt gilt:
+
+      * lokales Konto   -> lokales Passwort ODER aktueller Code aus der App
+      * Verzeichnis-Konto -> Passwort wird gegen das Verzeichnis geprueft,
+                             ersatzweise reicht der Code aus der App
+    """
+    from app import totp as _totp
+
+    # 1) Code aus der Authenticator-App - funktioniert fuer beide Kontoarten
+    #    und ist der stärkere Nachweis, weil er das Geraet voraussetzt.
+    if code and user.get("totp_secret"):
+        if _totp.verify(user["totp_secret"], code, user_key=str(user["id"])):
+            return
+        used, rest = _totp.use_backup_code(user.get("totp_backup") or "", code)
+        if used:
+            db.set_user_totp(user["id"], backup=rest)
+            # Auch im uebergebenen Objekt nachziehen: Es stammt aus der
+            # Anmeldung und wuerde sonst innerhalb desselben Aufrufs noch den
+            # alten Stand zeigen - der Code liesse sich dann ein zweites Mal
+            # verwenden.
+            user["totp_backup"] = rest
+            return
+
+    realm = user.get("auth_realm")
+    if realm:
+        # 2a) Verzeichnis-Konto: Passwort dort pruefen lassen.
+        if password:
+            try:
+                if authenticate_realm(user["username"], password, realm):
+                    return
+            except Exception:
+                pass          # Verzeichnis nicht erreichbar -> unten Fehler
+        raise HTTPException(
+            400,
+            "Bestätigung fehlgeschlagen. Dieses Konto wird über ein Verzeichnis "
+            "(AD/LDAP/SSO) verwaltet - bitte das Verzeichnis-Passwort eingeben "
+            "oder stattdessen einen aktuellen Code aus der Authenticator-App.")
+
+    # 2b) Lokales Konto
+    if password and user.get("password_hash") and verify_password(password, user["password_hash"]):
+        return
+    raise HTTPException(400, "Passwort oder Code stimmt nicht.")
 
 
 @router.get("/2fa/status")
@@ -404,6 +457,9 @@ async def totp_status(user: dict = Depends(get_current_user)):
     return {
         "enabled": bool(user.get("totp_enabled")),
         "backup_left": len([h for h in backup.split(",") if h]),
+        # Sagt der Oberflaeche, wonach sie fragen soll: Verzeichnis-Konten
+        # haben lokal kein Passwort.
+        "realm": user.get("auth_realm") or "",
     }
 
 
@@ -446,9 +502,8 @@ async def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_use
 
 @router.post("/2fa/disable")
 async def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_user)):
-    """Abschalten nur mit dem eigenen Passwort - ein offener Browser genuegt nicht."""
-    if not verify_password(body.password or "", user["password_hash"]):
-        raise HTTPException(400, "Passwort ist falsch")
+    """Abschalten nur mit eigenem Passwort ODER Code - ein offener Browser genuegt nicht."""
+    _confirm_identity(user, body.password, body.code)
     db.set_user_totp(user["id"], secret="", enabled=False, backup="")
     db.add_audit_entry(user["username"], "2fa.disabled")
     return {"ok": True}
@@ -460,8 +515,7 @@ async def totp_new_backup_codes(body: TotpDisableBody,
     """Neue Wiederherstellungscodes erzeugen; die alten verfallen dabei."""
     if not user.get("totp_enabled"):
         raise HTTPException(400, "Zwei-Faktor-Anmeldung ist nicht aktiv")
-    if not verify_password(body.password or "", user["password_hash"]):
-        raise HTTPException(400, "Passwort ist falsch")
+    _confirm_identity(user, body.password, body.code)
     from app import totp as _totp
     codes = _totp.new_backup_codes()
     db.set_user_totp(user["id"], backup=_totp.hash_backup_codes(codes))
