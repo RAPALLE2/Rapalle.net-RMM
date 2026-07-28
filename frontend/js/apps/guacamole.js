@@ -150,23 +150,15 @@ export function renderGuacamole(body, win) {
   // Gilt fuer alle Guacamole-Verbindungen, also RDP und VNC ebenso wie SSH und
   // Telnet. Der Zoom veraendert nur die Darstellung; Guacamole rechnet seine
   // Koordinaten selbst aus der Groesse des Anzeigebereichs.
-  let guacZoom = null;
+  let guacZoom = null;   // von den Maus-/Touch-Handlern zum Umrechnen genutzt
   setTimeout(() => {
     const inner = displayEl.querySelector("canvas, div") || displayEl;
     guacZoom = attachPinchZoom(displayEl, inner, { min: 1, max: 6 });
   }, 600);   // erst wenn Guacamole seinen Anzeigebereich gebaut hat
 
-  attachLongPress(displayEl, (cx, cy) => {
-    // Guacamole erwartet echte Mausereignisse - wir stellen einen Rechtsklick
-    // an genau dieser Stelle nach.
-    const opts = { bubbles: true, clientX: cx, clientY: cy, button: 2, buttons: 2 };
-    const target = document.elementFromPoint(cx, cy) || displayEl;
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    setTimeout(() => {
-      target.dispatchEvent(new MouseEvent("mouseup", { ...opts, buttons: 0 }));
-      target.dispatchEvent(new MouseEvent("contextmenu", opts));
-    }, 60);
-  });
+  // Kein eigener Langdruck mehr: Guacamole bringt dafür eine eigene
+  // Touch-Anbindung mit (siehe weiter unten, Guacamole.Mouse.Touchscreen).
+  // Nachgestellte Mausereignisse hätten sich damit doppelt ausgelöst.
   const protoSel = body.querySelector(`#gf-proto-${win.key}`);
   const portInput = body.querySelector(`#gf-port-${win.key}`);
   const connectBtn = body.querySelector(`#gf-connect-${win.key}`);
@@ -338,6 +330,7 @@ export function renderGuacamole(body, win) {
   let client = null;
   let keyboard = null;
   let mouse = null;
+  let touch = null;   // Guacamole-Touchanbindung (Handy/Tablet)
   let sizePoll = null;
   let lastCW = 0, lastCH = 0;
   let disconnected = false;
@@ -728,7 +721,12 @@ export function renderGuacamole(body, win) {
         // DENSELBEN Wert erneut -> Koordinaten schrumpfen pro Klick Richtung
         // (0,0): "Cursor wandert bei jedem Klick in die Ecke, springt beim
         // Bewegen zurück". Deshalb: skalierte KOPIE senden.
-        const scale = display.getScale() || 1;
+        // Zwei Skalierungen: die von Guacamole selbst UND unser Touch-Zoom.
+        // Letzteren kennt Guacamole nicht - er sitzt als CSS-Transformation
+        // darüber. Ohne die Division landeten Klicks im gezoomten Zustand an
+        // der falschen Stelle (immer weiter daneben, je stärker gezoomt).
+        const uiScale = (guacZoom && guacZoom.state().scale) || 1;
+        const scale = (display.getScale() || 1) * uiScale;
         const scaled = new Guacamole.Mouse.State(
           mouseState.x / scale,
           mouseState.y / scale,
@@ -742,6 +740,29 @@ export function renderGuacamole(body, win) {
       } catch { /* Maus-Event ignorieren, niemals das GUI blockieren */ }
     };
     mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = sendMouse;
+
+    // --- Touch (Handy/Tablet) ---
+    // Guacamole.Mouse hört NUR auf Mausereignisse - auf einem Touchgerät kam
+    // deshalb gar nichts an. Guacamole bringt dafür eine eigene Klasse mit,
+    // die Tippen in einen Linksklick und langes Halten in einen Rechtsklick
+    // übersetzt und Ziehen als Mausbewegung weitergibt.
+    // Der Klassenname hat sich zwischen den Guacamole-Versionen geändert,
+    // deshalb beide Varianten probieren.
+    try {
+      const TouchClass = (Guacamole.Mouse && Guacamole.Mouse.Touchscreen)
+        || Guacamole.Touchscreen;
+      if (TouchClass) {
+        touch = new TouchClass(displayElement);
+        // Etwas mehr Zeit fürs Halten - 500 ms fühlen sich auf dem Handy
+        // sicherer an als der knappe Standardwert.
+        if ("longPressThreshold" in touch) touch.longPressThreshold = 500;
+        touch.onmousedown = touch.onmouseup = touch.onmousemove = sendMouse;
+      } else {
+        console.warn("[guac] Keine Touch-Klasse in dieser Guacamole-Version");
+      }
+    } catch (e) {
+      console.warn("[guac] Touch-Anbindung fehlgeschlagen:", e);
+    }
 
     // --- Tastatur (nur wenn der Anzeigebereich fokussiert ist) ---
     keyboard = new Guacamole.Keyboard(displayEl);
@@ -806,6 +827,9 @@ export function renderGuacamole(body, win) {
     stopSizePoll();
     try { if (keyboard) { keyboard.onkeydown = null; keyboard.onkeyup = null; } } catch {}
     try { if (mouse) { mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = null; } } catch {}
+    // Touch-Anbindung ebenfalls lösen - sonst schickt eine alte Verbindung
+    // weiter Ereignisse in einen bereits geschlossenen Client.
+    try { if (touch) { touch.onmousedown = touch.onmouseup = touch.onmousemove = null; touch = null; } } catch {}
     try { if (client) client.disconnect(); } catch {}
     client = null;
   }

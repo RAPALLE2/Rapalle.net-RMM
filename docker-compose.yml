@@ -87,6 +87,25 @@ services:
     # dann fuer "andere" les- UND betretbar sein (a+rX), sonst findet Python
     # das Paket "app" nicht und meldet ModuleNotFoundError.
 
+    # ── Leistung: CPU und Arbeitsspeicher ──────────────────────────────────
+    # WICHTIG zum Verständnis: Diese Werte VERTEILEN keine Leistung, sie
+    # BEGRENZEN sie. Ohne Angabe darf der Container ohnehin alles nutzen.
+    # Läuft es zäh, liegt es also fast nie an fehlenden Limits, sondern an
+    # bereits gesetzten - etwa im Synology Container Manager, der beim Anlegen
+    # gern enge Grenzen einträgt. Dort unter "Ressourcenbegrenzung" nachsehen.
+    #
+    # Die Werte hier sind deshalb bewusst großzügig und über die .env
+    # anpassbar. Wer gar nicht begrenzen will, kommentiert den Block aus.
+    cpus: "${RMM_CPUS:-4}"
+    mem_limit: "${RMM_MEMORY:-4g}"
+    mem_reservation: "${RMM_MEMORY_MIN:-512m}"   # so viel wird reserviert
+    # Gemeinsamer Speicher: Der Standard von 64 MB ist für Bildschirm-
+    # aufzeichnungen und größere Übertragungen schnell zu knapp.
+    shm_size: "${RMM_SHM:-512m}"
+    # Nicht in den Auslagerungsspeicher drängen - das ist der häufigste Grund
+    # für plötzliche Hänger bei laufenden Fernsitzungen.
+    memswap_limit: "${RMM_MEMORY:-4g}"
+
     # Netzwerk-Scanner und Ping brauchen rohe Sockets.
     cap_add:
       - NET_RAW
@@ -123,6 +142,11 @@ services:
     image: guacamole/guacd:1.5.5
     container_name: rapalle-rmm-guacd
     restart: unless-stopped
+    # guacd macht die eigentliche Bildarbeit bei RDP/VNC - ruckelt eine
+    # Fernsitzung, ist meist hier zu wenig Luft, nicht im Backend.
+    cpus: "${GUACD_CPUS:-2}"
+    mem_limit: "${GUACD_MEMORY:-1g}"
+    shm_size: "256m"
     # Kein Port nach außen: nur der RMM-Container spricht mit guacd.
     expose:
       - "4822"
