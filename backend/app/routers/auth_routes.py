@@ -263,22 +263,21 @@ class UiPrefsBody(BaseModel):
 
 @router.get("/ui-prefs")
 async def get_ui_prefs(user: dict = Depends(get_current_user)):
-    import json as _json
-    raw = db.get_user_ui_prefs(user["id"])
-    if not raw:
-        return {"keys": {}}
-    try:
-        data = _json.loads(raw)
-        return {"keys": data.get("keys", {}) if isinstance(data, dict) else {}}
-    except Exception:
-        return {"keys": {}}
+    # Liest aus der Tabelle user_prefs (eine Zeile je Schluessel). Alte
+    # Installationen mit dem frueheren Blob werden dabei automatisch
+    # uebernommen, siehe db.get_user_prefs().
+    return {"keys": db.get_user_prefs(user["id"])}
 
 
 @router.put("/ui-prefs")
 async def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)):
-    import json as _json
+    # Altbestand-Route: ersetzt den kompletten Satz. Das Frontend nutzt PATCH.
     try:
-        db.set_user_ui_prefs(user["id"], _json.dumps({"keys": body.keys}))
+        old = set(db.get_user_prefs(user["id"]).keys())
+        payload = {k: v for k, v in (body.keys or {}).items()}
+        for k in old - set(payload.keys()):
+            payload[k] = None
+        db.merge_user_prefs(user["id"], payload)
     except ValueError as e:
         raise HTTPException(413, str(e))
     return {"ok": True}
@@ -298,10 +297,10 @@ async def patch_ui_prefs(body: UiPrefsPatchBody, user: dict = Depends(get_curren
     Datenbank gespeicherten Zustand ueberschreiben kann.
     """
     try:
-        db.merge_user_ui_prefs(user["id"], body.keys or {})
+        db.merge_user_prefs(user["id"], body.keys or {})
     except ValueError as e:
         raise HTTPException(413, str(e))
-    return {"ok": True}
+    return {"ok": True, "bytes": db.user_prefs_size(user["id"])}
 
 
 # ------------------------------------------------------------------

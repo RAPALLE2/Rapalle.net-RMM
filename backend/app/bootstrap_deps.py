@@ -32,6 +32,8 @@ _IMPORT_NAME = {
     "Pillow": "PIL",
     "uvicorn[standard]": "uvicorn",
     "python-multipart": "multipart",
+    "psycopg2-binary": "psycopg2",
+    "PyMySQL": "pymysql",
 }
 
 
@@ -50,6 +52,15 @@ _ESSENTIAL = {
     "bcrypt": "bcrypt",
     "pydantic": "pydantic",
     "multipart": "python-multipart",
+    # Datenbank-Treiber fuer den Wechsel auf MySQL/MariaDB bzw. PostgreSQL.
+    # Sie stehen zwar in requirements.txt, aber bestehende Installationen
+    # wurden vor dieser Aenderung gebaut - dann scheiterte der Wechsel mit
+    # "Treiber fehlt". Hier gehoert er ins Sicherheitsnetz, damit er beim
+    # naechsten Start ohne Zutun nachkommt.
+    "pymysql": "PyMySQL",
+    "psycopg2": "psycopg2-binary",
+    # SSH-Teil des SFTP-Zugangs am Relay.
+    "paramiko": "paramiko",
 }
 
 

@@ -138,11 +138,35 @@ if __name__ == "__main__":
             # Ausgeschaltet aendert sich gar nichts - dann bindet uvicorn wie
             # gewohnt direkt auf PORT.
             _ftp = False
+            _mode = "off"
             try:
+                # WICHTIG: Die Einstellung liegt in der Datenbank. Die Tabellen
+                # legt sonst erst app.main beim Import an - also NACH dieser
+                # Abfrage. Auf einer frischen Installation schlug get_setting()
+                # deshalb fehl, der Modus galt als "off" und FTP/SFTP starteten
+                # nie (stillschweigend). Darum hier einmal selbst einrichten -
+                # init_db() ist idempotent (CREATE TABLE IF NOT EXISTS).
+                from app import db as _db
+                _db.init_db()
                 from app import ftp_relay
-                _ftp = ftp_relay.enabled()
+                _mode = ftp_relay.mode()
+                _ftp = _mode in ("ftp", "sftp")
             except Exception as _e:
-                print(f"[run] FTP-Status nicht lesbar ({_e}) - bleibt aus.")
+                print(f"[run] Datei-Zugang nicht lesbar ({_e}) - bleibt aus.")
+
+            if _mode == "sftp":
+                # Ohne paramiko gibt es keinen SSH-Teil - dann lieber laut sein,
+                # statt den Port stumm ohne Dienst dastehen zu lassen.
+                try:
+                    from app import sftp_relay as _sr
+                    _ok, _why = _sr.available()
+                    if not _ok:
+                        print(f"[run] SFTP gewaehlt, aber nicht nutzbar: {_why}")
+                        _ftp = False
+                except Exception as _e:
+                    print(f"[run] SFTP nicht pruefbar ({_e}) - bleibt aus.")
+            print(f"[run] Datei-Zugang am Relay: {_mode}"
+                  + ("" if _ftp else " (nicht aktiv)"))
 
             if _ftp:
                 import threading
@@ -168,6 +192,11 @@ if __name__ == "__main__":
                                 HOST, PORT, "127.0.0.1", _inner, advertise_host=HOST)
                         _aio.run(_boot())
                     except Exception as e:
+                        try:
+                            front_door.STATUS["active"] = False
+                            front_door.STATUS["error"] = str(e)
+                        except Exception:
+                            pass
                         print(f"[run] Weiche beendet: {e}")
 
                 threading.Thread(target=_door, daemon=True).start()

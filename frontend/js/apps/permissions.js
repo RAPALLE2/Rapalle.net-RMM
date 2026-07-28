@@ -400,7 +400,7 @@ export function renderPermissions(body, win) {
       <div style="max-width:640px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--subtext)">Vorlagen:</span>
-          <button class="taskbar-btn" id="pm-preset-admin">👑 Full Admin</button>
+          <button class="taskbar-btn" id="pm-preset-admin">👑 Admin</button>
           <button class="taskbar-btn" id="pm-preset-view">👁️ Nur sehen</button>
         </div>
         <p style="color:var(--subtext);font-size:13px;margin-top:0">

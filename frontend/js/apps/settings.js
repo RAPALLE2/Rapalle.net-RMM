@@ -893,6 +893,20 @@ export function renderSettings(body, win) {
                   : esc(cfg.sftp_reason),
                 !cfg.sftp_available)}
           <div style="margin-top:8px;color:var(--warn,#f5a524)">⚠ ${esc(cfg.note)}</div>
+          ${cfg.restart_pending ? `
+            <div style="margin-top:6px;padding:8px;border:1px solid var(--warn,#f5a524);
+                        border-radius:8px;color:var(--warn,#f5a524)">
+              ⚠ ${esc(cfg.mode.toUpperCase())} ist eingestellt, läuft aber gerade
+              <b>nicht</b>: Der Anschluss wird nur beim Start des Backends
+              aufgebaut. Bitte das Backend neu starten.
+              ${cfg.listener_error ? `<div style="margin-top:4px;font-size:11.5px">Letzter Fehler: ${esc(cfg.listener_error)}</div>` : ""}
+            </div>` : ""}
+          ${(cfg.mode === "ftp" && !cfg.advertise_host) ? `
+            <div style="margin-top:6px;font-size:11.5px">
+              Hinweis für FTP hinter Docker/NAT: Trage oben unter „Server“ die
+              <b>IP-Adresse</b> ein, unter der die Clients das RMM erreichen —
+              sie wird dem FTP-Programm für die Datenverbindung genannt.
+            </div>` : ""}
           <div style="margin-top:4px">Anmeldung mit den Zugangsdaten des Dashboards.</div>`;
 
         // Nach dem Speichern: Neustart gleich oder später? FTP/SFTP wirken erst
@@ -1078,7 +1092,9 @@ export function renderSettings(body, win) {
   ];
   function presetGrants(preset) {
     // Liefert {role, grants} für die gewählte Vorlage.
-    if (preset === "full_admin") return { role: "admin", grants: null };
+    // "full_admin" ist der alte Name derselben Sache - beide fuehren zur
+    // Rolle "admin". Zwei Bezeichnungen fuer ein Recht waren nur verwirrend.
+    if (preset === "admin" || preset === "full_admin") return { role: "admin", grants: null };
     if (preset === "view_only") {
       return { role: "viewer",
         grants: VIEW_ONLY_ALLOW.map((p) => ({ scope: "global", perm: p, effect: "allow" })) };
@@ -1144,7 +1160,7 @@ export function renderSettings(body, win) {
         <div class="form-row">
           <label>Standard-Rechte</label>
           <select id="su-role">
-            <option value="full_admin">Full Admin (Vollzugriff)</option>
+            <option value="admin">Admin (Vollzugriff)</option>
             <option value="view_only">View Only (nur ansehen)</option>
             <option value="login_only">Login Only (nur anmelden)</option>
           </select>
@@ -1245,7 +1261,7 @@ export function renderSettings(body, win) {
       err.classList.add("hidden");
       const isFixed = pwMode.value === "fixed";
       const username = root.querySelector("#su-username").value.trim();
-      const preset = root.querySelector("#su-role").value;   // full_admin|view_only|login_only
+      const preset = root.querySelector("#su-role").value;   // admin|view_only|login_only
       const { role, grants } = presetGrants(preset);
       const payload = {
         username,

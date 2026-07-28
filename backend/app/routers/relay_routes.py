@@ -961,12 +961,26 @@ async def relay_ftp_config(user: dict = Depends(get_current_user)):
     from app import ftp_relay, sftp_relay
     from app.config import PORT
     sftp_ok, sftp_reason = sftp_relay.available()
+    # Laeuft die Weiche wirklich? Sie wird nur beim Start des Backends auf-
+    # bzw. abgebaut - ohne sie nimmt niemand FTP/SFTP entgegen, egal was
+    # eingestellt ist. Genau das ist der haeufigste Grund fuer "geht nicht".
+    try:
+        from app import front_door
+        door = dict(front_door.STATUS)
+    except Exception:
+        door = {"active": False, "port": None, "error": "Weiche nicht ladbar"}
+    mode_now = ftp_relay.mode()
     return {
-        "mode": ftp_relay.mode(),          # "off" | "ftp" | "sftp"
+        "mode": mode_now,                  # "off" | "ftp" | "sftp"
         "webdav": webdav_enabled(),
         "port": PORT,
         "sftp_available": sftp_ok,
         "sftp_reason": sftp_reason,
+        # Diagnose fuer die Oberflaeche.
+        "listener_active": bool(door.get("active")),
+        "listener_error": door.get("error") or "",
+        "restart_pending": mode_now in ("ftp", "sftp") and not door.get("active"),
+        "advertise_host": (db.get_setting("server_host") or "").strip(),
         # Darf DIESER Benutzer das Backend selbst neu starten? Sonst zeigt die
         # Oberflaeche den Hinweis, einen Administrator darum zu bitten.
         "may_restart": (user.get("role") == "admin"

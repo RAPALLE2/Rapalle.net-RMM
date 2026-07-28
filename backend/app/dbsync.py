@@ -81,6 +81,69 @@ def public_config() -> dict:
 # Externe Verbindung (kleine Dialekt-Schicht)
 # ------------------------------------------------------------------
 
+
+def _ensure_driver(module: str, pypi: str):
+    """
+    Treiber importieren - und wenn er fehlt, selbst nachinstallieren.
+
+    Beide Treiber stehen fest in requirements.txt, bestehende Installationen
+    haben sie aber oft noch nicht (das Image wurde vor der Aenderung gebaut).
+    Ein einzelner pip-Aufruf reicht dafuer nicht immer: Je nach Umgebung
+    scheitert er an einer "externally managed environment" (PEP 668) oder an
+    fehlenden Schreibrechten im System-Verzeichnis. Deshalb werden mehrere
+    Wege der Reihe nach probiert - und im Fehlerfall steht die ECHTE
+    pip-Ausgabe in der Meldung, statt nur "Treiber fehlt".
+    """
+    import importlib
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        pass
+
+    import subprocess
+    import sys
+
+    attempts = [
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", pypi],
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+         "--break-system-packages", pypi],
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+         "--user", pypi],
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+         "--user", "--break-system-packages", pypi],
+    ]
+    errors = []
+    for cmd in attempts:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if res.returncode == 0:
+                importlib.invalidate_caches()
+                # Ein frisch nach --user installiertes Paket liegt evtl. in
+                # einem Pfad, der noch nicht in sys.path steht.
+                try:
+                    import site
+                    for p in (site.getusersitepackages(),):
+                        if p and p not in sys.path:
+                            sys.path.insert(0, p)
+                except Exception:
+                    pass
+                try:
+                    return importlib.import_module(module)
+                except ImportError as e:
+                    errors.append(f"installiert, aber nicht importierbar: {e}")
+                    continue
+            tail = (res.stderr or res.stdout or "").strip().splitlines()
+            errors.append(tail[-1] if tail else f"Exit-Code {res.returncode}")
+        except Exception as e:
+            errors.append(str(e))
+
+    raise RuntimeError(
+        f"Der Datenbank-Treiber '{pypi}' fehlt und liess sich nicht automatisch "
+        f"nachinstallieren. Letzter Fehler: {errors[-1] if errors else 'unbekannt'}. "
+        f"Abhilfe: Container-Image neu bauen (docker compose build --no-cache) "
+        f"oder im Container ausfuehren: pip install {pypi}") from None
+
+
 class ExternalDB:
     """
     Minimale Abstraktion über MySQL/PostgreSQL/SQLite für genau die
@@ -92,10 +155,7 @@ class ExternalDB:
         self.type = (cfg.get("type") or "mysql").lower()
         self.cfg = cfg
         if self.type == "mysql":
-            try:
-                import pymysql  # optionaler Treiber
-            except ImportError:
-                raise RuntimeError("Treiber fehlt: pip install PyMySQL")
+            pymysql = _ensure_driver("pymysql", "PyMySQL")
             self.conn = pymysql.connect(
                 host=cfg.get("host") or "127.0.0.1",
                 port=int(cfg.get("port") or 3306),
@@ -106,10 +166,7 @@ class ExternalDB:
             )
             self.ph = "%s"
         elif self.type == "postgres":
-            try:
-                import psycopg2  # optionaler Treiber
-            except ImportError:
-                raise RuntimeError("Treiber fehlt: pip install psycopg2-binary")
+            psycopg2 = _ensure_driver("psycopg2", "psycopg2-binary")
             self.conn = psycopg2.connect(
                 host=cfg.get("host") or "127.0.0.1",
                 port=int(cfg.get("port") or 5432),

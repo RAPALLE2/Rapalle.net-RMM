@@ -48,6 +48,11 @@ CHUNK = 65536
 import re as _re
 _HTTP_RE = _re.compile(rb"^[A-Z]{3,10} \S+ HTTP/1\.[01]\r\n")
 
+# Diagnose fuer die Oberflaeche: Laeuft die Weiche in DIESEM Prozess? Ohne sie
+# nimmt niemand FTP-/SFTP-Verbindungen entgegen - dann hilft nur ein Neustart
+# des Backends (die Weiche wird nur beim Start auf- bzw. abgebaut).
+STATUS = {"active": False, "port": None, "error": ""}
+
 
 def _looks_like_http(first: bytes) -> bool:
     return bool(_HTTP_RE.match(first or b""))
@@ -185,6 +190,9 @@ async def serve_forever(listen_host: str, listen_port: int,
                         advertise_host: str = "127.0.0.1") -> None:
     server = await start(listen_host, listen_port, upstream_host, upstream_port,
                          advertise_host)
+    STATUS["active"] = True
+    STATUS["port"] = listen_port
+    STATUS["error"] = ""
     addr = ", ".join(str(s.getsockname()) for s in server.sockets or [])
     print(f"[front-door] HTTP + FTP auf {addr} "
           f"(Dashboard intern auf {upstream_host}:{upstream_port})")

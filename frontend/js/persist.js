@@ -133,7 +133,14 @@ const SYNC_PREFIXES = [
   "rmm_notifications", // Benachrichtigungs-Center
 ];
 // Diese bleiben bewusst NUR im Browser (Sicherheit / gerätegebunden).
-const NEVER_SYNC = new Set(["rmm_token", "rmm_login_hint", "rmm_spotify_tokens", "rmm_spotify_pkce"]);
+const NEVER_SYNC = new Set([
+  "rmm_token", "rmm_login_hint", "rmm_spotify_tokens", "rmm_spotify_pkce",
+  // Reiner Messwert-Zwischenspeicher: kann sehr gross werden und wuerde das
+  // Server-Limit (512 KB fuer ALLE Einstellungen zusammen) sprengen. Dann
+  // schlaegt der komplette Sync fehl - und genau daran haengen Startmenue,
+  // Favoriten und Layouts. Der Verlauf baut sich lokal ohnehin neu auf.
+  "rmm_fleet_history",
+]);
 
 function _isSyncable(k) {
   if (!k || NEVER_SYNC.has(k)) return false;
@@ -225,7 +232,21 @@ export async function flushToServer() {
       const v = localStorage.getItem(k);
       keys[k] = v === null ? null : v;   // null = Schlüssel serverseitig löschen
     }
-    await api.mergeUiPrefs(keys);
+    try {
+      await api.mergeUiPrefs(keys);
+    } catch (e) {
+      // Haeufigster Fall: Das Gesamtpaket ist zu gross (413). Dann NICHT
+      // alles verwerfen, sondern die Schluessel einzeln schicken - so landen
+      // die kleinen, wichtigen (Startmenue, Favoriten, Sprache) trotzdem in
+      // der Datenbank und nur der eine dicke Brocken faellt hinten runter.
+      console.warn("[persist] Sammel-Sync fehlgeschlagen, versuche einzeln:", e);
+      const entries = Object.entries(keys)
+        .sort((a, b) => String(a[1] || "").length - String(b[1] || "").length);
+      for (const [k, v] of entries) {
+        try { await api.mergeUiPrefs({ [k]: v }); }
+        catch (e2) { console.warn("[persist] Schlüssel nicht speicherbar:", k, e2); }
+      }
+    }
   } catch (e) {
     console.warn("[persist] Server-Sync fehlgeschlagen:", e);
   }

@@ -541,6 +541,9 @@ def init_db() -> None:
     # markiert werden: sie landen in einem standardmäßig eingeklappten Ordner
     # in der Rechte-/Gruppenauswahl und werden AD-Benutzern nicht zugewiesen.
     _migrate_add_column("groups", "unmanaged", "INTEGER NOT NULL DEFAULT 0")
+    # Standard-Gruppen: '' = normale Gruppe, 'user' = jeder neue Benutzer kommt
+    # automatisch hinein, 'admin' = jeder neue Administrator.
+    _migrate_add_column("groups", "auto_assign", "TEXT NOT NULL DEFAULT ''")
     _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
     _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
     _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
@@ -955,8 +958,102 @@ def init_db() -> None:
         _conn.commit()
         print("[db] Standard-Login angelegt: Benutzername 'admin', Passwort 'admin' (Änderung beim ersten Login erforderlich)")
 
+    # Standard-Gruppen (Alle Benutzer / Alle Administratoren) einmalig anlegen
+    # und bestehende Konten nachtragen.
+    _seed_default_groups()
+
     # Standard-Skripte (Agent-Update, App-Updates) einmalig einspielen.
     _seed_default_scripts()
+
+
+# ------------------------------------------------------------------
+# STANDARD-GRUPPEN
+# ------------------------------------------------------------------
+# Zwei Gruppen, in die neue Konten automatisch aufgenommen werden:
+#   "Alle Benutzer"          -> jeder Account
+#   "Alle Administratoren"   -> jeder Account mit der Rolle 'admin'
+#
+# Sie sind ganz normale Gruppen: Rechte lassen sich in der Rechte-Verwaltung
+# frei anpassen, und sie duerfen geloescht werden - der Seed laeuft nur EINMAL
+# (Settings-Flag 'default_groups_seeded'), sie tauchen also nicht wieder auf.
+#
+# Die Startrechte sind bewusst zurueckhaltend gewaehlt: anmelden, eigenes
+# Dashboard, Profilname, persoenliche Werkzeuge. NICHTS, was fremde Geraete
+# oder Daten sichtbar macht ('access_clients' fehlt absichtlich).
+DEFAULT_GROUP_USER = "Alle Benutzer"
+DEFAULT_GROUP_ADMIN = "Alle Administratoren"
+
+_DEFAULT_USER_PERMS = [
+    "login", "see_dashboard", "restore_session", "customize_dashboard",
+    "edit_profile_name", "use_todos", "use_calendar",
+]
+# Der Admin-Gruppe reicht das Wildcard-Recht: es deckt alle anderen ab.
+_DEFAULT_ADMIN_PERMS = ["admin"]
+
+
+def _seed_default_groups() -> None:
+    # Selbstheilend statt "einmal und nie wieder": Wurde der Seed frueher schon
+    # gesetzt, die Gruppen aber sind nicht (mehr) da - etwa weil sie in einer
+    # aelteren Version gar nicht erst angelegt wurden oder beim Datenbank-
+    # Wechsel verloren gingen -, werden sie erneut erzeugt. Nur wenn beide
+    # Gruppen existieren, bleibt alles unangetastet (dann darf man sie auch
+    # loeschen, ohne dass sie zurueckkommen... siehe unten).
+    seeded = get_setting("default_groups_seeded") == "1"
+    have_user = get_group_by_name(DEFAULT_GROUP_USER) is not None
+    have_admin = get_group_by_name(DEFAULT_GROUP_ADMIN) is not None
+    if seeded and have_user and have_admin:
+        _backfill_default_groups()
+        return
+    if seeded and (have_user or have_admin):
+        # Eine der beiden wurde bewusst geloescht -> respektieren.
+        _backfill_default_groups()
+        return
+    for name, perms, kind in (
+        (DEFAULT_GROUP_USER, _DEFAULT_USER_PERMS, "user"),
+        (DEFAULT_GROUP_ADMIN, _DEFAULT_ADMIN_PERMS, "admin"),
+    ):
+        grp = get_group_by_name(name)
+        # Die alte Rechte-Spalte mitfuellen: einige Pruefungen laufen noch
+        # ueber get_user_permissions() statt ueber die Grants.
+        legacy = [p for p in perms if p in ALL_PERMISSIONS]
+        if not grp:
+            grp = create_group(name, legacy)
+        else:
+            update_group(grp["id"], name, legacy)
+        _conn.execute("UPDATE groups SET auto_assign = ? WHERE id = ?", (kind, grp["id"]))
+        set_grants("group", grp["id"],
+                   [{"scope": "global", "perm": p, "effect": "allow"} for p in perms])
+    _conn.commit()
+    set_setting("default_groups_seeded", "1")
+    print(f"[db] Standard-Gruppen angelegt: '{DEFAULT_GROUP_USER}', '{DEFAULT_GROUP_ADMIN}'")
+    _backfill_default_groups()
+
+
+def auto_assign_groups(user_id: str, role: str) -> None:
+    """Traegt einen Benutzer in alle passenden Standard-Gruppen ein."""
+    try:
+        rows = _conn.execute(
+            "SELECT id, auto_assign FROM groups WHERE auto_assign IS NOT NULL "
+            "AND auto_assign != ''").fetchall()
+    except Exception:
+        return
+    for r in rows:
+        kind = (r["auto_assign"] or "").strip()
+        if kind == "user" or (kind == "admin" and role == "admin"):
+            _conn.execute(
+                "INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)",
+                (user_id, r["id"]))
+    _conn.commit()
+
+
+def _backfill_default_groups() -> None:
+    """Bestehende Konten nachtragen - idempotent (INSERT OR IGNORE)."""
+    try:
+        users = _conn.execute("SELECT id, role FROM users").fetchall()
+    except Exception:
+        return
+    for u in users:
+        auto_assign_groups(u["id"], u["role"])
 
 
 def _seed_default_scripts() -> None:
@@ -1201,6 +1298,9 @@ def create_user(username: str, password_hash: str, display_name: str, role: str,
         (user_id, username, password_hash, display_name, role, int(must_change_pw), _now_ms()),
     )
     _conn.commit()
+    # Standard-Gruppen sofort zuweisen, damit ein frisches Konto nicht ohne
+    # jedes Recht dasteht (nicht einmal 'login').
+    auto_assign_groups(user_id, role)
     return get_user_by_id(user_id)
 
 
@@ -1534,7 +1634,102 @@ def set_user_silent_screen(user_id: int, on: bool) -> None:
     _conn.commit()
 
 
-_UI_PREFS_MAX_BYTES = 512 * 1024   # 512 KB reichen locker für Layouts & Co.
+_UI_PREFS_MAX_BYTES = 512 * 1024   # Altbestand: EIN Blob in users.ui_prefs
+
+# Neue Ablage: eine Zeile JE SCHLUESSEL statt eines einzigen grossen Blobs.
+#
+# Warum der Umbau: Vorher lagen alle UI-Einstellungen zusammen in
+# users.ui_prefs und wurden gegen ein Limit von 512 KB geprueft. Sobald ein
+# einzelner Brocken (Flotten-Verlauf, Benachrichtigungen, grosse Layouts) das
+# Limit sprengte, schlug das GESAMTE Speichern fehl - und mit ihm auch das
+# Startmenue-Layout mit seinen Ordnern. Nach aussen sah das so aus, als wuerde
+# der Browser-Cache "vergessen": In einem anderen Browser/unter einer anderen
+# URL war schlicht nichts da, weil nie etwas ankam.
+#
+# Jetzt scheitert im schlimmsten Fall EIN Schluessel, nie mehr alle.
+_UI_PREF_KEY_MAX_BYTES = 2 * 1024 * 1024      # 2 MB je Schluessel
+_UI_PREF_TOTAL_MAX_BYTES = 32 * 1024 * 1024   # 32 MB je Benutzer insgesamt
+
+
+def _ensure_user_prefs_table() -> None:
+    _conn.executescript("""
+        CREATE TABLE IF NOT EXISTS user_prefs (
+            user_id TEXT NOT NULL,
+            key     TEXT NOT NULL,
+            value   TEXT NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, key)
+        );
+    """)
+    _conn.commit()
+
+
+def get_user_prefs(user_id) -> dict:
+    """Alle UI-Schluessel eines Benutzers als {key: value}."""
+    _ensure_user_prefs_table()
+    out: dict[str, str] = {}
+    try:
+        rows = _conn.execute(
+            "SELECT key, value FROM user_prefs WHERE user_id = ?",
+            (str(user_id),)).fetchall()
+        for r in rows:
+            out[r["key"]] = r["value"]
+    except Exception:
+        pass
+    # Einmalige Uebernahme aus der alten Blob-Spalte, damit bestehende
+    # Installationen ihre Einstellungen behalten.
+    if not out:
+        raw = get_user_ui_prefs(user_id)
+        if raw:
+            import json as _json
+            try:
+                data = _json.loads(raw)
+                keys = data.get("keys") if isinstance(data, dict) else None
+                if isinstance(keys, dict) and keys:
+                    merge_user_prefs(user_id, keys)
+                    out = {str(k): str(v) for k, v in keys.items()}
+            except Exception:
+                pass
+    return out
+
+
+def merge_user_prefs(user_id, keys: dict) -> None:
+    """
+    Einzelne Schluessel schreiben/loeschen (Wert None loescht).
+    Zu grosse Einzelwerte werden uebersprungen - der Rest wird trotzdem
+    gespeichert, damit ein Ausreisser nicht alles blockiert.
+    """
+    _ensure_user_prefs_table()
+    uid = str(user_id)
+    skipped: list[str] = []
+    for k, v in (keys or {}).items():
+        key = str(k)
+        if v is None:
+            _conn.execute("DELETE FROM user_prefs WHERE user_id = ? AND key = ?", (uid, key))
+            continue
+        val = str(v)
+        if len(val.encode("utf-8")) > _UI_PREF_KEY_MAX_BYTES:
+            skipped.append(key)
+            continue
+        _conn.execute(
+            "INSERT INTO user_prefs (user_id, key, value, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (uid, key, val, _now_ms()))
+    _conn.commit()
+    if skipped:
+        print(f"[db] UI-Einstellungen zu gross, uebersprungen: {', '.join(skipped)}")
+
+
+def user_prefs_size(user_id) -> int:
+    _ensure_user_prefs_table()
+    try:
+        row = _conn.execute(
+            "SELECT COALESCE(SUM(LENGTH(value)), 0) AS n FROM user_prefs WHERE user_id = ?",
+            (str(user_id),)).fetchone()
+        return int(row["n"] or 0)
+    except Exception:
+        return 0
 
 
 def get_user_ui_prefs(user_id: int) -> str | None:
@@ -1860,10 +2055,11 @@ GLOBAL_PERM_KEYS = [
     # Bewusst NICHT in 'admin_settings' enthalten - wer Server-Einstellungen
     # ändern darf, muss nicht automatisch fremde Personendaten einsehen.
     "manage_privacy",
-    # Voll-Administrator: deckt JEDES andere Recht ab (wie Rolle 'admin').
-    # Damit lässt sich Super-Admin auch über die Rechte-Verwaltung vergeben,
-    # ohne die Rolle des Benutzers zu ändern.
-    "super_admin",
+    # (Frueher stand hier zusaetzlich "super_admin" - "Voll-Administrator".
+    #  Das war dasselbe wie das 'admin'-Wildcard und nur verwirrend: zwei
+    #  Haekchen mit identischer Wirkung. Beide sind jetzt zu 'admin'
+    #  zusammengefasst; 'super_admin' bleibt als Alt-Schluessel gueltig, damit
+    #  bereits vergebene Rechte weiter greifen.)
     # Neue Clients aufnehmen (Enrollment-Token erzeugen, Agent-Installer holen)
     "add_client",
     # Organigramm (Über-/Unterstellung von Benutzern und Gruppen)
@@ -1905,6 +2101,9 @@ CLIENT_ONLY_PERM_KEYS = [
 LEGACY_PERM_KEYS = [
     "use_guacamole", "use_terminal", "use_screen", "use_explorer",
     "use_taskmanager", "manage_users",
+    # Zusammengefuehrt mit 'admin' (siehe oben) - wird nicht mehr angeboten,
+    # loest aber weiterhin auf.
+    "super_admin",
 ]
 
 # Master-Liste gültiger Keys (für set_grants-Validierung + Resolver).

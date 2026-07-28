@@ -415,8 +415,55 @@ class FTPSession:
 
     async def cmd_PASV(self, arg: str):
         port = await self._open_pasv()
-        ip = (self.host or "127.0.0.1").replace(".", ",")
+        ip = (self._advertise_ip() or "127.0.0.1").replace(".", ",")
         await self.send(f"227 Passivmodus ({ip},{port >> 8},{port & 255})")
+
+    def _advertise_ip(self) -> str:
+        """
+        Adresse, die wir dem Client fuer die Datenverbindung nennen.
+
+        Das ist der haeufigste Grund, warum FTP "nicht geht": Genannt wird eine
+        Adresse, die der Client gar nicht erreichen kann. Im Container ist das
+        die Container-IP (z.B. 172.17.0.2), hinter NAT die interne. Das FTP-
+        Programm meldet dann Zeitueberschreitung oder "Verbindung abgelehnt" -
+        obwohl Anmeldung und Verzeichniswechsel vorher funktioniert haben.
+
+        Reihenfolge:
+          1. Server-Adresse aus den Einstellungen (server_host, sonst der Host
+             aus server_url). Das ist genau die Adresse, unter der die Leute
+             das RMM aufrufen - und damit die einzige, die sicher passt.
+          2. Lokale Seite DIESER Steuerverbindung (stimmt ohne NAT immer).
+          3. Der konfigurierte Host, sofern er keine Platzhalter-Adresse ist.
+        """
+        def _ok(v: str) -> bool:
+            v = (v or "").strip()
+            return bool(v) and v not in ("0.0.0.0", "::", "*", "127.0.0.1", "localhost")
+
+        try:
+            from app import db as _db
+            host = (_db.get_setting("server_host") or "").strip()
+            if not host:
+                url = (_db.get_setting("server_url") or "").strip()
+                if url:
+                    import urllib.parse as _up
+                    host = (_up.urlparse(url).hostname or "").strip()
+            # Die klassische 227-Antwort kann nur IPv4 (vier Zahlen).
+            if _ok(host) and host.count(".") == 3 and host.replace(".", "").isdigit():
+                return host
+        except Exception:
+            pass
+
+        try:
+            sockname = self.writer.get_extra_info("sockname")
+            if sockname and _ok(str(sockname[0])):
+                return str(sockname[0])
+        except Exception:
+            pass
+
+        host = (self.host or "").strip()
+        if _ok(host):
+            return host
+        return "127.0.0.1"
 
     async def cmd_EPSV(self, arg: str):
         port = await self._open_pasv()
