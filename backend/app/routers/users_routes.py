@@ -26,7 +26,11 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 class CreateUserBody(BaseModel):
     username: str
     display_name: str
-    role: str = "admin"            # "admin" oder "viewer"
+    # "admin" (Vollzugriff), "support" (Support-Standardgruppe) oder "viewer".
+    # Die Rolle steuert nur, welche Standard-Gruppen automatisch zugewiesen
+    # werden (siehe db.auto_assign_groups) - die Rechte selbst haengen an den
+    # Gruppen bzw. den Grants.
+    role: str = "admin"
     password: str | None = None    # wenn None -> automatisch generiertes Einmalpasswort
     one_time_password: bool = True  # True = User MUSS beim ersten Login ein eigenes PW setzen
 
@@ -60,6 +64,9 @@ async def create_user(body: CreateUserBody, user: dict = Depends(get_current_use
 
     if db.get_user_by_username(body.username):
         raise HTTPException(400, "Benutzername existiert bereits")
+
+    if body.role not in ("admin", "support", "viewer"):
+        raise HTTPException(400, "Unbekannte Rolle (erlaubt: admin, support, viewer)")
 
     # Entweder das vom Admin vorgegebene Passwort nehmen, oder eins generieren
     plain_password = body.password or _generate_one_time_password()

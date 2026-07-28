@@ -34,6 +34,8 @@ window.notifyError = notifyError;
 import { renderTerminal } from "./apps/terminal.js";
 import { renderExplorer } from "./apps/explorer.js";
 import { renderRelayExplorer } from "./apps/relayexplorer.js";
+// Registriert window.showPermissionDenied - der Dialog bei fehlenden Rechten.
+import "./permdenied.js";
 import { renderTaskManager } from "./apps/taskmanager.js";
 import { renderVnc } from "./apps/vnc.js";
 import { renderEditClient, setEditOnChanged } from "./apps/editclient.js";

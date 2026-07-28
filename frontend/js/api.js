@@ -12,6 +12,79 @@ export function getToken() {
   return localStorage.getItem("rmm_token");
 }
 
+// Ein 403 vom Server bedeutet fast immer "Recht fehlt". Wir versuchen aus der
+// Meldung den technischen Rechte-Schlüssel und daraus eine verständliche
+// Beschreibung zu gewinnen und zeigen dann den Dialog mit Ticket-Angebot.
+//
+// Kein harter Import von permdenied.js: api.js wird von sehr vielen Modulen
+// geladen, ein Ringschluss wäre vorprogrammiert. Deshalb das globale Fenster.
+let _lastPermDialog = 0;
+function _permissionDialog(message, path) {
+  try {
+    const show = window.showPermissionDenied;
+    if (typeof show !== "function") return;
+    // Nur bei Meldungen, die wirklich nach fehlendem Recht klingen. Ein 403
+    // kann auch andere Gründe haben (abgelaufene Freigabe, Sperre) - da wäre
+    // ein Ticket-Angebot verwirrend.
+    const looksLikePerm = /Fehlendes Recht|nicht erlaubt|Kein Zugriff|Nur für Administratoren/i
+      .test(message || "");
+    if (!looksLikePerm) return;
+    // Endpunkte, die im Hintergrund dauernd laufen, sollen keine Fenster
+    // aufpoppen - sonst kommt der Dialog beim Laden des Dashboards ungefragt.
+    if (/\/api\/auth\/(effective|me)|\/api\/notify|\/api\/clients$/.test(path || "")) return;
+    // Bei mehreren parallelen Aufrufen nicht mehrere Fenster stapeln.
+    const now = Date.now();
+    if (now - _lastPermDialog < 8000) return;
+    _lastPermDialog = now;
+
+    const m = /Fehlendes Recht:\s*([\w:.\-]+)/i.exec(message || "");
+    const perm = m ? m[1] : null;
+    // Client-ID aus dem Pfad ziehen, wenn eine drinsteht.
+    const cm = /\/clients?\/([0-9a-f-]{8,})/i.exec(path || "");
+    show({
+      action: _actionFromPerm(perm) || message || "Diese Aktion",
+      perm,
+      clientId: cm ? cm[1] : null,
+      detail: perm ? "" : message,
+    });
+  } catch { /* Dialog ist Komfort - niemals den Fehler verschlucken lassen */ }
+}
+
+// Technische Rechte-Schlüssel in Klartext. Unbekannte Schlüssel werden
+// unverändert durchgereicht - besser der Schlüssel als gar nichts.
+const _PERM_TEXT = {
+  admin_settings: "Server-Einstellungen ändern",
+  manage_settings: "Einstellungen ändern",
+  see_source: "Quellcode ansehen",
+  edit_source: "Quellcode bearbeiten",
+  see_audit: "Audit-Log ansehen",
+  see_permissions: "Berechtigungen ansehen",
+  manage_permissions: "Berechtigungen ändern",
+  create_users: "Benutzer anlegen",
+  manage_clients: "Client bearbeiten",
+  manage_agent: "Agent aktualisieren",
+  access_clients: "auf diesen Client zugreifen",
+  c_terminal: "Terminal öffnen",
+  c_screen: "Remote-Bildschirm starten",
+  c_explorer_view: "Dateien ansehen",
+  c_explorer_edit: "Dateien ändern",
+  c_taskmanager_view: "Task-Manager öffnen",
+  c_taskmanager_kill: "Prozesse beenden",
+  c_power: "Client herunterfahren oder neu starten",
+  c_relay: "Relay freigeben",
+  c_delete: "Client löschen",
+  use_relay: "das Relay benutzen",
+  ticket_create: "ein Ticket erstellen",
+  manage_privacy: "Datenschutz-Vorgänge bearbeiten",
+  manage_patching: "Updates verwalten",
+  customize_dashboard: "das Dashboard anpassen",
+};
+
+function _actionFromPerm(perm) {
+  if (!perm) return null;
+  return _PERM_TEXT[perm] || perm;
+}
+
 async function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   const token = getToken();
@@ -25,6 +98,11 @@ async function request(path, options = {}) {
       const body = await res.json();
       message = body.detail || message;
     } catch { /* Antwort war kein JSON, egal */ }
+    // Fehlt ein Recht, soll der Benutzer nicht nur eine rote Zeile sehen,
+    // sondern gleich die Möglichkeit bekommen, sich beim Support zu melden.
+    // Deshalb hier zentral abgefangen - so gilt es für JEDEN Aufruf, ohne
+    // dass jede App das selbst einbauen muss.
+    if (res.status === 403) _permissionDialog(message, path);
     throw new Error(message);
   }
 

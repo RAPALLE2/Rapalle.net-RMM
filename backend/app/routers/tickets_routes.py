@@ -170,6 +170,11 @@ class TicketBody(BaseModel):
     due_date: int | None = None            # ms oder None
     clients: list[str] = []
     assignees: list[AssigneeEntry] = []
+    # Rechte-Anfrage: gesetzt, wenn das Ticket aus dem Dialog "Dir fehlt eine
+    # Berechtigung" entsteht. Dann wird die Support-Gruppe zugewiesen, AUCH
+    # wenn der Ersteller kein 'ticket_assign' hat - sonst landet die Meldung
+    # bei niemandem. Titel und Ziel setzt in diesem Fall das Frontend fest.
+    perm_request: bool = False
 
 
 def _save_assignees(ticket_id: str, assignees: list[AssigneeEntry]):
@@ -211,6 +216,14 @@ async def create_ticket(body: TicketBody, user: dict = Depends(get_current_user)
     # Zuweisen direkt beim Erstellen nur mit ticket_assign - sonst still leer.
     if body.assignees and user_has_permission(user, "ticket_assign"):
         _save_assignees(tid, body.assignees)
+    elif body.perm_request:
+        # Rechte-Anfrage: immer an die Support-Gruppe, unabhaengig von
+        # 'ticket_assign'. Gibt es die Gruppe nicht, bleibt das Ticket
+        # unzugewiesen - es ist trotzdem angelegt und sichtbar.
+        grp = db.get_group_by_name(db.DEFAULT_GROUP_SUPPORT)
+        if grp:
+            _save_assignees(tid, [AssigneeEntry(subject_type="group",
+                                                subject_id=grp["id"])])
     db.add_audit_entry(user["username"], "ticket.created", target=tid,
                        details=body.title.strip())
     vis.log("ticket", tid, user, "ticket.created", body.title.strip())
@@ -477,6 +490,17 @@ async def delete_file(ticket_id: str, file_id: str,
 
 
 # Auswahl-Listen für den Zuweisungs-Dialog.
+@router.get("/meta/support-group")
+async def support_group(user: dict = Depends(get_current_user)):
+    """Die Support-Standardgruppe - fuer den Dialog bei fehlenden Rechten.
+    Braucht absichtlich nur einen Login: Wer ein Ticket aufmachen darf, muss
+    auch wissen duerfen, wohin es geht."""
+    grp = db.get_group_by_name(db.DEFAULT_GROUP_SUPPORT)
+    return {"id": grp["id"] if grp else None,
+            "name": db.DEFAULT_GROUP_SUPPORT,
+            "exists": bool(grp)}
+
+
 @router.get("/meta/subjects")
 async def assign_subjects(user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")

@@ -1175,6 +1175,9 @@ export function renderSettings(body, win) {
     // "full_admin" ist der alte Name derselben Sache - beide fuehren zur
     // Rolle "admin". Zwei Bezeichnungen fuer ein Recht waren nur verwirrend.
     if (preset === "admin" || preset === "full_admin") return { role: "admin", grants: null };
+    // Support: Rechte kommen aus der Standard-Gruppe "Alle Support", die beim
+    // Anlegen automatisch zugewiesen wird - deshalb hier keine eigenen Grants.
+    if (preset === "support") return { role: "support", grants: null };
     if (preset === "view_only") {
       return { role: "viewer",
         grants: VIEW_ONLY_ALLOW.map((p) => ({ scope: "global", perm: p, effect: "allow" })) };
@@ -1241,6 +1244,7 @@ export function renderSettings(body, win) {
           <label>Standard-Rechte</label>
           <select id="su-role">
             <option value="admin">Admin (Vollzugriff)</option>
+            <option value="support">Support (Tickets bearbeiten)</option>
             <option value="view_only">View Only (nur ansehen)</option>
             <option value="login_only">Login Only (nur anmelden)</option>
           </select>

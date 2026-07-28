@@ -982,13 +982,37 @@ def init_db() -> None:
 # oder Daten sichtbar macht ('access_clients' fehlt absichtlich).
 DEFAULT_GROUP_USER = "Alle Benutzer"
 DEFAULT_GROUP_ADMIN = "Alle Administratoren"
+DEFAULT_GROUP_SUPPORT = "Alle Support"
 
 _DEFAULT_USER_PERMS = [
     "login", "see_dashboard", "restore_session", "customize_dashboard",
     "edit_profile_name", "use_todos", "use_calendar",
+    # Tickets: JEDER muss ein Ticket aufmachen und mitlesen koennen. Sonst
+    # laeuft der "Rechte fehlen -> Ticket erstellen"-Weg ins Leere: Genau die
+    # Leute, denen ein Recht fehlt, koennten sich dann nicht einmal melden.
+    "ticket_read", "ticket_create", "ticket_comment",
 ]
 # Der Admin-Gruppe reicht das Wildcard-Recht: es deckt alle anderen ab.
 _DEFAULT_ADMIN_PERMS = ["admin"]
+
+# Support: bearbeitet die Tickets, die aus fehlenden Rechten entstehen.
+# Bewusst OHNE 'access_clients' - Support soll Tickets bearbeiten koennen,
+# nicht automatisch alle Geraete sehen. Das vergibt man bei Bedarf dazu.
+_DEFAULT_SUPPORT_PERMS = _DEFAULT_USER_PERMS + [
+    "ticket_edit", "ticket_assign", "ticket_resolve", "see_org",
+]
+
+# Seed-Version: bei Erhoehung werden fehlende Gruppen angelegt und GENAU DIE
+# in dieser Version neu dazugekommenen Rechte nachgetragen. Absichtlich nicht
+# die komplette Liste - sonst bekaeme ein Administrator Rechte zurueck, die er
+# bewusst aus der Gruppe entfernt hat.
+_DEFAULT_GROUPS_SEED = "2"
+_SEED_ADD_V2 = {
+    DEFAULT_GROUP_USER: ["ticket_read", "ticket_create", "ticket_comment"],
+    DEFAULT_GROUP_ADMIN: [],
+    # Die Support-Gruppe ist in dieser Version NEU - sie wird komplett angelegt.
+    DEFAULT_GROUP_SUPPORT: _DEFAULT_SUPPORT_PERMS,
+}
 
 
 def _seed_default_groups() -> None:
@@ -998,20 +1022,44 @@ def _seed_default_groups() -> None:
     # Wechsel verloren gingen -, werden sie erneut erzeugt. Nur wenn beide
     # Gruppen existieren, bleibt alles unangetastet (dann darf man sie auch
     # loeschen, ohne dass sie zurueckkommen... siehe unten).
-    seeded = get_setting("default_groups_seeded") == "1"
-    have_user = get_group_by_name(DEFAULT_GROUP_USER) is not None
-    have_admin = get_group_by_name(DEFAULT_GROUP_ADMIN) is not None
-    if seeded and have_user and have_admin:
-        _backfill_default_groups()
-        return
-    if seeded and (have_user or have_admin):
-        # Eine der beiden wurde bewusst geloescht -> respektieren.
-        _backfill_default_groups()
-        return
-    for name, perms, kind in (
+    version = get_setting("default_groups_seeded") or ""
+    wanted = (
         (DEFAULT_GROUP_USER, _DEFAULT_USER_PERMS, "user"),
         (DEFAULT_GROUP_ADMIN, _DEFAULT_ADMIN_PERMS, "admin"),
-    ):
+        (DEFAULT_GROUP_SUPPORT, _DEFAULT_SUPPORT_PERMS, "support"),
+    )
+    if version == _DEFAULT_GROUPS_SEED:
+        _backfill_default_groups()
+        return
+    if version:
+        # Aeltere Version: nur ERGAENZEN. Vorhandene Gruppen behalten ihre
+        # Rechte; es werden lediglich fehlende Erlaubnisse dazugelegt und
+        # fehlende Gruppen neu erzeugt. Wer eine Gruppe bewusst geloescht hat,
+        # bekommt sie nicht zurueck - ausser die Support-Gruppe, die es vorher
+        # ueberhaupt nicht gab.
+        for name, perms, kind in wanted:
+            grp = get_group_by_name(name)
+            fresh = False
+            if not grp:
+                if name != DEFAULT_GROUP_SUPPORT:
+                    continue
+                grp = create_group(name, [p for p in perms if p in ALL_PERMISSIONS])
+                fresh = True
+            _conn.execute("UPDATE groups SET auto_assign = ? WHERE id = ?", (kind, grp["id"]))
+            wish = perms if fresh else _SEED_ADD_V2.get(name, [])
+            have = {g["perm"] for g in get_grants("group", grp["id"])
+                    if g.get("scope") == "global"}
+            add = [{"scope": "global", "perm": p, "effect": "allow"}
+                   for p in wish if p not in have]
+            if add:
+                set_grants("group", grp["id"],
+                           get_grants("group", grp["id"]) + add)
+        _conn.commit()
+        set_setting("default_groups_seeded", _DEFAULT_GROUPS_SEED)
+        print("[db] Standard-Gruppen ergaenzt (inkl. '%s')" % DEFAULT_GROUP_SUPPORT)
+        _backfill_default_groups()
+        return
+    for name, perms, kind in wanted:
         grp = get_group_by_name(name)
         # Die alte Rechte-Spalte mitfuellen: einige Pruefungen laufen noch
         # ueber get_user_permissions() statt ueber die Grants.
@@ -1024,8 +1072,9 @@ def _seed_default_groups() -> None:
         set_grants("group", grp["id"],
                    [{"scope": "global", "perm": p, "effect": "allow"} for p in perms])
     _conn.commit()
-    set_setting("default_groups_seeded", "1")
-    print(f"[db] Standard-Gruppen angelegt: '{DEFAULT_GROUP_USER}', '{DEFAULT_GROUP_ADMIN}'")
+    set_setting("default_groups_seeded", _DEFAULT_GROUPS_SEED)
+    print(f"[db] Standard-Gruppen angelegt: '{DEFAULT_GROUP_USER}', "
+          f"'{DEFAULT_GROUP_ADMIN}', '{DEFAULT_GROUP_SUPPORT}'")
     _backfill_default_groups()
 
 
@@ -1039,7 +1088,8 @@ def auto_assign_groups(user_id: str, role: str) -> None:
         return
     for r in rows:
         kind = (r["auto_assign"] or "").strip()
-        if kind == "user" or (kind == "admin" and role == "admin"):
+        # "user" gilt fuer ALLE Rollen, "admin"/"support" nur fuer die jeweilige.
+        if kind == "user" or (kind == role and role in ("admin", "support")):
             _conn.execute(
                 "INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)",
                 (user_id, r["id"]))

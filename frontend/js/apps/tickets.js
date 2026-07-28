@@ -12,6 +12,7 @@ import { api } from "../api.js";
 import { state, isAdmin, hasGlobalPerm } from "../state.js";
 import { esc, uiConfirm } from "../utils.js";
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker, splitGroups } from "../subjectpicker.js";
+import { RMM_TARGET, RMM_LABEL, targetLabel } from "../tickettarget.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
@@ -100,10 +101,8 @@ export function renderTickets(body, win) {
     const hit = list.find((s) => s.id === a.subject_id);
     return (a.subject_type === "group" ? "👥 " : "👤 ") + (hit ? hit.label : a.subject_id);
   };
-  const clientLabel = (cid) => {
-    const c = state.clients.find((x) => x.id === cid);
-    return c ? `🖥️ ${c.hostname}` : `🖥️ ${cid.slice(0, 8)}…`;
-  };
+  // Kennt sowohl Clients als auch das Haupt-RMM als Ziel.
+  const clientLabel = (cid) => targetLabel(cid);
 
   // ---------------- Liste ----------------
   function drawList() {
@@ -431,8 +430,14 @@ export function renderTickets(body, win) {
           </select></div>
         <div class="form-row"><label>Fällig am</label>
           <input id="tke-due" type="date" value="${existing?.due_date ? new Date(existing.due_date).toISOString().slice(0, 10) : ""}" /></div>
-        <div class="form-row"><label>Clients</label></div>
-        <div style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:150px;overflow:auto;font-size:12px">
+        <div class="form-row"><label>Betrifft</label></div>
+        <div style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:170px;overflow:auto;font-size:12px">
+          <!-- Das RMM selbst als Ziel: fuer alles, was nicht an einem
+               einzelnen Geraet haengt (Dashboard, Rechte, Server). -->
+          <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" data-cid="${esc(RMM_TARGET)}" ${cliChecked(RMM_TARGET) ? "checked" : ""}/>
+            🏢 ${esc(RMM_LABEL)}</label>
+          <div style="font-weight:700;margin:8px 0 4px;color:var(--subtext)">Clients</div>
           ${state.clients.map((c) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-cid="${esc(c.id)}" ${cliChecked(c.id) ? "checked" : ""}/> 🖥️ ${esc(c.hostname)}</label>`).join("")
           || `<div style="color:var(--subtext)">Keine Clients sichtbar</div>`}
@@ -445,10 +450,28 @@ export function renderTickets(body, win) {
             <input type="checkbox" data-stype="user" data-sid="${esc(u.id)}"
               ${existing?.assignees?.some((a) => a.subject_type === "user" && a.subject_id === u.id) ? "checked" : ""}/> ${esc(u.label)}</label>`).join("")}
           <div style="font-weight:700;margin:8px 0 4px">Gruppen</div>
-          ${subjects.groups.map((g) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
-            <input type="checkbox" data-stype="group" data-sid="${esc(g.id)}"
-              ${existing?.assignees?.some((a) => a.subject_type === "group" && a.subject_id === g.id) ? "checked" : ""}/> ${esc(g.label)}</label>`).join("")
-          || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`}
+          ${(() => {
+            // Unverwaltete (AD-)Gruppen liegen in einem eingeklappten Ordner -
+            // sonst gehen die eigenen Gruppen in einer langen AD-Liste unter.
+            const isOn = (g) => existing?.assignees?.some(
+              (a) => a.subject_type === "group" && a.subject_id === g.id);
+            const rows = (arr) => arr.map((g) => `
+              <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+                <input type="checkbox" data-stype="group" data-sid="${esc(g.id)}"
+                  ${isOn(g) ? "checked" : ""}/> ${esc(g.label || g.name)}</label>`).join("");
+            const { managed, unmanaged } = splitGroups(subjects.groups || []);
+            let out = rows(managed) || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`;
+            if (unmanaged.length) {
+              out += `
+                <details style="margin-top:6px" ${unmanaged.some(isOn) ? "open" : ""}>
+                  <summary style="cursor:pointer;color:var(--subtext)">
+                    📁 Unverwaltete AD-Gruppen (${unmanaged.length})
+                  </summary>
+                  <div style="margin-top:4px">${rows(unmanaged)}</div>
+                </details>`;
+            }
+            return out;
+          })()}
         </div>` : ""}
         <div id="tke-error" class="hidden" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
