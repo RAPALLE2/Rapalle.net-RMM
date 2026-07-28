@@ -1,4 +1,5 @@
 import { t } from "../i18n.js";
+import { attachLongPress } from "../touchgestures.js";
 // apps/miniterm.js
 // ----------------
 // Schlanker, abhängigkeitsfreier Terminal-Emulator (VT100/ANSI-Subset).
@@ -77,6 +78,15 @@ export class MiniTerm {
     //   "menu": Rechtsklick öffnet ein Kontextmenü (Kopieren/Einfügen/...)
     // Die Einstellung wird bei JEDEM Rechtsklick frisch gelesen, damit sie
     // ohne Terminal-Neustart wirkt (localStorage-Key, serverseitig gesynct).
+    // Auf dem Handy gibt es keine rechte Maustaste: langes Halten loest
+    // denselben Weg aus wie ein Rechtsklick (Einfuegen bzw. Kontextmenue -
+    // je nach Einstellung weiter unten).
+    attachLongPress(this.screen, (cx, cy) => {
+      this.screen.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 2,
+      }));
+    });
+
     this.screen.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       const mode = (localStorage.getItem("rmm_term_rightclick") || "direct");

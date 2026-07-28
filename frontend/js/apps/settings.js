@@ -482,6 +482,16 @@ export function renderSettings(body, win) {
           inklusive Port und abschließendem <code>/</code>.
         </div>
 
+        <div data-adminsec>
+        <h3 style="margin-top:24px">Relay</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Das Relay stellt die Client-Dateien als Netzlaufwerk bereit. WebDAV ist
+          immer aktiv. Zusätzlich kann ein FTP-Zugang auf demselben Port laufen —
+          für Programme, die kein WebDAV sprechen.
+        </p>
+        <div id="ge-relay" style="font-size:13px;color:var(--subtext)">Lade…</div>
+        </div>
+
         <div data-adminsec id="ge-docker-box" style="display:none">
         <h3 style="margin-top:24px">Container-Dienste</h3>
         <p style="color:var(--subtext);font-size:13px">
@@ -832,6 +842,67 @@ export function renderSettings(body, win) {
       btn.disabled = false; btn.textContent = orig;
     });
     refreshGuacStatus();
+
+    // ---------------- Relay: FTP-Zugang -----------------------------------
+    (async () => {
+      const box = root.querySelector("#ge-relay");
+      if (!box) return;
+      let cfg;
+      try {
+        cfg = await api.relayFtpConfig();
+      } catch {
+        box.textContent = "Dieses Backend kennt den FTP-Zugang noch nicht.";
+        return;
+      }
+      const draw = () => {
+        // Eine Auswahl statt zweier Häkchen: FTP und SFTP schließen sich
+        // gegenseitig aus, weil bei beiden der Server zuerst spricht. So kann
+        // "beide gleichzeitig" gar nicht erst eingestellt werden.
+        const opt = (val, label, hint, disabled = false) => `
+          <label style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;
+                        border-radius:8px;cursor:${disabled ? "not-allowed" : "pointer"};
+                        opacity:${disabled ? ".55" : "1"};
+                        background:${cfg.mode === val ? "var(--panel-2)" : "transparent"}">
+            <input type="radio" name="ge-filemode" value="${val}" style="margin-top:3px"
+                   ${cfg.mode === val ? "checked" : ""} ${disabled ? "disabled" : ""} />
+            <span>
+              <span style="color:var(--text)">${label}</span>
+              <div style="font-size:11.5px;margin-top:2px">${hint}</div>
+            </span>
+          </label>`;
+
+        box.innerHTML = `
+          ${opt("off", "Aus", "Nur WebDAV als Netzlaufwerk.")}
+          ${opt("ftp", `FTP (Port ${cfg.port})`,
+                `<code>ftp://&lt;server&gt;:${cfg.port}</code> · Passivmodus nutzt die Ports
+                 <code>${cfg.passive_ports[0]}–${cfg.passive_ports[1]}</code> —
+                 diese in der Firewall freigeben.`)}
+          ${opt("sftp", `SFTP (Port ${cfg.port})`,
+                cfg.sftp_available
+                  ? `<code>sftp://&lt;server&gt;:${cfg.port}</code> · verschlüsselt, nur ein Port nötig.`
+                  : esc(cfg.sftp_reason),
+                !cfg.sftp_available)}
+          <div style="margin-top:8px;color:var(--warn,#f5a524)">⚠ ${esc(cfg.note)}</div>
+          <div style="margin-top:4px">Anmeldung mit den Zugangsdaten des Dashboards.
+            Änderungen wirken nach einem Neustart des Backends.</div>`;
+
+        box.querySelectorAll("[name=ge-filemode]").forEach((r) =>
+          r.addEventListener("change", async (e) => {
+            const val = e.currentTarget.value;
+            const before = cfg.mode;
+            try {
+              const res = await api.relayFtpMode(val);
+              cfg.mode = res.mode;
+              window.notify?.(res.note || "Gespeichert", "success", 8000);
+            } catch (err) {
+              cfg.mode = before;
+              window.notify?.(err.message, "error", 9000);
+            }
+            draw();
+          }));
+      };
+      draw();
+    })();
 
     // ---------------- Container-Dienste (nur im Docker-Betrieb) -----------
     // Der Bereich bleibt versteckt, solange nicht sicher ist, dass wir in

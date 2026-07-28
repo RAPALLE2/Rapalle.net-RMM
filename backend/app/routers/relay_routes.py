@@ -75,6 +75,7 @@ async def relay_health():
 # Verwaltungs-API (normale Dashboard-Auth über JWT). Freigabe ERFOLGT PRO CLIENT.
 # ------------------------------------------------------------------
 from app.auth import get_current_user, require_admin, require_perm, user_has_permission, can_access_client  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 from fastapi import Depends, HTTPException  # noqa: E402
 
 
@@ -918,3 +919,62 @@ async def dav(request: Request, full_path: str = ""):
                         media_type="application/xml; charset=utf-8")
 
     return PlainTextResponse("Nicht unterstützt", status_code=405)
+
+
+# ==================================================================
+# FTP-Zugang (Einstellungen → Allgemein → Relay)
+# ------------------------------------------------------------------
+# Der FTP-Server teilt sich den Port mit dem Dashboard (siehe
+# app/front_door.py). Ein- und Ausschalten wirkt erst nach einem Neustart
+# des Backends, weil dabei die Weiche vor dem Port auf- bzw. abgebaut wird.
+#
+# SFTP ist bewusst NICHT dabei: Es ist ein SSH-Unterkanal und damit - wie FTP -
+# server-first. Zwei server-first-Protokolle lassen sich auf einem Port beim
+# Verbindungsaufbau nicht auseinanderhalten.
+# ==================================================================
+
+@router.get("/api/relay/ftp")
+async def relay_ftp_config(user: dict = Depends(get_current_user)):
+    require_admin(user)
+    from app import ftp_relay, sftp_relay
+    from app.config import PORT
+    sftp_ok, sftp_reason = sftp_relay.available()
+    return {
+        "mode": ftp_relay.mode(),          # "off" | "ftp" | "sftp"
+        "port": PORT,
+        "passive_ports": [ftp_relay.PASV_PORT_MIN, ftp_relay.PASV_PORT_MAX],
+        "sftp_available": sftp_ok,
+        "sftp_reason": sftp_reason,
+        "note": ("FTP und SFTP schließen sich aus: Bei beiden spricht der Server "
+                 "zuerst, sie wären auf einem gemeinsamen Port nicht "
+                 "unterscheidbar."),
+    }
+
+
+class FtpModeBody(BaseModel):
+    mode: str = "off"                      # "off" | "ftp" | "sftp"
+
+
+@router.post("/api/relay/ftp")
+async def relay_ftp_toggle(body: FtpModeBody, user: dict = Depends(get_current_user)):
+    """
+    Datei-Zugang umschalten. Genau EIN Wert - dadurch kann der Fall
+    "FTP und SFTP gleichzeitig" gar nicht erst entstehen.
+    """
+    require_admin(user)
+    mode = (body.mode or "off").strip().lower()
+    if mode not in ("off", "ftp", "sftp"):
+        raise HTTPException(400, "Ungültiger Modus (erlaubt: off, ftp, sftp)")
+
+    if mode == "sftp":
+        from app import sftp_relay
+        ok, reason = sftp_relay.available()
+        if not ok:
+            raise HTTPException(400, reason)
+
+    db.set_setting("relay_file_mode", mode)
+    # Den alten Schalter mitziehen, damit ältere Stände nichts Falsches lesen.
+    db.set_setting("relay_ftp_enabled", "1" if mode == "ftp" else "0")
+    db.add_audit_entry(user["username"], "relay.file_mode", details=mode)
+    return {"ok": True, "mode": mode,
+            "note": "Änderung wird erst nach einem Neustart des Backends wirksam."}

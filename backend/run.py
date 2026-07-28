@@ -132,7 +132,49 @@ if __name__ == "__main__":
     _tries = 0
     while True:
         try:
-            uvicorn.run("app.main:socket_app", host=HOST, port=PORT)
+            # --- FTP-Zugang am Relay: teilt sich den Port mit dem Dashboard ---
+            # Ist er eingeschaltet, lauscht das Dashboard INTERN auf PORT+1 und
+            # davor sitzt eine Weiche, die HTTP und FTP auseinanderhaelt.
+            # Ausgeschaltet aendert sich gar nichts - dann bindet uvicorn wie
+            # gewohnt direkt auf PORT.
+            _ftp = False
+            try:
+                from app import ftp_relay
+                _ftp = ftp_relay.enabled()
+            except Exception as _e:
+                print(f"[run] FTP-Status nicht lesbar ({_e}) - bleibt aus.")
+
+            if _ftp:
+                import threading
+                import asyncio as _aio
+                from app import front_door
+                _inner = PORT + 1
+                print(f"[run] FTP-Relay aktiv: Weiche auf {HOST}:{PORT}, "
+                      f"Dashboard intern auf 127.0.0.1:{_inner}")
+
+                def _door():
+                    # Eigene Ereignisschleife: uvicorn.run() belegt die des
+                    # Hauptthreads komplett.
+                    try:
+                        async def _boot():
+                            # SFTP laeuft in Threads und braucht eine Schleife,
+                            # ueber die es die Agenten-Aufrufe einplanen kann.
+                            try:
+                                from app import sftp_relay
+                                sftp_relay.set_loop(_aio.get_running_loop())
+                            except Exception:
+                                pass
+                            await front_door.serve_forever(
+                                HOST, PORT, "127.0.0.1", _inner, advertise_host=HOST)
+                        _aio.run(_boot())
+                    except Exception as e:
+                        print(f"[run] Weiche beendet: {e}")
+
+                threading.Thread(target=_door, daemon=True).start()
+                uvicorn.run("app.main:socket_app", host="127.0.0.1", port=_inner,
+                            proxy_headers=True, forwarded_allow_ips="127.0.0.1")
+            else:
+                uvicorn.run("app.main:socket_app", host=HOST, port=PORT)
             # Normaler, sauberer Rücklauf (z.B. Shutdown) -> nicht neu starten.
             break
         except KeyboardInterrupt:

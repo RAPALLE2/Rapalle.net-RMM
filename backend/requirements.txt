@@ -10,6 +10,8 @@ python-socketio>=5.11.0   # Echtzeit-Verbindungen (Agenten + Dashboard)
 python-dotenv>=1.0.0      # Liest .env Dateien für Konfiguration
 bcrypt>=4.2.0             # Sicheres Passwort-Hashing (direkt, ohne passlib)
 PyJWT>=2.9.0              # Login-Tokens (JWT)
+paramiko>=3.4             # SSH-Teil fuer den SFTP-Zugang am Relay (optional -
+                          # ohne das Paket bleibt nur FTP waehlbar)
 qrcode>=7.4               # QR-Code fuer die Zwei-Faktor-Einrichtung. Fehlt es,
                           # zeigt die Oberflaeche das Geheimnis zum Abtippen.
 python-multipart>=0.0.9   # Datei-Uploads und Formulare (FastAPI braucht es fuer

@@ -11,6 +11,7 @@
 //   3. Guacamole.Client mit WebSocketTunnel verbinden, Anzeige + Maus/Tastatur.
 
 import { api } from "../api.js";
+import { attachLongPress, attachPinchZoom } from "../touchgestures.js";
 import { esc, mapKeyboardText, uiConfirm, uiPrompt } from "../utils.js";
 import { t } from "../i18n.js";
 
@@ -144,6 +145,28 @@ export function renderGuacamole(body, win) {
   const formEl = body.querySelector(`#guac-form-${win.key}`);
   const formMsg = body.querySelector(`#guac-form-msg-${win.key}`);
   const displayEl = body.querySelector(`#guac-display-${win.key}`);
+
+  // ---- Touch: Zoomen/Schieben und Halten = Rechtsklick -------------------
+  // Gilt fuer alle Guacamole-Verbindungen, also RDP und VNC ebenso wie SSH und
+  // Telnet. Der Zoom veraendert nur die Darstellung; Guacamole rechnet seine
+  // Koordinaten selbst aus der Groesse des Anzeigebereichs.
+  let guacZoom = null;
+  setTimeout(() => {
+    const inner = displayEl.querySelector("canvas, div") || displayEl;
+    guacZoom = attachPinchZoom(displayEl, inner, { min: 1, max: 6 });
+  }, 600);   // erst wenn Guacamole seinen Anzeigebereich gebaut hat
+
+  attachLongPress(displayEl, (cx, cy) => {
+    // Guacamole erwartet echte Mausereignisse - wir stellen einen Rechtsklick
+    // an genau dieser Stelle nach.
+    const opts = { bubbles: true, clientX: cx, clientY: cy, button: 2, buttons: 2 };
+    const target = document.elementFromPoint(cx, cy) || displayEl;
+    target.dispatchEvent(new MouseEvent("mousedown", opts));
+    setTimeout(() => {
+      target.dispatchEvent(new MouseEvent("mouseup", { ...opts, buttons: 0 }));
+      target.dispatchEvent(new MouseEvent("contextmenu", opts));
+    }, 60);
+  });
   const protoSel = body.querySelector(`#gf-proto-${win.key}`);
   const portInput = body.querySelector(`#gf-port-${win.key}`);
   const connectBtn = body.querySelector(`#gf-connect-${win.key}`);

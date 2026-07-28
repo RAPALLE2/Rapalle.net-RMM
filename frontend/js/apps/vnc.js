@@ -11,6 +11,7 @@
 //   4. Fenster schließt -> "screen-stop" senden (siehe cleanup in app.js)
 
 import { dashboardSocket } from "../socket.js";
+import { attachLongPress, attachPinchZoom } from "../touchgestures.js";
 import { registerCleanup } from "../windowmanager.js";
 import { state } from "../state.js";
 import { api } from "../api.js";
@@ -424,6 +425,24 @@ export function renderVnc(body, win) {
     const { x, y } = mapCoords(e.clientX, e.clientY);
     // Beim Ziehen ebenfalls "move" senden - der Client hält ja die Taste gedrückt
     dashboardSocket.emit("screen-input", { clientId, type: "move", x, y });
+  });
+
+  // ---- Touch: Zoomen/Schieben und Halten = Rechtsklick -------------------
+  // Auf dem Handy gibt es keine rechte Maustaste, und die Gegenstelle ist ohne
+  // Zoom kaum bedienbar. mapCoords() rechnet weiterhin richtig, weil der Zoom
+  // nur die Darstellung veraendert - die getBoundingClientRect() des Bildes
+  // waechst mit.
+  const zoom = attachPinchZoom(img.parentElement, img, { min: 1, max: 6 });
+  registerCleanup(win.key, () => zoom.destroy());
+
+  attachLongPress(img, (cx, cy) => {
+    if (!controlEnabled()) return;
+    const { x, y } = mapCoords(cx, cy);
+    // Rechtsklick = druecken + sofort loslassen an derselben Stelle.
+    dashboardSocket.emit("screen-input", { clientId, type: "down", x, y, button: "right" });
+    setTimeout(() => {
+      dashboardSocket.emit("screen-input", { clientId, type: "up", x, y, button: "right" });
+    }, 60);
   });
 
   img.addEventListener("mousedown", (e) => {

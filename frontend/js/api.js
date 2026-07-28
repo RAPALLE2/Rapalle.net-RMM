@@ -426,6 +426,9 @@ export const api = {
   sourceRoots: () => request("/api/source/roots"),
   // Installationsart: Docker-Container oder natives Programm
   sourceRuntime: () => request("/api/source/runtime"),
+  // Relay: FTP-Zugang (teilt sich den Port mit dem Dashboard)
+  relayFtpConfig: () => request("/api/relay/ftp"),
+  relayFtpMode: (mode) => request("/api/relay/ftp", { method: "POST", body: JSON.stringify({ mode }) }),
   // --- Container-Dienste (nur im Docker-Betrieb) ---
   dockerServices: () => request("/api/admin/docker/services"),
   dockerEnable: (key) => request(`/api/admin/docker/services/${key}/enable`, { method: "POST" }),
