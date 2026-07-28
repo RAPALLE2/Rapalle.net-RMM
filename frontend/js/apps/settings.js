@@ -268,8 +268,7 @@ export function renderSettings(body, win) {
           Aktualisiert den RMM-Server direkt aus dem GitHub-Repo. Das Backend
           startet nach einem Update automatisch neu.
         </p>
-        <button class="btn-primary" id="up-toggle" style="width:auto">🔄 Update-Optionen anzeigen</button>
-        <div id="up-panel" class="hidden" style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--panel-2)">
+        <div id="up-panel" style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--panel-2)">
           <div id="up-loading" style="color:var(--subtext);font-size:13px">Lade Update-Informationen von GitHub…</div>
           <div id="up-content" class="hidden">
             <div style="font-size:13px;margin-bottom:10px">
@@ -316,7 +315,9 @@ export function renderSettings(body, win) {
                 <option value="any" ${(s.server_auto_update_channel || "full") === "any" ? "selected" : ""}>Neuestes Release (Alpha + Full)</option>
               </select>
             </div>
-            <button class="taskbar-btn" id="up-auto-save">Auto-Update speichern</button>
+            <p style="color:var(--subtext);font-size:12px;margin:2px 0 0">
+              Auto-Update-Einstellungen werden unten mit „${esc(t("save"))}" gespeichert.
+            </p>
           </div>
         </div>
         </div>
@@ -521,9 +522,11 @@ export function renderSettings(body, win) {
           </div>
         </div>
         <div id="guacd-status" style="font-size:13px;margin:2px 0 8px;color:var(--subtext)">${t("guac_loading")}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn-primary" id="guacd-save" style="width:auto;margin:0">${t("save")}</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="taskbar-btn" id="guacd-test">${t("guac_test")}</button>
+          <span style="color:var(--subtext);font-size:12px">
+            Host und Port werden unten mit „${esc(t("save"))}" gespeichert.
+          </span>
         </div>
         </div>
       </div>
@@ -622,9 +625,22 @@ export function renderSettings(body, win) {
         payload.host_lock_extra = val("ge-hostlock-extra").trim();
         payload.host_lock_trust_proxy = val("ge-hostlock-proxy");
       }
+      // Auto-Update (Sektion "Update") hat keinen eigenen Speichern-Knopf mehr -
+      // der Zustand haengt jetzt am grossen Knopf hier unten.
+      if (has("up-auto")) {
+        payload.server_auto_update = root.querySelector("#up-auto").checked ? "1" : "0";
+        payload.server_auto_update_channel = val("up-auto-channel");
+      }
+      // Genauso guacd (Host/Port) - ebenfalls ohne eigenen Knopf.
+      if (has("ge-guacd-host")) {
+        payload.guacd_host = val("ge-guacd-host").trim();
+        payload.guacd_port = parseInt(val("ge-guacd-port"), 10) || 4822;
+      }
       try {
         await api.updateSettings(payload);
         window.notify?.(t("general_saved"), "success");
+        // guacd-Erreichbarkeit direkt neu pruefen, wenn die Sektion da ist.
+        try { root._refreshGuacStatus?.(); } catch {}
       } catch (e) {
         err.textContent = e.message; err.classList.remove("hidden");
       }
@@ -691,13 +707,9 @@ export function renderSettings(body, win) {
       }
     }
 
-    root.querySelector("#up-toggle").addEventListener("click", () => {
-      const show = upPanel.classList.contains("hidden");
-      upPanel.classList.toggle("hidden", !show);
-      root.querySelector("#up-toggle").textContent =
-        show ? "🔄 Update-Optionen ausblenden" : "🔄 Update-Optionen anzeigen";
-      if (show && !upInfoLoaded) loadUpdateInfo();
-    });
+    // Der Bereich ist jetzt sofort offen - die GitHub-Infos werden direkt beim
+    // Öffnen des Reiters geladen (kein "Update-Optionen anzeigen" mehr).
+    if (upPanel) loadUpdateInfo();
 
     root.querySelector("#up-repo-save").addEventListener("click", async () => {
       const err = root.querySelector("#up-error"); err.classList.add("hidden");
@@ -727,17 +739,6 @@ export function renderSettings(body, win) {
         btn.disabled = false; btn.textContent = "⬇️ Update installieren";
         err.textContent = e.message; err.classList.remove("hidden");
       }
-    });
-
-    root.querySelector("#up-auto-save").addEventListener("click", async () => {
-      const err = root.querySelector("#up-error"); err.classList.add("hidden");
-      try {
-        await api.updateSettings({
-          server_auto_update: root.querySelector("#up-auto").checked ? "1" : "0",
-          server_auto_update_channel: root.querySelector("#up-auto-channel").value,
-        });
-        window.notify?.(t("u_auto_update_einstellungen_gespeich"), "success");
-      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
 
     // ---- Externe Datenbank (Settings -> Datenbank) ----
@@ -824,20 +825,11 @@ export function renderSettings(body, win) {
       }
     }
 
-    async function saveGuacd() {
-      try {
-        await api.updateSettings({
-          guacd_host: root.querySelector("#ge-guacd-host").value.trim(),
-          guacd_port: parseInt(root.querySelector("#ge-guacd-port").value, 10) || 4822,
-        });
-        window.notify?.(t("general_saved"), "success");
-        refreshGuacStatus();
-      } catch (e) {
-        window.notify?.(e.message, "error");
-      }
-    }
+    // Host/Port speichert der grosse "Speichern"-Knopf unten (siehe #ge-save).
+    // Damit er den Status danach neu pruefen kann, wird die Funktion hier
+    // am root-Element hinterlegt.
+    root._refreshGuacStatus = refreshGuacStatus;
 
-    root.querySelector("#guacd-save").addEventListener("click", saveGuacd);
     root.querySelector("#guacd-test").addEventListener("click", async (e) => {
       const btn = e.currentTarget; const orig = btn.textContent;
       btn.disabled = true; btn.textContent = "…";

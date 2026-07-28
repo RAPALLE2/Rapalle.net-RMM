@@ -35,6 +35,30 @@ function notifyChanged() {
 
 let cascade = 0; // sorgt für leicht versetzte Positionierung neuer Fenster
 
+// -----------------------------------------------------------------
+// Mehrfach-Instanzen: Standardmäßig holt ein erneutes Öffnen das bereits
+// vorhandene Fenster nach vorne. Wer wirklich eine ZWEITE Instanz will, hält
+// beim Klick die Umschalttaste (Shift) gedrückt.
+//
+// Warum ein globaler Merker statt eines Parameters: Die Apps öffnen Fenster an
+// dutzenden Stellen (Startmenü, Kacheln, Kontextmenüs, Tastenkürzel). Den
+// Modifier überall durchzureichen wäre fehleranfällig - hier wird er einmal
+// zentral mitgeschnitten.
+// -----------------------------------------------------------------
+let _shiftDown = false;
+try {
+  window.addEventListener("keydown", (e) => { if (e.key === "Shift") _shiftDown = true; }, true);
+  window.addEventListener("keyup", (e) => { if (e.key === "Shift") _shiftDown = false; }, true);
+  // Maus-/Touch-Ereignisse tragen den echten Zustand - zuverlässiger als
+  // keydown/keyup, wenn zwischendurch der Fokus gewechselt hat.
+  window.addEventListener("mousedown", (e) => { _shiftDown = !!e.shiftKey; }, true);
+  window.addEventListener("click", (e) => { _shiftDown = !!e.shiftKey; }, true);
+  window.addEventListener("blur", () => { _shiftDown = false; });
+} catch {}
+
+// Für Apps, die selbst entscheiden wollen (z.B. „Neues Terminal"-Knopf).
+export function wantsNewInstance() { return _shiftDown; }
+
 const layer = () => document.getElementById("window-layer");
 
 // Bei Größenänderung des Browserfensters alle offenen Fenster wieder
@@ -58,19 +82,21 @@ window.addEventListener("resize", () => {
 
 export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
                             x = null, y = null, minimized = false, maximized = false, focus = true,
-                            singleton = false, pinned = false }) {
+                            singleton = false, pinned = false, newInstance = null }) {
   // Alte, noch mit '#' persistierte Keys reparieren (CSS-Selektor-sicher).
   key = String(key).replace(/#/g, "--");
   const existing = state.windows.find((win) => win.key === key);
-  if (existing && !singleton) {
-    // Mehrfach-Instanzen erlaubt: für die neue Instanz einen eindeutigen
-    // Schlüssel ableiten (key#2, key#3, ...) und ein FRISCHES Fenster bauen.
-    // Zustandsgebundene Fenster (Einstellungen, Profil, Bearbeiten, ...)
-    // übergeben singleton:true und behalten das alte Fokus-Verhalten.
+  // Soll wirklich eine ZWEITE Instanz entstehen?
+  //   newInstance === true/false -> Aufrufer entscheidet hart
+  //   newInstance === null       -> Umschalttaste entscheidet
+  const forceNew = newInstance === true || (newInstance !== false && _shiftDown);
+  if (existing && !singleton && forceNew) {
+    // Mehrfach-Instanzen: für die neue Instanz einen eindeutigen Schlüssel
+    // ableiten (key--2, key--3, ...) und ein FRISCHES Fenster bauen.
     // WICHTIG: KEIN '#' im Suffix! Die Apps bauen Element-IDs aus win.key
     // (z.B. querySelector(`#term-text-${win.key}`)) - ein '#' im Key machte
     // diese Selektoren ungültig, wodurch jede 2./3. Instanz "unfunktionell"
-    // war (v.a. mehrere Terminals desselben Clients). Suffix jetzt "--n".
+    // war (v.a. mehrere Terminals desselben Clients). Suffix "--n".
     let n = 2;
     while (state.windows.some((win) => win.key === `${key}--${n}`)) n++;
     key = `${key}--${n}`;

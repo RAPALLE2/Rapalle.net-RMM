@@ -1058,13 +1058,13 @@ export function handleAction(action, client) {
   const colorProps = { clientColor: client.color };
   const props = { clientId: client.id, clientName: client.hostname, platform: client.platform };
   if (action === "terminal") {
-    // Eindeutiger Key pro Klick -> mehrere Terminals desselben Clients gleichzeitig.
-    const suffix = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`).slice(0, 8);
+    // Stabiler Key: ein erneuter Klick holt das vorhandene Terminal nach vorne.
+    // Mit gedrückter Umschalttaste entsteht ein zweites Terminal (Suffix --2).
     const openCount = state.windows.filter((w) => w.appId === "terminal" && w.props?.clientId === client.id).length;
     const title = openCount > 0
       ? `${t("terminal")} — ${client.hostname} (${openCount + 1})`
       : `${t("terminal")} — ${client.hostname}`;
-    openWindow({ key: `terminal-${client.id}-${suffix}`, appId: "terminal", title, props, ...colorProps });
+    openWindow({ key: `terminal-${client.id}`, appId: "terminal", title, props, ...colorProps });
   }
   else if (action === "explorer") openWindow({ key: `explorer-${client.id}`, appId: "explorer", title: `${t("file_explorer")} — ${client.hostname}`, props, ...colorProps });
   else if (action === "vnc") openWindow({ key: `vnc-${client.id}`, appId: "vnc", title: `${t("remote_screen")} — ${client.hostname}`, props, ...colorProps, w: 800, h: 600 });

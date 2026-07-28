@@ -65,15 +65,18 @@ services:
       - ./agent:/app/agent
       # Zeitzone vom Host übernehmen (read-only).
       - /etc/localtime:/etc/localtime:ro
-      # Docker-Socket: NUR nötig, wenn guacd und die SQL-Datenbank später
-      # bequem im Dashboard dazugeschaltet werden sollen
-      # (Einstellungen -> Allgemein -> Container-Dienste). Das Backend legt
-      # die beiden Container dann selbst als Nachbarn in diesem Netzwerk an.
+      # Docker-Socket: Damit kann das Backend Nachbar-Container selbst starten -
+      # guacd (RDP/VNC/SSH) und die SQL-Datenbank lassen sich dann direkt im
+      # Dashboard dazuschalten (Einstellungen -> Allgemein -> Container-Dienste).
+      # Ohne diese Zeile bleiben genau diese Schalter wirkungslos.
       #
-      # ACHTUNG: Wer den Socket erreicht, hat faktisch Rootrechte auf dem Host.
-      # Deshalb ist die Zeile bewusst auskommentiert - nur aktivieren, wenn die
-      # Funktion gewünscht ist, und den Dashboard-Zugang entsprechend schützen.
-      # - /var/run/docker.sock:/var/run/docker.sock
+      # SICHERHEITSHINWEIS: Wer den Socket erreicht, kann auf dem HOST beliebige
+      # Container starten - das entspricht faktisch Rootrechten auf dem Host.
+      # Der Zugang zum RMM-Dashboard (und besonders das Recht 'see_source')
+      # muss deshalb entsprechend streng vergeben werden. Wer das nicht will,
+      # kommentiert die Zeile aus; die Container-Dienste sind dann deaktiviert
+      # und guacd/SQL müssen von Hand betrieben werden.
+      - /var/run/docker.sock:/var/run/docker.sock
 
     # Der Container laeuft standardmaessig als root IM Container - das ist
     # nicht dasselbe wie root auf dem Host und in aller Regel richtig so.
