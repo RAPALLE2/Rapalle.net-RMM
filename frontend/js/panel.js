@@ -1002,7 +1002,7 @@ export const OVERVIEW_SUBS = {
 
 export async function handleQuickAction(action, client) {
   if (action === "edit") {
-    openWindow({ singleton: true, key: `edit-${client.id}`, appId: "edit-client", title: `${t("edit")} — ${client.hostname}`, props: { clientId: client.id }, w: 480, h: 520 });
+    openWindow({ key: `edit-${client.id}`, appId: "edit-client", title: `${t("edit")} — ${client.hostname}`, props: { clientId: client.id }, w: 480, h: 520 });
     return;
   }
   if (action === "reboot" || action === "shutdown") {

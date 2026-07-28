@@ -20,7 +20,10 @@ import { renderNotifications } from "./notifications.js";
 import { registerCleanup } from "../windowmanager.js";
 
 export function renderSettings(body, win) {
-  let activeTab = "general";
+  // Direkt auf einem bestimmten Reiter oeffnen (z.B. angehefteter Favorit
+  // "Einstellungen -> Source"). Faellt auf "general" zurueck, wenn nichts
+  // uebergeben wurde oder das Recht fehlt (siehe draw()).
+  let activeTab = (win && win.props && win.props.tab) || "general";
   let sourceCleanup = null;  // Aufräumen der Source-Shell (Socket/PTY) beim Verlassen
 
   // Beim Schließen des Einstellungen-Fensters die Source-Shell sicher beenden.

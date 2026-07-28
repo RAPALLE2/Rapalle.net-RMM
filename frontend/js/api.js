@@ -72,6 +72,11 @@ export const api = {
   getUiPrefs: () => request("/api/auth/ui-prefs"),
   saveUiPrefs: (keys) => request("/api/auth/ui-prefs", {
     method: "PUT", body: JSON.stringify({ keys }) }),
+  // Teil-Update (Merge): nur die uebergebenen Schluessel aendern. Wird vom
+  // Frontend fuer JEDEN Sync benutzt, damit ein leerer Browser-Cache niemals
+  // den Server-Stand loeschen kann.
+  mergeUiPrefs: (keys) => request("/api/auth/ui-prefs", {
+    method: "PATCH", body: JSON.stringify({ keys }) }),
   // Einmaliger Silent-Modus für den Remote-Bildschirm
   getSilentScreen: () => request("/api/auth/silent-screen"),
   setSilentScreen: (enabled) => request("/api/auth/silent-screen", {

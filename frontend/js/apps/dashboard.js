@@ -10,7 +10,8 @@
 
 import { state } from "../state.js";
 import { esc } from "../utils.js";
-import { favClientIds, favWebsiteList, favStarHtml, selectClientExternal } from "../sidebar.js";
+import { favClientIds, favWebsiteList, favStarHtml, selectClientExternal,
+         favPinList, openPin, pinIcon, removePin } from "../sidebar.js";
 import { renderFleetWidgets, refreshFleetWidgets } from "../fleetdash.js";
 
 // (Die Donut-/Tooltip-/groupBy-Logik der Flotten-Übersicht lebt jetzt in
@@ -66,7 +67,8 @@ export function renderDashboard(target) {
     if (!box) return;
     const favClients = state.clients.filter((c) => favClientIds("d").includes(c.id));
     const favSites = favWebsiteList("d");
-    if (!favClients.length && !favSites.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+    const pins = favPinList("d");
+    if (!favClients.length && !favSites.length && !pins.length) { box.style.display = "none"; box.innerHTML = ""; return; }
     box.style.display = "";
 
     const clientCards = favClients.map((c) => `
@@ -90,9 +92,27 @@ export function renderDashboard(target) {
       </div>`;
     }).join("");
 
+    // Selbst angeheftete Eintraege (Apps, App-Unterseiten, Client-Sitzungen, Links)
+    const pinCards = pins.map((p) => `
+      <div class="panel fav-pin" data-dash-pin="${esc(p.id)}"
+           title="${esc(p.sub || p.label || "")}"
+           style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer">
+        <span class="fav-pin-ico">${esc(pinIcon(p))}</span>
+        <span style="font-weight:600">${esc(p.label || "Favorit")}</span>
+        <span class="fav-star both fav-pin-del" data-pin-del="${esc(p.id)}" title="Favorit entfernen">\u2605</span>
+      </div>`).join("");
+
     box.innerHTML = `
-      <h3 style="margin:0 0 8px;font-size:14px;color:var(--subtext)">★ Angeheftet</h3>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${clientCards}${siteCards}</div>`;
+      <h3 style="margin:0 0 8px;font-size:14px;color:var(--subtext)">\u2605 Angeheftet</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${pinCards}${clientCards}${siteCards}</div>`;
+
+    box.querySelectorAll("[data-dash-pin]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        const del = e.target.closest("[data-pin-del]");
+        if (del) { e.stopPropagation(); removePin(del.dataset.pinDel); renderDashFavorites(); return; }
+        openPin(pins.find((x) => x.id === el.dataset.dashPin));
+      })
+    );
     // Website-Favoriten nach open_mode öffnen (intern/extern).
     box.querySelectorAll("[data-dash-web]").forEach((a) =>
       a.addEventListener("click", (e) => {

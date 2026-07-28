@@ -113,56 +113,131 @@ let _user = "anon";
 let _serverTimer = null;
 let _hydrated = false;
 
-// Welche localStorage-Keys serverseitig synchronisiert werden.
+// Welche Schlüssel gehören zum server-gespeicherten UI-Zustand?
+//
+// Früher war das eine feste Liste - jeder neue Schlüssel, den irgendein Modul
+// einführte, wurde schlicht vergessen und lebte nur im Browser. Deshalb jetzt
+// PRÄFIX-BASIERT: alles, was zu diesen Präfixen passt, landet automatisch in
+// der Datenbank. Nur echt gerätegebundene Dinge (Login-Token, Spotify-OAuth)
+// bleiben ausdrücklich lokal.
+const SYNC_PREFIXES = [
+  KEY_PREFIX,          // "rapalle-ui:<user>"  Fenster/Sidebar/Layouts/Profile
+  "rapalle-favs:",     // Favoriten (Sidebar + Dashboard + angeheftete Einträge)
+  "rmm_appmenu:",      // Startmenü-Layout inkl. ORDNER
+  "rmm_webapps:",      // interner Browser: gespeicherte Web-Apps
+  "rmm_dash",          // Dashboard-Zusatzzustände
+  "rmm_fleet",         // Flotten-Dashboard (Raster, Verlauf, Migrationen)
+  "rmm_icon_mode",     // Icon-Darstellung (SVG/Emoji)
+  "rmm_lang",          // Sprache
+  "rmm_term_",         // Terminal-Einstellungen
+  "rmm_notifications", // Benachrichtigungs-Center
+];
+// Diese bleiben bewusst NUR im Browser (Sicherheit / gerätegebunden).
+const NEVER_SYNC = new Set(["rmm_token", "rmm_login_hint", "rmm_spotify_tokens", "rmm_spotify_pkce"]);
+
+function _isSyncable(k) {
+  if (!k || NEVER_SYNC.has(k)) return false;
+  // Benutzergebundene Schlüssel nur für DIESEN Benutzer synchronisieren.
+  if (k.includes(":")) {
+    const [pfx, rest] = [k.slice(0, k.indexOf(":") + 1), k.slice(k.indexOf(":") + 1)];
+    if (SYNC_PREFIXES.includes(pfx) && rest !== _user) return false;
+  }
+  return SYNC_PREFIXES.some((p) => k === p || k.startsWith(p));
+}
+
+// Alle aktuell im Browser liegenden, synchronisierbaren Schlüssel.
 function _syncedKeys() {
-  return [
-    _key,                        // Fenster/Sidebar/Layouts/Profile (dieser Store)
-    `rmm_appmenu:${_user}`,      // Startmenü-Layout
-    `rapalle-favs:${_user}`,     // Favoriten (Sidebar + Dashboard)
-    "rmm_icon_mode",             // Icon-Darstellung (SVG/Emoji)
-    "rmm_lang",                  // Sprache
-    "rmm_term_rightclick",       // Terminal: Rechtsklick direkt vs. Kontextmenü
-    `rmm_webapps:${_user}`,      // interner Browser: gespeicherte Web-Apps
-  ];
+  const out = new Set([_key, `rmm_appmenu:${_user}`, `rapalle-favs:${_user}`, `rmm_webapps:${_user}`]);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (_isSyncable(k)) out.add(k);
+    }
+  } catch {}
+  return [...out].filter((k) => !NEVER_SYNC.has(k));
 }
 
 // Beim Login: Server-Stand holen und in localStorage übernehmen (Server
-// gewinnt). MUSS vor loadState()/initFavorites() laufen.
+// gewinnt IMMER). MUSS vor loadState()/initFavorites()/initStartMenu() laufen.
+//
+// Wichtig: Es werden ALLE vom Server gelieferten Schlüssel übernommen, nicht
+// nur die aus einer festen Liste. Dadurch ist der Browser-Cache nur noch ein
+// Spiegel der Datenbank - egal über welche URL man das RMM öffnet.
 export async function hydrateFromServer() {
   try {
     const { api } = await import("./api.js");
     const res = await api.getUiPrefs();
     const keys = (res && res.keys) || {};
-    for (const k of _syncedKeys()) {
-      if (Object.prototype.hasOwnProperty.call(keys, k)) {
-        try { localStorage.setItem(k, keys[k]); } catch {}
+    // Sonderfall "Erstmigration": Der Server kennt noch gar nichts (z.B. weil
+    // dieser Benutzer bisher nur lokal gearbeitet hat). Dann NICHT aufräumen,
+    // sondern den vorhandenen lokalen Stand einmalig in die Datenbank heben.
+    if (!Object.keys(keys).length) {
+      _hydrated = true;
+      const local = _syncedKeys().some((k) => localStorage.getItem(k) !== null);
+      if (local) { try { await flushToServer(); } catch {} }
+      return;
+    }
+    // 1) Lokale Reste eines fremden/alten Stands entfernen, damit nichts
+    //    "durchblutet", was der Server nicht (mehr) kennt.
+    const stale = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (_isSyncable(k) && !Object.prototype.hasOwnProperty.call(keys, k)) stale.push(k);
       }
+    } catch {}
+    for (const k of stale) { try { localStorage.removeItem(k); } catch {} }
+    // 2) Server-Stand einspielen.
+    for (const [k, v] of Object.entries(keys)) {
+      if (NEVER_SYNC.has(k)) continue;
+      try { localStorage.setItem(k, v); } catch {}
     }
     _hydrated = true;
   } catch (e) {
-    // Server nicht erreichbar o.ä. -> lokaler Stand bleibt einfach bestehen.
+    // Server nicht erreichbar o.ä. -> lokaler Stand bleibt bestehen, ABER es
+    // wird nichts hochgeladen (siehe _hydrated-Sperre in syncToServerSoon).
     console.warn("[persist] Server-UI-Einstellungen nicht ladbar:", e);
   }
 }
 
-// Gedrosseltes Hochladen des aktuellen Stands (fire-and-forget).
+export function isHydrated() { return _hydrated; }
+
+// Gedrosseltes Hochladen (fire-and-forget) - immer als MERGE (PATCH).
+//
+// Sperre: Solange der Server-Stand nicht erfolgreich geladen wurde, wird NICHTS
+// hochgeladen. Sonst konnte ein frisch geöffneter Browser (leerer Cache) den in
+// der Datenbank gespeicherten Zustand überschreiben - genau der Grund, warum
+// Startmenü-Ordner & Co. beim Öffnen über eine andere URL "weg" waren.
 export function syncToServerSoon() {
-  if (!_enabled) return;
+  if (!_enabled || !_hydrated) return;
   clearTimeout(_serverTimer);
-  _serverTimer = setTimeout(async () => {
-    try {
-      const { api } = await import("./api.js");
-      const keys = {};
-      for (const k of _syncedKeys()) {
-        const v = localStorage.getItem(k);
-        if (v !== null) keys[k] = v;
-      }
-      await api.saveUiPrefs(keys);
-    } catch (e) {
-      console.warn("[persist] Server-Sync fehlgeschlagen:", e);
-    }
-  }, 1500);
+  _serverTimer = setTimeout(() => { flushToServer(); }, 1200);
 }
+
+// Sofort schreiben (z.B. beim Schließen des Tabs).
+export async function flushToServer() {
+  if (!_enabled || !_hydrated) return;
+  clearTimeout(_serverTimer);
+  try {
+    const { api } = await import("./api.js");
+    const keys = {};
+    for (const k of _syncedKeys()) {
+      const v = localStorage.getItem(k);
+      keys[k] = v === null ? null : v;   // null = Schlüssel serverseitig löschen
+    }
+    await api.mergeUiPrefs(keys);
+  } catch (e) {
+    console.warn("[persist] Server-Sync fehlgeschlagen:", e);
+  }
+}
+
+// Beim Verlassen der Seite den letzten Stand noch mitnehmen (best effort).
+try {
+  window.addEventListener("pagehide", () => { if (_serverTimer) flushToServer(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && _serverTimer) flushToServer();
+  });
+} catch {}
 
 // --- Speichern (gedrosselt, damit häufige Änderungen nicht spammen) ---
 export function scheduleSave(state) {

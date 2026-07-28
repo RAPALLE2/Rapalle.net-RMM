@@ -35,14 +35,24 @@ const expanded = new Set();
 let _favUser = "anon";
 // Zwei Dimensionen pro Eintrag: s = Seitenleiste, d = Dashboard.
 // clients/tenants: {id:{s,d}} ; websites: {id:{s,d,meta:{name,url,clientId,clientHostname}}}
-const favorites = { clients: {}, tenants: {}, websites: {} };
+//
+// NEU: "pins" = frei anheftbare Einträge, die man über den ★-Knopf in der
+// Favoriten-Leiste selbst anlegt. Damit lassen sich Dinge anheften, die vorher
+// keinen Stern hatten:
+//   { id: { s, d, meta: {
+//       kind: "app"      -> appId (+ optional props, z.B. {tab:"source"})
+//            | "session" -> clientId + action (terminal/explorer/vnc/...)
+//            | "website" -> url + open_mode
+//            | "client" | "tenant"  -> Auswahl in der Sidebar
+//       label, icon, ... } } }
+const favorites = { clients: {}, tenants: {}, websites: {}, pins: {} };
 let favExpanded = true;   // Favoriten-Sektion aufgeklappt?
 
 function _favKey() { return `rapalle-favs:${_favUser}`; }
 
 export function initFavorites(username) {
   _favUser = username || "anon";
-  favorites.clients = {}; favorites.tenants = {}; favorites.websites = {};
+  favorites.clients = {}; favorites.tenants = {}; favorites.websites = {}; favorites.pins = {};
   try {
     const raw = localStorage.getItem(_favKey());
     if (raw) {
@@ -53,6 +63,7 @@ export function initFavorites(username) {
       if (Array.isArray(d.tenants)) d.tenants.forEach((id) => favorites.tenants[id] = { s: true, d: false });
       else Object.assign(favorites.tenants, d.tenants || {});
       Object.assign(favorites.websites, d.websites || {});
+      Object.assign(favorites.pins, d.pins || {});
       if (typeof d.expanded === "boolean") favExpanded = d.expanded;
     }
   } catch {}
@@ -62,11 +73,94 @@ function _saveFavorites() {
   try {
     localStorage.setItem(_favKey(), JSON.stringify({
       clients: favorites.clients, tenants: favorites.tenants,
-      websites: favorites.websites, expanded: favExpanded,
+      websites: favorites.websites, pins: favorites.pins, expanded: favExpanded,
     }));
     // Favoriten zusätzlich serverseitig sichern (in jedem Browser gleich).
     import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
   } catch {}
+}
+
+// -----------------------------------------------------------------
+// Angeheftete Einträge (Pins)
+// -----------------------------------------------------------------
+function _pinId() {
+  return "p_" + (window.crypto?.randomUUID?.().slice(0, 8)
+    || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
+}
+
+// meta = {kind, label, icon, appId?, props?, clientId?, action?, url?, open_mode?, targetId?}
+// dims = {s, d}  (Seitenleiste / Dashboard) - Standard: beide.
+export function addPin(meta, dims = { s: true, d: false }) {
+  const id = _pinId();
+  favorites.pins[id] = { s: !!dims.s, d: !!dims.d, meta: meta || {} };
+  _saveFavorites();
+  renderSidebar();
+  window.dispatchEvent(new CustomEvent("favorites-changed", { detail: { kind: "pins", id } }));
+  return id;
+}
+
+export function removePin(id) {
+  delete favorites.pins[id];
+  _saveFavorites();
+  renderSidebar();
+  window.dispatchEvent(new CustomEvent("favorites-changed", { detail: { kind: "pins", id } }));
+}
+
+export function favPinList(dim) {
+  return Object.entries(favorites.pins)
+    .filter(([, v]) => v[dim])
+    .map(([id, v]) => ({ id, s: !!v.s, d: !!v.d, ...(v.meta || {}) }));
+}
+
+// Einen Pin ausführen (öffnet App / Sitzung / Website oder wählt aus).
+export async function openPin(pin) {
+  if (!pin) return;
+  try {
+    if (pin.kind === "app") {
+      const { openWindow } = await import("./windowmanager.js");
+      const props = pin.props || {};
+      if (pin.appId && Object.keys(props).length) {
+        // App mit Unterseite (z.B. Einstellungen -> Source): direkt öffnen,
+        // damit die props (tab) wirklich ankommen.
+        openWindow({
+          key: `${pin.appId}`, appId: pin.appId,
+          title: pin.label || pin.appId, props,
+          w: pin.w || 900, h: pin.h || 640,
+        });
+      } else if (window.openRmmApp) {
+        window.openRmmApp(pin.appId);
+      }
+      return;
+    }
+    if (pin.kind === "session") {
+      const client = state.clients.find((c) => c.id === pin.clientId);
+      if (!client) { window.notify?.("Client nicht (mehr) verfügbar.", "warn", 4000); return; }
+      const { handleAction } = await import("./panel.js");
+      handleAction(pin.action || "terminal", client);
+      return;
+    }
+    if (pin.kind === "website") {
+      const m = await import("./apps/webbrowser.js");
+      m.openWebsiteEntry({ url: pin.url, name: pin.label || pin.url, open_mode: pin.open_mode || "internal" });
+      return;
+    }
+    if (pin.kind === "client") { revealClient(pin.targetId); select("client", pin.targetId); return; }
+    if (pin.kind === "tenant") { select("tenant", pin.targetId); return; }
+  } catch (e) {
+    window.notify?.("Favorit konnte nicht geöffnet werden: " + e.message, "error", 6000);
+  }
+}
+
+// Icon-Vorschlag je nach Pin-Art (falls keins gesetzt).
+export function pinIcon(pin) {
+  if (pin.icon) return pin.icon;
+  if (pin.kind === "session") {
+    return { terminal: "🖥️", explorer: "📁", vnc: "🖵", guacamole: "🪟", taskmanager: "📈" }[pin.action] || "🔧";
+  }
+  if (pin.kind === "website") return pin.open_mode === "internal" ? "🪟" : "🔗";
+  if (pin.kind === "client") return "💻";
+  if (pin.kind === "tenant") return "🏢";
+  return "⭐";
 }
 
 // Aktueller Zustand: {s, d}
@@ -470,11 +564,21 @@ function renderFavorites() {
   const sClientIds = favClientIds("s");
   const favClients = state.clients.filter((c) => sClientIds.includes(c.id));
   const favSites = favWebsiteList("s");
+  const pins = favPinList("s");
 
-  if (!favTenants.length && !favClients.length && !favSites.length) {
-    box.innerHTML = `<div class="fav-empty">Noch keine Favoriten – tippe auf ☆ neben einem Client, Tenant oder einer Website.</div>`;
+  if (!favTenants.length && !favClients.length && !favSites.length && !pins.length) {
+    box.innerHTML = `<div class="fav-empty">Noch keine Favoriten – tippe auf ☆ neben einem Client, Tenant oder einer Website, oder lege über den ★-Knopf oben einen eigenen Favoriten an (App, App-Unterseite, Client-Sitzung, …).</div>`;
   } else {
     let h = "";
+    // Selbst angeheftete Einträge zuerst (Apps, Sitzungen, Links).
+    for (const p of pins) {
+      h += `
+        <div class="tree-row row-anim fav-row fav-pin" data-fav-pin="${esc(p.id)}" title="${esc(p.sub || p.label || "")}">
+          <span class="fav-pin-ico">${esc(pinIcon(p))}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.label || "Favorit")}</span>
+          <span class="fav-star both fav-pin-del" data-pin-del="${esc(p.id)}" title="Favorit entfernen">★</span>
+        </div>`;
+    }
     for (const tn of favTenants) {
       h += `
         <div class="tree-row row-anim fav-row" data-fav-select="tenant:${tn.id}">
@@ -503,6 +607,16 @@ function renderFavorites() {
     }
     box.innerHTML = h;
   }
+
+  // Angeheftete Einträge: Klick öffnet, Klick auf den Stern entfernt.
+  box.querySelectorAll("[data-fav-pin]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      const del = e.target.closest("[data-pin-del]");
+      if (del) { e.stopPropagation(); removePin(del.dataset.pinDel); return; }
+      const p = favPinList("s").find((x) => x.id === el.dataset.favPin);
+      openPin(p);
+    })
+  );
 
   // Klick auf Favorit -> auswählen (+ Pfad aufklappen bei Clients)
   box.querySelectorAll("[data-fav-select]").forEach((el) =>
@@ -547,10 +661,21 @@ export function initSidebarNav() {
   }
 
   const header = document.getElementById("fav-header");
-  if (header) header.addEventListener("click", () => {
+  if (header) header.addEventListener("click", (e) => {
+    if (e.target.closest("#fav-add-btn")) return;   // ★-Knopf: eigener Handler
     favExpanded = !favExpanded;
     _saveFavorites();
     renderFavorites();
+  });
+
+  // ★-Knopf neben "Favoriten": eigenen Favoriten anlegen (App, App mit
+  // Unterseite, Client-Sitzung, Website, Client/Tenant).
+  const addBtn = document.getElementById("fav-add-btn");
+  if (addBtn) addBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!favExpanded) { favExpanded = true; _saveFavorites(); renderFavorites(); }
+    const m = await import("./favadd.js");
+    m.openAddFavoriteDialog();
   });
   const dash = document.getElementById("sidebar-dashboard");
   if (dash) dash.addEventListener("click", () => {

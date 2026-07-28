@@ -844,6 +844,28 @@ label:has(input[type="checkbox"]) {
 .sidebar-fav-list { animation: children-in 0.2s ease; padding: 0 4px; }
 .fav-row { margin: 2px 6px; padding: 5px 8px; border-radius: 7px; cursor: pointer; }
 .fav-empty { font-size: 11px; color: var(--subtext); padding: 6px 12px; line-height: 1.4; }
+
+/* ★-Knopf direkt neben dem Text "Favoriten": legt eigene Favoriten an
+   (Apps, App-Unterseiten, Client-Sitzungen, Links). Bewusst NUR ein Stern. */
+.sidebar-fav-header .fav-title { flex: 1; }
+.fav-add-btn {
+  border: none; background: transparent; color: var(--subtext);
+  font-size: 14px; line-height: 1; padding: 2px 4px; margin-left: 2px;
+  border-radius: 6px; cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+.fav-add-btn:hover {
+  color: var(--accent, #4da6ff);
+  background: rgba(255, 255, 255, 0.08);
+  transform: scale(1.15);
+}
+.fav-add-btn:active { transform: scale(0.94); }
+
+/* Angeheftete Einträge (Pins) */
+.fav-pin { display: flex; align-items: center; gap: 7px; }
+.fav-pin .fav-pin-ico { width: 16px; text-align: center; flex: none; }
+.fav-pin .fav-pin-del { opacity: 0; transition: opacity 0.16s ease; }
+.fav-pin:hover .fav-pin-del { opacity: 1; }
 .sidebar-section-label {
   font-size: 11px; color: var(--subtext); text-transform: uppercase;
   letter-spacing: 0.5px; padding: 8px 12px 4px; margin-top: 4px;

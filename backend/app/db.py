@@ -1551,6 +1551,39 @@ def set_user_ui_prefs(user_id: int, prefs_json: str) -> None:
     _conn.commit()
 
 
+def merge_user_ui_prefs(user_id: int, keys: dict) -> dict:
+    """
+    Führt einzelne UI-Schlüssel in den gespeicherten Stand ein, OHNE die
+    übrigen Schlüssel zu verlieren.
+
+    Warum das wichtig ist: Früher hat das Frontend immer den KOMPLETTEN Satz
+    per PUT geschrieben. Öffnete man das RMM über eine andere URL/einen anderen
+    Browser (leerer localStorage) und lief ein Speichervorgang, bevor der
+    Server-Stand geladen war, wurden serverseitig gespeicherte Dinge (offene
+    Ordner im Startmenü, Favoriten, Layouts) überschrieben bzw. gelöscht.
+    Mit dem Merge kann ein Client immer nur das ändern, was er wirklich kennt.
+
+    Wert None löscht den Schlüssel gezielt.
+    """
+    import json as _json
+    raw = get_user_ui_prefs(user_id)
+    cur = {}
+    if raw:
+        try:
+            data = _json.loads(raw)
+            if isinstance(data, dict) and isinstance(data.get("keys"), dict):
+                cur = data["keys"]
+        except Exception:
+            cur = {}
+    for k, v in (keys or {}).items():
+        if v is None:
+            cur.pop(k, None)
+        else:
+            cur[str(k)] = str(v)
+    set_user_ui_prefs(user_id, _json.dumps({"keys": cur}))
+    return cur
+
+
 def update_client(client_id: str, fields: dict) -> dict | None:
     """
     Generisches Update für den Edit-Dialog im Frontend.

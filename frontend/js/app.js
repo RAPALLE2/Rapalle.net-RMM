@@ -591,11 +591,11 @@ function initMenusAndButtons() {
   });
   document.getElementById("btn-open-profile").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ singleton: true, key: "profile", appId: "profile", title: "Profil", w: 460, h: 560 });
+    openWindow({ key: "profile", appId: "profile", title: "Profil", w: 460, h: 560 });
   });
   document.getElementById("btn-open-notifications").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ singleton: true, key: "notifycenter", appId: "notifycenter", title: "Benachrichtigungen", w: 520, h: 600 });
+    openWindow({ key: "notifycenter", appId: "notifycenter", title: "Benachrichtigungen", w: 520, h: 600 });
   });
   // Punkt am Benutzermenü-Button + am Menüeintrag, solange ungelesene
   // Benachrichtigungen vorhanden sind (Farbe = schwerste ungelesene Stufe).
@@ -603,7 +603,7 @@ function initMenusAndButtons() {
   attachUnreadDot(document.getElementById("btn-open-notifications"));
   document.getElementById("btn-open-settings").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ singleton: true, key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
+    openWindow({ key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
   });
 
   // Startmenü (unten links)
@@ -632,16 +632,16 @@ function initMenusAndButtons() {
     if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
     else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
     else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
-    else if (app === "manage") openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
-    else if (app === "settings") openWindow({ singleton: true, key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
-    else if (app === "permissions") openWindow({ singleton: true, key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
+    else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+    else if (app === "settings") openWindow({ key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
+    else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
     else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
     else if (app === "scripts") openWindow({ key: "scripts", appId: "scripts", title: "Scripts", w: 680, h: 560 });
     else if (app === "bulk") openWindow({ key: "bulk", appId: "bulk", title: "Bulk Remote Shell", w: 720, h: 600 });
     else if (app === "towerdefense") openWindow({ key: "towerdefense", appId: "towerdefense", title: "Tower Defense", w: 760, h: 620 });
-    else if (app === "gaminghub") openWindow({ singleton: true, key: "gaminghub", appId: "gaminghub", title: "Gaming Hub", w: 820, h: 640 });
+    else if (app === "gaminghub") openWindow({ key: "gaminghub", appId: "gaminghub", title: "Gaming Hub", w: 820, h: 640 });
     else if (app === "aichat") openWindow({ key: "aichat", appId: "aichat", title: "AI Chat", w: 860, h: 620 });
-    else if (app === "audioplayer") openWindow({ singleton: true, key: "audioplayer", appId: "audioplayer", title: "Audio Player", w: 1120, h: 700 });
+    else if (app === "audioplayer") openWindow({ key: "audioplayer", appId: "audioplayer", title: "Audio Player", w: 1120, h: 700 });
     else if (app === "webbrowser") openWindow({ key: "webbrowser", appId: "webbrowser", title: "Browser", w: 1020, h: 720 });
     else if (app.startsWith("webapp:")) {
       // Gespeicherte Web-App: Seite direkt in eigenem Fenster öffnen.
@@ -649,13 +649,13 @@ function initMenusAndButtons() {
       if (wa) openWindow({ key: app, appId: "webapp", title: `${wa.icon} ${wa.name}`,
                            props: { url: wa.url, name: wa.name, icon: wa.icon }, w: 1020, h: 720 });
     }
-    else if (app === "tickets") openWindow({ singleton: true, key: "tickets", appId: "tickets", title: "Tickets", w: 960, h: 660 });
-    else if (app === "chat") openWindow({ singleton: true, key: "chat", appId: "chat", title: "Chat", w: 900, h: 620 });
-    else if (app === "orgchart") openWindow({ singleton: true, key: "orgchart", appId: "orgchart", title: "Organigramm", w: 780, h: 640 });
-    else if (app === "calendar") openWindow({ singleton: true, key: "calendar", appId: "calendar", title: "Kalender", w: 900, h: 680 });
-    else if (app === "todos") openWindow({ singleton: true, key: "todos", appId: "todos", title: "Todos", w: 960, h: 640 });
-    else if (app === "privacy") openWindow({ singleton: true, key: "privacy", appId: "privacy", title: "Datenschutz", w: 820, h: 680 });
-    else if (app === "patching") openWindow({ singleton: true, key: "patching", appId: "patching", title: "Updates", w: 940, h: 700 });
+    else if (app === "tickets") openWindow({ key: "tickets", appId: "tickets", title: "Tickets", w: 960, h: 660 });
+    else if (app === "chat") openWindow({ key: "chat", appId: "chat", title: "Chat", w: 900, h: 620 });
+    else if (app === "orgchart") openWindow({ key: "orgchart", appId: "orgchart", title: "Organigramm", w: 780, h: 640 });
+    else if (app === "calendar") openWindow({ key: "calendar", appId: "calendar", title: "Kalender", w: 900, h: 680 });
+    else if (app === "todos") openWindow({ key: "todos", appId: "todos", title: "Todos", w: 960, h: 640 });
+    else if (app === "privacy") openWindow({ key: "privacy", appId: "privacy", title: "Datenschutz", w: 820, h: 680 });
+    else if (app === "patching") openWindow({ key: "patching", appId: "patching", title: "Updates", w: 940, h: 700 });
     else if (app === "automation") openWindow({ key: "automation", appId: "automation", title: "Automation", w: 620, h: 640 });
     else if (app === "relay-manager") openWindow({ key: "relay-manager", appId: "relay-manager", title: "Explorer-Relay verwalten", w: 760, h: 560 });
     else if (app === "speedtest") openWindow({ key: "speedtest", appId: "speedtest", title: "Speedtest", w: 560, h: 640 });
@@ -679,12 +679,12 @@ function initMenusAndButtons() {
 
   // Tenants/Standorte verwalten (Zahnrad in der Sidebar-Kopfzeile)
   document.getElementById("btn-manage-hierarchy").addEventListener("click", () => {
-    openWindow({ singleton: true, key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+    openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
   });
 
   // "Client hinzufügen"
   document.getElementById("btn-add-client").addEventListener("click", () => {
-    openWindow({ singleton: true, key: "add-client", appId: "add-client", title: t("u_client_hinzufugen"), w: 560, h: 600 });
+    openWindow({ key: "add-client", appId: "add-client", title: t("u_client_hinzufugen"), w: 560, h: 600 });
   });
 }
 

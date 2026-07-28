@@ -186,7 +186,7 @@ export function notifyError(message, level = "error", context = null, durationMs
       label: t("u_im_audit_offnen"),
       onClick: () => {
         import("./windowmanager.js").then(({ openWindow }) => {
-          openWindow({ singleton: true, key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
+          openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
           // Kurz warten, bis das Audit-Fenster gerendert ist und seinen
           // Highlight-Listener registriert hat.
           setTimeout(() => window.dispatchEvent(new CustomEvent("audit-highlight", {

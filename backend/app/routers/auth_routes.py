@@ -284,6 +284,26 @@ async def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)
     return {"ok": True}
 
 
+class UiPrefsPatchBody(BaseModel):
+    # { "keys": { "<Key>": "<Wert>" | null } }  - null loescht den Schluessel.
+    keys: dict[str, str | None] = {}
+
+
+@router.patch("/ui-prefs")
+async def patch_ui_prefs(body: UiPrefsPatchBody, user: dict = Depends(get_current_user)):
+    """
+    Teil-Update: nur die uebergebenen Schluessel werden geaendert, alle anderen
+    bleiben unangetastet. Das Frontend benutzt ausschliesslich diesen Weg, damit
+    ein frisch geoeffneter Browser (leerer localStorage) niemals den in der
+    Datenbank gespeicherten Zustand ueberschreiben kann.
+    """
+    try:
+        db.merge_user_ui_prefs(user["id"], body.keys or {})
+    except ValueError as e:
+        raise HTTPException(413, str(e))
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------
 # Silent-Modus für den Remote-Bildschirm (einmalig): Die NÄCHSTE Sitzung
 # startet ohne Zustimmungs-Dialog am Gerät, danach schaltet sich der Modus

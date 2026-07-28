@@ -134,7 +134,12 @@
         <!-- Ausklappbare Favoriten (Tenants + Clients mit Stern) -->
         <div class="sidebar-fav">
           <div id="fav-header" class="sidebar-fav-header">
-            <span class="fav-caret">▾</span> <span class="nav-ico">★</span> Favoriten
+            <span class="fav-caret">▾</span> <span class="nav-ico">★</span>
+            <span class="fav-title">Favoriten</span>
+            <!-- Eigenen Favoriten anlegen (App, App-Unterseite, Client-Sitzung, Link) -->
+            <button id="fav-add-btn" class="fav-add-btn" type="button"
+                    title="Favorit anheften (App, Unterseite, Client-Sitzung, Link)"
+                    aria-label="Favorit anheften">★</button>
           </div>
           <div id="sidebar-fav-list" class="sidebar-fav-list">
             <!-- wird per JS befüllt (sidebar.js) -->
