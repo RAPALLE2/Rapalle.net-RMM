@@ -106,7 +106,7 @@ export function attachPinchZoom(box, el, opts = {}) {
   const points = new Map();          // aktive Finger
   let startDist = 0, startScale = 1;
   let startMid = { x: 0, y: 0 };
-  let panFrom = null;
+  let lastMid = null;      // letzter Fingermittelpunkt (zum Mitschieben)
 
   box.style.overflow = "hidden";
   box.style.touchAction = "none";    // eigene Gesten statt Browser-Scrollen
@@ -133,11 +133,13 @@ export function attachPinchZoom(box, el, opts = {}) {
       startDist = dist(a, b) || 1;
       startScale = scale;
       startMid = mid(a, b);
-      panFrom = null;
-    } else if (points.size === 1 && scale > 1) {
-      // Nur im gezoomten Zustand schieben - sonst wären normale Klicks weg.
-      panFrom = { x: e.clientX, y: e.clientY, tx, ty };
+      lastMid = startMid;
     }
+    // Bewusst NICHT mit einem Finger schieben: Der eine Finger gehört der
+    // Gegenstelle, damit sich dort Fenster ziehen und Symbole verschieben
+    // lassen. Verschoben wird die Ansicht mit ZWEI Fingern - wie in
+    // Kartenanwendungen. Sonst müsste man sich zwischen "Ansicht bewegen" und
+    // "auf dem entfernten Rechner ziehen" entscheiden.
   };
 
   const onMove = (e) => {
@@ -150,14 +152,17 @@ export function attachPinchZoom(box, el, opts = {}) {
       // Um den Mittelpunkt zwischen den Fingern zoomen, nicht um die Ecke.
       const r = box.getBoundingClientRect();
       const cx = startMid.x - r.left, cy = startMid.y - r.top;
+      const nowMid = mid(a, b);
       tx = cx - ((cx - tx) / scale) * next;
       ty = cy - ((cy - ty) / scale) * next;
+      // Wandern beide Finger gemeinsam, verschiebt sich die Ansicht mit -
+      // Zoomen und Schieben in einer Bewegung, ohne abzusetzen.
+      if (lastMid) {
+        tx += nowMid.x - lastMid.x;
+        ty += nowMid.y - lastMid.y;
+      }
+      lastMid = nowMid;
       scale = next;
-      apply();
-      e.preventDefault?.();
-    } else if (panFrom && points.size === 1) {
-      tx = panFrom.tx + (e.clientX - panFrom.x);
-      ty = panFrom.ty + (e.clientY - panFrom.y);
       apply();
       e.preventDefault?.();
     }
@@ -165,8 +170,7 @@ export function attachPinchZoom(box, el, opts = {}) {
 
   const onUp = (e) => {
     points.delete(e.pointerId);
-    if (points.size < 2) startDist = 0;
-    if (points.size === 0) panFrom = null;
+    if (points.size < 2) { startDist = 0; lastMid = null; }
   };
 
   // Doppeltippen: zwischen Originalgröße und zweifacher Vergrößerung wechseln.

@@ -11,7 +11,7 @@
 //   4. Fenster schließt -> "screen-stop" senden (siehe cleanup in app.js)
 
 import { dashboardSocket } from "../socket.js";
-import { attachLongPress, attachPinchZoom } from "../touchgestures.js";
+import { attachPinchZoom } from "../touchgestures.js";
 import { registerCleanup } from "../windowmanager.js";
 import { state } from "../state.js";
 import { api } from "../api.js";
@@ -435,14 +435,86 @@ export function renderVnc(body, win) {
   const zoom = attachPinchZoom(img.parentElement, img, { min: 1, max: 6 });
   registerCleanup(win.key, () => zoom.destroy());
 
-  attachLongPress(img, (cx, cy) => {
-    if (!controlEnabled()) return;
+  // ---- Touch-Bedienung -----------------------------------------------
+  // Ein Finger gehört der Gegenstelle, damit sich dort Fenster ziehen und
+  // Symbole verschieben lassen. Unterschieden wird nach Bewegung und Zeit:
+  //
+  //   kurz tippen           -> Linksklick
+  //   bewegen               -> ziehen mit gedrückter linker Taste
+  //   halten ohne Bewegung  -> Rechtsklick
+  //
+  // Die Entscheidung fällt erst NACH dem Aufsetzen: Würde beim Aufsetzen
+  // sofort "gedrückt" gesendet, käme beim Halten zusätzlich ein Linksklick an
+  // und aus einem Rechtsklick würde ein versehentliches Ziehen.
+  const TOUCH_HOLD_MS = 500;     // ab hier gilt es als Halten
+  const TOUCH_MOVE_PX = 10;      // ab hier gilt es als Ziehen
+  let touchStart = null;
+  let touchDragging = false;
+  let touchHoldTimer = null;
+
+  const touchSend = (type, cx, cy, button = "left") => {
     const { x, y } = mapCoords(cx, cy);
-    // Rechtsklick = druecken + sofort loslassen an derselben Stelle.
-    dashboardSocket.emit("screen-input", { clientId, type: "down", x, y, button: "right" });
-    setTimeout(() => {
-      dashboardSocket.emit("screen-input", { clientId, type: "up", x, y, button: "right" });
-    }, 60);
+    dashboardSocket.emit("screen-input", { clientId, type, x, y, button });
+  };
+
+  img.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" || !controlEnabled()) return;
+    img.focus();
+    touchStart = { cx: e.clientX, cy: e.clientY };
+    touchDragging = false;
+    clearTimeout(touchHoldTimer);
+    touchHoldTimer = setTimeout(() => {
+      // Gehalten ohne Bewegung -> Rechtsklick.
+      if (!touchStart || touchDragging) return;
+      try { navigator.vibrate?.(18); } catch {}
+      const { cx, cy } = touchStart;
+      touchSend("down", cx, cy, "right");
+      setTimeout(() => touchSend("up", cx, cy, "right"), 60);
+      touchStart = null;
+    }, TOUCH_HOLD_MS);
+  }, { passive: true });
+
+  img.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "mouse" || !touchStart || !controlEnabled()) return;
+    const moved = Math.abs(e.clientX - touchStart.cx) + Math.abs(e.clientY - touchStart.cy);
+    if (!touchDragging && moved > TOUCH_MOVE_PX) {
+      // Erst jetzt die Taste drücken - und zwar am AUFSETZPUNKT. Nur so
+      // greift die Gegenstelle den Fenstertitel dort, wo der Finger startete.
+      clearTimeout(touchHoldTimer);
+      touchDragging = true;
+      touchSend("down", touchStart.cx, touchStart.cy, "left");
+    }
+    if (touchDragging) {
+      touchSend("move", e.clientX, e.clientY);
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  img.addEventListener("pointerup", (e) => {
+    if (e.pointerType === "mouse" || !touchStart) return;
+    clearTimeout(touchHoldTimer);
+    if (touchDragging) {
+      touchSend("up", e.clientX, e.clientY, "left");
+    } else if (controlEnabled()) {
+      // Kurzes Tippen -> vollständiger Linksklick an derselben Stelle.
+      const { cx, cy } = touchStart;
+      touchSend("down", cx, cy, "left");
+      setTimeout(() => touchSend("up", cx, cy, "left"), 40);
+    }
+    touchStart = null;
+    touchDragging = false;
+  });
+
+  img.addEventListener("pointercancel", () => {
+    clearTimeout(touchHoldTimer);
+    if (touchDragging && touchStart) touchSend("up", touchStart.cx, touchStart.cy, "left");
+    touchStart = null;
+    touchDragging = false;
+  }, { passive: true });
+
+  // Das Auswahl-/Lupenmenü des Browsers stört beim Ziehen.
+  img.addEventListener("contextmenu", (e) => {
+    if (e.pointerType !== "mouse") e.preventDefault();
   });
 
   img.addEventListener("mousedown", (e) => {

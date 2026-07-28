@@ -330,7 +330,6 @@ export function renderGuacamole(body, win) {
   let client = null;
   let keyboard = null;
   let mouse = null;
-  let touch = null;   // Guacamole-Touchanbindung (Handy/Tablet)
   let sizePoll = null;
   let lastCW = 0, lastCH = 0;
   let disconnected = false;
@@ -743,26 +742,97 @@ export function renderGuacamole(body, win) {
 
     // --- Touch (Handy/Tablet) ---
     // Guacamole.Mouse hört NUR auf Mausereignisse - auf einem Touchgerät kam
-    // deshalb gar nichts an. Guacamole bringt dafür eine eigene Klasse mit,
-    // die Tippen in einen Linksklick und langes Halten in einen Rechtsklick
-    // übersetzt und Ziehen als Mausbewegung weitergibt.
-    // Der Klassenname hat sich zwischen den Guacamole-Versionen geändert,
-    // deshalb beide Varianten probieren.
-    try {
-      const TouchClass = (Guacamole.Mouse && Guacamole.Mouse.Touchscreen)
-        || Guacamole.Touchscreen;
-      if (TouchClass) {
-        touch = new TouchClass(displayElement);
-        // Etwas mehr Zeit fürs Halten - 500 ms fühlen sich auf dem Handy
-        // sicherer an als der knappe Standardwert.
-        if ("longPressThreshold" in touch) touch.longPressThreshold = 500;
-        touch.onmousedown = touch.onmouseup = touch.onmousemove = sendMouse;
+    // deshalb gar nichts an. Die mitgelieferte Touch-Klasse wäre eine Option,
+    // ihr Verhalten unterscheidet sich aber je nach Guacamole-Version. Damit
+    // sich RDP und VNC hier GENAUSO anfühlen wie der Remote-Screen, wird es
+    // bewusst selbst gemacht:
+    //
+    //   kurz tippen           -> Linksklick
+    //   bewegen               -> ziehen mit gedrückter linker Taste
+    //                            (damit lassen sich Fenster verschieben)
+    //   halten ohne Bewegung  -> Rechtsklick
+    //
+    // Ein Finger gehört also der Gegenstelle; gezoomt und geschoben wird die
+    // Ansicht mit zwei Fingern.
+    const T_HOLD_MS = 500;
+    const T_MOVE_PX = 10;
+    let tStart = null, tDrag = false, tHold = null;
+
+    /** Bildschirmpunkt -> Koordinate auf der Gegenstelle. */
+    const toRemote = (cx, cy) => {
+      let px, py;
+      if (guacZoom) {
+        // Rechnet den eigenen Zoom (CSS-Transformation) heraus.
+        const p = guacZoom.toContent(cx, cy);
+        px = p.x; py = p.y;
       } else {
-        console.warn("[guac] Keine Touch-Klasse in dieser Guacamole-Version");
+        const r = displayElement.getBoundingClientRect();
+        px = cx - r.left; py = cy - r.top;
       }
-    } catch (e) {
-      console.warn("[guac] Touch-Anbindung fehlgeschlagen:", e);
-    }
+      const s = display.getScale() || 1;
+      return { x: px / s, y: py / s };
+    };
+
+    const sendTouch = (cx, cy, left, right) => {
+      try {
+        const { x, y } = toRemote(cx, cy);
+        client.sendMouseState(
+          new Guacamole.Mouse.State(x, y, !!left, false, !!right, false, false));
+      } catch { /* niemals die Oberfläche blockieren */ }
+    };
+
+    displayEl.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse") return;
+      displayEl.focus();
+      tStart = { cx: e.clientX, cy: e.clientY };
+      tDrag = false;
+      clearTimeout(tHold);
+      tHold = setTimeout(() => {
+        if (!tStart || tDrag) return;
+        try { navigator.vibrate?.(18); } catch {}
+        const { cx, cy } = tStart;
+        sendTouch(cx, cy, false, true);          // rechte Taste drücken
+        setTimeout(() => sendTouch(cx, cy, false, false), 60);   // loslassen
+        tStart = null;
+      }, T_HOLD_MS);
+    }, { passive: true });
+
+    displayEl.addEventListener("pointermove", (e) => {
+      if (e.pointerType === "mouse" || !tStart) return;
+      const moved = Math.abs(e.clientX - tStart.cx) + Math.abs(e.clientY - tStart.cy);
+      if (!tDrag && moved > T_MOVE_PX) {
+        // Taste am AUFSETZPUNKT drücken - sonst greift die Gegenstelle den
+        // Fenstertitel nicht dort, wo der Finger startete.
+        clearTimeout(tHold);
+        tDrag = true;
+        sendTouch(tStart.cx, tStart.cy, true, false);
+      }
+      if (tDrag) {
+        sendTouch(e.clientX, e.clientY, true, false);   // Taste bleibt gedrückt
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    displayEl.addEventListener("pointerup", (e) => {
+      if (e.pointerType === "mouse" || !tStart) return;
+      clearTimeout(tHold);
+      if (tDrag) {
+        sendTouch(e.clientX, e.clientY, false, false);  // loslassen
+      } else {
+        const { cx, cy } = tStart;
+        sendTouch(cx, cy, true, false);
+        setTimeout(() => sendTouch(cx, cy, false, false), 40);
+      }
+      tStart = null;
+      tDrag = false;
+    });
+
+    displayEl.addEventListener("pointercancel", () => {
+      clearTimeout(tHold);
+      if (tDrag && tStart) sendTouch(tStart.cx, tStart.cy, false, false);
+      tStart = null;
+      tDrag = false;
+    }, { passive: true });
 
     // --- Tastatur (nur wenn der Anzeigebereich fokussiert ist) ---
     keyboard = new Guacamole.Keyboard(displayEl);
@@ -827,9 +897,6 @@ export function renderGuacamole(body, win) {
     stopSizePoll();
     try { if (keyboard) { keyboard.onkeydown = null; keyboard.onkeyup = null; } } catch {}
     try { if (mouse) { mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = null; } } catch {}
-    // Touch-Anbindung ebenfalls lösen - sonst schickt eine alte Verbindung
-    // weiter Ereignisse in einen bereits geschlossenen Client.
-    try { if (touch) { touch.onmousedown = touch.onmouseup = touch.onmousemove = null; touch = null; } } catch {}
     try { if (client) client.disconnect(); } catch {}
     client = null;
   }
