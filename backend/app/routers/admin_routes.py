@@ -20,7 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
-from app.auth import get_current_user, require_admin, require_perm, list_realm_groups
+from app.auth import (get_current_user, require_admin, require_perm,
+                      user_has_permission, list_realm_groups)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -391,7 +392,14 @@ async def restart_backend(user: dict = Depends(get_current_user)):
     Fällen. Antwortet SOFORT und startet ~1 s später neu, damit die Antwort noch
     beim Client ankommt.
     """
-    require_perm(user, "admin_settings")
+    # Neu starten darf, wer Einstellungen ändern darf: 'admin_settings'
+    # (Server-/Systemeinstellungen) ODER 'manage_settings' (Standard-
+    # Einstellungen). Grund: Änderungen an FTP/SFTP wirken erst nach einem
+    # Neustart - wer sie setzen darf, muss sie auch anwenden können.
+    # Vollwertige Administratoren haben ohnehin alle Rechte.
+    if not (user_has_permission(user, "admin_settings")
+            or user_has_permission(user, "manage_settings")):
+        raise HTTPException(403, "Fehlendes Recht: admin_settings/manage_settings")
     db.add_audit_entry(user["username"], "backend.restart")
 
     import sys as _sys

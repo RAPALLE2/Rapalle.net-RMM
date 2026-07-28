@@ -489,9 +489,10 @@ export function renderSettings(body, win) {
         <div data-adminsec>
         <h3 style="margin-top:24px">Relay</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Das Relay stellt die Client-Dateien als Netzlaufwerk bereit. WebDAV ist
-          immer aktiv. Zusätzlich kann ein FTP-Zugang auf demselben Port laufen —
-          für Programme, die kein WebDAV sprechen.
+          Das Relay stellt die Client-Dateien als Netzlaufwerk bereit. WebDAV,
+          FTP und SFTP lassen sich einzeln zuschalten — alles läuft über
+          denselben Port wie das Dashboard, weitere Freigaben in der Firewall
+          sind nicht nötig. FTP und SFTP schließen sich gegenseitig aus.
         </p>
         <div id="ge-relay" style="font-size:13px;color:var(--subtext)">Lade…</div>
         </div>
@@ -850,9 +851,10 @@ export function renderSettings(body, win) {
         return;
       }
       const draw = () => {
-        // Eine Auswahl statt zweier Häkchen: FTP und SFTP schließen sich
-        // gegenseitig aus, weil bei beiden der Server zuerst spricht. So kann
-        // "beide gleichzeitig" gar nicht erst eingestellt werden.
+        // WebDAV ist ein eigener Schalter (HTTP, client-first) und laesst sich
+        // frei mit FTP/SFTP kombinieren. FTP und SFTP dagegen schliessen sich
+        // gegenseitig aus, weil bei beiden der Server zuerst spricht - deshalb
+        // eine Auswahl mit drei Moeglichkeiten statt zweier Haekchen.
         const opt = (val, label, hint, disabled = false) => `
           <label style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;
                         border-radius:8px;cursor:${disabled ? "not-allowed" : "pointer"};
@@ -867,19 +869,65 @@ export function renderSettings(body, win) {
           </label>`;
 
         box.innerHTML = `
-          ${opt("off", "Aus", "Nur WebDAV als Netzlaufwerk.")}
+          <label style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;
+                        border-radius:8px;cursor:pointer;margin-bottom:6px;
+                        background:${cfg.webdav ? "var(--panel-2)" : "transparent"}">
+            <input type="checkbox" id="ge-webdav" style="margin-top:3px" ${cfg.webdav ? "checked" : ""} />
+            <span>
+              <span style="color:var(--text)">WebDAV als Netzlaufwerk</span>
+              <div style="font-size:11.5px;margin-top:2px">
+                <code>http://&lt;server&gt;:${cfg.port}/dav/</code> · wirkt sofort,
+                kein Neustart nötig.
+              </div>
+            </span>
+          </label>
+
+          <div style="margin:10px 0 4px;color:var(--text)">Zusätzlicher Datei-Zugang</div>
+          ${opt("off", "Nichts", "Nur das, was oben angehakt ist.")}
           ${opt("ftp", `FTP (Port ${cfg.port})`,
-                `<code>ftp://&lt;server&gt;:${cfg.port}</code> · Passivmodus nutzt die Ports
-                 <code>${cfg.passive_ports[0]}–${cfg.passive_ports[1]}</code> —
-                 diese in der Firewall freigeben.`)}
+                `<code>ftp://&lt;server&gt;:${cfg.port}</code> · Steuerung UND Daten laufen
+                 über diesen einen Port — es muss kein weiterer Port freigegeben werden.`)}
           ${opt("sftp", `SFTP (Port ${cfg.port})`,
                 cfg.sftp_available
                   ? `<code>sftp://&lt;server&gt;:${cfg.port}</code> · verschlüsselt, nur ein Port nötig.`
                   : esc(cfg.sftp_reason),
                 !cfg.sftp_available)}
           <div style="margin-top:8px;color:var(--warn,#f5a524)">⚠ ${esc(cfg.note)}</div>
-          <div style="margin-top:4px">Anmeldung mit den Zugangsdaten des Dashboards.
-            Änderungen wirken nach einem Neustart des Backends.</div>`;
+          <div style="margin-top:4px">Anmeldung mit den Zugangsdaten des Dashboards.</div>`;
+
+        // Nach dem Speichern: Neustart gleich oder später? FTP/SFTP wirken erst
+        // danach, weil dabei die Weiche vor dem Port auf-/abgebaut wird.
+        const askRestart = async (res) => {
+          if (!res || !res.needs_restart) {
+            window.notify?.(res?.note || "Gespeichert", "success", 4000);
+            return;
+          }
+          if (!cfg.may_restart) {
+            window.notify?.(
+              "Gespeichert. Die Änderung wirkt erst nach einem Neustart — bitte "
+              + "einen Administrator, das RMM neu zu starten.",
+              "warn", 12000);
+            return;
+          }
+          const { uiChoice } = await import("../utils.js");
+          const choice = await uiChoice("Änderung gespeichert — jetzt neu starten?", [
+            { label: "Jetzt neu starten", value: "now" },
+            { label: "Später selbst neu starten", value: "later" },
+          ], { description: "FTP und SFTP werden erst nach einem Neustart des "
+                          + "Backends aktiv. Laufende Sitzungen brechen dabei ab." });
+          if (choice !== "now") {
+            window.notify?.("Gespeichert. Wirkt nach dem nächsten Neustart.", "info", 8000);
+            return;
+          }
+          try {
+            await api.restartBackend();
+            window.notify?.("Backend startet neu — die Seite lädt gleich neu.", "success", 8000);
+            setTimeout(() => location.reload(), 6000);
+          } catch (err) {
+            window.notify?.("Neustart nicht möglich: " + err.message
+              + " — bitte einen Administrator, das RMM neu zu starten.", "error", 12000);
+          }
+        };
 
         box.querySelectorAll("[name=ge-filemode]").forEach((r) =>
           r.addEventListener("change", async (e) => {
@@ -888,13 +936,30 @@ export function renderSettings(body, win) {
             try {
               const res = await api.relayFtpMode(val);
               cfg.mode = res.mode;
-              window.notify?.(res.note || "Gespeichert", "success", 8000);
+              draw();
+              await askRestart(res);
             } catch (err) {
               cfg.mode = before;
+              draw();
               window.notify?.(err.message, "error", 9000);
             }
-            draw();
           }));
+
+        box.querySelector("#ge-webdav")?.addEventListener("change", async (e) => {
+          const on = e.currentTarget.checked;
+          const before = cfg.webdav;
+          try {
+            const res = await api.relayFtpMode(cfg.mode, on);
+            cfg.webdav = res.webdav;
+            draw();
+            // Reine WebDAV-Änderung braucht keinen Neustart -> nur Bestätigung.
+            await askRestart(res);
+          } catch (err) {
+            cfg.webdav = before;
+            draw();
+            window.notify?.(err.message, "error", 9000);
+          }
+        });
       };
       draw();
     })();

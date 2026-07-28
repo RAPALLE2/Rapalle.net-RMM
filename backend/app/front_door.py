@@ -15,6 +15,17 @@ Kommen Daten, ist es HTTP und die Verbindung wird unverändert an das Dashboard
 weitergereicht, das intern auf einem eigenen Port lauscht. Kommt nichts,
 übernimmt der FTP-Server.
 
+Dritter Fall: FTP-DATENverbindungen
+-----------------------------------
+FTP überträgt Dateien über eine zweite Verbindung. Früher öffnete der Server
+dafür Ports aus einem festen Bereich, der in der Firewall freigegeben sein
+musste. Das entfällt: Die FTP-Sitzung meldet vor jeder Übertragung an, dass
+gleich eine Verbindung von einer bestimmten IP kommt (ftp_relay.arm_data).
+Die Weiche erkennt sie daran und reicht sie als Datenverbindung durch.
+Sicherung gegen Verwechslung: Sehen die ersten Bytes wie eine HTTP-Anfrage
+aus, gewinnt immer HTTP. Damit läuft alles - Dashboard, FTP-Steuerung und
+FTP-Daten - über einen einzigen Port.
+
 Genau deshalb geht SFTP hier NICHT zusätzlich: Auch SSH ist server-first,
 und zwei server-first-Protokolle sind am Anfang einer Verbindung nicht
 unterscheidbar.
@@ -30,6 +41,16 @@ import asyncio
 
 PEEK_TIMEOUT = 0.4          # Sekunden, die wir auf den Client warten
 CHUNK = 65536
+
+# Erkennung einer HTTP-Anfrage: Methode, Pfad, Protokollversion, Zeilenumbruch.
+# Wird gebraucht, um eine FTP-DATENverbindung (die von derselben IP kommt und
+# bei Uploads sofort losschickt) von einer echten HTTP-Anfrage zu trennen.
+import re as _re
+_HTTP_RE = _re.compile(rb"^[A-Z]{3,10} \S+ HTTP/1\.[01]\r\n")
+
+
+def _looks_like_http(first: bytes) -> bool:
+    return bool(_HTTP_RE.match(first or b""))
 
 
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -96,13 +117,38 @@ def start(listen_host: str, listen_port: int,
         except Exception:
             pass
 
+        # Wartet fuer diese IP gerade eine FTP-Datenverbindung? Dann horchen wir
+        # nur ganz kurz - bei Downloads schickt der Client naemlich gar nichts
+        # und soll nicht unnoetig auf das volle Zeitfenster warten.
+        pending = False
         try:
-            first = await asyncio.wait_for(reader.read(CHUNK), PEEK_TIMEOUT)
+            from app import ftp_relay
+            # Reine Speicher-Abfrage (kein Datenbankzugriff): Eintraege gibt es
+            # ueberhaupt nur, solange eine FTP-Sitzung eine Uebertragung
+            # angemeldet hat.
+            pending = ftp_relay.has_pending(peer_ip)
+        except Exception:
+            pending = False
+
+        try:
+            first = await asyncio.wait_for(reader.read(CHUNK),
+                                           0.05 if pending else PEEK_TIMEOUT)
         except asyncio.TimeoutError:
             first = b""
         except Exception:
             writer.close()
             return
+
+        # Angemeldete Datenverbindung durchreichen - ausser die ersten Bytes
+        # sind eindeutig eine HTTP-Anfrage, dann gewinnt HTTP.
+        # Dadurch braucht FTP keinen eigenen Portbereich mehr.
+        if pending and not _looks_like_http(first):
+            try:
+                from app import ftp_relay as _fr
+                if _fr.deliver_data(peer_ip, reader, writer, first):
+                    return
+            except Exception:
+                pass
 
         if first:
             # Der Client hat angefangen -> HTTP (bzw. WebSocket-Aufbau).
@@ -128,7 +174,8 @@ def start(listen_host: str, listen_port: int,
                     writer.transport.abort()
                 sftp_relay.serve_in_thread(dup)
             else:
-                await ftp_relay.handle_connection(reader, writer, advertise_host)
+                await ftp_relay.handle_connection(reader, writer, advertise_host,
+                                                  listen_port)
 
     return asyncio.start_server(handle, listen_host, listen_port)
 

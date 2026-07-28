@@ -65,6 +65,23 @@ _EXPLORER_JUNK = {
 }
 
 
+def webdav_enabled() -> bool:
+    """
+    Laeuft das WebDAV-Netzlaufwerk? Eigener Schalter, unabhaengig von FTP/SFTP -
+    die drei Zugaenge lassen sich frei kombinieren (WebDAV ist HTTP und damit
+    client-first, FTP/SFTP sind server-first; nur die beiden letzteren
+    schliessen sich gegenseitig aus).
+    Standard: an (so war es vor der Einfuehrung des Schalters).
+    """
+    try:
+        raw = db.get_setting("relay_webdav_enabled")
+        if raw is None or str(raw).strip() == "":
+            return True
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return True
+
+
 @router.get("/relay-health")
 async def relay_health():
     """Health-Check OHNE Login (zum Prüfen, ob das Modul geladen ist)."""
@@ -627,6 +644,11 @@ async def dav_root_probe(request: Request):
 async def dav(request: Request, full_path: str = ""):
     method = request.method.upper()
 
+    # WebDAV ist abschaltbar (Einstellungen -> Allgemein -> Relay).
+    if not webdav_enabled():
+        return PlainTextResponse(
+            "Das WebDAV-Relay ist deaktiviert.", status_code=503)
+
     # OPTIONS beantwortet Windows/macOS oft VOR der Authentifizierung.
     if method == "OPTIONS":
         return Response(status_code=200, headers={
@@ -941,18 +963,31 @@ async def relay_ftp_config(user: dict = Depends(get_current_user)):
     sftp_ok, sftp_reason = sftp_relay.available()
     return {
         "mode": ftp_relay.mode(),          # "off" | "ftp" | "sftp"
+        "webdav": webdav_enabled(),
         "port": PORT,
-        "passive_ports": [ftp_relay.PASV_PORT_MIN, ftp_relay.PASV_PORT_MAX],
         "sftp_available": sftp_ok,
         "sftp_reason": sftp_reason,
+        # Darf DIESER Benutzer das Backend selbst neu starten? Sonst zeigt die
+        # Oberflaeche den Hinweis, einen Administrator darum zu bitten.
+        "may_restart": (user.get("role") == "admin"
+                        or user_has_permission(user, "admin_settings")
+                        or user_has_permission(user, "manage_settings")),
         "note": ("FTP und SFTP schließen sich aus: Bei beiden spricht der Server "
                  "zuerst, sie wären auf einem gemeinsamen Port nicht "
-                 "unterscheidbar."),
+                 "unterscheidbar. WebDAV ist HTTP und läuft unabhängig davon."),
     }
+
+
+def ftp_relay_mode_before() -> str:
+    """Aktueller FTP/SFTP-Modus - gebraucht, um zu erkennen, ob wirklich ein
+    Neustart noetig ist (bei einer reinen WebDAV-Aenderung ist er das nicht)."""
+    from app import ftp_relay
+    return ftp_relay.mode()
 
 
 class FtpModeBody(BaseModel):
     mode: str = "off"                      # "off" | "ftp" | "sftp"
+    webdav: bool | None = None             # None = unveraendert lassen
 
 
 @router.post("/api/relay/ftp")
@@ -962,6 +997,7 @@ async def relay_ftp_toggle(body: FtpModeBody, user: dict = Depends(get_current_u
     "FTP und SFTP gleichzeitig" gar nicht erst entstehen.
     """
     require_admin(user)
+    _mode_before = ftp_relay_mode_before()
     mode = (body.mode or "off").strip().lower()
     if mode not in ("off", "ftp", "sftp"):
         raise HTTPException(400, "Ungültiger Modus (erlaubt: off, ftp, sftp)")
@@ -975,6 +1011,20 @@ async def relay_ftp_toggle(body: FtpModeBody, user: dict = Depends(get_current_u
     db.set_setting("relay_file_mode", mode)
     # Den alten Schalter mitziehen, damit ältere Stände nichts Falsches lesen.
     db.set_setting("relay_ftp_enabled", "1" if mode == "ftp" else "0")
-    db.add_audit_entry(user["username"], "relay.file_mode", details=mode)
-    return {"ok": True, "mode": mode,
-            "note": "Änderung wird erst nach einem Neustart des Backends wirksam."}
+    if body.webdav is not None:
+        db.set_setting("relay_webdav_enabled", "1" if body.webdav else "0")
+    detail = mode + (f" + webdav={'an' if body.webdav else 'aus'}"
+                     if body.webdav is not None else "")
+    db.add_audit_entry(user["username"], "relay.file_mode", details=detail)
+    return {
+        "ok": True,
+        "mode": mode,
+        "webdav": webdav_enabled(),
+        # WebDAV wirkt sofort (nur eine Abfrage im Request-Pfad). FTP/SFTP
+        # brauchen einen Neustart, weil dabei die Weiche vor dem Port auf-
+        # bzw. abgebaut wird.
+        "needs_restart": mode != _mode_before,
+        "note": ("Änderung an FTP/SFTP wird erst nach einem Neustart des "
+                 "Backends wirksam." if mode != _mode_before
+                 else "Gespeichert."),
+    }

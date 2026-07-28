@@ -42,11 +42,80 @@ from app import db
 from app.auth import verify_password, authenticate_realm
 from app.sockets import request_fs_list, request_fs_read, request_fs_op
 
-# Passiv-Datenverbindungen: Portbereich, den die Firewall freigeben muss.
-PASV_PORT_MIN = 40100
-PASV_PORT_MAX = 40199
-
 ENCODING = "utf-8"
+
+# ==========================================================================
+# Passiv-Datenverbindungen OHNE eigenen Portbereich
+# --------------------------------------------------------------------------
+# FTP braucht fuer jede Uebertragung eine ZWEITE Verbindung - die Steuer-
+# verbindung ist waehrenddessen belegt. Klassisch oeffnet der Server dafuer
+# einen Port aus einem festen Bereich (frueher hier 40100-40199), der in der
+# Firewall freigegeben werden muss.
+#
+# Das entfaellt jetzt: Die Datenverbindung laeuft ueber DENSELBEN Port wie das
+# Dashboard. Moeglich wird das, weil vor dem Port ohnehin eine Weiche sitzt
+# (front_door.py). Ablauf:
+#
+#   1. Der Client schickt PASV/EPSV.
+#   2. Die Sitzung "meldet an", dass gleich eine Datenverbindung von genau
+#      dieser IP kommt (arm_data) und nennt dem Client den normalen Port.
+#   3. Die Weiche sieht eine neue Verbindung von einer IP mit Anmeldung und
+#      reicht sie als Datenverbindung durch (deliver_data), statt sie als
+#      HTTP oder als neue FTP-Sitzung zu behandeln.
+#
+# Damit muss nur EIN Port offen sein - der, der ohnehin schon offen ist.
+#
+# Grenze der Methode: Die Zuordnung geht ueber die Absender-IP. Oeffnet
+# jemand von derselben IP im exakt gleichen Moment eine normale Verbindung,
+# koennte sie faelschlich als Datenverbindung gelten. Deshalb prueft die
+# Weiche zusaetzlich, ob die ersten Bytes wie eine HTTP-Anfrage aussehen
+# (siehe front_door._looks_like_http) - dann gewinnt HTTP. Das Zeitfenster
+# ist ausserdem nur wenige Millisekunden gross.
+# ==========================================================================
+
+# peer_ip -> Liste wartender Warteschlangen (FIFO, eine je angemeldeter
+# Datenverbindung).
+_pending_data: dict[str, list] = {}
+
+
+def arm_data(peer_ip: str) -> asyncio.Queue:
+    """Meldet an, dass von dieser IP gleich eine Datenverbindung kommt."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=1)
+    _pending_data.setdefault(peer_ip or "", []).append(q)
+    return q
+
+
+def disarm_data(peer_ip: str, q) -> None:
+    """Anmeldung zuruecknehmen (Uebertragung fertig oder abgebrochen)."""
+    lst = _pending_data.get(peer_ip or "")
+    if not lst:
+        return
+    try:
+        lst.remove(q)
+    except ValueError:
+        pass
+    if not lst:
+        _pending_data.pop(peer_ip or "", None)
+
+
+def has_pending(peer_ip: str) -> bool:
+    """Wartet fuer diese IP gerade eine Datenverbindung?"""
+    return bool(_pending_data.get(peer_ip or ""))
+
+
+def deliver_data(peer_ip: str, reader, writer, first: bytes = b"") -> bool:
+    """Eine eingehende Verbindung als Datenverbindung uebergeben."""
+    lst = _pending_data.get(peer_ip or "")
+    if not lst:
+        return False
+    q = lst.pop(0)
+    if not lst:
+        _pending_data.pop(peer_ip or "", None)
+    try:
+        q.put_nowait((reader, writer, first))
+    except Exception:
+        return False
+    return True
 
 
 def mode() -> str:
@@ -106,17 +175,18 @@ def _authenticate(username: str, password: str):
 
 class FTPSession:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                 host: str):
+                 host: str, port: int = 0):
         self.reader = reader
         self.writer = writer
         self.host = host              # Adresse, die wir dem Client für PASV nennen
+        self.port = int(port or 0)    # Datenport = derselbe Port wie das Dashboard
         self.user = None
         self.pending_user = ""
         self.cwd = "/"                # virtueller Pfad wie im WebDAV: /<client>/...
-        self.pasv_server = None
-        self.pasv_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+        self.pasv_queue = None        # wartet auf die angemeldete Datenverbindung
         self.rename_from = None
         self.peer = ""
+        self.peer_ip = ""
 
     # ---------------- Grundlagen ----------------
 
@@ -202,42 +272,33 @@ class FTPSession:
     # ---------------- Datenverbindung (nur passiv) ----------------
 
     async def _open_pasv(self) -> int:
+        """
+        Passivmodus vorbereiten: KEIN eigener Port mehr, sondern eine Anmeldung
+        bei der Weiche. Zurueckgegeben wird der ganz normale Dashboard-Port.
+        """
         await self._close_pasv()
-
-        async def on_conn(r, w):
-            if self.pasv_queue.full():
-                w.close()
-                return
-            await self.pasv_queue.put((r, w))
-
-        last_err = None
-        for port in range(PASV_PORT_MIN, PASV_PORT_MAX + 1):
-            try:
-                self.pasv_server = await asyncio.start_server(on_conn, "0.0.0.0", port)
-                return port
-            except OSError as e:
-                last_err = e
-                continue
-        raise OSError(f"Kein freier Datenport {PASV_PORT_MIN}-{PASV_PORT_MAX}: {last_err}")
+        self.pasv_queue = arm_data(self.peer_ip)
+        return self.port
 
     async def _close_pasv(self) -> None:
-        if self.pasv_server:
-            self.pasv_server.close()
-            try:
-                await self.pasv_server.wait_closed()
-            except Exception:
-                pass
-            self.pasv_server = None
-        while not self.pasv_queue.empty():
-            try:
-                _, w = self.pasv_queue.get_nowait()
-                w.close()
-            except Exception:
-                break
+        if self.pasv_queue is not None:
+            disarm_data(self.peer_ip, self.pasv_queue)
+            # Eine bereits gelieferte, aber nie benutzte Verbindung schliessen.
+            while not self.pasv_queue.empty():
+                try:
+                    _, w, _ = self.pasv_queue.get_nowait()
+                    w.close()
+                except Exception:
+                    break
+            self.pasv_queue = None
 
     async def _data(self, timeout: float = 30.0):
-        """Wartet auf die Datenverbindung, die der Client nach PASV aufbaut."""
-        if not self.pasv_server:
+        """
+        Wartet auf die Datenverbindung, die der Client nach PASV/EPSV aufbaut.
+        Rueckgabe: (reader, writer, first) - 'first' sind bereits gelesene
+        Bytes (bei Uploads schickt der Client sofort los).
+        """
+        if self.pasv_queue is None:
             raise RuntimeError("Erst PASV/EPSV senden")
         try:
             return await asyncio.wait_for(self.pasv_queue.get(), timeout)
@@ -248,7 +309,10 @@ class FTPSession:
 
     async def run(self) -> None:
         try:
-            self.peer = str(self.writer.get_extra_info("peername") or "")
+            info = self.writer.get_extra_info("peername")
+            self.peer = str(info or "")
+            if info:
+                self.peer_ip = info[0]
         except Exception:
             pass
         await self.send("220 RAPALLE.net RMM Relay (FTP)")
@@ -372,7 +436,7 @@ class FTPSession:
         return f"{perm} 1 rmm rmm {size:>12} {stamp} {e['name']}"
 
     async def _send_data(self, payload: bytes):
-        r, w = await self._data()
+        r, w, _first = await self._data()
         try:
             w.write(payload)
             await w.drain()
@@ -412,9 +476,10 @@ class FTPSession:
     async def cmd_STOR(self, arg: str):
         client_id, real = await self._real(self._abs(arg))
         await self.send("150 Bereit für die Daten.")
-        r, w = await self._data()
+        r, w, first = await self._data()
         try:
-            chunks = []
+            # 'first' sind Bytes, die die Weiche schon gelesen hatte.
+            chunks = [first] if first else []
             while True:
                 chunk = await r.read(65536)
                 if not chunk:
@@ -491,7 +556,10 @@ class FTPSession:
 
 async def handle_connection(reader: asyncio.StreamReader,
                             writer: asyncio.StreamWriter,
-                            advertise_host: str = "127.0.0.1") -> None:
-    """Wird von front_door.py aufgerufen, wenn eine FTP-Verbindung erkannt wurde."""
-    session = FTPSession(reader, writer, advertise_host)
+                            advertise_host: str = "127.0.0.1",
+                            advertise_port: int = 0) -> None:
+    """Wird von front_door.py aufgerufen, wenn eine FTP-Verbindung erkannt wurde.
+    'advertise_port' ist der Port, den wir dem Client fuer die Datenverbindung
+    nennen - derselbe, auf dem auch das Dashboard laeuft."""
+    session = FTPSession(reader, writer, advertise_host, advertise_port)
     await session.run()
