@@ -685,6 +685,11 @@ export const api = {
   getDatabaseInfo: () => request("/api/admin/database/info"),
   testDatabase: (cfg) => request("/api/admin/database/test", { method: "POST", body: JSON.stringify(cfg) }),
   switchDatabase: (cfg) => request("/api/admin/database/switch", { method: "POST", body: JSON.stringify(cfg) }),
+  databaseProgress: () => request("/api/admin/database/progress"),
+  databaseBackups: () => request("/api/admin/database/backups"),
+  databaseBackup: () => request("/api/admin/database/backup", { method: "POST", body: "{}" }),
+  databaseRestoreBackup: (path) => request("/api/admin/database/restore-backup", {
+    method: "POST", body: JSON.stringify({ path }) }),
 
   getPermissions: () => request("/api/admin/permissions"),
   getGroups: () => request("/api/admin/groups"),

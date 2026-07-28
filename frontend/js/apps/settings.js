@@ -368,11 +368,36 @@ export function renderSettings(body, win) {
             <input type="text" id="dbx-name" placeholder="rapalle_rmm" />
           </div>
           <div id="dbx-error" class="form-error hidden"></div>
+          <div id="dbx-progress" style="display:none;margin:10px 0;border:1px solid var(--border);
+                                        border-radius:8px;padding:10px;font-size:12.5px">
+            <div style="display:flex;justify-content:space-between;gap:10px">
+              <span id="dbx-pg-phase" style="color:var(--text)"></span>
+              <span id="dbx-pg-count" style="color:var(--subtext)"></span>
+            </div>
+            <div style="height:8px;background:var(--panel-2);border-radius:5px;margin:8px 0;overflow:hidden">
+              <div id="dbx-pg-bar" style="height:100%;width:0%;background:var(--accent,#4da6ff);
+                                          transition:width .25s"></div>
+            </div>
+            <div id="dbx-pg-log" style="max-height:150px;overflow:auto;font-family:ui-monospace,monospace;
+                                        font-size:11.5px;color:var(--subtext);white-space:pre-wrap"></div>
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
             <button class="taskbar-btn" id="dbx-test">Verbindung testen</button>
             <button class="btn-primary" id="dbx-to-external" style="width:auto;margin:0">→ Auf externe Datenbank umschalten</button>
             <button class="btn-primary" id="dbx-to-local" style="width:auto;margin:0">→ Auf lokale Datenbank umschalten</button>
           </div>
+
+          <h4 style="margin:18px 0 4px;font-size:13px">Sicherungen der lokalen Datenbank</h4>
+          <p style="color:var(--subtext);font-size:12px;margin:0 0 8px">
+            Vor jedem Umschalten wird automatisch eine Sicherung angelegt. Geht
+            beim Kopieren etwas schief, wird sie sofort zurückgespielt und der
+            Modus bleibt unverändert. Es werden die letzten 5 aufbewahrt.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <button class="taskbar-btn" id="dbx-backup">Sicherung jetzt anlegen</button>
+            <button class="taskbar-btn" id="dbx-backups-refresh">⟳</button>
+          </div>
+          <div id="dbx-backups" style="font-size:12px;color:var(--subtext)">Lade…</div>
         </div>
         </div>
 
@@ -803,6 +828,120 @@ export function renderSettings(body, win) {
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
 
+    // --- Fortschritt des Datenbank-Wechsels -----------------------------
+    const pgBox = root.querySelector("#dbx-progress");
+    const pgPhase = root.querySelector("#dbx-pg-phase");
+    const pgCount = root.querySelector("#dbx-pg-count");
+    const pgBar = root.querySelector("#dbx-pg-bar");
+    const pgLog = root.querySelector("#dbx-pg-log");
+    let pgTimer = null;
+
+    const PHASE_TEXT = {
+      backup: "Sicherung wird angelegt…",
+      dump: "Kopiere in die externe Datenbank…",
+      restore: "Lade aus der externen Datenbank…",
+      fertig: "Fertig",
+    };
+
+    function drawProgress(p) {
+      pgBox.style.display = "";
+      pgPhase.textContent = PHASE_TEXT[p.phase] || p.phase || "…";
+      pgCount.textContent = p.total
+        ? `${p.done}/${p.total} Tabellen · ${p.rows} Zeilen`
+        : (p.rows ? `${p.rows} Zeilen` : "");
+      pgBar.style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : "0%";
+      const lines = [...(p.log || [])];
+      // Fehler zusätzlich gesammelt ans Ende - sie sind das Wichtigste.
+      if (p.errors?.length) {
+        lines.push("", `── ${p.errors.length} Fehler ──`);
+        for (const e of p.errors) lines.push(`  ${e.table}: ${e.error}`);
+      }
+      pgLog.textContent = lines.join("\n");
+      pgLog.scrollTop = pgLog.scrollHeight;
+      pgBar.style.background = p.ok === false ? "var(--danger,#f66)" : "var(--accent,#4da6ff)";
+    }
+
+    async function pollProgress() {
+      try {
+        const p = await api.databaseProgress();
+        drawProgress(p);
+        if (p.running) return;                 // weiter pollen
+        clearInterval(pgTimer); pgTimer = null;
+        if (p.ok) {
+          window.notify?.(`${p.detail} — Backend startet neu, Seite lädt gleich neu.`,
+                          "success", 10000);
+          setTimeout(() => location.reload(), 9000);
+        } else {
+          const err = root.querySelector("#dbx-error");
+          err.textContent = p.detail || "Der Wechsel ist fehlgeschlagen.";
+          err.classList.remove("hidden");
+          window.notify?.(
+            p.restored
+              ? "Wechsel fehlgeschlagen — die lokale Datenbank wurde aus der Sicherung wiederhergestellt."
+              : "Wechsel fehlgeschlagen — der Modus wurde nicht geändert.",
+            "error", 14000);
+          loadBackups();
+        }
+      } catch (e) {
+        // Beim Neustart bricht die Verbindung ab - das ist der Normalfall.
+        clearInterval(pgTimer); pgTimer = null;
+      }
+    }
+
+    function startPolling() {
+      drawProgress({ phase: "backup", done: 0, total: 0, rows: 0, log: [] });
+      clearInterval(pgTimer);
+      pgTimer = setInterval(pollProgress, 800);
+    }
+
+    // --- Sicherungen ----------------------------------------------------
+    async function loadBackups() {
+      const box = root.querySelector("#dbx-backups");
+      if (!box) return;
+      try {
+        const res = await api.databaseBackups();
+        const list = res.backups || [];
+        if (!list.length) { box.textContent = "Noch keine Sicherungen."; return; }
+        box.innerHTML = list.map((b) => `
+          <div style="display:flex;gap:10px;align-items:center;padding:4px 0;
+                      border-bottom:1px solid var(--border)">
+            <span style="flex:1">${esc(b.name)}</span>
+            <span>${(b.size / 1048576).toFixed(1)} MB</span>
+            <span>${new Date(b.at).toLocaleString()}</span>
+            <button class="taskbar-btn" style="padding:2px 8px"
+                    data-restore="${esc(b.path)}">Zurückspielen</button>
+          </div>`).join("");
+        box.querySelectorAll("[data-restore]").forEach((btn) =>
+          btn.addEventListener("click", async () => {
+            const ok = await uiConfirm("Diese Sicherung zurückspielen?", {
+              description: "Der aktuelle lokale Stand wird dabei ersetzt. "
+                + "Das Backend startet anschließend neu." });
+            if (!ok) return;
+            try {
+              await api.databaseRestoreBackup(btn.dataset.restore);
+              window.notify?.("Sicherung wird eingespielt — Backend startet neu.",
+                              "success", 10000);
+              setTimeout(() => location.reload(), 9000);
+            } catch (e) { window.notify?.(e.message, "error", 9000); }
+          }));
+      } catch (e) {
+        box.textContent = "Sicherungen nicht abrufbar: " + e.message;
+      }
+    }
+    loadBackups();
+
+    root.querySelector("#dbx-backups-refresh")?.addEventListener("click", loadBackups);
+    root.querySelector("#dbx-backup")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget; const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = "…";
+      try {
+        await api.databaseBackup();
+        window.notify?.("Sicherung angelegt.", "success", 4000);
+        loadBackups();
+      } catch (err) { window.notify?.(err.message, "error", 9000); }
+      btn.disabled = false; btn.textContent = orig;
+    });
+
     async function dbxSwitch(mode) {
       const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
       const ok = await uiConfirm(
@@ -812,9 +951,11 @@ export function renderSettings(body, win) {
           : t("u_der_stand_der_externen_datenbank_w"));
       if (!ok) return;
       try {
-        const res = await api.switchDatabase({ ...dbxConfig(), mode });
-        window.notify?.(`${res.detail} — Backend startet neu, Seite lädt gleich neu.`, "success");
-        setTimeout(() => location.reload(), 8000);
+        // Der Wechsel läuft jetzt im Hintergrund; der Fortschritt wird
+        // abgefragt, damit man sieht, wo es hakt, statt minutenlang auf eine
+        // einzige Antwort zu warten.
+        await api.switchDatabase({ ...dbxConfig(), mode });
+        startPolling();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     }
     root.querySelector("#dbx-to-external").addEventListener("click", () => dbxSwitch("external"));

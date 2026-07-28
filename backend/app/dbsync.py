@@ -40,6 +40,124 @@ _CONFIG_FILE = _BACKEND_DIR / "dbconfig.json"
 
 _META_TABLE = "__rmm_meta"
 
+# Sicherungen der lokalen Datenbank (vor jedem Umschalten).
+_BACKUP_DIR = _BACKEND_DIR / "db-backups"
+# Die Datenbank kann leicht dreistellige MB gross sein - deshalb bewusst
+# wenige Sicherungen aufheben, sonst laeuft die Platte voll.
+_BACKUP_KEEP = 5
+
+
+# ------------------------------------------------------------------
+# Fortschritt / Fehlerprotokoll eines laufenden Wechsels
+# ------------------------------------------------------------------
+# Der Wechsel kopiert je nach Datenmenge dutzende Tabellen. Bisher sah man
+# davon nichts: entweder kam am Ende "ok" oder eine einzelne Fehlermeldung -
+# und beim ersten Fehler brach alles ab. Deshalb hier ein gemeinsamer
+# Zustand, den die Oberflaeche abfragen kann, waehrend der Wechsel laeuft.
+JOB = {
+    "running": False,
+    "phase": "",            # "backup" | "dump" | "restore" | "fertig"
+    "table": "",            # gerade bearbeitete Tabelle
+    "done": 0,              # fertige Tabellen
+    "total": 0,             # Tabellen insgesamt
+    "rows": 0,              # kopierte Zeilen insgesamt
+    "errors": [],           # [{table, error}] - der Lauf geht trotzdem weiter
+    "log": [],              # kurze Textzeilen fuer die Anzeige
+    "ok": None,             # True/False, sobald fertig
+    "detail": "",
+    "backup": "",           # Pfad der Sicherung, die vorher angelegt wurde
+    "restored": False,      # wurde nach einem Fehler zurueckgesichert?
+    "started_at": 0,
+    "finished_at": 0,
+}
+
+
+def job_reset(phase: str = "") -> None:
+    JOB.update({"running": True, "phase": phase, "table": "", "done": 0,
+                "total": 0, "rows": 0, "errors": [], "log": [], "ok": None,
+                "detail": "", "backup": "", "restored": False,
+                "started_at": int(time.time() * 1000), "finished_at": 0})
+
+
+def job_log(text: str) -> None:
+    JOB["log"].append(text)
+    del JOB["log"][:-200]          # nicht unbegrenzt wachsen lassen
+    print(f"[dbsync] {text}")
+
+
+def job_error(table: str, err: Exception | str) -> None:
+    JOB["errors"].append({"table": table, "error": str(err)})
+    job_log(f"FEHLER bei '{table}': {err}")
+
+
+def job_finish(ok: bool, detail: str = "") -> None:
+    JOB.update({"running": False, "ok": ok, "detail": detail,
+                "phase": "fertig", "finished_at": int(time.time() * 1000)})
+
+
+# ------------------------------------------------------------------
+# Sicherung der lokalen Datenbank
+# ------------------------------------------------------------------
+
+def backup_local(tag: str = "switch") -> str:
+    """
+    Legt eine konsistente Kopie der lokalen SQLite an und gibt den Pfad zurueck.
+
+    Bewusst ueber die sqlite3-Backup-API statt per Dateikopie: Die Verbindung
+    ist im Betrieb offen, eine simple Kopie koennte mitten in einer
+    Transaktion entstehen und waere dann unbrauchbar - also genau dann kaputt,
+    wenn man sie braucht.
+    """
+    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = _BACKUP_DIR / f"{stamp}-{tag}.sqlite"
+    dest = sqlite3.connect(path)
+    try:
+        db._raw_conn.backup(dest)
+        dest.commit()
+    finally:
+        dest.close()
+    _prune_backups()
+    return str(path)
+
+
+def _prune_backups() -> None:
+    try:
+        files = sorted(_BACKUP_DIR.glob("*.sqlite"), key=lambda p: p.stat().st_mtime)
+        for old in files[:-_BACKUP_KEEP]:
+            old.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def list_backups() -> list[dict]:
+    out = []
+    try:
+        for p in sorted(_BACKUP_DIR.glob("*.sqlite"),
+                        key=lambda p: p.stat().st_mtime, reverse=True):
+            st = p.stat()
+            out.append({"name": p.name, "path": str(p),
+                        "size": st.st_size, "at": int(st.st_mtime * 1000)})
+    except OSError:
+        pass
+    return out
+
+
+def restore_local_backup(path: str) -> None:
+    """
+    Spielt eine Sicherung in die LAUFENDE lokale Datenbank zurueck.
+
+    Auch hier die Backup-API statt Datei tauschen: Die Anwendung haelt die
+    Verbindung offen, ein Dateitausch wuerde ihr den Boden unter den Fuessen
+    wegziehen. So wird der Inhalt an Ort und Stelle ersetzt.
+    """
+    src = sqlite3.connect(path)
+    try:
+        src.backup(db._raw_conn)
+        db._raw_conn.commit()
+    finally:
+        src.close()
+
 # Für den Änderungs-Check des periodischen Syncs
 _last_total_changes: int | None = None
 
@@ -282,22 +400,46 @@ def _local_tables() -> list[dict]:
     return tables
 
 
-def dump_local_to_external(cfg: dict | None = None) -> dict:
-    """Kopiert die KOMPLETTE lokale Datenbank in die externe (ersetzt dort alles)."""
+def dump_local_to_external(cfg: dict | None = None, track: bool = False) -> dict:
+    """
+    Kopiert die KOMPLETTE lokale Datenbank in die externe (ersetzt dort alles).
+
+    'track=True' schreibt den Fortschritt nach JOB mit und laesst den Lauf bei
+    einem Tabellen-Fehler WEITERLAUFEN, statt sofort abzubrechen. So sieht man
+    am Ende alle Probleme auf einmal statt immer nur das erste. Der Aufrufer
+    entscheidet dann anhand von JOB["errors"], ob der Wechsel gilt.
+    """
     cfg = cfg or load_config()
     ext = ExternalDB(cfg)
     try:
         tables = _local_tables()
         counts = {}
+        if track:
+            JOB["phase"] = "dump"
+            JOB["total"] = len(tables)
+            job_log(f"Kopiere {len(tables)} Tabellen nach {cfg.get('type')}…")
         for t in tables:
             colnames = [c[0] for c in t["columns"]]
-            data = db._conn.execute(
-                f'SELECT {", ".join(chr(34)+c+chr(34) for c in colnames)} FROM "{t["name"]}"'
-            ).fetchall()
-            rows = [tuple(r[c] for c in colnames) for r in data]
-            ext.recreate_table(t["name"], t["columns"])
-            ext.insert_rows(t["name"], colnames, rows)
-            counts[t["name"]] = len(rows)
+            if track:
+                JOB["table"] = t["name"]
+            try:
+                data = db._conn.execute(
+                    f'SELECT {", ".join(chr(34)+c+chr(34) for c in colnames)} FROM "{t["name"]}"'
+                ).fetchall()
+                rows = [tuple(r[c] for c in colnames) for r in data]
+                ext.recreate_table(t["name"], t["columns"])
+                ext.insert_rows(t["name"], colnames, rows)
+                counts[t["name"]] = len(rows)
+                if track:
+                    JOB["rows"] += len(rows)
+            except Exception as e:
+                if not track:
+                    raise
+                job_error(t["name"], e)
+                counts[t["name"]] = 0
+            finally:
+                if track:
+                    JOB["done"] += 1
         # Meta: originale SQLite-Schemas + Spaltenlisten + Zeitstempel
         ext.recreate_table(_META_TABLE, [("k", "TEXT"), ("v", "TEXT")])
         meta = {
@@ -322,7 +464,7 @@ def _read_meta(ext: ExternalDB) -> dict | None:
     return None
 
 
-def restore_external_to_local(cfg: dict | None = None) -> dict:
+def restore_external_to_local(cfg: dict | None = None, track: bool = False) -> dict:
     """
     Ersetzt die lokale Datenbank durch den Stand aus der externen DB.
     Die Tabellen werden mit den ORIGINALEN SQLite-CREATE-Statements neu
@@ -337,19 +479,36 @@ def restore_external_to_local(cfg: dict | None = None) -> dict:
         counts = {}
         cur = db._conn
         cur.execute("PRAGMA foreign_keys = OFF")
+        if track:
+            JOB["phase"] = "restore"
+            JOB["total"] = len(meta["schema"])
+            job_log(f"Lade {len(meta['schema'])} Tabellen aus {cfg.get('type')}…")
         for name, create_sql in meta["schema"].items():
             colnames = meta["columns"][name]
-            rows = ext.read_all(name, colnames) if ext.table_exists(name) else []
-            cur.execute(f'DROP TABLE IF EXISTS "{name}"')
-            cur.execute(create_sql)
-            if rows:
-                ph = ", ".join(["?"] * len(colnames))
-                cols = ", ".join(f'"{c}"' for c in colnames)
-                cur.executemany(
-                    f'INSERT INTO "{name}" ({cols}) VALUES ({ph})',
-                    [tuple(r) for r in rows],
-                )
-            counts[name] = len(rows)
+            if track:
+                JOB["table"] = name
+            try:
+                rows = ext.read_all(name, colnames) if ext.table_exists(name) else []
+                cur.execute(f'DROP TABLE IF EXISTS "{name}"')
+                cur.execute(create_sql)
+                if rows:
+                    ph = ", ".join(["?"] * len(colnames))
+                    cols = ", ".join(f'"{c}"' for c in colnames)
+                    cur.executemany(
+                        f'INSERT INTO "{name}" ({cols}) VALUES ({ph})',
+                        [tuple(r) for r in rows],
+                    )
+                counts[name] = len(rows)
+                if track:
+                    JOB["rows"] += len(rows)
+            except Exception as e:
+                if not track:
+                    raise
+                job_error(name, e)
+                counts[name] = 0
+            finally:
+                if track:
+                    JOB["done"] += 1
         cur.commit()
         return {"ok": True, "tables": counts, "synced_at": meta.get("synced_at")}
     finally:
