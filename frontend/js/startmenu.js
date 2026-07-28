@@ -116,6 +116,43 @@ export function initStartMenu({ root, username, onOpenApp, allowed }) {
 // Recht aus, ohne das Layout zu verändern).
 export function refreshStartMenu() { render(); }
 
+// Benutzer NACHTRÄGLICH setzen.
+//
+// Warum das nötig ist: initStartMenu() läuft aus initMenusAndButtons() heraus,
+// also BEVOR der Login durch ist - state.user ist da noch null. Das Layout
+// landete deshalb immer unter "rmm_appmenu:default" statt unter dem Benutzer.
+// Dieser Schlüssel wurde vom Server-Abgleich (persist.js) bewusst ignoriert,
+// weil er zu keinem Benutzer gehört. Folge: Ordner und Anordnung im Startmenü
+// lebten NUR im Browser und waren unter einer anderen URL weg.
+//
+// Diese Funktion wird nach dem Login (und nach hydrateFromServer) aufgerufen:
+// sie schaltet auf den echten Benutzer-Schlüssel um, übernimmt einmalig ein
+// evtl. vorhandenes "default"-Layout und zeichnet neu.
+export function setStartMenuUser(username) {
+  const nextKey = `rmm_appmenu:${username || "default"}`;
+  if (nextKey === userKey) return;
+  const legacyKey = userKey;                 // in der Regel "rmm_appmenu:default"
+  userKey = nextKey;
+  load();
+  // Noch nichts unter dem Benutzer gespeichert? Dann das alte, browserlokale
+  // Layout einmalig übernehmen, damit niemand seine Ordner verliert.
+  const empty = !layout || !Array.isArray(layout.items) || !layout.items.length;
+  if (empty) {
+    try {
+      const raw = localStorage.getItem(legacyKey);
+      if (raw) {
+        const old = JSON.parse(raw);
+        if (old && Array.isArray(old.items) && old.items.length) layout = old;
+      }
+    } catch {}
+  }
+  // Der default-Schlüssel wird nicht mehr gebraucht und würde beim nächsten
+  // Benutzer am selben Browser nur stören.
+  try { if (legacyKey.endsWith(":default")) localStorage.removeItem(legacyKey); } catch {}
+  reconcile();   // speichert unter dem neuen Schlüssel + stößt den Server-Sync an
+  render();
+}
+
 // Dynamische Katalog-Einträge (z.B. gespeicherte Web-Apps aus dem internen
 // Browser): fügen eine App zur Laufzeit ins Startmenü ein bzw. entfernen sie.
 export function addCatalogEntry(id, icon, label) {

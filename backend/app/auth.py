@@ -372,13 +372,15 @@ def get_user_with_permissions(user: dict) -> dict:
 
 def is_super_admin(user: dict) -> bool:
     """
-    Voll-Administrator - darf alles (Bypass des Resolvers). Zwei Wege:
+    Voll-Administrator - darf alles (Bypass des Resolvers). Wege:
       1. Rolle 'admin' (wie bisher)
-      2. das globale Recht 'super_admin' (über die Rechte-Verwaltung vergeben,
-         auch an Gruppen). Damit lässt sich Super-Admin vergeben, ohne die
-         Rolle des Benutzers anzufassen.
-    Ein ausdrückliches 'deny' auf 'super_admin' entzieht das Recht wieder -
-    die Rolle 'admin' bleibt davon aber unberührt.
+      2. das globale Recht 'admin' (Wildcard, über die Rechte-Verwaltung
+         vergeben - auch an Gruppen)
+      3. der Alt-Schlüssel 'super_admin' (früher ein zweites, gleichwertiges
+         Häkchen; beide sind zu 'admin' zusammengefasst, bereits vergebene
+         Grants gelten weiter)
+    Ein ausdrückliches 'deny' entzieht das Recht wieder - die Rolle 'admin'
+    bleibt davon aber unberührt.
     """
     try:
         role = user.get("role")
@@ -386,8 +388,9 @@ def is_super_admin(user: dict) -> bool:
         role = user["role"]
     if role == "admin":
         return True
-    # Rekursionsschutz: _has_perm() fragt is_super_admin() NICHT für diesen Key.
-    return _has_perm_raw(user, "super_admin", None)
+    # Rekursionsschutz: _has_perm() fragt is_super_admin() NICHT für diese Keys.
+    return (_has_perm_raw(user, "admin", None)
+            or _has_perm_raw(user, "super_admin", None))
 
 
 def _aggregate_effect(grants: list[dict], perm: str, scopes: list[str]) -> str | None:
