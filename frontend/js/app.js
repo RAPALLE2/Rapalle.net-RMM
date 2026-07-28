@@ -33,6 +33,7 @@ window.notifyError = notifyError;
 // App-Fenster-Renderer
 import { renderTerminal } from "./apps/terminal.js";
 import { renderExplorer } from "./apps/explorer.js";
+import { renderRelayExplorer } from "./apps/relayexplorer.js";
 import { renderTaskManager } from "./apps/taskmanager.js";
 import { renderVnc } from "./apps/vnc.js";
 import { renderEditClient, setEditOnChanged } from "./apps/editclient.js";
@@ -69,7 +70,7 @@ import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
 import { renderPanelPart } from "./apps/panelpart.js";
 import { renderFleetWidget } from "./apps/fleetwidget.js";
-import { initStartMenu, refreshStartMenu } from "./startmenu.js";
+import { initStartMenu, refreshStartMenu, setStartMenuUser } from "./startmenu.js";
 import { t } from "./i18n.js";
 
 // -----------------------------------------------------------------
@@ -79,6 +80,7 @@ import { t } from "./i18n.js";
 const APP_RENDERERS = {
   terminal: renderTerminal,
   explorer: renderExplorer,
+  "relay-explorer": renderRelayExplorer,
   taskmanager: renderTaskManager,
   vnc: renderVnc,
   "edit-client": renderEditClient,
@@ -312,6 +314,11 @@ async function startSession(user) {
     const lang = localStorage.getItem("rmm_lang");
     if (lang && lang !== getLanguage()) setLanguage(lang);
   } catch {}
+  // Startmenue auf den ECHTEN Benutzer umstellen. initStartMenu() lief schon
+  // vor dem Login (state.user war null) und haette das Layout sonst dauerhaft
+  // unter "rmm_appmenu:default" gehalten - dieser Schluessel wird nicht mit dem
+  // Server abgeglichen, weshalb Ordner/Anordnung unter einer anderen URL fehlten.
+  try { setStartMenuUser(user.username); } catch (e) { try { console.error(e); } catch {} }
   initFavorites(user.username);   // Favoriten des Benutzers laden
   initSidebarNav();               // Dashboard-Tab + Favoriten-Header verkabeln
 
@@ -629,7 +636,9 @@ function initMenusAndButtons() {
 
   function openAppFromMenu(app) {
     startMenu.classList.add("hidden");
-    if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
+    if (app === "relay-explorer") openWindow({ key: "relay-explorer", appId: "relay-explorer",
+                                              title: "Relay-Explorer", w: 860, h: 560 });
+    else if (app === "network") openWindow({ key: "network", appId: "network", title: "Netzwerk-Scanner", w: 620, h: 500 });
     else if (app === "portscan") openWindow({ key: "portscan", appId: "portscan", title: "Portscan", w: 560, h: 480 });
     else if (app === "recordings") openWindow({ key: "recordings", appId: "recordings", title: "Session-Aufzeichnungen", w: 820, h: 560 });
     else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });

@@ -229,11 +229,23 @@ class FTPSession:
         """
         from app.routers import relay_routes as rr
 
+        from app import relay_storage as _rs
+
         parts = [p for p in vpath.split("/") if p]
         if not parts:
+            # Oberste Ebene: die Server-Ordner zuerst, dann die Clients.
             names = rr._client_display_names(rr._relay_clients(self.user))
-            return [{"name": n, "is_dir": True, "size": 0, "mtime": 0}
-                    for n in sorted(names)]
+            return ([{"name": n, "is_dir": True, "size": 0, "mtime": 0}
+                     for n in _rs.display_names()]
+                    + [{"name": n, "is_dir": True, "size": 0, "mtime": 0}
+                       for n in sorted(names)])
+
+        # Server-eigene Ordner (Storage / Deployment) - kein Client dahinter.
+        section = _rs.section_of(parts[0])
+        if section:
+            if not _rs.may_read(self.user):
+                raise PermissionError("Kein Zugriff auf das Relay")
+            return _rs.listdir(section, parts[1:])
 
         client_id, err = rr._resolve_client_segment(parts[0], self.user)
         if not client_id:
@@ -254,6 +266,16 @@ class FTPSession:
                 "mtime": int(e.get("mtime") or 0),
             })
         return out
+
+    def _server_path(self, vpath: str):
+        """(sektion, restpfad) zurueckgeben, wenn der Pfad in einem
+        Server-Ordner liegt - sonst (None, None)."""
+        from app import relay_storage as _rs
+        parts = [p for p in vpath.split("/") if p]
+        if not parts:
+            return None, None
+        section = _rs.section_of(parts[0])
+        return (section, parts[1:]) if section else (None, None)
 
     async def _real(self, vpath: str) -> tuple[str, str]:
         """virtueller Pfad -> (client_id, echter Pfad auf dem Client)."""
@@ -509,8 +531,23 @@ class FTPSession:
 
     # ---------------- Befehle: Dateien ----------------
 
+    def _need_write(self, section: str) -> None:
+        from app import relay_storage as _rs
+        if not _rs.may_write(self.user, section):
+            raise PermissionError(f"Schreiben in '{section}' nicht erlaubt")
+
     async def cmd_RETR(self, arg: str):
-        client_id, real = await self._real(self._abs(arg))
+        vpath = self._abs(arg)
+        section, sub = self._server_path(vpath)
+        if section:
+            from app import relay_storage as _rs
+            payload = _rs.read(section, sub)
+            await self.send("150 Datei wird gesendet.")
+            await self._send_data(payload)
+            self._log("download", f"{section}:/{'/'.join(sub)} ({len(payload)} Bytes)")
+            await self.send("226 Übertragung abgeschlossen.")
+            return
+        client_id, real = await self._real(vpath)
         await self.send("150 Datei wird gesendet.")
         res = await request_fs_read(client_id, real)
         import base64
@@ -521,7 +558,13 @@ class FTPSession:
         await self.send("226 Übertragung abgeschlossen.")
 
     async def cmd_STOR(self, arg: str):
-        client_id, real = await self._real(self._abs(arg))
+        vpath = self._abs(arg)
+        section, sub = self._server_path(vpath)
+        if section:
+            self._need_write(section)
+        client_id = real = None
+        if not section:
+            client_id, real = await self._real(vpath)
         await self.send("150 Bereit für die Daten.")
         r, w, first = await self._data()
         try:
@@ -537,6 +580,12 @@ class FTPSession:
             await self._close_pasv()
         import base64
         payload = b"".join(chunks)
+        if section:
+            from app import relay_storage as _rs
+            _rs.write(section, sub, payload)
+            self._log("upload", f"{section}:/{'/'.join(sub)} ({len(payload)} Bytes)")
+            await self.send("226 Übertragung abgeschlossen.")
+            return
         await request_fs_op(client_id, "fs_write",
                             {"path": real,
                              "data": base64.b64encode(payload).decode()})
@@ -567,18 +616,43 @@ class FTPSession:
         await self.send("550 Nicht gefunden.")
 
     async def cmd_DELE(self, arg: str):
-        client_id, real = await self._real(self._abs(arg))
+        vpath = self._abs(arg)
+        section, sub = self._server_path(vpath)
+        if section:
+            from app import relay_storage as _rs
+            self._need_write(section)
+            _rs.delete(section, sub)
+            self._log("delete", f"{section}:/{'/'.join(sub)}")
+            await self.send("250 Gelöscht.")
+            return
+        client_id, real = await self._real(vpath)
         await request_fs_op(client_id, "fs_delete", {"path": real})
         self._log("delete", f"{client_id}:{real}")
         await self.send("250 Gelöscht.")
 
     async def cmd_MKD(self, arg: str):
-        client_id, real = await self._real(self._abs(arg))
+        vpath = self._abs(arg)
+        section, sub = self._server_path(vpath)
+        if section:
+            from app import relay_storage as _rs
+            self._need_write(section)
+            _rs.mkdir(section, sub)
+            await self.send(f'257 "{arg}" erstellt.')
+            return
+        client_id, real = await self._real(vpath)
         await request_fs_op(client_id, "fs_mkdir", {"path": real})
         await self.send(f'257 "{arg}" erstellt.')
 
     async def cmd_RMD(self, arg: str):
-        client_id, real = await self._real(self._abs(arg))
+        vpath = self._abs(arg)
+        section, sub = self._server_path(vpath)
+        if section:
+            from app import relay_storage as _rs
+            self._need_write(section)
+            _rs.delete(section, sub)
+            await self.send("250 Gelöscht.")
+            return
+        client_id, real = await self._real(vpath)
         await request_fs_op(client_id, "fs_delete", {"path": real})
         await self.send("250 Gelöscht.")
 
@@ -589,6 +663,19 @@ class FTPSession:
     async def cmd_RNTO(self, arg: str):
         if not self.rename_from:
             await self.send("503 Erst RNFR senden.")
+            return
+        src_section, src_sub = self._server_path(self.rename_from)
+        dst_section, dst_sub = self._server_path(self._abs(arg))
+        if src_section or dst_section:
+            if src_section != dst_section:
+                self.rename_from = None
+                await self.send("550 Nur innerhalb desselben Ordners möglich.")
+                return
+            from app import relay_storage as _rs
+            self._need_write(src_section)
+            _rs.move(src_section, src_sub, dst_sub)
+            self.rename_from = None
+            await self.send("250 Umbenannt.")
             return
         client_id, src = await self._real(self.rename_from)
         _, dst = await self._real(self._abs(arg))

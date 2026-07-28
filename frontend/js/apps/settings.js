@@ -495,6 +495,15 @@ export function renderSettings(body, win) {
           sind nicht nötig. FTP und SFTP schließen sich gegenseitig aus.
         </p>
         <div id="ge-relay" style="font-size:13px;color:var(--subtext)">Lade…</div>
+
+        <h3 style="margin-top:24px">Deployment-Seite</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Der Relay-Ordner <b>Deployment</b> lässt sich zusätzlich als kleine
+          Webseite veröffentlichen. Alles darin ist dann <b>ohne Anmeldung</b>
+          über einen Link erreichbar — praktisch, um ein Bild, ein Skript oder
+          einen Installer schnell weiterzugeben.
+        </p>
+        <div id="ge-deploy" style="font-size:13px;color:var(--subtext)">Lade…</div>
         </div>
 
         <div data-adminsec id="ge-docker-box" style="display:none">
@@ -976,6 +985,77 @@ export function renderSettings(body, win) {
         });
       };
       draw();
+    })();
+
+    // ---------------- Deployment-Seite ------------------------------------
+    (async () => {
+      const box = root.querySelector("#ge-deploy");
+      if (!box) return;
+      let cfg;
+      try {
+        cfg = await api.getDeployment();
+      } catch (e) {
+        box.textContent = "Nicht verfügbar: " + e.message;
+        return;
+      }
+      const origin = location.origin;
+      box.innerHTML = `
+        <label style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;
+                      border-radius:8px;cursor:pointer;
+                      background:${cfg.public ? "var(--panel-2)" : "transparent"}">
+          <input type="checkbox" id="dep-public" style="margin-top:3px" ${cfg.public ? "checked" : ""} />
+          <span>
+            <span style="color:var(--text)">Öffentlich erreichbar</span>
+            <div style="font-size:11.5px;margin-top:2px">
+              <code>${esc(origin)}/deployment</code> · <b>ohne Anmeldung</b>.
+              Nur einschalten, wenn im Ordner nichts Vertrauliches liegt.
+            </div>
+          </span>
+        </label>
+
+        <div class="form-row" style="margin-top:10px">
+          <label>Seitentitel</label>
+          <input type="text" id="dep-title" value="${esc(cfg.title || "Deployment")}" />
+        </div>
+
+        <div style="margin-top:10px">
+          <label style="display:block;margin-bottom:4px">Eigener HTML-Code</label>
+          <textarea id="dep-html" spellcheck="false" rows="10"
+            placeholder="Leer lassen für die automatische Dateiliste."
+            style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;
+                   font-size:12px;padding:8px;border-radius:8px;
+                   border:1px solid var(--border);background:var(--panel-2);
+                   color:var(--text)">${esc(cfg.html || "")}</textarea>
+          <div style="font-size:11.5px;margin-top:4px">
+            Wird der Code leer gelassen, zeigt die Seite automatisch alle Dateien
+            aus dem Ordner. Eigene Dateien verlinkst du mit
+            <code>/deployment/&lt;dateiname&gt;</code>, Bilder z.B. mit
+            <code>&lt;img src="/deployment/logo.png"&gt;</code>.
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+          <button class="btn-primary" id="dep-save" style="width:auto;margin:0">${t("save")}</button>
+          <a class="taskbar-btn" href="/deployment" target="_blank" rel="noopener">Seite öffnen ↗</a>
+          <span style="font-size:11.5px">Dateien legst du im Relay-Explorer unter „Deployment" ab.</span>
+        </div>`;
+
+      box.querySelector("#dep-save").addEventListener("click", async (e) => {
+        const btn = e.currentTarget; const orig = btn.textContent;
+        btn.disabled = true; btn.textContent = "…";
+        try {
+          const res = await api.saveDeployment({
+            html: box.querySelector("#dep-html").value,
+            title: box.querySelector("#dep-title").value,
+            public: box.querySelector("#dep-public").checked,
+          });
+          cfg.public = res.public;
+          window.notify?.("Deployment-Seite gespeichert.", "success", 4000);
+        } catch (err) {
+          window.notify?.(err.message, "error", 9000);
+        }
+        btn.disabled = false; btn.textContent = orig;
+      });
     })();
 
     // ---------------- Container-Dienste (nur im Docker-Betrieb) -----------

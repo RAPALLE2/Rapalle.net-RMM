@@ -95,15 +95,39 @@ class _Files:
         fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
         return fut.result(timeout)
 
+    # ---- Server-eigene Ordner (Storage / Deployment) -------------------
+    def _server(self, vpath: str):
+        """(sektion, restpfad) oder (None, None), wenn es ein Client-Pfad ist."""
+        from app import relay_storage as _rs
+        parts = [p for p in vpath.split("/") if p]
+        if not parts:
+            return None, None
+        section = _rs.section_of(parts[0])
+        return (section, parts[1:]) if section else (None, None)
+
+    def _need_write(self, section: str) -> None:
+        from app import relay_storage as _rs
+        if not _rs.may_write(self.user, section):
+            raise PermissionError(f"Schreiben in '{section}' nicht erlaubt")
+
     def listdir(self, vpath: str) -> list[dict]:
         from app.routers import relay_routes as rr
         from app.sockets import request_fs_list
+        from app import relay_storage as _rs
 
         parts = [p for p in vpath.split("/") if p]
         if not parts:
             names = rr._client_display_names(rr._relay_clients(self.user))
-            return [{"name": n, "is_dir": True, "size": 0, "mtime": 0}
-                    for n in sorted(names)]
+            return ([{"name": n, "is_dir": True, "size": 0, "mtime": 0}
+                     for n in _rs.display_names()]
+                    + [{"name": n, "is_dir": True, "size": 0, "mtime": 0}
+                       for n in sorted(names)])
+
+        section, sub = self._server(vpath)
+        if section:
+            if not _rs.may_read(self.user):
+                raise PermissionError("Kein Zugriff auf das Relay")
+            return _rs.listdir(section, sub)
 
         client_id, err = rr._resolve_client_segment(parts[0], self.user)
         if not client_id:
@@ -133,6 +157,10 @@ class _Files:
 
     def read(self, vpath: str) -> bytes:
         from app.sockets import request_fs_read
+        section, sub = self._server(vpath)
+        if section:
+            from app import relay_storage as _rs
+            return _rs.read(section, sub)
         client_id, real = self.real(vpath)
         res = self._run(request_fs_read(client_id, real), timeout=120)
         data = res.get("data") or ""
@@ -140,6 +168,12 @@ class _Files:
 
     def write(self, vpath: str, payload: bytes) -> None:
         from app.sockets import request_fs_op
+        section, sub = self._server(vpath)
+        if section:
+            from app import relay_storage as _rs
+            self._need_write(section)
+            _rs.write(section, sub, payload)
+            return
         client_id, real = self.real(vpath)
         self._run(request_fs_op(client_id, "fs_write",
                                 {"path": real,
@@ -148,6 +182,20 @@ class _Files:
 
     def op(self, event: str, vpath: str, extra: dict | None = None) -> None:
         from app.sockets import request_fs_op
+        section, sub = self._server(vpath)
+        if section:
+            from app import relay_storage as _rs
+            self._need_write(section)
+            if event == "fs_mkdir":
+                _rs.mkdir(section, sub)
+            elif event == "fs_delete":
+                _rs.delete(section, sub)
+            elif event == "fs_move":
+                dst_section, dst_sub = self._server((extra or {}).get("dst", ""))
+                if dst_section != section:
+                    raise PermissionError("Nur innerhalb desselben Ordners möglich")
+                _rs.move(section, sub, dst_sub)
+            return
         client_id, real = self.real(vpath)
         data = {"path": real}
         data.update(extra or {})
@@ -283,6 +331,12 @@ def _build_classes():
 
         def rename(self, oldpath, newpath):
             try:
+                # Server-Ordner (Storage/Deployment) gehen über die lokale
+                # Ablage, nicht über den Agenten.
+                section, _ = self.files._server(oldpath)
+                if section:
+                    self.files.op("fs_move", oldpath, {"dst": newpath})
+                    return paramiko.SFTP_OK
                 client_id, src = self.files.real(oldpath)
                 _, dst = self.files.real(newpath)
                 from app.sockets import request_fs_op

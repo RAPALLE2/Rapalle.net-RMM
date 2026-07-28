@@ -45,6 +45,7 @@ from app.routers import (
     guac_routes,
     source_routes,
     relay_routes,
+    storage_routes,
     speedtest_routes,
     ai_routes,
     tickets_routes,
@@ -112,6 +113,7 @@ api.include_router(docker_routes.router)   # Zusatzdienste im Container-Betrieb
 api.include_router(guac_routes.router)
 api.include_router(source_routes.router)
 api.include_router(relay_routes.router)
+api.include_router(storage_routes.router)  # Storage/Deployment + /deployment
 api.include_router(speedtest_routes.router)
 api.include_router(ai_routes.router)          # AI-Chat (Verbindungen + Proxy)
 api.include_router(tickets_routes.router)     # Ticket-System

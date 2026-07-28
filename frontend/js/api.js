@@ -433,6 +433,32 @@ export const api = {
   sourceRuntime: () => request("/api/source/runtime"),
   // Relay: FTP-Zugang (teilt sich den Port mit dem Dashboard)
   relayFtpConfig: () => request("/api/relay/ftp"),
+
+  // --- Server-eigene Relay-Ordner (Storage / Deployment) ---
+  storageSections: () => request("/api/storage/sections"),
+  storageList: (section, path = "") => request(
+    `/api/storage/list?section=${encodeURIComponent(section)}&path=${encodeURIComponent(path)}`),
+  storageDownloadUrl: (section, path) =>
+    `/api/storage/download?section=${encodeURIComponent(section)}&path=${encodeURIComponent(path)}`,
+  // Datei-Upload (multipart, deshalb nicht ueber request()).
+  storageUpload: async (section, path, file) => {
+    const token = localStorage.getItem("rmm_token");
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const q = `section=${encodeURIComponent(section)}&path=${encodeURIComponent(path || "")}`;
+    const res = await fetch(`/api/storage/upload?${q}`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail
+      || `Upload fehlgeschlagen (${res.status})`);
+    return res.json();
+  },
+  storageMkdir: (section, path) => request("/api/storage/mkdir", {    method: "POST", body: JSON.stringify({ section, path }) }),
+  storageDelete: (section, path) => request("/api/storage/delete", {
+    method: "POST", body: JSON.stringify({ section, path }) }),
+  storageMove: (section, path, dst) => request("/api/storage/move", {
+    method: "POST", body: JSON.stringify({ section, path, dst }) }),
+  getDeployment: () => request("/api/storage/deployment"),  saveDeployment: (body) => request("/api/storage/deployment", {
+    method: "POST", body: JSON.stringify(body) }),
   relayFtpMode: (mode, webdav) => request("/api/relay/ftp", {
     method: "POST",
     body: JSON.stringify(webdav === undefined ? { mode } : { mode, webdav }) }),

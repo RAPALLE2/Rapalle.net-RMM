@@ -471,6 +471,15 @@ def _walk_relay(segments: list[str], user) -> dict:
     if not segments:
         return {"node": "root", "consumed": consumed, "clients": clients}
 
+    # --- Server-eigene Ordner (Storage / Deployment) ---
+    # Sie liegen auf derselben Ebene wie die Mandanten und gehoeren nicht zu
+    # einem Client, sondern zum Server selbst.
+    from app import relay_storage as _rs
+    _sec = _rs.section_of(segments[0])
+    if _sec:
+        return {"node": "server", "consumed": [_sec], "section": _sec,
+                "rest": segments[1:]}
+
     # --- Tenant ---
     tmap = _tenant_display(clients)
     tdisp, tkey = _match(tmap, segments[0])
@@ -525,7 +534,8 @@ def _relay_children(walk: dict, user) -> list[str]:
     """Anzeigenamen der Kind-Ordner eines Zwischenknotens (alle sind Ordner)."""
     node = walk["node"]
     if node == "root":
-        return list(_tenant_display(walk["clients"]).keys())
+        from app import relay_storage as _rs
+        return _rs.display_names() + list(_tenant_display(walk["clients"]).keys())
     if node == "tenant":
         return list(_location_display(walk["clients"]).keys())
     if node in ("location", "folder"):
@@ -700,6 +710,95 @@ async def dav(request: Request, full_path: str = ""):
                     f"<ul>{rows or '<li>(leer)</li>'}</ul></body>")
             return Response(content=html, media_type="text/html")
         return PlainTextResponse("Nur lesbar", status_code=403)
+
+    # --- Server-eigene Ordner (Storage / Deployment) ---
+    if node == "server":
+        from app import relay_storage as _rs
+        section = walk["section"]
+        sub = walk.get("rest", [])
+        if not _rs.may_read(user):
+            return PlainTextResponse("Kein Zugriff auf das Relay", status_code=403)
+        writable = _rs.may_write(user, section)
+        base_href = "/dav/" + _up.quote(section) + (
+            "/" + "/".join(_up.quote(x) for x in sub) if sub else "")
+        try:
+            entry = _rs.stat_entry(section, sub)
+        except PermissionError as e:
+            return PlainTextResponse(str(e), status_code=403)
+
+        if method == "PROPFIND":
+            if not entry:
+                return PlainTextResponse("Not Found", status_code=404)
+            responses = [_propfind_response(
+                base_href + ("/" if entry["is_dir"] else ""),
+                entry["name"] or section, entry["is_dir"], entry["size"], entry["mtime"])]
+            if entry["is_dir"] and request.headers.get("depth", "1") != "0":
+                for e in _rs.listdir(section, sub):
+                    responses.append(_propfind_response(
+                        f"{base_href}/{_up.quote(e['name'])}" + ("/" if e["is_dir"] else ""),
+                        e["name"], e["is_dir"], e["size"], e["mtime"]))
+            return _multistatus(responses)
+
+        if method in ("GET", "HEAD"):
+            if not entry:
+                return PlainTextResponse("Not Found", status_code=404)
+            if entry["is_dir"]:
+                if method == "HEAD":
+                    return Response(status_code=200)
+                rows = "".join(
+                    f'<li>{"📁" if e["is_dir"] else "📄"} '
+                    f'<a href="{base_href}/{_up.quote(e["name"])}">{_xml.escape(e["name"])}</a></li>'
+                    for e in _rs.listdir(section, sub))
+                html = ("<!doctype html><meta charset=utf-8><title>RMM Relay</title>"
+                        f"<body style='font-family:sans-serif'><h3>📦 {_xml.escape(section)}</h3>"
+                        f"<ul>{rows or '<li>(leer)</li>'}</ul></body>")
+                return Response(content=html, media_type="text/html")
+            if method == "HEAD":
+                return Response(status_code=200, headers={
+                    "Content-Length": str(entry["size"])})
+            data = _rs.read(section, sub)
+            return Response(content=data, media_type="application/octet-stream")
+
+        if not writable:
+            return PlainTextResponse(
+                f"Schreiben in '{section}' nicht erlaubt", status_code=403)
+
+        try:
+            if method == "PUT":
+                _rs.write(section, sub, await request.body())
+                db.add_audit_entry(user["username"], "relay.storage.write",
+                                   target=section, details="/".join(sub))
+                return Response(status_code=201)
+            if method == "MKCOL":
+                _rs.mkdir(section, sub)
+                return Response(status_code=201)
+            if method == "DELETE":
+                _rs.delete(section, sub)
+                db.add_audit_entry(user["username"], "relay.storage.delete",
+                                   target=section, details="/".join(sub))
+                return Response(status_code=204)
+            if method == "MOVE":
+                dest = request.headers.get("destination", "")
+                idx = dest.find("/dav/")
+                if idx < 0:
+                    return PlainTextResponse("Ziel unklar", status_code=400)
+                dparts = [_up.unquote(p) for p in dest[idx + 5:].split("/") if p]
+                if not dparts or _rs.section_of(dparts[0]) != section:
+                    return PlainTextResponse(
+                        "Verschieben nur innerhalb desselben Ordners",
+                        status_code=502)
+                _rs.move(section, sub, dparts[1:])
+                return Response(status_code=201)
+        except PermissionError as e:
+            return PlainTextResponse(str(e), status_code=403)
+        except FileNotFoundError:
+            return PlainTextResponse("Not Found", status_code=404)
+        except OSError as e:
+            return PlainTextResponse(f"Fehler: {e}", status_code=502)
+
+        if method in ("LOCK", "UNLOCK", "PROPPATCH"):
+            return Response(status_code=204)
+        return PlainTextResponse("Nicht unterstützt", status_code=405)
 
     # --- Konkreter Client ---
     client_id = walk["client_id"]
