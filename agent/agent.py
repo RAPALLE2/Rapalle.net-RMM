@@ -3070,8 +3070,21 @@ def main():
                 state["left"], state["top"] = mon.get("left", 0), mon.get("top", 0)
                 shot = sct.grab(mon)
                 img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                # Gleiche Regel wie im direkten Aufnahmeweg des Agenten:
+                # hohe Qualitaet -> bis 1920 px, sonst 1280 px. Vorher schickte
+                # der Helfer IMMER die volle Aufloesung - das kostete unnoetig
+                # Bandbreite und ignorierte die Qualitaetseinstellung.
+                q = max(10, min(95, state["quality"]))
+                max_width = 1920 if q >= 70 else 1280
+                if img.width > max_width:
+                    ratio = max_width / img.width
+                    img = img.resize((max_width, int(img.height * ratio)))
                 buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=max(10, min(95, state["quality"])))
+                img.save(buf, "JPEG", quality=q)
+                # Gemeldet wird die ECHTE Bildschirmgroesse (nicht die des
+                # verkleinerten JPEG): Das Dashboard rechnet Mausklicks damit
+                # zurueck. Das Seitenverhaeltnis bleibt gleich, deshalb passt
+                # die Zuordnung weiterhin.
                 meta = {"width": shot.width, "height": shot.height, "index": idx,
                         "count": count, "left": state["left"], "top": state["top"]}
                 send(sock, b"F" + json.dumps(meta).encode() + b"\0" + buf.getvalue())

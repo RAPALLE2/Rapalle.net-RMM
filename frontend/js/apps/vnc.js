@@ -22,8 +22,19 @@ import { t } from "../i18n.js";
 export function renderVnc(body, win) {
   const { clientId, clientName } = win.props;
 
+  // WICHTIG zum Layout: Der Fenster-Body (.rmm-window-body) ist ein Flex-Item
+  // mit "flex:1" und "overflow:auto", hat also KEINE feste Hoehe. Ein
+  // "height:100%" darauf laeuft ins Leere (die Hoehe haengt am Inhalt, der
+  // Inhalt an der Hoehe). Genau daran lag das nicht zentrierte Bild: Der
+  // Bildbereich wuchs auf die volle Bildhoehe, "max-height:100%" griff nie,
+  // das Bild wurde auf die volle Fensterbreite gestreckt und unten
+  // abgeschnitten - man sah nur noch den mittleren Ausschnitt (die untere
+  // Leiste "Text senden" war deshalb ebenfalls aus dem Fenster geschoben).
+  // Loesung: absolut im Body verankern (der ist position:relative) - damit
+  // hat der Rahmen IMMER die echte Fenstergroesse als Bezug.
+  body.style.overflow = "hidden";
   body.innerHTML = `
-    <div style="display:flex;flex-direction:column;height:100%;background:#000">
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;background:#000">
       <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
         <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
         <span id="vnc-status-${win.key}" style="color:var(--subtext)">Verbinde...</span>
@@ -225,10 +236,14 @@ export function renderVnc(body, win) {
     window.removeEventListener("mouseup", onMouseUp);
 
     // Fenster leeren, Hinweis-Banner (inkl. Guacamole-Option) + Terminal einsetzen
+    // Gleiche Falle wie oben: height:100% auf dem Fenster-Body wirkt nicht.
+    // Absolut verankern, damit das Terminal die echte Fensterhoehe bekommt.
     body.innerHTML = "";
-    body.style.display = "flex";
-    body.style.flexDirection = "column";
-    body.style.height = "100%";
+    body.style.display = "block";
+    body.style.overflow = "hidden";
+    const shellRoot = document.createElement("div");
+    shellRoot.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column";
+    body.appendChild(shellRoot);
     const banner = document.createElement("div");
     banner.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;color:var(--subtext);border-bottom:1px solid var(--border);flex-wrap:wrap";
     const label = document.createElement("span");
@@ -240,10 +255,10 @@ export function renderVnc(body, win) {
     guacBtn.addEventListener("click", openGuacWindow);
     banner.appendChild(label);
     banner.appendChild(guacBtn);
-    body.appendChild(banner);
+    shellRoot.appendChild(banner);
     const termHost = document.createElement("div");
     termHost.style.cssText = "flex:1;min-height:0";
-    body.appendChild(termHost);
+    shellRoot.appendChild(termHost);
     // Bestehendes Terminal-Programm im selben Fenster rendern (eigene Session,
     // persistentes Arbeitsverzeichnis usw. - läuft über denselben Agent-Kanal).
     renderTerminal(termHost, win);
