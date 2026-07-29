@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import io
 import json
 import logging
 import os
 import platform
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -176,7 +179,11 @@ def _run_watchdog() -> "int":
 
 if (__name__ == "__main__"
         and os.environ.get("RMM_SUPERVISED") != "1"
-        and os.environ.get("RMM_NO_WATCHDOG") != "1"):
+        and os.environ.get("RMM_NO_WATCHDOG") != "1"
+        # Sicherheitsnetz: Sollte agent.py doch einmal mit --screen-helper
+        # aufgerufen werden (alte Aufgabe, Skript von Hand), darf daraus kein
+        # zweiter vollwertiger Agent entstehen.
+        and "--screen-helper" not in sys.argv):
     sys.exit(_run_watchdog())
 
 
@@ -229,19 +236,29 @@ logging.getLogger().addHandler(_console_handler)
 # beim Import in einer Umgebung ohne grafische Sitzung (Windows-Dienst als
 # SYSTEM, Linux ohne X11) mit anderen Fehlern abbrechen kann - das darf den
 # Agenten NICHT komplett lahmlegen.
+# WICHTIG: Den Grund des Fehlschlags merken. Frueher wurde die Ausnahme
+# stillschweigend verschluckt - der Benutzer sah dann nur "mss/Pillow fehlen"
+# und hatte keinerlei Anhaltspunkt, WARUM. Meist fehlen die Pakete gar nicht,
+# sondern sind kaputt (halbe Installation, falscher Interpreter, fehlende
+# System-Bibliothek). Genau das steht jetzt in _SCREEN_ERROR.
+_SCREEN_ERROR = ""
+_INPUT_ERROR = ""
+
 try:
     import mss  # Screenshots aufnehmen (schnell, plattformübergreifend)
     from PIL import Image  # zum Verkleinern/Kodieren der Screenshots
     _SCREEN_AVAILABLE = True
-except Exception:
+except Exception as _e:
     _SCREEN_AVAILABLE = False
+    _SCREEN_ERROR = f"{type(_e).__name__}: {_e}"
 
 try:
     from pynput.mouse import Controller as MouseController, Button as MouseButton
     from pynput.keyboard import Controller as KeyboardController, Key as KeyboardKey
     _INPUT_AVAILABLE = True
-except Exception:
+except Exception as _e:
     _INPUT_AVAILABLE = False
+    _INPUT_ERROR = f"{type(_e).__name__}: {_e}"
 
 # .env Datei aus demselben Ordner wie dieses Skript laden
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -271,9 +288,22 @@ def _no_window_kwargs() -> dict:
 
 
 def _run(cmd, **kwargs):
-    """subprocess.run-Ersatz, der unter Windows kein Fenster aufblitzen lässt."""
+    """
+    subprocess.run-Ersatz, der unter Windows kein Fenster aufblitzen lässt.
+
+    WICHTIG - Zeichensatz: text=True allein benutzt die Locale-Codepage
+    (auf deutschen Systemen cp1252). winget und PowerShell schreiben aber
+    UTF-8 bzw. Zeichen, die es in cp1252 gar nicht gibt (0x81, 0x8d, 0x90,
+    0x9d ...). Das Ergebnis war ein UnicodeDecodeError MITTEN im Scan -
+    die aufrufende Funktion fing ihn ab und meldete brav "0 Aktualisierungen
+    gefunden". Deshalb hier fest UTF-8 mit errors='replace': lieber ein
+    kaputtes Zeichen im Namen als ein stillschweigend leeres Scan-Ergebnis.
+    """
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
+    if kwargs.get("text"):
+        kwargs.setdefault("encoding", "utf-8")
+        kwargs.setdefault("errors", "replace")
     for k, v in _no_window_kwargs().items():
         kwargs.setdefault(k, v)
     return subprocess.run(cmd, **kwargs)
@@ -380,6 +410,27 @@ def _read_agent_version() -> str:
 
 
 AGENT_VERSION = _read_agent_version()
+
+
+def _read_agent_code_hash() -> str:
+    """
+    Prüfsumme des eigenen Quellcodes.
+
+    version.txt wird beim Entwickeln regelmäßig vergessen. Steht dort weiter
+    dieselbe Nummer, hält das Backend einen uralten Agenten für aktuell und
+    schickt nie ein Update - genau deshalb fehlten auf den Clients zuletzt
+    die Patch-Handler, obwohl agent.py im Projekt längst neuer war. Die
+    Prüfsumme sagt dagegen die Wahrheit über den Code, der wirklich läuft.
+    """
+    try:
+        import hashlib
+        data = Path(__file__).resolve().read_bytes()
+        return hashlib.sha256(data).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+AGENT_CODE_HASH = _read_agent_code_hash()
 
 # Der Socket.IO-Client, über den die gesamte Kommunikation läuft
 # EINEN festen Event-Loop erzeugen und als aktuellen setzen, BEVOR der
@@ -522,6 +573,17 @@ async def connect():
             "enrollment_token": ENROLLMENT_TOKEN,  # nur beim ersten Mal relevant
             "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
             "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
+            "agent_code_hash": AGENT_CODE_HASH,     # Prüfsumme des laufenden Codes
+            # Merkmal dieser Fassung: Kennt der Agent den Bildschirm-Helfer
+            # fuer Windows-Sitzung 0? Damit sieht man im Dashboard sofort, ob
+            # auf dem Client wirklich die neue Datei laeuft - eine Versions-
+            # nummer allein hat das zuletzt nicht verlaesslich gezeigt.
+            "screen_helper": True,
+            # Patch-Fähigkeit ungefragt mitteilen. Das Backend muss dadurch
+            # nicht erst einen Ping schicken, um zu wissen, ob ein
+            # Patch-Auftrag auf diesem Client überhaupt Sinn ergibt.
+            "patch_protocol": PATCH_PROTOCOL,
+            "patch_sources": _patch_sources(),
             "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (Auto-Erkennung)
             "last_crash": _read_and_clear_last_crash(),  # Traceback des letzten Absturzes (falls vorhanden)
         },
@@ -1652,6 +1714,246 @@ class _WinTerminal:
             pass
 
 
+def _pip(*args):
+    """pip im GLEICHEN Interpreter aufrufen, ohne Konsolenfenster."""
+    kw = {}
+    if platform.system() == "Windows":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        kw = {"startupinfo": si,
+              "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    try:
+        return subprocess.run([sys.executable, "-m", "pip", *args],
+                              capture_output=True, text=True, timeout=600, **kw)
+    except Exception as e:
+        _print(f"[repair] pip {' '.join(args)} fehlgeschlagen: {e}")
+        return None
+
+
+_screen_repair_tried = False
+
+
+def _repair_screen() -> bool:
+    """
+    Einmaliger Versuch, mss/Pillow (und pynput) wieder lauffaehig zu machen.
+
+    Der haeufigste Fall ist nicht "Paket fehlt", sondern "Paket ist kaputt":
+    ein abgebrochener Download, eine halbe Installation oder ein Rest, den pip
+    fuer vorhanden haelt. Ein schlichtes 'pip install' meldet dann
+    "already satisfied" und aendert nichts - deshalb --force-reinstall.
+    """
+    global _screen_repair_tried, _SCREEN_AVAILABLE, _INPUT_AVAILABLE
+    global _SCREEN_ERROR, _INPUT_ERROR, mss, Image
+    global MouseController, MouseButton, KeyboardController, KeyboardKey
+    if _screen_repair_tried:
+        return _SCREEN_AVAILABLE
+    _screen_repair_tried = True
+
+    _print(f"[repair] Bildaufnahme-Pakete neu installieren (Grund: {_SCREEN_ERROR})")
+    _pip("install", "--no-cache-dir", "--force-reinstall", "mss>=9.0.0", "Pillow>=10.0.0")
+    if not _INPUT_AVAILABLE:
+        _pip("install", "--no-cache-dir", "--force-reinstall", "pynput>=1.7.0")
+
+    import importlib
+    importlib.invalidate_caches()
+    for name in [m for m in list(sys.modules)
+                 if m in ("mss", "PIL", "pynput") or m.startswith(("mss.", "PIL.", "pynput."))]:
+        sys.modules.pop(name, None)
+    try:
+        import mss as _mss
+        from PIL import Image as _Image
+        mss, Image = _mss, _Image
+        _SCREEN_AVAILABLE = True
+        _SCREEN_ERROR = ""
+        _print("[repair] mss/Pillow erfolgreich nachinstalliert.")
+    except Exception as e:
+        _SCREEN_AVAILABLE = False
+        _SCREEN_ERROR = f"{type(e).__name__}: {e}"
+        _print(f"[repair] mss/Pillow weiterhin nicht ladbar: {e}")
+    try:
+        from pynput.mouse import Controller as _MC, Button as _MB
+        from pynput.keyboard import Controller as _KC, Key as _KK
+        MouseController, MouseButton, KeyboardController, KeyboardKey = _MC, _MB, _KC, _KK
+        _INPUT_AVAILABLE = True
+        _INPUT_ERROR = ""
+    except Exception as e:
+        _INPUT_AVAILABLE = False
+        _INPUT_ERROR = f"{type(e).__name__}: {e}"
+    return _SCREEN_AVAILABLE
+
+
+_winpty_repair_tried = False
+
+
+def _winpty_diagnose() -> str:
+    """
+    Sammelt, was man braucht, um ein kaputtes pywinpty einzuordnen.
+
+    Der typische Fehler 'No module named winpty._winpty' bedeutet fast immer:
+    Es liegt ein Paket namens 'winpty' im Suchpfad, dessen kompilierter Teil
+    (_winpty.pyd) fehlt - entweder ein Rest einer alten pywinpty-1.x-Version
+    oder das alte, andere PyPI-Paket 'winpty'. Ein 'pip install pywinpty'
+    aendert daran nichts, weil pip das vorhandene Verzeichnis als installiert
+    ansieht bzw. der Rest weiter davorliegt.
+
+    Zweiter haeufiger Fall: 'pip install' lief in einem ANDEREN Python als dem,
+    mit dem der Agent laeuft. Deshalb steht der Interpreterpfad mit in der
+    Ausgabe - damit sieht man den Unterschied sofort.
+    """
+    lines = [f"Python: {sys.executable}"]
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("winpty")
+        lines.append(f"winpty gefunden unter: {getattr(spec, 'origin', None)}")
+    except Exception as e:
+        lines.append(f"winpty nicht auffindbar: {e}")
+    try:
+        from importlib.metadata import version, distributions
+        try:
+            lines.append(f"pywinpty-Version: {version('pywinpty')}")
+        except Exception:
+            lines.append("pywinpty: nicht als Paket registriert")
+        # Das ALTE, gleichnamige Paket 'winpty' ist die haeufigste Ursache.
+        for d in distributions():
+            if (d.metadata.get("Name") or "").lower() == "winpty":
+                lines.append(f"ACHTUNG: altes Paket 'winpty' {d.version} installiert "
+                             f"- das kollidiert mit pywinpty")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def _winpty_repair() -> bool:
+    """
+    Einmaliger Reparaturversuch: kollidierendes 'winpty' entfernen, Reste
+    loeschen und pywinpty sauber neu installieren. Gibt True zurueck, wenn
+    der Import danach klappt.
+    """
+    global _winpty_repair_tried
+    if _winpty_repair_tried:
+        return False
+    _winpty_repair_tried = True
+
+    pip = _pip
+    _print("[term] Repariere pywinpty…")
+    # 1) Beide Pakete sauber entfernen (das alte 'winpty' ist der Stoerenfried).
+    pip("uninstall", "-y", "winpty")
+    pip("uninstall", "-y", "pywinpty")
+    # 2) Uebrig gebliebenes Verzeichnis loeschen - ohne das findet Python
+    #    weiterhin ein 'winpty' ohne den kompilierten Teil.
+    try:
+        import site
+        import shutil
+        for base in set(site.getsitepackages() + [site.getusersitepackages()]):
+            leftover = Path(base) / "winpty"
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+                _print(f"[term] Rest entfernt: {leftover}")
+    except Exception as e:
+        _print(f"[term] Aufraeumen uebersprungen: {e}")
+    # 3) Neu installieren.
+    pip("install", "--no-cache-dir", "--force-reinstall", "pywinpty>=2.0.0")
+
+    try:
+        import importlib
+        importlib.invalidate_caches()
+        for name in [m for m in list(sys.modules) if m == "winpty" or m.startswith("winpty.")]:
+            sys.modules.pop(name, None)
+        importlib.import_module("winpty")
+        _print("[term] pywinpty erfolgreich repariert.")
+        return True
+    except Exception as e:
+        _print(f"[term] Reparatur fehlgeschlagen: {e}")
+        return False
+
+
+class _WinPipeTerminal:
+    """
+    Ersatz-Terminal fuer Windows OHNE pywinpty.
+
+    Statt eines echten ConPTY laeuft die Shell an normalen Pipes. Das ist
+    bewusst ein Kompromiss, aber ein brauchbarer: Befehle, Ausgabe und
+    Eingabe funktionieren. Was NICHT geht, sind Vollbild-Anwendungen
+    (nano-artige Editoren, Fortschrittsbalken mit Cursorsteuerung) und die
+    Groessenanpassung - dafuer braucht es ein echtes PTY.
+
+    Der Sinn: Lieber ein eingeschraenktes Terminal als gar keins, wenn
+    pywinpty auf dem Rechner partout nicht laeuft.
+    """
+
+    LIMITED_NOTE = ("\x1b[33m[Eingeschränkter Modus: ohne pywinpty läuft die Shell "
+                    "an einfachen Pipes. Vollbild-Programme und Größenanpassung "
+                    "funktionieren hier nicht.]\x1b[0m\r\n")
+
+    def __init__(self, session_id, shell, cols, rows, loop):
+        self.session_id = session_id
+        self.loop = loop
+        self.alive = True
+        if shell == "powershell":
+            cmd = ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"]
+        else:
+            cmd = ["cmd.exe", "/Q"]
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        self.proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, bufsize=0, startupinfo=si,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+        self._emit(self.LIMITED_NOTE)
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+    def _emit(self, text):
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("term-output", {"id": DEVICE_ID, "session": self.session_id,
+                                     "data": text}, namespace="/agent"),
+            self.loop,
+        )
+
+    def _read_loop(self):
+        while self.alive:
+            try:
+                chunk = self.proc.stdout.read(1)
+                if not chunk:
+                    break
+                # Alles nachlesen, was schon bereitliegt, damit die Ausgabe
+                # nicht Zeichen fuer Zeichen durchs Netz tropft.
+                try:
+                    import msvcrt  # noqa: F401  (nur Windows)
+                except Exception:
+                    pass
+                extra = self.proc.stdout.read1(65536) if hasattr(self.proc.stdout, "read1") else b""
+                data = (chunk + (extra or b"")).decode("utf-8", errors="replace")
+            except Exception:
+                break
+            self._emit(data.replace("\n", "\r\n") if "\r\n" not in data else data)
+        self.alive = False
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("term-exit", {"id": DEVICE_ID, "session": self.session_id},
+                     namespace="/agent"),
+            self.loop,
+        )
+
+    def write(self, data: str):
+        try:
+            self.proc.stdin.write(data.replace("\r", "\r\n").encode("utf-8", "replace"))
+            self.proc.stdin.flush()
+        except Exception:
+            pass
+
+    def resize(self, cols, rows):
+        pass          # ohne PTY nicht moeglich
+
+    def close(self):
+        self.alive = False
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+
 @sio.on("term-open", namespace="/agent")
 async def on_term_open(data):
     """Startet eine echte interaktive Shell-Session."""
@@ -1686,14 +1988,45 @@ async def on_term_open(data):
             term = _PosixTerminal(session_id, shell, cols, rows, loop)
         _terminals[session_id] = term
     except ImportError as e:
-        await sio.emit("term-output", {
-            "id": DEVICE_ID, "session": session_id,
-            "data": "\r\n\x1b[31mInteraktives Terminal benoetigt 'pywinpty' "
-                    f"(Import fehlgeschlagen: {e}).\x1b[0m\r\n"
-                    "Installiere es manuell mit:  pip install pywinpty\r\n"
-                    "oder starte den Agenten neu (er versucht es automatisch).\r\n",
-        }, namespace="/agent")
-        await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id}, namespace="/agent")
+        # pywinpty fehlt oder ist kaputt. Erst einmal selbst reparieren -
+        # das deckt den haeufigsten Fall ab (Reste einer alten Version bzw.
+        # das kollidierende Paket 'winpty'). Klappt das nicht, laeuft die
+        # Shell im eingeschraenkten Pipe-Modus weiter, statt gar nicht.
+        diag = _winpty_diagnose()
+        _print(f"[term] pywinpty-Import fehlgeschlagen: {e}\n{diag}")
+        term = None
+        if _winpty_repair():
+            try:
+                term = _WinTerminal(session_id, shell, cols, rows, loop)
+                await sio.emit("term-output", {
+                    "id": DEVICE_ID, "session": session_id,
+                    "data": "\x1b[32m[pywinpty wurde repariert.]\x1b[0m\r\n",
+                }, namespace="/agent")
+            except Exception as e2:
+                _print(f"[term] Auch nach Reparatur kein ConPTY: {e2}")
+                term = None
+        if term is None:
+            await sio.emit("term-output", {
+                "id": DEVICE_ID, "session": session_id,
+                "data": "\r\n\x1b[33mKein ConPTY verfügbar "
+                        f"({e}).\x1b[0m\r\n"
+                        + "".join(f"\x1b[90m{l}\x1b[0m\r\n" for l in diag.split("\n"))
+                        + "\x1b[90mHinweis: Ein 'pip install pywinpty' hilft hier meist "
+                          "nicht - es liegt ein Rest im Suchpfad. Manuell: "
+                          "pip uninstall -y winpty pywinpty && pip install pywinpty"
+                          "\x1b[0m\r\n",
+            }, namespace="/agent")
+            try:
+                term = _WinPipeTerminal(session_id, shell, cols, rows, loop)
+            except Exception as e3:
+                await sio.emit("term-output", {
+                    "id": DEVICE_ID, "session": session_id,
+                    "data": f"\r\n\x1b[31mAuch der Ersatz-Modus scheiterte: {e3}\x1b[0m\r\n",
+                }, namespace="/agent")
+                await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id},
+                               namespace="/agent")
+                return
+        _terminals[session_id] = term
     except Exception as e:
         import traceback
         _print(f"[term] Fehler beim Shell-Start: {e}\n{traceback.format_exc()}")
@@ -1910,7 +2243,7 @@ async def on_fs_list(data):
 
     loop = asyncio.get_event_loop()
     try:
-        entries = await loop.run_in_executor(None, _list_directory, req_path)
+        entries = await loop.run_in_executor(None, _listdir_admin, req_path)
         await sio.emit("fs-result", {"requestId": request_id, "entries": entries}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -1936,7 +2269,7 @@ async def on_fs_read(data):
     path = data.get("path", "")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _read_file_b64, path)
+        result = await loop.run_in_executor(None, _read_file_admin, path)
         await sio.emit("fs-read-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-read-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -1975,6 +2308,227 @@ def _rename_path(src: str, dst: str) -> dict:
     return {"ok": True, "src": src, "dst": dst}
 
 
+# --------------------------------------------------------------
+# Datei-Operationen mit ADMIN-RECHTEN (Web-Explorer + Explorer-Relay)
+# --------------------------------------------------------------
+# Läuft der Agent NICHT bereits als SYSTEM/root, schlagen Dateizugriffe auf
+# geschützte Pfade mit "Zugriff verweigert" fehl (und der Relay-Client zeigt
+# Fehler bzw. bricht die Verbindung ab). Deshalb gilt für ALLES, was über den
+# Web-Explorer oder das Explorer-Relay läuft: Erst der normale (schnelle)
+# Versuch - schlägt der mit Zugriff-verweigert fehl, wird die Operation
+# automatisch ELEVIERT wiederholt:
+#   Windows: Start-Process -Verb RunAs (läuft der Agent als Dienst/SYSTEM,
+#            ist das transparent ohne UAC-Dialog)
+#   Linux:   sudo -n (setzt eine NOPASSWD-Regel für den Agent-Benutzer voraus;
+#            läuft der Agent als root, greift schon der Direktversuch)
+# So werden die Operationen effektiv IMMER mit Admin-Rechten ausgeführt und
+# ein "Datei ohne Rechte editieren" bringt den Relay nicht mehr zum Absturz.
+
+def _is_access_denied(exc: Exception) -> bool:
+    """Erkennt 'Zugriff verweigert'-Fehler plattformübergreifend."""
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError):
+        if getattr(exc, "winerror", None) == 5:          # ERROR_ACCESS_DENIED
+            return True
+        import errno as _errno
+        return exc.errno in (_errno.EACCES, _errno.EPERM)
+    return False
+
+
+# Eigenständiges Mini-Skript, das die Datei-Operation im ELEVIERTEN Prozess
+# ausführt. Austausch über zwei JSON-Dateien (Request/Response), damit keine
+# Kommandozeilen-Quoting-Probleme entstehen.
+_FS_ELEV_SOURCE = r'''
+import base64, json, os, shutil, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    req = json.load(f)
+op = req.get("op"); res = {}
+try:
+    if op == "list":
+        out = []
+        base = req["path"]
+        for name in sorted(os.listdir(base)):
+            full = os.path.join(base, name)
+            try:
+                st = os.stat(full, follow_symlinks=False)
+                is_dir = os.path.isdir(full)
+                out.append({"name": name, "path": full, "isDir": is_dir,
+                            "size": 0 if is_dir else int(st.st_size),
+                            "mtime": int(st.st_mtime * 1000)})
+            except Exception:
+                out.append({"name": name, "path": full, "isDir": False,
+                            "size": 0, "mtime": 0})
+        res = {"entries": out}
+    elif op == "read":
+        with open(req["path"], "rb") as f:
+            data = f.read()
+        res = {"name": os.path.basename(req["path"]),
+               "data": base64.b64encode(data).decode("ascii")}
+    elif op == "write":
+        content = base64.b64decode(req.get("data", ""))
+        os.makedirs(os.path.dirname(req["path"]) or ".", exist_ok=True)
+        with open(req["path"], "wb") as f:
+            f.write(content)
+        res = {"ok": True, "path": req["path"], "size": len(content)}
+    elif op == "mkdir":
+        os.makedirs(req["path"], exist_ok=False)
+        res = {"ok": True, "path": req["path"]}
+    elif op == "delete":
+        p = req["path"]
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
+        res = {"ok": True, "path": p}
+    elif op == "rename":
+        os.rename(req["src"], req["dst"])
+        res = {"ok": True, "src": req["src"], "dst": req["dst"]}
+    else:
+        res = {"error": "Unbekannte Operation: %s" % op}
+except Exception as e:
+    res = {"error": str(e)}
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump(res, f)
+'''
+
+
+def _fs_elevated(op: dict) -> dict:
+    """Führt eine Datei-Operation ELEVIERT (Admin/root) aus. Blockierend -
+    wird wie die Direkt-Varianten im Executor aufgerufen."""
+    import json as _json_mod
+    import shutil as _shutil
+    tmpdir = tempfile.mkdtemp(prefix="rmm-fsadmin-")
+    script = os.path.join(tmpdir, "fsop.py")
+    req_f = os.path.join(tmpdir, "req.json")
+    res_f = os.path.join(tmpdir, "res.json")
+    try:
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(_FS_ELEV_SOURCE)
+        with open(req_f, "w", encoding="utf-8") as f:
+            _json_mod.dump(op, f)
+
+        if IS_WINDOWS:
+            # Gleiches Muster wie _run_elevated_windows: Start-Process -Verb RunAs.
+            inner_exec = f'"{sys.executable}" "{script}" "{req_f}" "{res_f}"'
+            launch_script = (
+                f"$p = Start-Process -FilePath cmd.exe -ArgumentList '/c',{_ps_single_quote(inner_exec)} "
+                f"-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
+            )
+            encoded = base64.b64encode(launch_script.encode("utf-16-le")).decode("ascii")
+            _run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                  "-EncodedCommand", encoded],
+                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        else:
+            # Linux/macOS: sudo ohne Passwort-Abfrage (-n). Ohne passende
+            # sudoers-Regel schlägt das kontrolliert fehl (kein Hänger).
+            _run(["sudo", "-n", sys.executable, script, req_f, res_f],
+                 capture_output=True, timeout=120)
+
+        if not os.path.exists(res_f):
+            raise PermissionError(
+                "Zugriff verweigert - Ausführung mit Admin-Rechten nicht möglich "
+                "(UAC abgelehnt bzw. sudo ohne NOPASSWD-Regel).")
+        with open(res_f, "r", encoding="utf-8") as f:
+            res = _json_mod.load(f)
+        if res.get("error"):
+            raise PermissionError(res["error"])
+        return res
+    finally:
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ------------------------------------------------------------------
+# Elevation-Bremse: Explorer-Relay-Browsing kann pro Ordner DUTZENDE
+# "Zugriff verweigert"-Fälle auslösen (folder.jpg, Thumbs.db, System-
+# Junctions, ...). Ohne Bremse würde für jeden einzelnen ein RunAs-
+# PowerShell-Prozess gestartet (bis 120s Timeout) - das hat den Agent
+# in der Vergangenheit destabilisiert (harter Prozess-Tod 0x80000003).
+#   - _ELEV_LOCK:     nie mehr als EINE Elevation gleichzeitig
+#   - _elev_failed:   pro Pfad 10min Sperre nach fehlgeschlagener Elevation
+#   - _elev_last_fail: nach JEDEM Fehlschlag 60s globale Pause
+#   - System-Junctions (Documents and Settings, $Recycle.Bin, ...) werden
+#     bei "list" gar nicht erst eleviert - dort hilft Elevation ohnehin nicht.
+# ------------------------------------------------------------------
+_ELEV_LOCK = threading.Lock()
+_elev_failed: dict[str, float] = {}
+_elev_last_fail = 0.0
+_ELEV_PATH_COOLDOWN = 600.0   # Sekunden pro Pfad
+_ELEV_GLOBAL_COOLDOWN = 60.0  # Sekunden nach beliebigem Fehlschlag
+_WIN_SYSTEM_JUNCTIONS = {
+    "documents and settings", "$recycle.bin", "system volume information",
+    "recovery", "config.msi", "dfsrprivate", "perflogs",
+}
+
+
+def _elev_key(op: dict) -> str:
+    return f"{op.get('op')}::{op.get('path') or op.get('src') or ''}".lower()
+
+
+def _fs_with_admin(direct, op: dict):
+    """Direktversuch; bei 'Zugriff verweigert' automatisch eleviert wiederholen.
+    Mit Drossel, damit Explorer-Relay-Browsing keinen Elevation-Sturm auslöst."""
+    global _elev_last_fail
+    try:
+        return direct()
+    except Exception as e:
+        if not _is_access_denied(e):
+            raise
+        # Bekannte System-Junctions: Elevation bringt beim Auflisten nichts.
+        if op.get("op") == "list":
+            base = os.path.basename((op.get("path") or "").rstrip("\\/")).lower()
+            if base in _WIN_SYSTEM_JUNCTIONS:
+                raise
+        now = time.time()
+        key = _elev_key(op)
+        ts = _elev_failed.get(key)
+        if ts and now - ts < _ELEV_PATH_COOLDOWN:
+            raise  # gleicher Pfad ist erst kürzlich gescheitert
+        if now - _elev_last_fail < _ELEV_GLOBAL_COOLDOWN:
+            raise  # globale Schonfrist nach letztem Fehlschlag
+        _print(f"[agent] Datei-Operation '{op.get('op')}' ohne Rechte "
+               f"({e}) -> wiederhole mit Admin-Rechten")
+        with _ELEV_LOCK:
+            try:
+                res = _fs_elevated(op)
+                _elev_failed.pop(key, None)
+                return res
+            except Exception:
+                _elev_failed[key] = time.time()
+                _elev_last_fail = time.time()
+                raise
+
+
+def _listdir_admin(path: str):
+    # Leerer Pfad = Laufwerks-/Root-Übersicht, braucht nie Elevation.
+    if not path:
+        return _list_directory(path)
+    res = _fs_with_admin(lambda: _list_directory(path), {"op": "list", "path": path})
+    return res["entries"] if isinstance(res, dict) and "entries" in res else res
+
+
+def _read_file_admin(path: str) -> dict:
+    return _fs_with_admin(lambda: _read_file_b64(path), {"op": "read", "path": path})
+
+
+def _write_file_admin(path: str, data_b64: str) -> dict:
+    return _fs_with_admin(lambda: _write_file_b64(path, data_b64),
+                          {"op": "write", "path": path, "data": data_b64})
+
+
+def _mkdir_admin(path: str) -> dict:
+    return _fs_with_admin(lambda: _make_dir(path), {"op": "mkdir", "path": path})
+
+
+def _delete_admin(path: str) -> dict:
+    return _fs_with_admin(lambda: _delete_path(path), {"op": "delete", "path": path})
+
+
+def _rename_admin(src: str, dst: str) -> dict:
+    return _fs_with_admin(lambda: _rename_path(src, dst),
+                          {"op": "rename", "src": src, "dst": dst})
+
+
 @sio.on("fs-write", namespace="/agent")
 async def on_fs_write(data):
     """Datei hochladen oder eine editierte Datei zurückschreiben."""
@@ -1983,7 +2537,7 @@ async def on_fs_write(data):
     payload = data.get("data", "")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _write_file_b64, path, payload)
+        result = await loop.run_in_executor(None, _write_file_admin, path, payload)
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -1994,7 +2548,7 @@ async def on_fs_mkdir(data):
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _make_dir, data.get("path", ""))
+        result = await loop.run_in_executor(None, _mkdir_admin, data.get("path", ""))
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -2005,7 +2559,7 @@ async def on_fs_delete(data):
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _delete_path, data.get("path", ""))
+        result = await loop.run_in_executor(None, _delete_admin, data.get("path", ""))
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
         await sio.emit("fs-op-result", {"requestId": request_id, "error": str(e)}, namespace="/agent")
@@ -2016,7 +2570,7 @@ async def on_fs_rename(data):
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, _rename_path,
+        result = await loop.run_in_executor(None, _rename_admin,
                                              data.get("src", ""), data.get("dst", ""))
         await sio.emit("fs-op-result", {"requestId": request_id, **result}, namespace="/agent")
     except Exception as e:
@@ -2091,7 +2645,10 @@ async def on_proc_kill(data):
 _screen_stream = {"active": False, "thread": None, "sid_loop": None,
                   "quality": 55, "fps": 10,
                   "monitor": 1,          # gewählter Bildschirm (1 = primär)
-                  "mon_left": 0, "mon_top": 0}   # Offset des gewählten Bildschirms
+                  "mon_left": 0, "mon_top": 0,   # Offset des gewählten Bildschirms
+                  # Verbindung zum Aufnahme-Helfer in der Benutzersitzung
+                  # (nur Windows/Sitzung 0, sonst immer None).
+                  "helper": None}
 
 
 def _detect_from_xorg_process():
@@ -2234,9 +2791,595 @@ if _INPUT_AVAILABLE:
         _print(f"[agent] Fernsteuerung deaktiviert (Controller-Init fehlgeschlagen: {e})")
 
 
+# ======================================================================
+# Bildschirmaufnahme aus Sitzung 0 (Windows-Dienst) - Helfer-Prozess
+# ======================================================================
+# Ausgangslage: Der Windows-Agent wird als geplante Aufgabe unter dem Konto
+# SYSTEM eingerichtet und startet beim Hochfahren. Solche Prozesse laufen in
+# "Sitzung 0" - einer eigenen, unsichtbaren Sitzung, die seit Windows Vista
+# strikt vom Desktop des angemeldeten Benutzers getrennt ist. Eine Aufnahme
+# aus Sitzung 0 sieht den Benutzer-Desktop nicht; je nach Bibliothek kommt ein
+# schwarzes Bild oder ein Fehler ("BitBlt failed", "access denied").
+#
+# Das laesst sich nicht wegkonfigurieren - man braucht einen zweiten Prozess
+# IN der Sitzung des Benutzers. Genau das passiert hier:
+#
+#   1. Der Agent (Sitzung 0) oeffnet einen Server auf 127.0.0.1 mit zufaelligem
+#      Port und zufaelligem Schluessel.
+#   2. Er startet sich selbst noch einmal - diesmal mit dem Token des
+#      angemeldeten Benutzers, also in dessen Sitzung - mit den Argumenten
+#      --screen-helper <port> <schluessel>.
+#   3. Der Helfer verbindet sich zurueck, weist sich mit dem Schluessel aus und
+#      schickt von da an JPEG-Bilder. Eingaben (Maus/Tastatur) gehen den
+#      umgekehrten Weg, denn auch die funktionieren aus Sitzung 0 nicht.
+#
+# Der Server lauscht ausschliesslich auf 127.0.0.1 und akzeptiert genau eine
+# Verbindung, die den Schluessel kennt - von aussen ist da nichts erreichbar.
+
+
+# ----------------------------------------------------------------------
+# Der Helfer als EIGENSTAENDIGES Miniprogramm
+# ----------------------------------------------------------------------
+# Erster Versuch war, agent.py einfach noch einmal mit --screen-helper zu
+# starten. Das schlug fehl: Der Helfer laeuft als normaler BENUTZER, agent.py
+# schreibt beim Import aber unter anderem seine Logdatei nach
+# "C:\Program Files\RapalleRmmAgent\agent.log" - dort hat ein Benutzer kein
+# Schreibrecht. Der Prozess startete (die PID stand im Log), starb dann aber
+# beim Import, noch bevor er sich verbinden konnte. Genau das sah man als
+# "Helfer hat sich nicht gemeldet: timed out".
+#
+# Deshalb wird der Helfer jetzt als kleines, unabhaengiges Skript neben
+# agent.py geschrieben. Es importiert nur, was es wirklich braucht, schreibt
+# sein eigenes Protokoll ins TEMP-Verzeichnis des Benutzers und kennt weder
+# Backend noch Watchdog.
+_HELPER_FILENAME = "_screen_helper.py"
+
+_HELPER_SOURCE = r"""# Automatisch erzeugt von agent.py - nicht von Hand bearbeiten.
+# Laeuft in der Sitzung des angemeldeten Benutzers und liefert dem Agenten
+# (Sitzung 0) Bildschirminhalte, Eingaben und die Zustimmungsabfrage.
+import io, json, os, socket, sys, tempfile, threading, time, traceback
+
+LOG = os.path.join(tempfile.gettempdir(), "rmm-screen-helper.log")
+
+def log(msg):
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + str(msg) + "\n")
+    except Exception:
+        pass
+
+def send(sock, payload):
+    sock.sendall(len(payload).to_bytes(4, "big") + payload)
+
+def recv(sock):
+    def exact(n):
+        buf = b""
+        while len(buf) < n:
+            c = sock.recv(n - len(buf))
+            if not c:
+                return None
+            buf += c
+        return buf
+    head = exact(4)
+    return exact(int.from_bytes(head, "big")) if head else None
+
+def consent_dialog(who, timeout_s):
+    import tkinter as tk
+    result = {"ok": False}
+    root = tk.Tk()
+    root.title("RAPALLE.net RMM - Remote-Bildschirm")
+    root.attributes("-topmost", True)
+    root.configure(bg="#131c2b")
+    root.geometry("460x230")
+    root.eval("tk::PlaceWindow . center")
+    tk.Label(root, text="Remote-Bildschirm zulassen?", bg="#131c2b", fg="#e8eef7",
+             font=("Segoe UI", 14, "bold")).pack(pady=(22, 8))
+    tk.Label(root, text=str(who) + " moechte den Bildschirm dieses Computers\n"
+             "sehen und steuern.", bg="#131c2b", fg="#8fa3bd",
+             font=("Segoe UI", 10), justify="center").pack()
+    countdown = tk.Label(root, text="", bg="#131c2b", fg="#8fa3bd", font=("Segoe UI", 9))
+    countdown.pack(pady=(10, 0))
+    row = tk.Frame(root, bg="#131c2b"); row.pack(pady=18)
+    def yes():
+        result["ok"] = True; root.destroy()
+    def no():
+        root.destroy()
+    tk.Button(row, text="Ablehnen", command=no, width=14,
+              bg="#243043", fg="#e8eef7", relief="flat").pack(side="left", padx=6)
+    tk.Button(row, text="Zulassen", command=yes, width=14,
+              bg="#2f6fed", fg="#ffffff", relief="flat").pack(side="left", padx=6)
+    left = {"n": int(timeout_s)}
+    def tick():
+        if left["n"] <= 0:
+            try: root.destroy()
+            except Exception: pass
+            return
+        countdown.config(text="Ohne Antwort wird in %d Sekunden abgelehnt." % left["n"])
+        left["n"] -= 1
+        root.after(1000, tick)
+    tick()
+    root.protocol("WM_DELETE_WINDOW", no)
+    root.mainloop()
+    return result["ok"]
+
+def main():
+    port, key = int(sys.argv[1]), sys.argv[2]
+    log("Start (PID %s, Python %s)" % (os.getpid(), sys.executable))
+    sock = socket.create_connection(("127.0.0.1", port), timeout=15)
+    send(sock, json.dumps({"key": key, "pid": os.getpid()}).encode())
+    log("Verbunden mit dem Agenten auf Port %s" % port)
+
+    state = {"quality": 60, "fps": 10, "monitor": 1,
+             "left": 0, "top": 0, "stream": False, "stop": False}
+
+    mouse = keyboard = None
+    try:
+        from pynput.mouse import Controller as MC, Button as MB
+        from pynput.keyboard import Controller as KC, Key as KK
+        mouse, keyboard = MC(), KC()
+    except Exception as e:
+        log("Eingabe nicht verfuegbar: %s" % e)
+        MB = KK = None
+
+    def do_input(d):
+        if mouse is None:
+            return
+        ox, oy = state["left"], state["top"]
+        def pos(x):
+            return (int(x["x"]) + ox, int(x["y"]) + oy)
+        k = d.get("type")
+        btn = {"left": "left", "right": "right", "middle": "middle"}.get(
+            d.get("button", "left"), "left")
+        b = getattr(MB, btn)
+        if k == "move":
+            mouse.position = pos(d)
+        elif k == "click":
+            mouse.position = pos(d); mouse.click(b, 1)
+        elif k == "down":
+            mouse.position = pos(d); mouse.press(b)
+        elif k == "up":
+            mouse.position = pos(d); mouse.release(b)
+        elif k == "dblclick":
+            mouse.position = pos(d); mouse.click(MB.left, 2)
+        elif k == "scroll":
+            mouse.scroll(0, int(d.get("dy", 0)))
+        elif k == "text":
+            keyboard.type(d.get("text", ""))
+        elif k in ("key", "combo"):
+            names = d.get("keys") or [d.get("key")]
+            keys = []
+            for n in names:
+                if not n:
+                    continue
+                keys.append(getattr(KK, n, None) or n)
+            for x in keys:
+                keyboard.press(x)
+            for x in reversed(keys):
+                keyboard.release(x)
+
+    def control():
+        while not state["stop"]:
+            try:
+                msg = recv(sock)
+            except Exception as e:
+                log("Steuerkanal beendet: %s" % e); break
+            if msg is None or msg[:1] != b"C":
+                if msg is None:
+                    break
+                continue
+            try:
+                o = json.loads(msg[1:].decode())
+            except Exception:
+                continue
+            c = o.get("cmd")
+            if c == "config":
+                state["quality"] = int(o.get("quality", state["quality"]))
+                state["fps"] = int(o.get("fps", state["fps"]))
+                state["monitor"] = int(o.get("monitor", state["monitor"]))
+                state["stream"] = bool(o.get("stream", state["stream"]))
+            elif c == "input":
+                try: do_input(o.get("data") or {})
+                except Exception as e: log("Eingabe: %s" % e)
+            elif c == "consent":
+                ok = False
+                try:
+                    ok = consent_dialog(o.get("who", "Ein Administrator"),
+                                        int(o.get("timeout", 30)))
+                except Exception as e:
+                    log("Zustimmungsdialog fehlgeschlagen: %s" % e)
+                try:
+                    send(sock, b"R" + json.dumps({"consent": bool(ok)}).encode())
+                except Exception:
+                    pass
+            elif c == "stop":
+                state["stop"] = True
+                break
+        state["stop"] = True
+
+    threading.Thread(target=control, daemon=True).start()
+
+    try:
+        import mss
+        from PIL import Image
+    except Exception as e:
+        log("mss/Pillow fehlen: %s" % e)
+        try:
+            send(sock, b"F" + json.dumps({"error": "mss/Pillow fehlen: %s" % e}).encode() + b"\0")
+        except Exception:
+            pass
+        return
+
+    with mss.mss() as sct:
+        while not state["stop"]:
+            if not state["stream"]:
+                time.sleep(0.15)
+                continue
+            try:
+                mons = sct.monitors
+                count = max(1, len(mons) - 1)
+                idx = state["monitor"] if 0 < state["monitor"] <= count else 1
+                mon = mons[idx]
+                state["left"], state["top"] = mon.get("left", 0), mon.get("top", 0)
+                shot = sct.grab(mon)
+                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                buf = io.BytesIO()
+                img.save(buf, "JPEG", quality=max(10, min(95, state["quality"])))
+                meta = {"width": shot.width, "height": shot.height, "index": idx,
+                        "count": count, "left": state["left"], "top": state["top"]}
+                send(sock, b"F" + json.dumps(meta).encode() + b"\0" + buf.getvalue())
+            except Exception as e:
+                log("Aufnahme: %s" % e)
+                try:
+                    send(sock, b"F" + json.dumps({"error": str(e)}).encode() + b"\0")
+                except Exception:
+                    pass
+                break
+            time.sleep(1.0 / max(1, min(30, state["fps"])))
+    log("Ende")
+
+try:
+    main()
+except Exception:
+    log(traceback.format_exc())
+"""
+
+
+def _write_helper_script() -> str:
+    """Schreibt das Helfer-Skript neben agent.py und gibt den Pfad zurueck.
+    Der Agent laeuft als SYSTEM und darf dort schreiben; der Benutzer darf
+    lesen und ausfuehren - genau das wird gebraucht."""
+    path = Path(__file__).resolve().parent / _HELPER_FILENAME
+    try:
+        if not path.is_file() or path.read_text(encoding="utf-8") != _HELPER_SOURCE:
+            path.write_text(_HELPER_SOURCE, encoding="utf-8")
+    except OSError as e:
+        _print(f"[screen-helper] Skript nicht schreibbar ({e}) - nutze TEMP")
+        import tempfile
+        path = Path(tempfile.gettempdir()) / _HELPER_FILENAME
+        path.write_text(_HELPER_SOURCE, encoding="utf-8")
+    return str(path)
+
+
+
+def _win_session_id() -> int:
+    """Sitzungs-ID dieses Prozesses (-1, wenn nicht ermittelbar)."""
+    if platform.system() != "Windows":
+        return -1
+    try:
+        import ctypes
+        from ctypes import wintypes
+        sid = wintypes.DWORD()
+        ok = ctypes.windll.kernel32.ProcessIdToSessionId(
+            ctypes.windll.kernel32.GetCurrentProcessId(), ctypes.byref(sid))
+        return sid.value if ok else -1
+    except Exception:
+        return -1
+
+
+def _needs_session_helper() -> bool:
+    """Muessen wir ueber einen Helfer gehen? Nur Windows, nur aus Sitzung 0."""
+    if platform.system() != "Windows":
+        return False
+    if os.environ.get("RMM_SCREEN_HELPER") == "1":
+        return False          # wir SIND der Helfer
+    return _win_session_id() == 0
+
+
+def _win_start_in_user_session(args: list) -> bool:
+    """
+    Startet ein Programm in der Sitzung des angemeldeten Benutzers.
+
+    Der Weg ist der uebliche fuer Dienste: Token der aktiven Konsolensitzung
+    holen (WTSQueryUserToken), duplizieren, Umgebungsblock erzeugen und den
+    Prozess auf dem sichtbaren Desktop "winsta0\\default" starten.
+    Voraussetzung ist, dass wir als SYSTEM laufen - sonst fehlt das Recht.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.windll.kernel32
+        advapi = ctypes.windll.advapi32
+        wtsapi = ctypes.windll.wtsapi32
+        userenv = ctypes.windll.userenv
+
+        session = k32.WTSGetActiveConsoleSessionId()
+        if session in (0xFFFFFFFF, 0):
+            _print("[screen-helper] Keine aktive Benutzersitzung gefunden "
+                   "(niemand angemeldet?)")
+            return False
+
+        token = wintypes.HANDLE()
+        if not wtsapi.WTSQueryUserToken(wintypes.DWORD(session), ctypes.byref(token)):
+            _print(f"[screen-helper] WTSQueryUserToken fehlgeschlagen "
+                   f"(Fehler {ctypes.GetLastError()}) - laeuft der Agent als SYSTEM?")
+            return False
+
+        dup = wintypes.HANDLE()
+        # 2 = SecurityImpersonation, 1 = TokenPrimary
+        if not advapi.DuplicateTokenEx(token, 0x02000000, None, 2, 1, ctypes.byref(dup)):
+            _print(f"[screen-helper] DuplicateTokenEx fehlgeschlagen "
+                   f"(Fehler {ctypes.GetLastError()})")
+            k32.CloseHandle(token)
+            return False
+        k32.CloseHandle(token)
+
+        env = ctypes.c_void_p()
+        userenv.CreateEnvironmentBlock(ctypes.byref(env), dup, False)
+
+        class STARTUPINFOW(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR),
+                        ("lpDesktop", wintypes.LPWSTR), ("lpTitle", wintypes.LPWSTR),
+                        ("dwX", wintypes.DWORD), ("dwY", wintypes.DWORD),
+                        ("dwXSize", wintypes.DWORD), ("dwYSize", wintypes.DWORD),
+                        ("dwXCountChars", wintypes.DWORD), ("dwYCountChars", wintypes.DWORD),
+                        ("dwFillAttribute", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                        ("wShowWindow", wintypes.WORD), ("cbReserved2", wintypes.WORD),
+                        ("lpReserved2", ctypes.POINTER(ctypes.c_byte)),
+                        ("hStdInput", wintypes.HANDLE), ("hStdOutput", wintypes.HANDLE),
+                        ("hStdError", wintypes.HANDLE)]
+
+        class PROCESS_INFORMATION(ctypes.Structure):
+            _fields_ = [("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE),
+                        ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD)]
+
+        si = STARTUPINFOW()
+        si.cb = ctypes.sizeof(si)
+        si.lpDesktop = "winsta0\\default"     # der sichtbare Desktop
+        si.dwFlags = 0x00000001               # STARTF_USESHOWWINDOW
+        si.wShowWindow = 0                    # SW_HIDE
+        pi = PROCESS_INFORMATION()
+
+        cmdline = " ".join(f'"{a}"' for a in args)
+        CREATE_UNICODE_ENVIRONMENT = 0x00000400
+        CREATE_NO_WINDOW = 0x08000000
+        ok = advapi.CreateProcessAsUserW(
+            dup, None, ctypes.create_unicode_buffer(cmdline), None, None, False,
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env,
+            str(Path(args[1]).resolve().parent) if len(args) > 1 else None,
+            ctypes.byref(si), ctypes.byref(pi))
+        if not ok:
+            _print(f"[screen-helper] CreateProcessAsUser fehlgeschlagen "
+                   f"(Fehler {ctypes.GetLastError()})")
+            return False
+        _print(f"[screen-helper] Helfer in Sitzung {session} gestartet "
+               f"(PID {pi.dwProcessId})")
+        k32.CloseHandle(pi.hProcess)
+        k32.CloseHandle(pi.hThread)
+        return True
+    except Exception as e:
+        _print(f"[screen-helper] Start fehlgeschlagen: {e}")
+        return False
+
+
+def _sock_send(sock, payload: bytes) -> None:
+    sock.sendall(len(payload).to_bytes(4, "big") + payload)
+
+
+def _sock_recv(sock) -> bytes | None:
+    def _exact(n):
+        buf = b""
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
+    head = _exact(4)
+    if not head:
+        return None
+    return _exact(int.from_bytes(head, "big"))
+
+
+class _ScreenHelper:
+    """Verbindung des Agenten (Sitzung 0) zu seinem Helfer in der Benutzersitzung."""
+
+    def __init__(self, server, conn):
+        self.server = server
+        self.conn = conn
+        self.alive = True
+
+    @classmethod
+    def start(cls, loop, timeout: float = 25.0):
+        import secrets
+        import socket as _socket
+
+        server = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        server.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))       # nur lokal, freier Port
+        server.listen(1)
+        server.settimeout(timeout)
+        port = server.getsockname()[1]
+        key = secrets.token_hex(16)
+
+        # NICHT agent.py erneut starten - siehe Kommentar bei _HELPER_SOURCE.
+        script = _write_helper_script()
+        exe = sys.executable
+        if not _win_start_in_user_session([exe, script, str(port), key]):
+            server.close()
+            return None
+
+        try:
+            conn, _addr = server.accept()
+        except Exception as e:
+            _print(f"[screen-helper] Helfer hat sich nicht gemeldet: {e}")
+            server.close()
+            return None
+        conn.settimeout(20.0)
+        try:
+            hello = _sock_recv(conn)
+            if not hello or json.loads(hello.decode()).get("key") != key:
+                _print("[screen-helper] Falscher Schluessel - Verbindung verworfen")
+                conn.close()
+                server.close()
+                return None
+        except Exception as e:
+            _print(f"[screen-helper] Anmeldung fehlgeschlagen: {e}")
+            conn.close()
+            server.close()
+            return None
+        _print("[screen-helper] Helfer verbunden.")
+        return cls(server, conn)
+
+    def send(self, obj) -> bool:
+        try:
+            _sock_send(self.conn, b"C" + json.dumps(obj).encode())
+            return True
+        except Exception:
+            self.alive = False
+            return False
+
+    def recv(self, timeout: float | None = None):
+        """
+        Naechste Nachricht vom Helfer.
+        Rueckgabe: ("frame", meta, jpeg) | ("reply", obj, None) | None
+        """
+        try:
+            if timeout is not None:
+                self.conn.settimeout(timeout)
+            msg = _sock_recv(self.conn)
+        except Exception:
+            return None
+        if not msg:
+            return None
+        if msg[:1] == b"F":
+            sep = msg.index(b"\0", 1)
+            return "frame", json.loads(msg[1:sep].decode()), msg[sep + 1:]
+        if msg[:1] == b"R":
+            return "reply", json.loads(msg[1:].decode()), None
+        return None
+
+    def ask_consent(self, who: str, timeout_s: int) -> bool:
+        """Zustimmungsdialog IN der Benutzersitzung anzeigen lassen.
+        Aus Sitzung 0 ist ein Fenster fuer den Benutzer unsichtbar - genau
+        deshalb kam bisher 'Warte auf Bestaetigung', ohne dass am Bildschirm
+        etwas erschien."""
+        if not self.send({"cmd": "consent", "who": who, "timeout": int(timeout_s)}):
+            return False
+        deadline = time.time() + timeout_s + 10
+        while time.time() < deadline:
+            got = self.recv(timeout=max(1.0, deadline - time.time()))
+            if got is None:
+                return False
+            kind, obj, _ = got
+            if kind == "reply" and "consent" in obj:
+                return bool(obj["consent"])
+        return False
+
+    def close(self):
+        self.alive = False
+        for s in (self.conn, self.server):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def _screen_helper_loop(loop, helper):
+    """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard."""
+    helper.send({"cmd": "config", "stream": True,
+                 "quality": int(_screen_stream.get("quality", 60)),
+                 "fps": int(_screen_stream.get("fps", 10)),
+                 "monitor": int(_screen_stream.get("monitor", 1) or 1)})
+    last_cfg = None
+    while _screen_stream["active"] and helper.alive:
+        cfg = (int(_screen_stream.get("quality", 60)),
+               int(_screen_stream.get("fps", 10)),
+               int(_screen_stream.get("monitor", 1) or 1))
+        if cfg != last_cfg:
+            helper.send({"cmd": "config", "stream": True, "quality": cfg[0],
+                         "fps": cfg[1], "monitor": cfg[2]})
+            last_cfg = cfg
+        got = helper.recv(timeout=30.0)
+        if got is None:
+            break
+        kind, meta, jpeg = got
+        if kind != "frame":
+            continue
+        if meta.get("error"):
+            _notify_screen_error(loop, f"Helfer meldet: {meta['error']}")
+            break
+        _screen_stream["mon_left"] = meta.get("left", 0)
+        _screen_stream["mon_top"] = meta.get("top", 0)
+        b64 = base64.b64encode(jpeg).decode()
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("screen-frame", {
+                "id": DEVICE_ID, "image": b64,
+                "width": meta.get("width"), "height": meta.get("height"),
+                "monitor_index": meta.get("index", 0),
+                "monitor_count": meta.get("count", 1),
+            }, namespace="/agent"),
+            loop,
+        )
+    _screen_stream["active"] = False
+    _print("[screen-helper] Übertragung beendet.")
+
+
+def _ensure_helper(loop):
+    """
+    Verbindung zum Helfer in der Benutzersitzung holen (oder aufbauen).
+    Wird sowohl fuer die Zustimmungsabfrage als auch fuer die Aufnahme
+    gebraucht - deshalb an einer Stelle gebuendelt.
+    """
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive:
+        return helper
+    helper = _ScreenHelper.start(loop)
+    _screen_stream["helper"] = helper
+    return helper
+
+
 def _screen_capture_loop(loop):
     """Läuft in einem eigenen Thread und schickt fortlaufend Bildschirm-Frames."""
     is_linux = platform.system() == "Linux"
+
+    # Windows-Sonderfall: Der Agent läuft als geplante Aufgabe unter SYSTEM und
+    # damit in Sitzung 0. Von dort ist der Desktop des angemeldeten Benutzers
+    # grundsätzlich nicht erreichbar ("Session-0-Isolation"). Deshalb starten
+    # wir einen Helfer IN der Benutzersitzung und lassen uns die Bilder von
+    # dort schicken. Details siehe _ScreenHelper.
+    if _needs_session_helper():
+        helper = _ensure_helper(loop)
+        if helper is None:
+            _notify_screen_error(
+                loop,
+                "Der Agent läuft als Dienst in Sitzung 0 und kann den Desktop "
+                "von dort nicht aufnehmen. Der Helfer für die Benutzersitzung "
+                "hat sich nicht gemeldet. Prüfen: Ist jemand am Gerät "
+                "angemeldet? Die Protokolldatei des Helfers liegt im "
+                "TEMP-Ordner des angemeldeten Benutzers unter "
+                "rmm-screen-helper.log (im Explorer: %TEMP% eingeben).")
+            _screen_stream["active"] = False
+            return
+        try:
+            _screen_helper_loop(loop, helper)
+        finally:
+            # Verbindung offen lassen: Die naechste Sitzung braucht sie fuer
+            # die Zustimmungsabfrage sofort wieder. Nur die Uebertragung
+            # anhalten.
+            helper.send({"cmd": "config", "stream": False})
+        return
+
     try:
         sct = mss.mss()
     except Exception as e:
@@ -2525,6 +3668,23 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
     Läuft blockierend und wird deshalb im Executor ausgeführt.
     """
     who = requested_by or "Ein Administrator"
+
+    # Sitzung 0: Ein Fenster, das WIR hier oeffnen, sieht der Benutzer nie -
+    # der Desktop gehoert einer anderen Sitzung. Deshalb laesst der Helfer den
+    # Dialog dort anzeigen. Genau das war der Grund, warum im Dashboard
+    # "Warte auf Bestaetigung" stand, am Bildschirm aber nichts erschien.
+    if _needs_session_helper():
+        try:
+            helper = _ensure_helper(_AGENT_LOOP)
+            if helper is None:
+                _print("[agent] Kein Helfer in der Benutzersitzung - "
+                       "Zustimmung kann nicht eingeholt werden (niemand angemeldet?)")
+                return False
+            return helper.ask_consent(who, timeout_s)
+        except Exception as e:
+            _print(f"[agent] Zustimmung ueber den Helfer fehlgeschlagen: {e}")
+            return False
+
     title = "RAPALLE.net RMM - Remote-Bildschirm"
     text = (f"{who} möchte den Bildschirm dieses Computers sehen und steuern.\n\n"
             f"Zulassen? (Ohne Antwort wird nach {timeout_s} Sekunden automatisch abgelehnt.)")
@@ -2587,10 +3747,15 @@ async def on_screen_start(data):
         if data.get("fps"):
             _screen_stream["fps"] = int(data["fps"])
 
-    # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen -> Shell anbieten.
+    # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen. Vorher aber EINMAL
+    # selbst reparieren - meist sind die Pakete nicht weg, sondern kaputt.
+    if not _SCREEN_AVAILABLE:
+        await loop.run_in_executor(None, _repair_screen)
     if not _SCREEN_AVAILABLE:
         _notify_screen_mode(loop, "shell",
-                            "Bildaufnahme-Pakete (mss/Pillow) fehlen - es wird eine Shell geöffnet.")
+                            "Bildschirm-Übertragung nicht möglich: mss/Pillow lassen "
+                            f"sich nicht laden ({_SCREEN_ERROR}). Python: {sys.executable}. "
+                            "Es wird stattdessen eine Shell geöffnet.")
         return
 
     # Ist überhaupt ein grafischer Bildschirm da? (setzt auf Linux ggf. DISPLAY)
@@ -2924,6 +4089,13 @@ async def on_screen_input(data):
     Simuliert eine Maus-/Tastatureingabe, die vom Dashboard kommt.
     data.type ist einer von: "move", "click", "scroll", "key", "text", "combo"
     """
+    # Laeuft ein Helfer in der Benutzersitzung? Dann MUSS die Eingabe dort
+    # ausgefuehrt werden - aus Sitzung 0 erreicht kein Klick den Desktop.
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive:
+        helper.send({"cmd": "input", "data": data})
+        return
+
     if not _INPUT_AVAILABLE:
         return
 
@@ -3031,8 +4203,18 @@ async def main():
     _print(f"[agent] Gerätename : {DEVICE_NAME}")
     _print(f"[agent] Geräte-ID  : {DEVICE_ID}")
     _print(f"[agent] Backend    : {BACKEND_URL}")
-    _print(f"[agent] Remote Screen: {'verfügbar' if _SCREEN_AVAILABLE else 'deaktiviert (mss/Pillow fehlt)'}")
+    _print(f"[agent] Remote Screen: "
+           + ("verfügbar" if _SCREEN_AVAILABLE
+              else f"deaktiviert - mss/Pillow nicht ladbar ({_SCREEN_ERROR})"))
+    if not _INPUT_AVAILABLE:
+        _print(f"[agent] Fernsteuerung: deaktiviert - pynput nicht ladbar ({_INPUT_ERROR})")
     _print(f"[agent] Fernsteuerung: {'verfügbar' if _INPUT_AVAILABLE else 'deaktiviert (pynput fehlt)'}")
+    # Beweis-Zeile: Steht sie NICHT im Log, laeuft auf dem Client eine aeltere
+    # agent.py - egal was die Versionsnummer behauptet.
+    if IS_WINDOWS:
+        _print(f"[agent] Sitzung {_win_session_id()} | Bildschirm-Helfer: "
+               + ("wird verwendet (Dienst in Sitzung 0)" if _needs_session_helper()
+                  else "nicht nötig"))
 
     # Heartbeat läuft als eigene Hintergrund-Aufgabe, unabhängig von der Verbindung
     asyncio.create_task(heartbeat_loop())
@@ -3067,7 +4249,798 @@ async def main():
         await asyncio.sleep(3)
 
 
+# ==========================================================================
+# SOFTWARE-PATCHING  (Protokoll 2)
+# --------------------------------------------------------------------------
+# Leitgedanke dieser Fassung: Der Agent sagt von sich aus, was er kann und
+# was er tut. Die vorige Fassung schwieg im Fehlerfall - jede Quelle, die
+# nicht ansprang, lieferte einfach eine leere Liste zurück. Ob "keine
+# Updates vorhanden" oder "winget gar nicht erst gestartet" gemeint war,
+# liess sich von aussen nicht unterscheiden. Deshalb jetzt:
+#
+#   * Jede Quelle liefert ein Ergebnis MIT Zustand (ok / Fehlertext), nie
+#     nur eine leere Liste.
+#   * Der Agent meldet seine Fähigkeiten schon beim Anmelden mit
+#     (PATCH_PROTOCOL im 'register'), nicht erst auf Nachfrage. Das Backend
+#     weiss dadurch VOR jedem Auftrag, ob der Client überhaupt patchen kann.
+#   * Jeder Handler antwortet IMMER - auch wenn er selbst scheitert.
+#     Ein stiller Handler ist von aussen nicht von einem fehlenden zu
+#     unterscheiden, und genau diese Verwechslung hat zuletzt viel Zeit
+#     gekostet.
+#   * Während eines Scans laufend Fortschrittsmeldungen, damit niemand
+#     minutenlang auf einen stehenden Balken schaut.
+#
+# Quellen: Windows Update (COM-API), winget, apt, dnf.
+# Stufen:  security | critical | important | moderate | low | feature | other
+# ==========================================================================
+
+# Fähigkeitsstufe dieses Agenten. Wird beim Anmelden mitgeschickt; das
+# Backend entscheidet daran, ob es einen Patch-Auftrag überhaupt schickt.
+#   1 = erste Fassung (patch-scan/patch-apply, kein patch-ping)
+#   2 = diese Fassung (Selbstauskunft, Fortschritt, Fehler je Quelle)
+PATCH_PROTOCOL = 2
+
+PATCH_EVENTS = ("patch-ping", "patch-scan", "patch-apply", "patch-selftest")
+
+_PATCH_LEVELS = ("security", "critical", "important", "moderate",
+                 "low", "feature", "other")
+
+
+def _patch_log(msg: str) -> None:
+    _print(f"[patch] {msg}")
+
+
+# --------------------------------------------------------------------------
+# Werkzeuge
+# --------------------------------------------------------------------------
+
+def _winget_exe() -> "str | None":
+    """
+    Pfad zu winget.exe.
+
+    Der Agent läuft als Dienst unter SYSTEM. Dort liegt winget NICHT im PATH:
+    die App-Execution-Aliase unter %LOCALAPPDATA%\\Microsoft\\WindowsApps gibt
+    es nur für angemeldete Benutzer. Ein blosses "winget" endete deshalb im
+    FileNotFoundError - der früher stillschweigend zu "keine Updates" wurde.
+    """
+    if not IS_WINDOWS:
+        return None
+    found = shutil.which("winget")
+    if found:
+        return found
+    base = Path(os.environ.get("ProgramW6432") or r"C:\Program Files") / "WindowsApps"
+    try:
+        for pattern in ("Microsoft.DesktopAppInstaller_*_x64__*/winget.exe",
+                        "Microsoft.DesktopAppInstaller_*/winget.exe"):
+            for cand in sorted(base.glob(pattern), reverse=True):
+                if cand.exists():
+                    return str(cand)
+    except Exception:
+        pass
+    return None
+
+
+def _source(name: str, ok: bool, patches=None, error: str = "",
+            note: str = "") -> dict:
+    """
+    Einheitliches Ergebnis EINER Quelle.
+
+    'ok=False' heisst: die Quelle konnte nicht befragt werden. Das ist
+    ausdrücklich etwas anderes als 'ok=True' mit leerer Liste ("befragt,
+    nichts gefunden"). Genau diese Unterscheidung fehlte vorher.
+    """
+    return {"source": name, "ok": bool(ok), "patches": patches or [],
+            "count": len(patches or []), "error": error[:500], "note": note[:300]}
+
+
+def _is_admin() -> bool:
+    """Läuft der Agent mit den Rechten, die zum Installieren nötig sind?"""
+    try:
+        if IS_WINDOWS:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        return os.geteuid() == 0
+    except Exception:
+        return False
+
+
+# --------------------------------------------------------------------------
+# Windows Update (COM)
+# --------------------------------------------------------------------------
+# Über die COM-API statt über das Modul PSWindowsUpdate: das ist auf den
+# meisten Systemen nicht installiert, und eine Ferninstallation richtet mehr
+# Schaden an als sie hilft.
+
+_WU_SEARCH_PS = r"""
+$ErrorActionPreference = 'Stop'
+try {
+  $session  = New-Object -ComObject Microsoft.Update.Session
+  $searcher = $session.CreateUpdateSearcher()
+  $result   = $searcher.Search("IsInstalled=0 and IsHidden=0")
+  $out = @()
+  foreach ($u in $result.Updates) {
+    $cats = @()
+    foreach ($c in $u.Categories) { $cats += $c.Name }
+    $kb = @()
+    foreach ($k in $u.KBArticleIDs) { $kb += "KB$k" }
+    $out += [PSCustomObject]@{
+      id        = $u.Identity.UpdateID
+      name      = $u.Title
+      version   = ($kb -join ',')
+      severity  = [string]$u.MsrcSeverity
+      categories= ($cats -join ',')
+      size      = [int64]$u.MaxDownloadSize
+      reboot    = [int]$u.InstallationBehavior.RebootBehavior
+    }
+  }
+  # Immer ein Array ausgeben: ohne den Komma-Operator macht PowerShell aus
+  # einem einzelnen Element ein Objekt und aus null Elementen gar nichts.
+  ConvertTo-Json -InputObject @($out) -Compress -Depth 3
+} catch {
+  Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
+}
+"""
+
+_WU_INSTALL_PS = r"""
+$ErrorActionPreference = 'Stop'
+$wanted = '__IDS__'.Split(',') | Where-Object { $_ -ne '' }
+try {
+  $session  = New-Object -ComObject Microsoft.Update.Session
+  $searcher = $session.CreateUpdateSearcher()
+  $result   = $searcher.Search("IsInstalled=0 and IsHidden=0")
+  $coll = New-Object -ComObject Microsoft.Update.UpdateColl
+  foreach ($u in $result.Updates) {
+    if ($wanted -contains $u.Identity.UpdateID) {
+      if (-not $u.EulaAccepted) { $u.AcceptEula() | Out-Null }
+      $coll.Add($u) | Out-Null
+    }
+  }
+  if ($coll.Count -eq 0) {
+    Write-Output '{"installed":0,"reboot":false,"code":0,"note":"nichts passendes gefunden"}'
+    exit
+  }
+  $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll; $dl.Download() | Out-Null
+  $inst = $session.CreateUpdateInstaller(); $inst.Updates = $coll
+  $r = $inst.Install()
+  $reboot = [bool]$r.RebootRequired
+  Write-Output ('{"installed":' + $coll.Count + ',"reboot":' + $reboot.ToString().ToLower() + ',"code":' + $r.ResultCode + '}')
+} catch {
+  Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
+}
+"""
+
+
+def _ps(script: str, timeout: int = 600):
+    """
+    PowerShell ausführen.
+
+    Die Ausgabekodierung wird ausdrücklich auf UTF-8 gestellt. Ohne das
+    liefert PowerShell die Konsolen-Codepage (deutsch: cp850) - Update-Titel
+    mit Umlauten kamen als Buchstabensalat an oder brachten das Einlesen
+    ganz zum Scheitern.
+    """
+    prelude = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+    return _run(["powershell", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-Command", prelude + script],
+                timeout=timeout)
+
+
+def _level_from_windows(severity: str, categories: str) -> str:
+    """
+    Schweregrad einer Windows-Aktualisierung bestimmen.
+
+    Die Kategorie hat Vorrang vor MsrcSeverity: Microsoft lässt den
+    Schweregrad bei vielen Sicherheitsupdates leer. Wer nur nach
+    MsrcSeverity filtert, verpasst genau die Updates, die er wollte.
+    """
+    cats = (categories or "").lower()
+    sev = (severity or "").strip().lower()
+    if "security" in cats:
+        return "security"
+    if "critical" in cats:
+        return "critical"
+    if sev in ("critical", "important", "moderate", "low"):
+        return sev
+    if "definition" in cats:
+        return "security"          # Virendefinitionen: sicherheitsrelevant
+    if "driver" in cats:
+        return "other"
+    if "feature pack" in cats or "upgrade" in cats:
+        return "feature"
+    return "other"
+
+
+def _scan_windows_os() -> dict:
+    if not IS_WINDOWS:
+        return _source("windows-update", True, note="kein Windows")
+    try:
+        res = _ps(_WU_SEARCH_PS, timeout=420)
+    except subprocess.TimeoutExpired:
+        return _source("windows-update", False,
+                       error="Zeitüberschreitung bei der Windows-Update-Abfrage (>7 min)")
+    except Exception as e:
+        return _source("windows-update", False, error=f"{e.__class__.__name__}: {e}")
+
+    raw = (res.stdout or "").strip()
+    if not raw:
+        err = (res.stderr or "").strip()[:400]
+        if err:
+            return _source("windows-update", False,
+                           error=f"PowerShell meldete: {err}")
+        return _source("windows-update", True, note="keine Ausgabe - nichts gefunden")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return _source("windows-update", False,
+                       error=f"Antwort war kein JSON: {raw[:200]}")
+
+    if isinstance(data, dict):
+        if data.get("__error__"):
+            return _source("windows-update", False, error=str(data["__error__"]))
+        data = [data]
+
+    out = []
+    for u in data or []:
+        uid = str(u.get("id") or "").strip()
+        if not uid:
+            continue
+        out.append({
+            "uid": uid,
+            "name": u.get("name") or "Unbenannte Aktualisierung",
+            "current_version": "",
+            "available_version": u.get("version") or "",
+            "source": "windows-update",
+            "level": _level_from_windows(u.get("severity"), u.get("categories")),
+            "size": int(u.get("size") or 0),
+            # RebootBehavior: 0 = nie, 1 = immer, 2 = kann sein
+            "needs_reboot": 1 if int(u.get("reboot") or 0) else 0,
+        })
+    return _source("windows-update", True, out)
+
+
+# --------------------------------------------------------------------------
+# winget
+# --------------------------------------------------------------------------
+
+def _winget_columns(header: str) -> "dict | None":
+    """
+    Spaltenanfänge aus der Kopfzeile ableiten - ohne die Spalten beim Namen
+    zu nennen.
+
+    Der frühere Weg suchte die Wörter "Id" und "Available". Auf einem
+    deutschen Windows heissen die Spalten "Kennung" und "Verfügbar", auf
+    einem französischen wieder anders: die Kopfzeile wurde nie erkannt und
+    der Scan meldete grundsätzlich null Anwendungsupdates.
+
+    Womit man rechnen kann, ist die Formatierung: winget trennt seine
+    Spalten immer durch MINDESTENS zwei Leerzeichen und richtet die Werte
+    darunter linksbündig an derselben Position aus. Wir lesen also nur die
+    Startspalten ab und ignorieren, was in der Überschrift steht.
+
+    Spaltenfolge bei winget stabil: Name, Kennung, Version, Verfügbar, Quelle.
+    """
+    starts = [m.start() for m in re.finditer(r"(?<=\s)\S", "  " + header)]
+    # "  " vorangestellt, damit auch die erste Spalte erkannt wird; die
+    # Verschiebung um zwei Zeichen wieder herausrechnen.
+    starts = sorted({max(0, s - 2) for s in starts})
+    # Nur echte Spaltenanfänge behalten: solche, vor denen zwei Leerzeichen
+    # stehen (innerhalb einer Überschrift wie "Verfügbare Version" steht nur
+    # eines).
+    cols = [0] + [s for s in starts if s >= 2 and header[s - 2:s] == "  "]
+    cols = sorted(set(cols))
+    if len(cols) < 4:
+        return None
+    return {"name": cols[0], "id": cols[1], "cur": cols[2],
+            "avail": cols[3], "end": cols[4] if len(cols) > 4 else None}
+
+
+def _scan_winget() -> dict:
+    if not IS_WINDOWS:
+        return _source("winget", True, note="kein Windows")
+    exe = _winget_exe()
+    if not exe:
+        return _source("winget", False, error=(
+            "winget wurde nicht gefunden. Unter dem Dienstkonto SYSTEM liegt es "
+            "nicht im PATH; auch das Paket 'App Installer' kann fehlen."))
+    try:
+        res = _run([exe, "upgrade", "--include-unknown",
+                    "--accept-source-agreements", "--disable-interactivity"],
+                   timeout=240)
+    except subprocess.TimeoutExpired:
+        return _source("winget", False, error="Zeitüberschreitung bei winget (>4 min)")
+    except Exception as e:
+        return _source("winget", False, error=f"{e.__class__.__name__}: {e}")
+
+    lines = [l.rstrip() for l in (res.stdout or "").splitlines()]
+    # Die Trennzeile dient nur dazu, die Kopfzeile zu FINDEN: sie besteht in
+    # jeder Sprache aus Bindestrichen. Die Spaltenpositionen kommen dann aus
+    # der Zeile darüber.
+    sep_idx = next((i for i, l in enumerate(lines)
+                    if l.strip() and set(l.strip()) == {"-"}
+                    and len(l.strip()) > 20), None)
+    if sep_idx is None or sep_idx == 0:
+        # Kein Tabellenkopf: entweder wirklich nichts zu tun, oder winget hat
+        # sich beschwert. Beides unterscheidbar machen statt zu schweigen.
+        text = " ".join(l.strip() for l in lines if l.strip())
+        if res.returncode != 0:
+            return _source("winget", False,
+                           error=f"winget endete mit Code {res.returncode}: {text[:300]}")
+        return _source("winget", True,
+                       note="keine Tabelle in der Ausgabe - nichts zu aktualisieren")
+
+    cols = _winget_columns(lines[sep_idx - 1])
+    if not cols:
+        return _source("winget", False, error=(
+            "Spaltenaufteilung der winget-Tabelle nicht erkannt. Kopfzeile: "
+            f"{lines[sep_idx - 1][:160]}"))
+
+    out = []
+    for line in lines[sep_idx + 1:]:
+        if not line.strip() or set(line.strip()) <= {"-", " "}:
+            continue
+        name = line[cols["name"]:cols["id"]].strip()
+        pkg = line[cols["id"]:cols["cur"]].strip()
+        cur = line[cols["cur"]:cols["avail"]].strip()
+        avail_field = line[cols["avail"]:cols["end"]] if cols["end"] else line[cols["avail"]:]
+        avail = avail_field.strip().split(" ")[0] if avail_field.strip() else ""
+        # Fusszeilen ("2 Upgrades verfügbar.") laufen quer über die Spalten:
+        # in der Kennung-Spalte stünde dann Text mit Leerzeichen.
+        if not pkg or not name or " " in pkg:
+            continue
+        if not avail or avail.lower() in ("unknown", "unbekannt"):
+            continue
+        out.append({
+            "uid": pkg, "name": name,
+            "current_version": cur, "available_version": avail,
+            "source": "winget",
+            # winget kennt keine Schweregrade. Als 'security' zu raten wäre
+            # gefährlich - dann würden Sicherheitsregeln beliebige Apps
+            # mitaktualisieren.
+            "level": "other",
+            "size": 0, "needs_reboot": 0,
+        })
+    return _source("winget", True, out)
+
+
+# --------------------------------------------------------------------------
+# apt / dnf
+# --------------------------------------------------------------------------
+
+def _has(binary: str) -> bool:
+    return bool(shutil.which(binary))
+
+
+def _scan_apt() -> dict:
+    """
+    LC_ALL=C erzwingt englische Ausgabe - sonst heisst es auf deutschen
+    Systemen "aktualisierbar von:" statt "upgradable from:". Beide
+    Schreibweisen werden trotzdem erkannt, falls die Locale nicht greift.
+    """
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C",
+           "DEBIAN_FRONTEND": "noninteractive"}
+    note = ""
+    try:
+        upd = _run(["apt-get", "update", "-qq"], timeout=240, env=env)
+        if upd.returncode != 0:
+            # Kein Abbruch: die Paketliste kann veraltet, aber brauchbar sein.
+            note = f"apt-get update meldete Code {upd.returncode}"
+    except Exception as e:
+        note = f"apt-get update übersprungen ({e})"
+    try:
+        res = _run(["apt", "list", "--upgradable"], timeout=180, env=env)
+    except Exception as e:
+        return _source("apt", False, error=f"{e.__class__.__name__}: {e}")
+
+    pattern = re.compile(
+        r"^(?P<pkg>[^/\s]+)/(?P<repo>\S+)\s+(?P<avail>\S+)\s+\S+"
+        r"\s+\[(?:upgradable from|aktualisierbar von):\s*(?P<cur>[^\]]+)\]")
+    out = []
+    for line in (res.stdout or "").splitlines():
+        m = pattern.match(line.strip())
+        if not m:
+            continue
+        out.append({
+            "uid": m.group("pkg"), "name": m.group("pkg"),
+            "current_version": m.group("cur").strip(),
+            "available_version": m.group("avail"),
+            "source": "apt",
+            # Debian/Ubuntu kennzeichnen Sicherheitsaktualisierungen über die
+            # Quelle ("...-security"). Das ist die einzige verlässliche Angabe.
+            "level": "security" if "security" in m.group("repo").lower() else "other",
+            "size": 0, "needs_reboot": 0,
+        })
+    return _source("apt", True, out, note=note)
+
+
+def _scan_dnf() -> dict:
+    try:
+        # check-update endet planmässig mit Code 100, wenn es Updates gibt.
+        res = _run(["dnf", "-q", "check-update"], timeout=240)
+    except Exception as e:
+        return _source("dnf", False, error=f"{e.__class__.__name__}: {e}")
+    if res.returncode not in (0, 100):
+        return _source("dnf", False, error=(
+            f"dnf check-update endete mit Code {res.returncode}: "
+            f"{(res.stderr or '').strip()[:300]}"))
+
+    sec = set()
+    try:
+        s = _run(["dnf", "-q", "updateinfo", "list", "security"], timeout=240)
+        for line in (s.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                sec.add(parts[-1].rsplit("-", 2)[0])
+    except Exception:
+        pass
+
+    out = []
+    for line in (res.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 3 or line.startswith(("Last metadata", "Obsoleting", "Security")):
+            continue
+        pkg = parts[0].rsplit(".", 1)[0]
+        out.append({
+            "uid": pkg, "name": pkg, "current_version": "",
+            "available_version": parts[1], "source": "dnf",
+            "level": "security" if pkg in sec else "other",
+            "size": 0, "needs_reboot": 0,
+        })
+    return _source("dnf", True, out)
+
+
+# --------------------------------------------------------------------------
+# Selbstauskunft
+# --------------------------------------------------------------------------
+
+def _patch_sources() -> list:
+    """Welche Quellen kommen auf DIESEM System überhaupt in Frage?"""
+    if IS_WINDOWS:
+        src = ["windows-update"]
+        if _winget_exe():
+            src.append("winget")
+        return src
+    src = []
+    if _has("apt"):
+        src.append("apt")
+    elif _has("dnf"):
+        src.append("dnf")
+    return src
+
+
+def _patch_capabilities() -> dict:
+    """
+    Wozu ist dieser Agent in Sachen Patching in der Lage? Wird beim Anmelden
+    und bei jedem 'patch-ping' gemeldet - das Backend muss dadurch nicht mehr
+    raten, ob ein Auftrag überhaupt Sinn ergibt.
+    """
+    return {
+        "protocol": PATCH_PROTOCOL,
+        "agent_version": AGENT_VERSION,
+        "agent_code_hash": AGENT_CODE_HASH,
+        "platform": platform.system(),
+        "release": OS_RELEASE,
+        "sources": _patch_sources(),
+        "winget": _winget_exe() or "",
+        "elevated": _is_admin(),
+        "events": list(PATCH_EVENTS),
+    }
+
+
+# --------------------------------------------------------------------------
+# Sammeln und Installieren
+# --------------------------------------------------------------------------
+
+def _collect_patches(progress=None) -> dict:
+    """
+    Alle Quellen befragen (blockierend, läuft im Thread).
+
+    'progress' ist ein Rückruf(stage, detail, done, total) für die
+    Fortschrittsmeldungen. Er darf niemals eine Ausnahme nach aussen tragen -
+    ein kaputter Fortschrittsbalken darf keinen Scan abbrechen.
+    """
+    def tell(stage, detail, done, total):
+        if not progress:
+            return
+        try:
+            progress(stage, detail, done, total)
+        except Exception:
+            pass
+
+    scanners = []
+    if IS_WINDOWS:
+        scanners.append(("windows-update", _scan_windows_os))
+        scanners.append(("winget", _scan_winget))
+    elif _has("apt"):
+        scanners.append(("apt", _scan_apt))
+    elif _has("dnf"):
+        scanners.append(("dnf", _scan_dnf))
+
+    total = len(scanners)
+    sources, patches = [], []
+    for idx, (name, fn) in enumerate(scanners):
+        tell("scanning", name, idx, total)
+        try:
+            result = fn()
+        except Exception as e:
+            result = _source(name, False, error=f"{e.__class__.__name__}: {e}")
+        sources.append({k: v for k, v in result.items() if k != "patches"})
+        patches += result["patches"]
+        state = f"{result['count']}" if result["ok"] else f"FEHLER: {result['error'][:120]}"
+        _patch_log(f"{name}: {state}")
+        tell("scanned", name, idx + 1, total)
+
+    # Doppelte (gleiche Quelle + gleiche Kennung) entfernen.
+    seen, unique = set(), []
+    for p in patches:
+        key = (p["source"], p["uid"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+
+    return {
+        "patches": unique,
+        "sources": sources,
+        "capabilities": _patch_capabilities(),
+        "scanned_at": int(time.time() * 1000),
+    }
+
+
+def _apply_patches(items: list, progress=None) -> dict:
+    """
+    Ausgewählte Aktualisierungen installieren.
+
+    'items' sind Einträge aus dem letzten Scan ({uid, source, name}). Es wird
+    NIE etwas installiert, das nicht ausdrücklich benannt wurde - kein
+    "alles aktualisieren" per Fernsteuerung.
+    """
+    def tell(stage, detail, done, total):
+        if not progress:
+            return
+        try:
+            progress(stage, detail, done, total)
+        except Exception:
+            pass
+
+    installed, failed, reboot = [], [], False
+    total = len(items)
+    done = 0
+
+    # --- Windows Update: alle in EINEM Durchgang, das ist deutlich schneller
+    wu = [i for i in items if i.get("source") == "windows-update"]
+    if wu and IS_WINDOWS:
+        names = ", ".join(str(i.get("name") or i.get("uid"))[:40] for i in wu[:3])
+        tell("installing", f"Windows Update ({len(wu)}): {names}", done, total)
+        try:
+            ids = ",".join(str(i["uid"]) for i in wu)
+            res = _ps(_WU_INSTALL_PS.replace("__IDS__", ids), timeout=5400)
+            lines = [l for l in (res.stdout or "").strip().splitlines() if l.strip()]
+            data = json.loads(lines[-1]) if lines else {}
+            if data.get("__error__"):
+                for i in wu:
+                    failed.append({"name": i.get("name") or i.get("uid"),
+                                   "error": str(data["__error__"])})
+            else:
+                installed += [i.get("name") or i.get("uid") for i in wu]
+                reboot = reboot or bool(data.get("reboot"))
+        except Exception as e:
+            for i in wu:
+                failed.append({"name": i.get("name") or i.get("uid"),
+                               "error": f"{e.__class__.__name__}: {e}"})
+        done += len(wu)
+        tell("installed", f"Windows Update: {len(wu)}", done, total)
+
+    # --- alles Übrige einzeln
+    for item in items:
+        src = item.get("source")
+        uid = item.get("uid")
+        name = item.get("name") or uid or "?"
+        if src == "windows-update":
+            continue
+        tell("installing", str(name), done, total)
+        try:
+            if src == "winget":
+                exe = _winget_exe()
+                if not exe:
+                    raise RuntimeError("winget ist auf diesem Client nicht verfügbar")
+                r = _run([exe, "upgrade", "--id", uid, "--exact", "--silent",
+                          "--accept-package-agreements", "--accept-source-agreements",
+                          "--disable-interactivity"], timeout=3600)
+            elif src == "apt":
+                env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive",
+                       "LC_ALL": "C", "LANG": "C"}
+                r = _run(["apt-get", "install", "-y", "--only-upgrade", uid],
+                         timeout=3600, env=env)
+            elif src == "dnf":
+                r = _run(["dnf", "-y", "upgrade", uid], timeout=3600)
+            else:
+                raise RuntimeError(f"Unbekannte Quelle: {src}")
+
+            if r.returncode == 0:
+                installed.append(name)
+            else:
+                err = (r.stderr or r.stdout or "").strip()[-400:]
+                failed.append({"name": name, "error": err or f"Code {r.returncode}"})
+        except Exception as e:
+            failed.append({"name": name, "error": f"{e.__class__.__name__}: {e}"})
+        done += 1
+        tell("installed", str(name), done, total)
+
+    if IS_WINDOWS:
+        # Ein ausstehender Neustart lässt sich zuverlässig an diesem
+        # Registrierungsschlüssel ablesen.
+        try:
+            chk = _ps("if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\"
+                      "CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired')"
+                      " { 'yes' } else { 'no' }", timeout=60)
+            if "yes" in (chk.stdout or ""):
+                reboot = True
+        except Exception:
+            pass
+    elif Path("/var/run/reboot-required").exists():
+        reboot = True
+
+    return {"installed": installed, "failed": failed, "needs_reboot": reboot}
+
+
+# --------------------------------------------------------------------------
+# Ereignis-Handler
+# --------------------------------------------------------------------------
+# Grundregel: JEDER Handler antwortet, auch wenn er selbst scheitert. Ein
+# stiller Handler ist von aussen nicht von einem fehlenden zu unterscheiden -
+# das Backend meldet dann fälschlich "Agent zu alt", obwohl in Wahrheit eine
+# Ausnahme geflogen ist.
+
+async def _patch_reply(event: str, payload: dict) -> None:
+    try:
+        await sio.emit(event, payload, namespace="/agent")
+    except Exception as e:
+        _patch_log(f"Antwort '{event}' konnte nicht gesendet werden: {e}")
+
+
+def _patch_progress_sender(request_id: str, kind: str):
+    """
+    Baut einen Rückruf, der aus dem Arbeits-Thread heraus Fortschritt meldet.
+    Die Emission muss zurück auf den Event-Loop - deshalb
+    run_coroutine_threadsafe.
+    """
+    loop = _AGENT_LOOP
+
+    def send(stage: str, detail: str, done: int, total: int) -> None:
+        payload = {"id": DEVICE_ID, "requestId": request_id, "kind": kind,
+                   "stage": stage, "detail": detail, "done": done, "total": total}
+        try:
+            asyncio.run_coroutine_threadsafe(
+                sio.emit("patch-progress", payload, namespace="/agent"), loop)
+        except Exception:
+            pass
+    return send
+
+
+@sio.on("patch-ping", namespace="/agent")
+async def on_patch_ping(data):
+    """Selbstauskunft. Antwortet sofort, ohne irgendetwas zu starten."""
+    request_id = (data or {}).get("requestId")
+    _patch_log("Fähigkeitsabfrage empfangen")
+    try:
+        caps = _patch_capabilities()
+    except Exception as e:
+        caps = {"protocol": PATCH_PROTOCOL, "error": f"{e.__class__.__name__}: {e}"}
+    await _patch_reply("patch-ping-result",
+                       {"requestId": request_id, "ok": True, **caps})
+
+
+@sio.on("patch-selftest", namespace="/agent")
+async def on_patch_selftest(data):
+    """
+    Kurzer Funktionstest OHNE vollständigen Scan: prüft, ob die Quellen
+    ansprechbar sind. Dauert Sekunden statt Minuten und beantwortet die
+    Frage "liegt es am Agenten oder am System?".
+    """
+    request_id = (data or {}).get("requestId")
+    _patch_log("Selbsttest angefordert")
+    checks = []
+
+    def check(name, fn):
+        try:
+            checks.append({"name": name, **fn()})
+        except Exception as e:
+            checks.append({"name": name, "ok": False,
+                           "detail": f"{e.__class__.__name__}: {e}"})
+
+    if IS_WINDOWS:
+        def wu():
+            r = _ps("try { $s = New-Object -ComObject Microsoft.Update.Session; "
+                    "if ($s) { 'ok' } } catch { 'ERR ' + $_.Exception.Message }",
+                    timeout=90)
+            txt = (r.stdout or "").strip()
+            return {"ok": txt.startswith("ok"), "detail": txt[:300] or "keine Ausgabe"}
+        check("Windows-Update-COM", wu)
+
+        def wg():
+            exe = _winget_exe()
+            if not exe:
+                return {"ok": False, "detail": "winget.exe nicht gefunden"}
+            r = _run([exe, "--version"], timeout=60)
+            return {"ok": r.returncode == 0,
+                    "detail": (r.stdout or r.stderr or "").strip()[:200] or exe}
+        check("winget", wg)
+    else:
+        for tool in ("apt", "dnf"):
+            if _has(tool):
+                check(tool, lambda t=tool: {
+                    "ok": True, "detail": shutil.which(t) or t})
+
+    check("Rechte", lambda: {"ok": _is_admin(),
+                             "detail": "erhöht" if _is_admin() else
+                                       "NICHT erhöht - Installieren wird scheitern"})
+
+    await _patch_reply("patch-selftest-result", {
+        "requestId": request_id, "ok": True,
+        "capabilities": _patch_capabilities(), "checks": checks})
+
+
+@sio.on("patch-scan", namespace="/agent")
+async def on_patch_scan(data):
+    """Nach verfügbaren Aktualisierungen suchen und melden."""
+    request_id = (data or {}).get("requestId")
+    _patch_log("Suche nach Aktualisierungen gestartet")
+    progress = _patch_progress_sender(request_id, "scan")
+    try:
+        result = await _AGENT_LOOP.run_in_executor(
+            None, functools.partial(_collect_patches, progress))
+        _patch_log(f"Suche beendet: {len(result['patches'])} Aktualisierung(en)")
+        await _patch_reply("patch-scan-result", {"requestId": request_id, **result})
+    except Exception as e:
+        _patch_log(f"Suche fehlgeschlagen: {e.__class__.__name__}: {e}")
+        await _patch_reply("patch-scan-result", {
+            "requestId": request_id,
+            "error": f"{e.__class__.__name__}: {e}",
+            "capabilities": _patch_capabilities()})
+
+
+@sio.on("patch-apply", namespace="/agent")
+async def on_patch_apply(data):
+    """Benannte Aktualisierungen installieren."""
+    request_id = (data or {}).get("requestId")
+    items = (data or {}).get("items") or []
+    if not items:
+        await _patch_reply("patch-apply-result", {
+            "requestId": request_id, "error": "Keine Aktualisierungen angegeben"})
+        return
+
+    _patch_log(f"Installiere {len(items)} Aktualisierung(en)")
+    await _emit_action_log("patch", "started", f"{len(items)} Aktualisierung(en)")
+    progress = _patch_progress_sender(request_id, "apply")
+    try:
+        result = await _AGENT_LOOP.run_in_executor(
+            None, functools.partial(_apply_patches, items, progress))
+        note = (f"{len(result['installed'])} installiert, "
+                f"{len(result['failed'])} fehlgeschlagen")
+        _patch_log(note)
+        await _emit_action_log("patch", "finished", note)
+        await _patch_reply("patch-apply-result", {"requestId": request_id, **result})
+    except Exception as e:
+        msg = f"{e.__class__.__name__}: {e}"
+        _patch_log(f"Installation fehlgeschlagen: {msg}")
+        await _emit_action_log("patch", "failed", msg)
+        await _patch_reply("patch-apply-result", {"requestId": request_id, "error": msg})
+
+
+# Beim Laden einmal ausgeben, WELCHE Patch-Ereignisse dieser Agent kennt.
+# Damit steht in der Agent-Konsole schwarz auf weiss, ob die neue Fassung
+# wirklich läuft - genau die Frage, die sich aus der Ferne sonst nicht
+# beantworten lässt.
+_patch_log(f"Modul geladen - Protokoll {PATCH_PROTOCOL}, "
+           f"Ereignisse: {', '.join(PATCH_EVENTS)}")
+
+
 if __name__ == "__main__":
+    # Helfer-Modus: Der Agent hat sich selbst in der Benutzersitzung gestartet,
+    # um dort den Bildschirm aufzunehmen (siehe _ScreenHelper). In diesem Modus
+    # wird KEINE Verbindung zum Backend aufgebaut - der Helfer redet nur mit
+    # dem Haupt-Agenten auf 127.0.0.1.
     # WICHTIG: auf dem OBEN gesetzten Loop laufen (nicht asyncio.run(), das einen
     # neuen Loop anlegen würde) -> derselbe Loop, auf dem 'sio' erstellt wurde.
     asyncio.set_event_loop(_AGENT_LOOP)
@@ -3100,3 +5073,4 @@ if __name__ == "__main__":
             _AGENT_LOOP.close()
         except Exception:
             pass
+
