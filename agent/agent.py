@@ -2648,7 +2648,13 @@ _screen_stream = {"active": False, "thread": None, "sid_loop": None,
                   "mon_left": 0, "mon_top": 0,   # Offset des gewählten Bildschirms
                   # Verbindung zum Aufnahme-Helfer in der Benutzersitzung
                   # (nur Windows/Sitzung 0, sonst immer None).
-                  "helper": None}
+                  "helper": None,
+                  # Zaehler laufender Sitzungswuensche. Trifft waehrend einer
+                  # offenen Zustimmungsabfrage ein "screen-stop" ein (Dashboard-
+                  # Fenster geschlossen), wird der Zaehler erhoeht - die
+                  # Abfrage weiss dann, dass niemand mehr zusieht, und startet
+                  # KEINEN Stream mehr. Vorher lief der Stream sonst blind los.
+                  "epoch": 0}
 
 
 def _detect_from_xorg_process():
@@ -3076,6 +3082,23 @@ def _win_session_id() -> int:
         return -1
 
 
+def _win_console_session_id() -> int:
+    """
+    ID der aktiven Konsolensitzung (die Sitzung mit Bildschirm/Tastatur).
+    Nur fuer die Diagnose: Weicht sie von der eigenen Sitzung ab, sitzt der
+    Agent in einer Sitzung OHNE sichtbaren Desktop - genau die Lage, in der
+    BitBlt scheitert. -1, wenn nicht ermittelbar.
+    """
+    if platform.system() != "Windows":
+        return -1
+    try:
+        import ctypes
+        sid = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+        return -1 if sid == 0xFFFFFFFF else int(sid)
+    except Exception:
+        return -1
+
+
 def _needs_session_helper() -> bool:
     """Muessen wir ueber einen Helfer gehen? Nur Windows, nur aus Sitzung 0."""
     if platform.system() != "Windows":
@@ -3413,6 +3436,7 @@ def _screen_capture_loop(loop):
 
     _select_monitor(_screen_stream.get("monitor", 1))
     consecutive_errors = 0
+    helper_retry_done = False   # Fallback auf die Benutzersitzung nur einmal
 
     while _screen_stream["active"]:
         try:
@@ -3464,6 +3488,28 @@ def _screen_capture_loop(loop):
                 break
             # Windows: typischer Fall headless/kein Desktop -> RDP-Angebot.
             if "denied" in msg.lower() or "bitblt" in msg.lower():
+                # ZWEITER VERSUCH ueber die Benutzersitzung.
+                # Grund: Genau dieselbe Fehlermeldung ("BitBlt failed",
+                # "access denied") entsteht auch dann, wenn der Prozess zwar
+                # NICHT in Sitzung 0 sitzt (_needs_session_helper() sagt also
+                # "nicht noetig"), aber trotzdem keinen sichtbaren Desktop
+                # besitzt - z.B. bei einer getrennten RDP-Sitzung, einem
+                # Task-Scheduler-Start "unabhaengig von der Anmeldung" oder
+                # einer verwaisten Sitzung nach Benutzerwechsel. In diesen
+                # Faellen liefert der Helfer in der aktiven Konsolensitzung
+                # sehr wohl ein Bild. Nur EINMAL versuchen, sonst Endlosschleife.
+                if IS_WINDOWS and not helper_retry_done and os.environ.get("RMM_SCREEN_HELPER") != "1":
+                    helper_retry_done = True
+                    _print(f"[agent] Direkte Aufnahme scheitert ({msg}) - "
+                           f"versuche Helfer in der aktiven Benutzersitzung.")
+                    helper = _ensure_helper(loop)
+                    if helper is not None:
+                        try:
+                            _screen_helper_loop(loop, helper)
+                        finally:
+                            helper.send({"cmd": "config", "stream": False})
+                        break
+                    _print("[agent] Helfer nicht erreichbar - gebe auf.")
                 _notify_screen_error(
                     loop,
                     "Bildschirm kann nicht erfasst werden. Häufige Ursache: Der PC ist "
@@ -3471,7 +3517,10 @@ def _screen_capture_loop(loop):
                     "keine Anmeldung, oder nur per RDP erreichbar). Ohne echte "
                     "Bildschirmsitzung gibt es nichts zu übertragen. Lösung: am Gerät "
                     "angemeldet bleiben, einen (virtuellen) Monitor bereitstellen oder "
-                    "einen virtuellen Displaytreiber installieren."
+                    "einen virtuellen Displaytreiber installieren. "
+                    f"[Technisch: {msg} | Sitzung {_win_session_id()} | "
+                    f"aktive Konsolensitzung {_win_console_session_id()} | "
+                    f"Helfer-Pfad {'ja' if _needs_session_helper() else 'nein'}]"
                 )
                 _screen_stream["active"] = False
                 break
@@ -3794,10 +3843,20 @@ async def on_screen_start(data):
     if require_consent and not await loop.run_in_executor(None, _someone_logged_in):
         _print("[agent] Remote-Bildschirm: niemand angemeldet - verbinde ohne Abfrage")
         require_consent = False
+    # Marke fuer DIESE Anfrage. Kommt waehrend der Abfrage ein "screen-stop"
+    # (Dashboard-Fenster zu), erhoeht on_screen_stop den Zaehler und wir
+    # brechen danach ab, statt ins Leere zu streamen.
+    _screen_stream["epoch"] += 1
+    my_epoch = _screen_stream["epoch"]
+
     if require_consent:
         requested_by = (data or {}).get("requested_by") or ""
         _notify_screen_mode(loop, "consent", "Warte auf Bestätigung am Gerät...")
         allowed = await loop.run_in_executor(None, _ask_screen_consent, requested_by)
+        if _screen_stream["epoch"] != my_epoch:
+            _print("[agent] Zustimmung kam zu spät - die Sitzung wurde inzwischen "
+                   "beendet oder neu angefragt. Es wird kein Stream gestartet.")
+            return
         if _screen_stream["active"]:
             return  # in der Zwischenzeit anderweitig gestartet
         if not allowed:
@@ -3822,6 +3881,10 @@ async def on_screen_start(data):
 async def on_screen_stop(data):
     """Stoppt das Bildschirm-Streaming."""
     _screen_stream["active"] = False
+    # Auch eine noch offene Zustimmungsabfrage entwerten (siehe "epoch"):
+    # sonst startete eine verspaetete Zustimmung einen Stream, den niemand
+    # mehr sieht - und blockierte die naechste Sitzung.
+    _screen_stream["epoch"] += 1
     _print("[agent] Bildschirm-Streaming gestoppt")
 
 
@@ -4212,7 +4275,8 @@ async def main():
     # Beweis-Zeile: Steht sie NICHT im Log, laeuft auf dem Client eine aeltere
     # agent.py - egal was die Versionsnummer behauptet.
     if IS_WINDOWS:
-        _print(f"[agent] Sitzung {_win_session_id()} | Bildschirm-Helfer: "
+        _print(f"[agent] Sitzung {_win_session_id()} | aktive Konsolensitzung "
+               f"{_win_console_session_id()} | Bildschirm-Helfer: "
                + ("wird verwendet (Dienst in Sitzung 0)" if _needs_session_helper()
                   else "nicht nötig"))
 
