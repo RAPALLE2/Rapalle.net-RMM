@@ -814,7 +814,24 @@ export function renderSettings(body, win) {
         dbxAdaptForm();
         loading.classList.add("hidden");
         root.querySelector("#dbx-content").classList.remove("hidden");
-        root.querySelector(c.mode === "external" ? "#dbx-to-external" : "#dbx-to-local").style.display = "none";
+        // Beide Knöpfe bleiben immer sichtbar - vorher verschwand jeweils
+        // einer, was aussah, als gäbe es den Weg zurück gar nicht. Der Knopf
+        // für den AKTUELLEN Modus ist stattdessen deaktiviert und beschriftet.
+        const toExt = root.querySelector("#dbx-to-external");
+        const toLoc = root.querySelector("#dbx-to-local");
+        const isExt = c.mode === "external";
+        toExt.style.display = ""; toLoc.style.display = "";
+        toExt.disabled = isExt;  toLoc.disabled = !isExt;
+        toExt.className = isExt ? "taskbar-btn" : "btn-primary";
+        toLoc.className = isExt ? "btn-primary" : "taskbar-btn";
+        toExt.textContent = isExt ? "✓ Externe Datenbank aktiv"
+                                  : "→ Auf externe Datenbank umschalten";
+        toLoc.textContent = isExt ? "→ Zurück auf lokale Datenbank"
+                                  : "✓ Lokale Datenbank aktiv";
+        for (const b of [toExt, toLoc]) {
+          b.style.opacity = b.disabled ? ".6" : "";
+          b.style.cursor = b.disabled ? "default" : "pointer";
+        }
       } catch (e) {
         loading.textContent = `Fehler: ${e.message}`;
       }
@@ -861,9 +878,11 @@ export function renderSettings(body, win) {
       pgBar.style.background = p.ok === false ? "var(--danger,#f66)" : "var(--accent,#4da6ff)";
     }
 
+    let pgMisses = 0;
     async function pollProgress() {
       try {
         const p = await api.databaseProgress();
+        pgMisses = 0;
         drawProgress(p);
         if (p.running) return;                 // weiter pollen
         clearInterval(pgTimer); pgTimer = null;
@@ -883,15 +902,31 @@ export function renderSettings(body, win) {
           loadBackups();
         }
       } catch (e) {
-        // Beim Neustart bricht die Verbindung ab - das ist der Normalfall.
-        clearInterval(pgTimer); pgTimer = null;
+        // Einzelne Aussetzer sind normal: Beim Neustart bricht die Verbindung
+        // ab, und ein Rate-Limiter davor kann eine Abfrage mit 429 abweisen.
+        // Deshalb erst nach mehreren Fehlversuchen hintereinander aufgeben -
+        // sonst verliert man die Anzeige mitten im laufenden Wechsel.
+        pgMisses++;
+        pgLog.textContent += `\n(Abfrage fehlgeschlagen: ${e.message})`;
+        if (pgMisses >= 5) {
+          clearInterval(pgTimer); pgTimer = null;
+          pgPhase.textContent = "Fortschritt nicht mehr abrufbar";
+          window.notify?.("Der Fortschritt lässt sich nicht mehr abfragen. "
+            + "Der Wechsel läuft im Backend weiter - die Seite in einer Minute "
+            + "neu laden.", "warn", 14000);
+        }
       }
     }
 
     function startPolling() {
+      pgMisses = 0;
       drawProgress({ phase: "backup", done: 0, total: 0, rows: 0, log: [] });
       clearInterval(pgTimer);
-      pgTimer = setInterval(pollProgress, 800);
+      // Bewusst nur alle 2 s: Das Dashboard laedt ohnehin viele Dateien, und
+      // ein Proxy mit Rate-Limit soll durch das Polling nicht zusaetzlich
+      // gereizt werden.
+      pgTimer = setInterval(pollProgress, 2000);
+      pollProgress();
     }
 
     // --- Sicherungen ----------------------------------------------------

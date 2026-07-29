@@ -94,10 +94,20 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     let message = `Fehler ${res.status}`;
+    let hadDetail = false;
     try {
       const body = await res.json();
-      message = body.detail || message;
+      if (body.detail) { message = body.detail; hadDetail = true; }
     } catch { /* Antwort war kein JSON, egal */ }
+    // 429 ohne JSON-Antwort kommt nicht vom RMM: Das Backend antwortet nur
+    // beim Login mit 429 (Sperre nach Fehlversuchen) und liefert dann immer
+    // eine Begründung mit. Kommt stattdessen HTML oder gar nichts, hat ein
+    // Proxy/Rate-Limiter davor (Cloudflare, nginx, ...) abgewiesen.
+    if (res.status === 429 && !hadDetail) {
+      message = "Die Anfrage wurde von einem vorgeschalteten Proxy abgewiesen "
+        + "(429, zu viele Anfragen). Das kommt nicht vom RMM selbst - bitte das "
+        + "Rate-Limit bei Cloudflare bzw. dem Reverse Proxy prüfen.";
+    }
     // Fehlt ein Recht, soll der Benutzer nicht nur eine rote Zeile sehen,
     // sondern gleich die Möglichkeit bekommen, sich beim Support zu melden.
     // Deshalb hier zentral abgefangen - so gilt es für JEDEN Aufruf, ohne

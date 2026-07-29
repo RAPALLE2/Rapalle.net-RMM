@@ -179,7 +179,12 @@ def _run_watchdog() -> "int":
 
 if (__name__ == "__main__"
         and os.environ.get("RMM_SUPERVISED") != "1"
-        and os.environ.get("RMM_NO_WATCHDOG") != "1"):
+        and os.environ.get("RMM_NO_WATCHDOG") != "1"
+        # Der Bildschirm-Helfer (siehe _run_screen_helper) ist ein kurzlebiger
+        # Hilfsprozess in der Benutzersitzung. Er darf KEINEN Watchdog starten -
+        # sonst wuerde er einen zweiten vollwertigen Agenten hochziehen.
+        # Literal statt _HELPER_ARG, weil die Konstante erst weiter unten steht.
+        and "--screen-helper" not in sys.argv):
     sys.exit(_run_watchdog())
 
 
@@ -232,19 +237,29 @@ logging.getLogger().addHandler(_console_handler)
 # beim Import in einer Umgebung ohne grafische Sitzung (Windows-Dienst als
 # SYSTEM, Linux ohne X11) mit anderen Fehlern abbrechen kann - das darf den
 # Agenten NICHT komplett lahmlegen.
+# WICHTIG: Den Grund des Fehlschlags merken. Frueher wurde die Ausnahme
+# stillschweigend verschluckt - der Benutzer sah dann nur "mss/Pillow fehlen"
+# und hatte keinerlei Anhaltspunkt, WARUM. Meist fehlen die Pakete gar nicht,
+# sondern sind kaputt (halbe Installation, falscher Interpreter, fehlende
+# System-Bibliothek). Genau das steht jetzt in _SCREEN_ERROR.
+_SCREEN_ERROR = ""
+_INPUT_ERROR = ""
+
 try:
     import mss  # Screenshots aufnehmen (schnell, plattformübergreifend)
     from PIL import Image  # zum Verkleinern/Kodieren der Screenshots
     _SCREEN_AVAILABLE = True
-except Exception:
+except Exception as _e:
     _SCREEN_AVAILABLE = False
+    _SCREEN_ERROR = f"{type(_e).__name__}: {_e}"
 
 try:
     from pynput.mouse import Controller as MouseController, Button as MouseButton
     from pynput.keyboard import Controller as KeyboardController, Key as KeyboardKey
     _INPUT_AVAILABLE = True
-except Exception:
+except Exception as _e:
     _INPUT_AVAILABLE = False
+    _INPUT_ERROR = f"{type(_e).__name__}: {_e}"
 
 # .env Datei aus demselben Ordner wie dieses Skript laden
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -1695,6 +1710,246 @@ class _WinTerminal:
             pass
 
 
+def _pip(*args):
+    """pip im GLEICHEN Interpreter aufrufen, ohne Konsolenfenster."""
+    kw = {}
+    if platform.system() == "Windows":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        kw = {"startupinfo": si,
+              "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    try:
+        return subprocess.run([sys.executable, "-m", "pip", *args],
+                              capture_output=True, text=True, timeout=600, **kw)
+    except Exception as e:
+        _print(f"[repair] pip {' '.join(args)} fehlgeschlagen: {e}")
+        return None
+
+
+_screen_repair_tried = False
+
+
+def _repair_screen() -> bool:
+    """
+    Einmaliger Versuch, mss/Pillow (und pynput) wieder lauffaehig zu machen.
+
+    Der haeufigste Fall ist nicht "Paket fehlt", sondern "Paket ist kaputt":
+    ein abgebrochener Download, eine halbe Installation oder ein Rest, den pip
+    fuer vorhanden haelt. Ein schlichtes 'pip install' meldet dann
+    "already satisfied" und aendert nichts - deshalb --force-reinstall.
+    """
+    global _screen_repair_tried, _SCREEN_AVAILABLE, _INPUT_AVAILABLE
+    global _SCREEN_ERROR, _INPUT_ERROR, mss, Image
+    global MouseController, MouseButton, KeyboardController, KeyboardKey
+    if _screen_repair_tried:
+        return _SCREEN_AVAILABLE
+    _screen_repair_tried = True
+
+    _print(f"[repair] Bildaufnahme-Pakete neu installieren (Grund: {_SCREEN_ERROR})")
+    _pip("install", "--no-cache-dir", "--force-reinstall", "mss>=9.0.0", "Pillow>=10.0.0")
+    if not _INPUT_AVAILABLE:
+        _pip("install", "--no-cache-dir", "--force-reinstall", "pynput>=1.7.0")
+
+    import importlib
+    importlib.invalidate_caches()
+    for name in [m for m in list(sys.modules)
+                 if m in ("mss", "PIL", "pynput") or m.startswith(("mss.", "PIL.", "pynput."))]:
+        sys.modules.pop(name, None)
+    try:
+        import mss as _mss
+        from PIL import Image as _Image
+        mss, Image = _mss, _Image
+        _SCREEN_AVAILABLE = True
+        _SCREEN_ERROR = ""
+        _print("[repair] mss/Pillow erfolgreich nachinstalliert.")
+    except Exception as e:
+        _SCREEN_AVAILABLE = False
+        _SCREEN_ERROR = f"{type(e).__name__}: {e}"
+        _print(f"[repair] mss/Pillow weiterhin nicht ladbar: {e}")
+    try:
+        from pynput.mouse import Controller as _MC, Button as _MB
+        from pynput.keyboard import Controller as _KC, Key as _KK
+        MouseController, MouseButton, KeyboardController, KeyboardKey = _MC, _MB, _KC, _KK
+        _INPUT_AVAILABLE = True
+        _INPUT_ERROR = ""
+    except Exception as e:
+        _INPUT_AVAILABLE = False
+        _INPUT_ERROR = f"{type(e).__name__}: {e}"
+    return _SCREEN_AVAILABLE
+
+
+_winpty_repair_tried = False
+
+
+def _winpty_diagnose() -> str:
+    """
+    Sammelt, was man braucht, um ein kaputtes pywinpty einzuordnen.
+
+    Der typische Fehler 'No module named winpty._winpty' bedeutet fast immer:
+    Es liegt ein Paket namens 'winpty' im Suchpfad, dessen kompilierter Teil
+    (_winpty.pyd) fehlt - entweder ein Rest einer alten pywinpty-1.x-Version
+    oder das alte, andere PyPI-Paket 'winpty'. Ein 'pip install pywinpty'
+    aendert daran nichts, weil pip das vorhandene Verzeichnis als installiert
+    ansieht bzw. der Rest weiter davorliegt.
+
+    Zweiter haeufiger Fall: 'pip install' lief in einem ANDEREN Python als dem,
+    mit dem der Agent laeuft. Deshalb steht der Interpreterpfad mit in der
+    Ausgabe - damit sieht man den Unterschied sofort.
+    """
+    lines = [f"Python: {sys.executable}"]
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("winpty")
+        lines.append(f"winpty gefunden unter: {getattr(spec, 'origin', None)}")
+    except Exception as e:
+        lines.append(f"winpty nicht auffindbar: {e}")
+    try:
+        from importlib.metadata import version, distributions
+        try:
+            lines.append(f"pywinpty-Version: {version('pywinpty')}")
+        except Exception:
+            lines.append("pywinpty: nicht als Paket registriert")
+        # Das ALTE, gleichnamige Paket 'winpty' ist die haeufigste Ursache.
+        for d in distributions():
+            if (d.metadata.get("Name") or "").lower() == "winpty":
+                lines.append(f"ACHTUNG: altes Paket 'winpty' {d.version} installiert "
+                             f"- das kollidiert mit pywinpty")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def _winpty_repair() -> bool:
+    """
+    Einmaliger Reparaturversuch: kollidierendes 'winpty' entfernen, Reste
+    loeschen und pywinpty sauber neu installieren. Gibt True zurueck, wenn
+    der Import danach klappt.
+    """
+    global _winpty_repair_tried
+    if _winpty_repair_tried:
+        return False
+    _winpty_repair_tried = True
+
+    pip = _pip
+    _print("[term] Repariere pywinpty…")
+    # 1) Beide Pakete sauber entfernen (das alte 'winpty' ist der Stoerenfried).
+    pip("uninstall", "-y", "winpty")
+    pip("uninstall", "-y", "pywinpty")
+    # 2) Uebrig gebliebenes Verzeichnis loeschen - ohne das findet Python
+    #    weiterhin ein 'winpty' ohne den kompilierten Teil.
+    try:
+        import site
+        import shutil
+        for base in set(site.getsitepackages() + [site.getusersitepackages()]):
+            leftover = Path(base) / "winpty"
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+                _print(f"[term] Rest entfernt: {leftover}")
+    except Exception as e:
+        _print(f"[term] Aufraeumen uebersprungen: {e}")
+    # 3) Neu installieren.
+    pip("install", "--no-cache-dir", "--force-reinstall", "pywinpty>=2.0.0")
+
+    try:
+        import importlib
+        importlib.invalidate_caches()
+        for name in [m for m in list(sys.modules) if m == "winpty" or m.startswith("winpty.")]:
+            sys.modules.pop(name, None)
+        importlib.import_module("winpty")
+        _print("[term] pywinpty erfolgreich repariert.")
+        return True
+    except Exception as e:
+        _print(f"[term] Reparatur fehlgeschlagen: {e}")
+        return False
+
+
+class _WinPipeTerminal:
+    """
+    Ersatz-Terminal fuer Windows OHNE pywinpty.
+
+    Statt eines echten ConPTY laeuft die Shell an normalen Pipes. Das ist
+    bewusst ein Kompromiss, aber ein brauchbarer: Befehle, Ausgabe und
+    Eingabe funktionieren. Was NICHT geht, sind Vollbild-Anwendungen
+    (nano-artige Editoren, Fortschrittsbalken mit Cursorsteuerung) und die
+    Groessenanpassung - dafuer braucht es ein echtes PTY.
+
+    Der Sinn: Lieber ein eingeschraenktes Terminal als gar keins, wenn
+    pywinpty auf dem Rechner partout nicht laeuft.
+    """
+
+    LIMITED_NOTE = ("\x1b[33m[Eingeschränkter Modus: ohne pywinpty läuft die Shell "
+                    "an einfachen Pipes. Vollbild-Programme und Größenanpassung "
+                    "funktionieren hier nicht.]\x1b[0m\r\n")
+
+    def __init__(self, session_id, shell, cols, rows, loop):
+        self.session_id = session_id
+        self.loop = loop
+        self.alive = True
+        if shell == "powershell":
+            cmd = ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"]
+        else:
+            cmd = ["cmd.exe", "/Q"]
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        self.proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, bufsize=0, startupinfo=si,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+        self._emit(self.LIMITED_NOTE)
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+    def _emit(self, text):
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("term-output", {"id": DEVICE_ID, "session": self.session_id,
+                                     "data": text}, namespace="/agent"),
+            self.loop,
+        )
+
+    def _read_loop(self):
+        while self.alive:
+            try:
+                chunk = self.proc.stdout.read(1)
+                if not chunk:
+                    break
+                # Alles nachlesen, was schon bereitliegt, damit die Ausgabe
+                # nicht Zeichen fuer Zeichen durchs Netz tropft.
+                try:
+                    import msvcrt  # noqa: F401  (nur Windows)
+                except Exception:
+                    pass
+                extra = self.proc.stdout.read1(65536) if hasattr(self.proc.stdout, "read1") else b""
+                data = (chunk + (extra or b"")).decode("utf-8", errors="replace")
+            except Exception:
+                break
+            self._emit(data.replace("\n", "\r\n") if "\r\n" not in data else data)
+        self.alive = False
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("term-exit", {"id": DEVICE_ID, "session": self.session_id},
+                     namespace="/agent"),
+            self.loop,
+        )
+
+    def write(self, data: str):
+        try:
+            self.proc.stdin.write(data.replace("\r", "\r\n").encode("utf-8", "replace"))
+            self.proc.stdin.flush()
+        except Exception:
+            pass
+
+    def resize(self, cols, rows):
+        pass          # ohne PTY nicht moeglich
+
+    def close(self):
+        self.alive = False
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+
 @sio.on("term-open", namespace="/agent")
 async def on_term_open(data):
     """Startet eine echte interaktive Shell-Session."""
@@ -1729,14 +1984,45 @@ async def on_term_open(data):
             term = _PosixTerminal(session_id, shell, cols, rows, loop)
         _terminals[session_id] = term
     except ImportError as e:
-        await sio.emit("term-output", {
-            "id": DEVICE_ID, "session": session_id,
-            "data": "\r\n\x1b[31mInteraktives Terminal benoetigt 'pywinpty' "
-                    f"(Import fehlgeschlagen: {e}).\x1b[0m\r\n"
-                    "Installiere es manuell mit:  pip install pywinpty\r\n"
-                    "oder starte den Agenten neu (er versucht es automatisch).\r\n",
-        }, namespace="/agent")
-        await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id}, namespace="/agent")
+        # pywinpty fehlt oder ist kaputt. Erst einmal selbst reparieren -
+        # das deckt den haeufigsten Fall ab (Reste einer alten Version bzw.
+        # das kollidierende Paket 'winpty'). Klappt das nicht, laeuft die
+        # Shell im eingeschraenkten Pipe-Modus weiter, statt gar nicht.
+        diag = _winpty_diagnose()
+        _print(f"[term] pywinpty-Import fehlgeschlagen: {e}\n{diag}")
+        term = None
+        if _winpty_repair():
+            try:
+                term = _WinTerminal(session_id, shell, cols, rows, loop)
+                await sio.emit("term-output", {
+                    "id": DEVICE_ID, "session": session_id,
+                    "data": "\x1b[32m[pywinpty wurde repariert.]\x1b[0m\r\n",
+                }, namespace="/agent")
+            except Exception as e2:
+                _print(f"[term] Auch nach Reparatur kein ConPTY: {e2}")
+                term = None
+        if term is None:
+            await sio.emit("term-output", {
+                "id": DEVICE_ID, "session": session_id,
+                "data": "\r\n\x1b[33mKein ConPTY verfügbar "
+                        f"({e}).\x1b[0m\r\n"
+                        + "".join(f"\x1b[90m{l}\x1b[0m\r\n" for l in diag.split("\n"))
+                        + "\x1b[90mHinweis: Ein 'pip install pywinpty' hilft hier meist "
+                          "nicht - es liegt ein Rest im Suchpfad. Manuell: "
+                          "pip uninstall -y winpty pywinpty && pip install pywinpty"
+                          "\x1b[0m\r\n",
+            }, namespace="/agent")
+            try:
+                term = _WinPipeTerminal(session_id, shell, cols, rows, loop)
+            except Exception as e3:
+                await sio.emit("term-output", {
+                    "id": DEVICE_ID, "session": session_id,
+                    "data": f"\r\n\x1b[31mAuch der Ersatz-Modus scheiterte: {e3}\x1b[0m\r\n",
+                }, namespace="/agent")
+                await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id},
+                               namespace="/agent")
+                return
+        _terminals[session_id] = term
     except Exception as e:
         import traceback
         _print(f"[term] Fehler beim Shell-Start: {e}\n{traceback.format_exc()}")
@@ -2355,7 +2641,10 @@ async def on_proc_kill(data):
 _screen_stream = {"active": False, "thread": None, "sid_loop": None,
                   "quality": 55, "fps": 10,
                   "monitor": 1,          # gewählter Bildschirm (1 = primär)
-                  "mon_left": 0, "mon_top": 0}   # Offset des gewählten Bildschirms
+                  "mon_left": 0, "mon_top": 0,   # Offset des gewählten Bildschirms
+                  # Verbindung zum Aufnahme-Helfer in der Benutzersitzung
+                  # (nur Windows/Sitzung 0, sonst immer None).
+                  "helper": None}
 
 
 def _detect_from_xorg_process():
@@ -2498,9 +2787,383 @@ if _INPUT_AVAILABLE:
         _print(f"[agent] Fernsteuerung deaktiviert (Controller-Init fehlgeschlagen: {e})")
 
 
+# ======================================================================
+# Bildschirmaufnahme aus Sitzung 0 (Windows-Dienst) - Helfer-Prozess
+# ======================================================================
+# Ausgangslage: Der Windows-Agent wird als geplante Aufgabe unter dem Konto
+# SYSTEM eingerichtet und startet beim Hochfahren. Solche Prozesse laufen in
+# "Sitzung 0" - einer eigenen, unsichtbaren Sitzung, die seit Windows Vista
+# strikt vom Desktop des angemeldeten Benutzers getrennt ist. Eine Aufnahme
+# aus Sitzung 0 sieht den Benutzer-Desktop nicht; je nach Bibliothek kommt ein
+# schwarzes Bild oder ein Fehler ("BitBlt failed", "access denied").
+#
+# Das laesst sich nicht wegkonfigurieren - man braucht einen zweiten Prozess
+# IN der Sitzung des Benutzers. Genau das passiert hier:
+#
+#   1. Der Agent (Sitzung 0) oeffnet einen Server auf 127.0.0.1 mit zufaelligem
+#      Port und zufaelligem Schluessel.
+#   2. Er startet sich selbst noch einmal - diesmal mit dem Token des
+#      angemeldeten Benutzers, also in dessen Sitzung - mit den Argumenten
+#      --screen-helper <port> <schluessel>.
+#   3. Der Helfer verbindet sich zurueck, weist sich mit dem Schluessel aus und
+#      schickt von da an JPEG-Bilder. Eingaben (Maus/Tastatur) gehen den
+#      umgekehrten Weg, denn auch die funktionieren aus Sitzung 0 nicht.
+#
+# Der Server lauscht ausschliesslich auf 127.0.0.1 und akzeptiert genau eine
+# Verbindung, die den Schluessel kennt - von aussen ist da nichts erreichbar.
+
+_HELPER_ARG = "--screen-helper"
+
+
+def _win_session_id() -> int:
+    """Sitzungs-ID dieses Prozesses (-1, wenn nicht ermittelbar)."""
+    if platform.system() != "Windows":
+        return -1
+    try:
+        import ctypes
+        from ctypes import wintypes
+        sid = wintypes.DWORD()
+        ok = ctypes.windll.kernel32.ProcessIdToSessionId(
+            ctypes.windll.kernel32.GetCurrentProcessId(), ctypes.byref(sid))
+        return sid.value if ok else -1
+    except Exception:
+        return -1
+
+
+def _needs_session_helper() -> bool:
+    """Muessen wir ueber einen Helfer gehen? Nur Windows, nur aus Sitzung 0."""
+    if platform.system() != "Windows":
+        return False
+    if os.environ.get("RMM_SCREEN_HELPER") == "1":
+        return False          # wir SIND der Helfer
+    return _win_session_id() == 0
+
+
+def _win_start_in_user_session(args: list) -> bool:
+    """
+    Startet ein Programm in der Sitzung des angemeldeten Benutzers.
+
+    Der Weg ist der uebliche fuer Dienste: Token der aktiven Konsolensitzung
+    holen (WTSQueryUserToken), duplizieren, Umgebungsblock erzeugen und den
+    Prozess auf dem sichtbaren Desktop "winsta0\\default" starten.
+    Voraussetzung ist, dass wir als SYSTEM laufen - sonst fehlt das Recht.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.windll.kernel32
+        advapi = ctypes.windll.advapi32
+        wtsapi = ctypes.windll.wtsapi32
+        userenv = ctypes.windll.userenv
+
+        session = k32.WTSGetActiveConsoleSessionId()
+        if session in (0xFFFFFFFF, 0):
+            _print("[screen-helper] Keine aktive Benutzersitzung gefunden "
+                   "(niemand angemeldet?)")
+            return False
+
+        token = wintypes.HANDLE()
+        if not wtsapi.WTSQueryUserToken(wintypes.DWORD(session), ctypes.byref(token)):
+            _print(f"[screen-helper] WTSQueryUserToken fehlgeschlagen "
+                   f"(Fehler {ctypes.GetLastError()}) - laeuft der Agent als SYSTEM?")
+            return False
+
+        dup = wintypes.HANDLE()
+        # 2 = SecurityImpersonation, 1 = TokenPrimary
+        if not advapi.DuplicateTokenEx(token, 0x02000000, None, 2, 1, ctypes.byref(dup)):
+            _print(f"[screen-helper] DuplicateTokenEx fehlgeschlagen "
+                   f"(Fehler {ctypes.GetLastError()})")
+            k32.CloseHandle(token)
+            return False
+        k32.CloseHandle(token)
+
+        env = ctypes.c_void_p()
+        userenv.CreateEnvironmentBlock(ctypes.byref(env), dup, False)
+
+        class STARTUPINFOW(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR),
+                        ("lpDesktop", wintypes.LPWSTR), ("lpTitle", wintypes.LPWSTR),
+                        ("dwX", wintypes.DWORD), ("dwY", wintypes.DWORD),
+                        ("dwXSize", wintypes.DWORD), ("dwYSize", wintypes.DWORD),
+                        ("dwXCountChars", wintypes.DWORD), ("dwYCountChars", wintypes.DWORD),
+                        ("dwFillAttribute", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                        ("wShowWindow", wintypes.WORD), ("cbReserved2", wintypes.WORD),
+                        ("lpReserved2", ctypes.POINTER(ctypes.c_byte)),
+                        ("hStdInput", wintypes.HANDLE), ("hStdOutput", wintypes.HANDLE),
+                        ("hStdError", wintypes.HANDLE)]
+
+        class PROCESS_INFORMATION(ctypes.Structure):
+            _fields_ = [("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE),
+                        ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD)]
+
+        si = STARTUPINFOW()
+        si.cb = ctypes.sizeof(si)
+        si.lpDesktop = "winsta0\\default"     # der sichtbare Desktop
+        si.dwFlags = 0x00000001               # STARTF_USESHOWWINDOW
+        si.wShowWindow = 0                    # SW_HIDE
+        pi = PROCESS_INFORMATION()
+
+        cmdline = " ".join(f'"{a}"' for a in args)
+        CREATE_UNICODE_ENVIRONMENT = 0x00000400
+        CREATE_NO_WINDOW = 0x08000000
+        ok = advapi.CreateProcessAsUserW(
+            dup, None, ctypes.create_unicode_buffer(cmdline), None, None, False,
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env,
+            str(Path(args[1]).resolve().parent) if len(args) > 1 else None,
+            ctypes.byref(si), ctypes.byref(pi))
+        if not ok:
+            _print(f"[screen-helper] CreateProcessAsUser fehlgeschlagen "
+                   f"(Fehler {ctypes.GetLastError()})")
+            return False
+        _print(f"[screen-helper] Helfer in Sitzung {session} gestartet "
+               f"(PID {pi.dwProcessId})")
+        k32.CloseHandle(pi.hProcess)
+        k32.CloseHandle(pi.hThread)
+        return True
+    except Exception as e:
+        _print(f"[screen-helper] Start fehlgeschlagen: {e}")
+        return False
+
+
+def _sock_send(sock, payload: bytes) -> None:
+    sock.sendall(len(payload).to_bytes(4, "big") + payload)
+
+
+def _sock_recv(sock) -> bytes | None:
+    def _exact(n):
+        buf = b""
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
+    head = _exact(4)
+    if not head:
+        return None
+    return _exact(int.from_bytes(head, "big"))
+
+
+class _ScreenHelper:
+    """Verbindung des Agenten (Sitzung 0) zu seinem Helfer in der Benutzersitzung."""
+
+    def __init__(self, server, conn):
+        self.server = server
+        self.conn = conn
+        self.alive = True
+
+    @classmethod
+    def start(cls, loop, timeout: float = 25.0):
+        import secrets
+        import socket as _socket
+
+        server = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        server.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))       # nur lokal, freier Port
+        server.listen(1)
+        server.settimeout(timeout)
+        port = server.getsockname()[1]
+        key = secrets.token_hex(16)
+
+        script = str(Path(__file__).resolve())
+        exe = sys.executable
+        if not _win_start_in_user_session([exe, script, _HELPER_ARG, str(port), key]):
+            server.close()
+            return None
+
+        try:
+            conn, _addr = server.accept()
+        except Exception as e:
+            _print(f"[screen-helper] Helfer hat sich nicht gemeldet: {e}")
+            server.close()
+            return None
+        conn.settimeout(20.0)
+        try:
+            hello = _sock_recv(conn)
+            if not hello or json.loads(hello.decode()).get("key") != key:
+                _print("[screen-helper] Falscher Schluessel - Verbindung verworfen")
+                conn.close()
+                server.close()
+                return None
+        except Exception as e:
+            _print(f"[screen-helper] Anmeldung fehlgeschlagen: {e}")
+            conn.close()
+            server.close()
+            return None
+        _print("[screen-helper] Helfer verbunden.")
+        return cls(server, conn)
+
+    def send(self, obj) -> bool:
+        try:
+            _sock_send(self.conn, b"C" + json.dumps(obj).encode())
+            return True
+        except Exception:
+            self.alive = False
+            return False
+
+    def recv(self):
+        """Naechste Nachricht: (meta, jpeg) oder None."""
+        try:
+            msg = _sock_recv(self.conn)
+        except Exception:
+            return None
+        if not msg or msg[:1] != b"F":
+            return None
+        sep = msg.index(b"\0", 1)
+        return json.loads(msg[1:sep].decode()), msg[sep + 1:]
+
+    def close(self):
+        self.alive = False
+        for s in (self.conn, self.server):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def _screen_helper_loop(loop, helper):
+    """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard."""
+    _screen_stream["helper"] = helper
+    helper.send({"cmd": "config",
+                 "quality": int(_screen_stream.get("quality", 60)),
+                 "fps": int(_screen_stream.get("fps", 10)),
+                 "monitor": int(_screen_stream.get("monitor", 0) or 0)})
+    last_cfg = None
+    while _screen_stream["active"] and helper.alive:
+        cfg = (int(_screen_stream.get("quality", 60)),
+               int(_screen_stream.get("fps", 10)),
+               int(_screen_stream.get("monitor", 0) or 0))
+        if cfg != last_cfg:
+            helper.send({"cmd": "config", "quality": cfg[0], "fps": cfg[1],
+                         "monitor": cfg[2]})
+            last_cfg = cfg
+        got = helper.recv()
+        if got is None:
+            break
+        meta, jpeg = got
+        if meta.get("error"):
+            _notify_screen_error(loop, f"Helfer meldet: {meta['error']}")
+            break
+        _screen_stream["mon_left"] = meta.get("left", 0)
+        _screen_stream["mon_top"] = meta.get("top", 0)
+        b64 = base64.b64encode(jpeg).decode()
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("screen-frame", {
+                "id": DEVICE_ID, "image": b64,
+                "width": meta.get("width"), "height": meta.get("height"),
+                "monitor_index": meta.get("index", 0),
+                "monitor_count": meta.get("count", 1),
+            }, namespace="/agent"),
+            loop,
+        )
+    _screen_stream["helper"] = None
+    _screen_stream["active"] = False
+    _print("[screen-helper] Übertragung beendet.")
+
+
+def _run_screen_helper(port: int, key: str) -> None:
+    """
+    Der Helfer selbst - laeuft in der Sitzung des Benutzers.
+
+    Bewusst schlank gehalten: verbinden, Bilder schicken, Eingaben ausfuehren.
+    Alles andere (Backend-Verbindung, Metriken, Terminal) macht weiterhin der
+    Haupt-Agent in Sitzung 0.
+    """
+    import socket as _socket
+    import io as _io
+
+    os.environ["RMM_SCREEN_HELPER"] = "1"
+    sock = _socket.create_connection(("127.0.0.1", port), timeout=15)
+    _sock_send(sock, json.dumps({"key": key, "pid": os.getpid()}).encode())
+
+    quality, fps, monitor = 60, 10, 0
+    stop = threading.Event()
+
+    def _control():
+        """Steuerbefehle und Eingaben vom Agenten entgegennehmen."""
+        nonlocal quality, fps, monitor
+        while not stop.is_set():
+            msg = _sock_recv(sock)
+            if msg is None:
+                break
+            if msg[:1] != b"C":
+                continue
+            try:
+                obj = json.loads(msg[1:].decode())
+            except Exception:
+                continue
+            if obj.get("cmd") == "config":
+                quality = int(obj.get("quality", quality))
+                fps = int(obj.get("fps", fps))
+                monitor = int(obj.get("monitor", monitor))
+            elif obj.get("cmd") == "input":
+                try:
+                    _apply_input(obj.get("data") or {})
+                except Exception as e:
+                    print(f"[helper] Eingabe fehlgeschlagen: {e}")
+            elif obj.get("cmd") == "stop":
+                stop.set()
+                break
+        stop.set()
+
+    threading.Thread(target=_control, daemon=True).start()
+
+    try:
+        with mss.mss() as sct:
+            while not stop.is_set():
+                mons = sct.monitors
+                count = max(1, len(mons) - 1)
+                idx = monitor if 0 < monitor <= count else (1 if count >= 1 else 0)
+                mon = mons[idx] if idx < len(mons) else mons[0]
+                shot = sct.grab(mon)
+                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                buf = _io.BytesIO()
+                img.save(buf, "JPEG", quality=max(10, min(95, quality)))
+                meta = {"width": shot.width, "height": shot.height,
+                        "index": idx, "count": count,
+                        "left": mon.get("left", 0), "top": mon.get("top", 0)}
+                _sock_send(sock, b"F" + json.dumps(meta).encode() + b"\0" + buf.getvalue())
+                time.sleep(1.0 / max(1, min(30, fps)))
+    except Exception as e:
+        try:
+            _sock_send(sock, b"F" + json.dumps({"error": str(e)}).encode() + b"\0")
+        except Exception:
+            pass
+        print(f"[helper] Aufnahme beendet: {e}")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 def _screen_capture_loop(loop):
     """Läuft in einem eigenen Thread und schickt fortlaufend Bildschirm-Frames."""
     is_linux = platform.system() == "Linux"
+
+    # Windows-Sonderfall: Der Agent läuft als geplante Aufgabe unter SYSTEM und
+    # damit in Sitzung 0. Von dort ist der Desktop des angemeldeten Benutzers
+    # grundsätzlich nicht erreichbar ("Session-0-Isolation"). Deshalb starten
+    # wir einen Helfer IN der Benutzersitzung und lassen uns die Bilder von
+    # dort schicken. Details siehe _ScreenHelper.
+    if _needs_session_helper():
+        helper = _ScreenHelper.start(loop)
+        if helper is None:
+            _notify_screen_error(
+                loop,
+                "Der Agent läuft als Dienst in Sitzung 0 und kann den Desktop "
+                "von dort nicht aufnehmen. Der Helfer für die Benutzersitzung "
+                "konnte nicht gestartet werden (siehe agent.log). Meist ist "
+                "gerade niemand am Gerät angemeldet.")
+            _screen_stream["active"] = False
+            return
+        try:
+            _screen_helper_loop(loop, helper)
+        finally:
+            helper.close()
+        return
+
     try:
         sct = mss.mss()
     except Exception as e:
@@ -2851,10 +3514,15 @@ async def on_screen_start(data):
         if data.get("fps"):
             _screen_stream["fps"] = int(data["fps"])
 
-    # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen -> Shell anbieten.
+    # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen. Vorher aber EINMAL
+    # selbst reparieren - meist sind die Pakete nicht weg, sondern kaputt.
+    if not _SCREEN_AVAILABLE:
+        await loop.run_in_executor(None, _repair_screen)
     if not _SCREEN_AVAILABLE:
         _notify_screen_mode(loop, "shell",
-                            "Bildaufnahme-Pakete (mss/Pillow) fehlen - es wird eine Shell geöffnet.")
+                            "Bildschirm-Übertragung nicht möglich: mss/Pillow lassen "
+                            f"sich nicht laden ({_SCREEN_ERROR}). Python: {sys.executable}. "
+                            "Es wird stattdessen eine Shell geöffnet.")
         return
 
     # Ist überhaupt ein grafischer Bildschirm da? (setzt auf Linux ggf. DISPLAY)
@@ -3188,6 +3856,13 @@ async def on_screen_input(data):
     Simuliert eine Maus-/Tastatureingabe, die vom Dashboard kommt.
     data.type ist einer von: "move", "click", "scroll", "key", "text", "combo"
     """
+    # Laeuft ein Helfer in der Benutzersitzung? Dann MUSS die Eingabe dort
+    # ausgefuehrt werden - aus Sitzung 0 erreicht kein Klick den Desktop.
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive:
+        helper.send({"cmd": "input", "data": data})
+        return
+
     if not _INPUT_AVAILABLE:
         return
 
@@ -3295,7 +3970,11 @@ async def main():
     _print(f"[agent] Gerätename : {DEVICE_NAME}")
     _print(f"[agent] Geräte-ID  : {DEVICE_ID}")
     _print(f"[agent] Backend    : {BACKEND_URL}")
-    _print(f"[agent] Remote Screen: {'verfügbar' if _SCREEN_AVAILABLE else 'deaktiviert (mss/Pillow fehlt)'}")
+    _print(f"[agent] Remote Screen: "
+           + ("verfügbar" if _SCREEN_AVAILABLE
+              else f"deaktiviert - mss/Pillow nicht ladbar ({_SCREEN_ERROR})"))
+    if not _INPUT_AVAILABLE:
+        _print(f"[agent] Fernsteuerung: deaktiviert - pynput nicht ladbar ({_INPUT_ERROR})")
     _print(f"[agent] Fernsteuerung: {'verfügbar' if _INPUT_AVAILABLE else 'deaktiviert (pynput fehlt)'}")
 
     # Heartbeat läuft als eigene Hintergrund-Aufgabe, unabhängig von der Verbindung
@@ -4119,6 +4798,18 @@ _patch_log(f"Modul geladen - Protokoll {PATCH_PROTOCOL}, "
 
 
 if __name__ == "__main__":
+    # Helfer-Modus: Der Agent hat sich selbst in der Benutzersitzung gestartet,
+    # um dort den Bildschirm aufzunehmen (siehe _ScreenHelper). In diesem Modus
+    # wird KEINE Verbindung zum Backend aufgebaut - der Helfer redet nur mit
+    # dem Haupt-Agenten auf 127.0.0.1.
+    if _HELPER_ARG in sys.argv:
+        _i = sys.argv.index(_HELPER_ARG)
+        try:
+            _run_screen_helper(int(sys.argv[_i + 1]), sys.argv[_i + 2])
+        except Exception as _e:
+            print(f"[helper] Abbruch: {_e}")
+        sys.exit(0)
+
     # WICHTIG: auf dem OBEN gesetzten Loop laufen (nicht asyncio.run(), das einen
     # neuen Loop anlegen würde) -> derselbe Loop, auf dem 'sio' erstellt wurde.
     asyncio.set_event_loop(_AGENT_LOOP)
