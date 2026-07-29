@@ -590,34 +590,75 @@ if [ "$(id -u)" != "0" ] && [ -f "$0" ] && command -v sudo >/dev/null 2>&1; then
   exec sudo -E "$0" "$@"
 fi
 
+# Alles mitprotokollieren - das Skript laeuft losgeloest ohne Terminal.
+sudo mkdir -p "$INSTALL_DIR"
+exec > >(sudo tee -a "$INSTALL_DIR/update.log") 2>&1
+echo "=== RAPALLE.net RMM - Agent NEU AUSROLLEN ($(date)) ==="
+
+# --- 1. Neues Paket holen ---------------------------------------------------
 echo "Lade neueste Agent-Version..."
 curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/rapalle-agent.zip
-sudo mkdir -p "$INSTALL_DIR"
 rm -rf /tmp/rapalle-agent-extract
 mkdir -p /tmp/rapalle-agent-extract
 unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract >/dev/null
 
-# Laufenden Agenten stoppen, damit die alte agent.py nicht weiterlaeuft.
+# --- 2. Laufenden Agenten stoppen -------------------------------------------
+echo "Stoppe laufenden Agenten..."
 sudo systemctl stop rapalle-agent 2>/dev/null || true
 sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
+sleep 2
 
-# Alle Dateien AUSSER .env ersetzen (.env behaelt Konfiguration).
-sudo find /tmp/rapalle-agent-extract/agent -maxdepth 1 -type f ! -name '.env' -exec cp {{}} "$INSTALL_DIR/" ';'
-# .env anlegen, falls noch keine da ist; danach BACKEND_URL aktualisieren.
-if [ ! -f "$INSTALL_DIR/.env" ] && [ -f /tmp/rapalle-agent-extract/agent/.env ]; then
-  sudo cp /tmp/rapalle-agent-extract/agent/.env "$INSTALL_DIR/.env"
-fi
+# --- 3. Identitaet sichern --------------------------------------------------
+# .env und .device-id MUESSEN erhalten bleiben, sonst erscheint das Geraet
+# nach dem Neuausrollen als NEUER Client im Dashboard.
+KEEP=/tmp/rapalle-agent-keep
+sudo rm -rf "$KEEP"; sudo mkdir -p "$KEEP"
+for f in .env .device-id; do
+  [ -f "$INSTALL_DIR/$f" ] && sudo cp "$INSTALL_DIR/$f" "$KEEP/$f"
+done
+
+# --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
+# Alte .pyc, verwaiste Skripte und eine halb kaputte venv sollen weg. Nur die
+# Logdateien bleiben fuer die Fehlersuche stehen.
+echo "Raeume alten Programmordner auf..."
+sudo find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+     ! -name 'agent.log' ! -name 'update.log' -exec rm -rf {{}} ';' 2>/dev/null || true
+
+# --- 5. Neue Dateien auslegen (rekursiv) ------------------------------------
+echo "Rolle neue Agent-Dateien aus..."
+sudo cp -a /tmp/rapalle-agent-extract/agent/. "$INSTALL_DIR/"
+for f in .env .device-id; do
+  [ -f "$KEEP/$f" ] && sudo cp "$KEEP/$f" "$INSTALL_DIR/$f"
+done
 if [ -f "$INSTALL_DIR/.env" ]; then
   sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
 fi
 
 cd "$INSTALL_DIR"
-# Python-Interpreter bestimmen (venv bevorzugt) und Abhaengigkeiten nachziehen.
+# --- 6. Virtuelle Umgebung frisch bauen -------------------------------------
+# Erst daneben bauen, dann tauschen. Scheitert es (kein python3-venv-Paket),
+# faellt der Dienst auf das System-Python zurueck statt gar nicht zu starten.
+SYSPY="$(command -v python3 || true)"
+if [ -n "$SYSPY" ]; then
+  echo "Baue virtuelle Umgebung neu mit $SYSPY ..."
+  sudo rm -rf "$INSTALL_DIR/venv.new"
+  if sudo "$SYSPY" -m venv "$INSTALL_DIR/venv.new" 2>/dev/null; then
+    sudo rm -rf "$INSTALL_DIR/venv"
+    sudo mv "$INSTALL_DIR/venv.new" "$INSTALL_DIR/venv"
+  else
+    echo "WARNUNG: venv konnte nicht gebaut werden (python3-venv installiert?)."
+    sudo rm -rf "$INSTALL_DIR/venv.new"
+  fi
+fi
 if [ -x "$INSTALL_DIR/venv/bin/python" ]; then
   PYEXEC="$INSTALL_DIR/venv/bin/python"
-  sudo ./venv/bin/pip install --quiet -r requirements.txt || true
+  echo "Installiere Abhaengigkeiten..."
+  sudo "$INSTALL_DIR/venv/bin/pip" install --upgrade pip --quiet || true
+  sudo "$INSTALL_DIR/venv/bin/pip" install -r requirements.txt
 else
   PYEXEC="$(command -v python3)"
+  sudo "$PYEXEC" -m pip install -r requirements.txt --break-system-packages 2>/dev/null || \
+    sudo "$PYEXEC" -m pip install -r requirements.txt || true
 fi
 
 # Autostart-Unit (neu) schreiben -> garantiert vorhanden fuer den Neustart.
@@ -665,51 +706,131 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
          -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $enc)
     exit $p.ExitCode
 }}
+# Alles mitprotokollieren - das Skript laeuft als SYSTEM ohne sichtbares
+# Fenster. Ohne diese Datei war nach einem misslungenen Update nicht
+# nachvollziehbar, WO es klemmte.
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+try {{ Start-Transcript -Path "$InstallDir\\update.log" -Force | Out-Null }} catch {{}}
+Write-Host "=== RAPALLE.net RMM - Agent NEU AUSROLLEN ($(Get-Date)) ==="
+
+# --- 1. Neues Paket holen ---------------------------------------------------
 Write-Host "Lade neueste Agent-Version..."
 Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
 if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
 Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
+$Src = "$env:TEMP\\rapalle-agent-extract\\agent"
 
-# Laufenden Agenten stoppen (Task + Prozesse), damit die alte agent.py endet.
+# --- 2. Laufenden Agenten UND Bildschirm-Helfer beenden ---------------------
+# Der Helfer (_screen_helper.py) laeuft in der Benutzersitzung und haelt sonst
+# eine alte Datei offen -> die neue Fassung wuerde erst nach Reboot greifen.
+Write-Host "Stoppe Agent und Bildschirm-Helfer..."
 try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
 try {{
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-        Where-Object {{ $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" }} |
+        Where-Object {{ $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or $_.CommandLine -like "*_screen_helper.py*" }} |
         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 }} catch {{}}
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 
-# Alle Dateien AUSSER .env ersetzen (behaelt Konfiguration/Device-ID).
-Get-ChildItem "$env:TEMP\\rapalle-agent-extract\\agent" -File | Where-Object {{ $_.Name -ne ".env" }} |
-    ForEach-Object {{ Copy-Item $_.FullName -Destination $InstallDir -Force }}
+# --- 3. Identitaet sichern --------------------------------------------------
+# .env (Token/Backend) und .device-id (Client-Identitaet) MUESSEN das
+# Neuausrollen ueberleben, sonst taucht das Geraet als NEUER Client auf.
+$Keep = "$env:TEMP\\rapalle-agent-keep"
+if (Test-Path $Keep) {{ Remove-Item -Recurse -Force $Keep }}
+New-Item -ItemType Directory -Force -Path $Keep | Out-Null
+foreach ($f in @(".env", ".device-id")) {{
+    if (Test-Path "$InstallDir\\$f") {{ Copy-Item "$InstallDir\\$f" "$Keep\\$f" -Force }}
+}}
+
+# --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
+# Bewusst alles weg: alte .pyc, verwaiste Helfer-Skripte und eine womoeglich
+# halb kaputte venv. Nur agent.log bleibt fuer die Fehlersuche stehen.
+Write-Host "Raeume alten Programmordner auf..."
+Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.Name -notin @("agent.log", "update.log") }} |
+    ForEach-Object {{ Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }}
+
+# --- 5. Neue Dateien auslegen (rekursiv, inkl. Unterordner) -----------------
+Write-Host "Rolle neue Agent-Dateien aus..."
+Copy-Item -Path "$Src\\*" -Destination $InstallDir -Recurse -Force
+foreach ($f in @(".env", ".device-id")) {{
+    if (Test-Path "$Keep\\$f") {{ Copy-Item "$Keep\\$f" "$InstallDir\\$f" -Force }}
+}}
 if (Test-Path "$InstallDir\\.env") {{
     (Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
 }}
-if (Test-Path "$InstallDir\\venv\\Scripts\\pip.exe") {{
-    & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt" --quiet
+
+# --- 6. Virtuelle Umgebung frisch bauen -------------------------------------
+# Wichtig: Erst NEBEN die alte bauen ("venv.new"). Nur wenn das klappt, wird
+# getauscht. Findet sich kein System-Python (SYSTEM hat oft einen anderen
+# PATH als der installierende Benutzer), bleibt die vorhandene venv bestehen -
+# ein kaputtes Update ist schlimmer als eine alte Bibliothek.
+$SysPy = $null
+foreach ($cand in @("python.exe", "python3.exe")) {{
+    $c = Get-Command $cand -ErrorAction SilentlyContinue
+    if ($c) {{ $SysPy = $c.Source; break }}
+}}
+if (-not $SysPy) {{
+    $py = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($py) {{ $SysPy = $py.Source }}
+}}
+if (-not $SysPy) {{
+    foreach ($g in @("$env:LOCALAPPDATA\\Programs\\Python\\Python3*\\python.exe",
+                     "$env:ProgramFiles\\Python3*\\python.exe",
+                     "C:\\Python3*\\python.exe")) {{
+        $hit = Get-ChildItem $g -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($hit) {{ $SysPy = $hit.FullName; break }}
+    }}
+}}
+if ($SysPy) {{
+    Write-Host "Baue virtuelle Umgebung neu mit $SysPy ..."
+    if (Test-Path "$InstallDir\\venv.new") {{ Remove-Item -Recurse -Force "$InstallDir\\venv.new" }}
+    & $SysPy -m venv "$InstallDir\\venv.new"
+    if ($LASTEXITCODE -eq 0 -and (Test-Path "$InstallDir\\venv.new\\Scripts\\python.exe")) {{
+        if (Test-Path "$InstallDir\\venv") {{ Remove-Item -Recurse -Force "$InstallDir\\venv" -ErrorAction SilentlyContinue }}
+        Rename-Item "$InstallDir\\venv.new" "venv"
+    }} else {{
+        Write-Host "WARNUNG: Neue venv konnte nicht gebaut werden - nutze die vorhandene." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force "$InstallDir\\venv.new" -ErrorAction SilentlyContinue
+    }}
+}} else {{
+    Write-Host "WARNUNG: Kein System-Python gefunden - venv bleibt unveraendert." -ForegroundColor Yellow
+}}
+if (-not (Test-Path "$InstallDir\\venv\\Scripts\\python.exe")) {{
+    Write-Host "FEHLER: Keine lauffaehige venv vorhanden. Bitte install.ps1 erneut ausfuehren." -ForegroundColor Red
+    try {{ Stop-Transcript | Out-Null }} catch {{}}
+    exit 1
+}}
+Write-Host "Installiere Abhaengigkeiten..."
+& "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
+& "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt"
+if ($LASTEXITCODE -ne 0) {{
+    Write-Host "FEHLER bei der Paket-Installation - Agent kann so nicht starten." -ForegroundColor Red
+    try {{ Stop-Transcript | Out-Null }} catch {{}}
+    exit 1
 }}
 
-# Autostart-Task pruefen und ggf. auf den Dienst-Betrieb umstellen.
-# Alt-Installationen liefen unter dem angemeldeten Benutzer mit Trigger
-# "AtLogOn" - auf Servern ohne Anmeldung startete der Agent damit nie. Das
-# Update zieht solche Tasks automatisch auf SYSTEM/AtStartup nach.
-$task = Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue
-$needsTask = (-not $task) -or ($task.Principal.UserId -notmatch "SYSTEM")
-if ($needsTask) {{
-    Write-Host "Stelle Autostart auf Dienst-Betrieb um (SYSTEM, beim Systemstart)..."
-    $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
-    $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
-    $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
-    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit (sonst stiller Kill nach 72h)
-    try {{ Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-    Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
-}}
+# --- 7. Autostart-Task IMMER neu registrieren -------------------------------
+# Frueher wurde der Task nur angefasst, wenn er nicht auf SYSTEM lief. Dadurch
+# behielten Altinstallationen fehlerhafte Einstellungen (z.B. das 72-Stunden-
+# Zeitlimit) und der "neue" Agent verhielt sich weiter wie der alte.
+Write-Host "Registriere Autostart-Task neu (SYSTEM, beim Systemstart)..."
+$Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
+$TrigBoot  = New-ScheduledTaskTrigger -AtStartup
+$TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit (sonst stiller Kill nach 72h)
+try {{ Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 
-# NEU STARTEN.
+# --- 8. Wartungs-Tasks nachziehen -------------------------------------------
+try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (Wartungs-Tasks: $_)" }}
+
+# --- 9. NEU STARTEN ---------------------------------------------------------
 New-Item -ItemType File -Force "$InstallDir\\.updated" | Out-Null
 Start-ScheduledTask -TaskName "RapalleRmmAgent"
-Write-Host "Update fertig - Agent neu gestartet."
+Write-Host "=== Neuausrollung fertig - Agent neu gestartet. ==="
+try {{ Stop-Transcript | Out-Null }} catch {{}}
 """
     return PlainTextResponse(script, media_type="text/plain")
 

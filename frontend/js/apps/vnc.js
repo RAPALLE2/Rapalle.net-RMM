@@ -47,8 +47,8 @@ export function renderVnc(body, win) {
         <button class="taskbar-btn" id="vnc-clip-get-${win.key}" title="Zwischenablage des Remote-PCs holen">→📋</button>
         </span>
       </div>
-      <div style="flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative">
-        <img id="vnc-img-${win.key}" style="max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair"
+      <div style="flex:1 1 0;min-height:0;min-width:0;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative">
+        <img id="vnc-img-${win.key}" style="display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;cursor:crosshair"
              tabindex="0" />
       </div>
       <div class="bar-optrow" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">

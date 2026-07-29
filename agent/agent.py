@@ -2876,13 +2876,43 @@ def consent_dialog(who, timeout_s):
     root.title("RAPALLE.net RMM - Remote-Bildschirm")
     root.attributes("-topmost", True)
     root.configure(bg="#131c2b")
-    root.geometry("460x230")
-    root.eval("tk::PlaceWindow . center")
+    root.resizable(False, False)
+
+    # Logo: logo.png liegt seit Install/Update neben agent.py - also im
+    # gleichen Ordner wie dieses Helfer-Skript. Es wird sowohl als Fenster-
+    # symbol (iconphoto, kann PNG) als auch sichtbar im Dialog verwendet.
+    # Ohne diesen Block war der Dialog des Helfers bildlos - der alte, direkt
+    # im Agenten gezeichnete Dialog hatte das Logo noch.
+    logo_big = logo_small = None
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+        if os.path.isfile(p):
+            logo_big = tk.PhotoImage(file=p)
+            f = max(1, logo_big.width() // 64)
+            logo_small = logo_big.subsample(f, f)
+            icons = []
+            for target in (64, 32, 16):
+                s = max(1, logo_big.width() // target)
+                icons.append(logo_big.subsample(s, s))
+            root._icon_refs = [logo_big, logo_small] + icons   # GC-Schutz
+            try:
+                root.iconphoto(True, *icons)
+            except Exception:
+                pass
+    except Exception as e:
+        log("Logo nicht ladbar: %s" % e)
+        logo_big = logo_small = None
+
+    if logo_small is not None:
+        tk.Label(root, image=logo_small, bg="#131c2b").pack(pady=(20, 4))
+    else:
+        tk.Label(root, text="\U0001F5A5", font=("Segoe UI Emoji", 30),
+                 bg="#131c2b", fg="#e8eef7").pack(pady=(20, 4))
     tk.Label(root, text="Remote-Bildschirm zulassen?", bg="#131c2b", fg="#e8eef7",
-             font=("Segoe UI", 14, "bold")).pack(pady=(22, 8))
+             font=("Segoe UI", 14, "bold")).pack(pady=(4, 8))
     tk.Label(root, text=str(who) + " moechte den Bildschirm dieses Computers\n"
              "sehen und steuern.", bg="#131c2b", fg="#8fa3bd",
-             font=("Segoe UI", 10), justify="center").pack()
+             font=("Segoe UI", 10), justify="center").pack(padx=28)
     countdown = tk.Label(root, text="", bg="#131c2b", fg="#8fa3bd", font=("Segoe UI", 9))
     countdown.pack(pady=(10, 0))
     row = tk.Frame(root, bg="#131c2b"); row.pack(pady=18)
@@ -2905,6 +2935,18 @@ def consent_dialog(who, timeout_s):
         root.after(1000, tick)
     tick()
     root.protocol("WM_DELETE_WINDOW", no)
+    # Erst nach dem Aufbau zentrieren - vorher steht die Fenstergroesse noch
+    # nicht fest und der Dialog landete oben links.
+    try:
+        root.update_idletasks()
+        w, h = root.winfo_width(), root.winfo_height()
+        x = (root.winfo_screenwidth() - w) // 2
+        y = (root.winfo_screenheight() - h) // 3
+        root.geometry("+%d+%d" % (x, y))
+        root.lift()
+        root.focus_force()
+    except Exception:
+        pass
     root.mainloop()
     return result["ok"]
 
@@ -3292,18 +3334,49 @@ class _ScreenHelper:
             return "reply", json.loads(msg[1:].decode()), None
         return None
 
-    def ask_consent(self, who: str, timeout_s: int) -> bool:
+    def drain(self, seconds: float = 1.5) -> None:
+        """
+        Restnachrichten der VORHERIGEN Sitzung wegwerfen.
+        Nach einem Stop liegen oft noch Bilder im Socket-Puffer. Wurden die
+        nicht abgeraeumt, verbrauchte die naechste Zustimmungsabfrage ihre
+        Wartezeit mit dem Lesen alter Frames - im Dashboard stand dann
+        'abgelehnt', obwohl niemand etwas angeklickt hatte.
+        """
+        end = time.time() + seconds
+        while time.time() < end:
+            try:
+                self.conn.settimeout(0.2)
+                if _sock_recv(self.conn) is None:
+                    self.alive = False
+                    return
+            except Exception:
+                return          # nichts mehr da (Timeout) - fertig
+
+    def ask_consent(self, who: str, timeout_s: int):
         """Zustimmungsdialog IN der Benutzersitzung anzeigen lassen.
         Aus Sitzung 0 ist ein Fenster fuer den Benutzer unsichtbar - genau
         deshalb kam bisher 'Warte auf Bestaetigung', ohne dass am Bildschirm
-        etwas erschien."""
+        etwas erschien.
+
+        Rueckgabe: True = zugelassen, False = abgelehnt/Zeit abgelaufen,
+        None = Verbindung zum Helfer gestoert. Nur bei None darf der Aufrufer
+        den Helfer neu starten und es erneut versuchen - eine echte Ablehnung
+        wird NICHT wiederholt.
+        """
+        # Stream sicher anhalten und Reste abraeumen, damit die Antwort des
+        # Dialogs nicht hinter alten Bildern haengt.
+        self.send({"cmd": "config", "stream": False})
+        self.drain()
+        if not self.alive:
+            return None
         if not self.send({"cmd": "consent", "who": who, "timeout": int(timeout_s)}):
-            return False
-        deadline = time.time() + timeout_s + 10
+            return None
+        deadline = time.time() + timeout_s + 15
         while time.time() < deadline:
             got = self.recv(timeout=max(1.0, deadline - time.time()))
             if got is None:
-                return False
+                self.alive = False
+                return None      # Leitung tot -> KEINE stille Ablehnung
             kind, obj, _ = got
             if kind == "reply" and "consent" in obj:
                 return bool(obj["consent"])
@@ -3335,6 +3408,9 @@ def _screen_helper_loop(loop, helper):
             last_cfg = cfg
         got = helper.recv(timeout=30.0)
         if got is None:
+            # Leitung weg: Als tot markieren, damit die NAECHSTE Sitzung einen
+            # frischen Helfer startet, statt auf einen toten Socket zu warten.
+            helper.alive = False
             break
         kind, meta, jpeg = got
         if kind != "frame":
@@ -3723,16 +3799,37 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
     # Dialog dort anzeigen. Genau das war der Grund, warum im Dashboard
     # "Warte auf Bestaetigung" stand, am Bildschirm aber nichts erschien.
     if _needs_session_helper():
-        try:
-            helper = _ensure_helper(_AGENT_LOOP)
-            if helper is None:
-                _print("[agent] Kein Helfer in der Benutzersitzung - "
-                       "Zustimmung kann nicht eingeholt werden (niemand angemeldet?)")
-                return False
-            return helper.ask_consent(who, timeout_s)
-        except Exception as e:
-            _print(f"[agent] Zustimmung ueber den Helfer fehlgeschlagen: {e}")
-            return False
+        # Zwei Anlaeufe: Beim ersten kann die Leitung zum Helfer noch von der
+        # vorherigen Sitzung her tot sein (Helfer beendet, Abmeldung,
+        # Benutzerwechsel). Frueher wurde das als "abgelehnt" gewertet -
+        # deshalb stand nach Stop/Neustart einer Sitzung IMMER "abgelehnt" da.
+        for attempt in (1, 2):
+            try:
+                helper = _ensure_helper(_AGENT_LOOP)
+                if helper is None:
+                    _print("[agent] Kein Helfer in der Benutzersitzung - "
+                           "Zustimmung kann nicht eingeholt werden (niemand angemeldet?)")
+                    return False
+                answer = helper.ask_consent(who, timeout_s)
+                if answer is not None:
+                    return bool(answer)
+                _print(f"[agent] Helfer antwortet nicht (Versuch {attempt}) - "
+                       f"Verbindung wird neu aufgebaut.")
+            except Exception as e:
+                _print(f"[agent] Zustimmung ueber den Helfer fehlgeschlagen "
+                       f"(Versuch {attempt}): {e}")
+            # Tote Verbindung wegwerfen, damit _ensure_helper einen neuen
+            # Helfer in der aktuellen Benutzersitzung startet.
+            old = _screen_stream.get("helper")
+            if old is not None:
+                try:
+                    old.close()
+                except Exception:
+                    pass
+            _screen_stream["helper"] = None
+        _print("[agent] Zustimmung konnte auch im zweiten Anlauf nicht "
+               "eingeholt werden - Sitzung wird abgelehnt.")
+        return False
 
     title = "RAPALLE.net RMM - Remote-Bildschirm"
     text = (f"{who} möchte den Bildschirm dieses Computers sehen und steuern.\n\n"
