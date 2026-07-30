@@ -87,7 +87,6 @@ which address it is bound to, and which settings are locked.
 
 
 
-
 ## Support & Feedback
 
 Feel free to join the RAPALLE.net Discord community:
