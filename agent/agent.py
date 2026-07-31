@@ -3362,6 +3362,75 @@ def _win_console_session_id() -> int:
         return -1
 
 
+# Sitzung, in der zuletzt ein Helfer gestartet wurde. Der Start laeuft ueber
+# mehrere Funktionen (Prozessstart, dann Socket-Annahme), deshalb hier abgelegt
+# statt durchgereicht.
+_LAST_HELPER_SESSION = [None]
+
+
+def _win_user_sessions() -> list[int]:
+    """
+    Alle Windows-Sitzungen, in denen ein Benutzer angemeldet ist - sortiert
+    nach Eignung fuer eine Bildschirmaufnahme.
+
+    Warum nicht einfach WTSGetActiveConsoleSessionId()? Weil das NUR die
+    physische Konsole liefert (Monitor/Tastatur am Geraet). Bei einer
+    RDP-Verbindung - auch ueber das Guacamole-Gateway des RMM - hat der
+    Benutzer eine eigene Sitzung, und die Konsole ist leer. Der Helfer wurde
+    dann nie gestartet, obwohl jemand angemeldet war.
+
+    Reihenfolge:
+      1. WTSActive  (angemeldet UND verbunden - hier ist wirklich ein Desktop)
+      2. WTSDisconnected (angemeldet, aber getrennt - Desktop existiert weiter,
+         die Aufnahme liefert das zuletzt gezeigte Bild)
+      3. Konsolensitzung zuerst innerhalb derselben Stufe, weil sie am
+         ehesten einen echten Monitor hat.
+    Sitzung 0 bleibt immer aussen vor - dort laufen die Dienste, kein Desktop.
+    """
+    if platform.system() != "Windows":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _WTS_SESSION_INFOW(ctypes.Structure):
+            _fields_ = [("SessionId", wintypes.DWORD),
+                        ("pWinStationName", wintypes.LPWSTR),
+                        ("State", ctypes.c_int)]
+
+        wts = ctypes.windll.wtsapi32
+        count = wintypes.DWORD(0)
+        arr = ctypes.POINTER(_WTS_SESSION_INFOW)()
+        # 0 = WTS_CURRENT_SERVER_HANDLE
+        if not wts.WTSEnumerateSessionsW(0, 0, 1, ctypes.byref(arr), ctypes.byref(count)):
+            return []
+        try:
+            console = _win_console_session_id()
+            active, disconnected = [], []
+            for i in range(count.value):
+                info = arr[i]
+                sid, state = int(info.SessionId), int(info.State)
+                if sid == 0:
+                    continue                    # Dienst-Sitzung, kein Desktop
+                if state == 0:                  # WTSActive
+                    active.append(sid)
+                elif state == 4:                # WTSDisconnected
+                    disconnected.append(sid)
+            # Konsolensitzung innerhalb ihrer Stufe nach vorne holen.
+            key = lambda x: (x != console, x)   # noqa: E731
+            return sorted(active, key=key) + sorted(disconnected, key=key)
+        finally:
+            try:
+                wts.WTSFreeMemory(arr)
+            except Exception:
+                pass
+    except Exception as e:
+        _print(f"[screen-helper] Sitzungsliste nicht lesbar: {e}")
+        # Rueckfallebene: wenigstens die Konsolensitzung versuchen.
+        cid = _win_console_session_id()
+        return [cid] if cid > 0 else []
+
+
 def _needs_session_helper() -> bool:
     """Muessen wir ueber einen Helfer gehen? Nur Windows, nur aus Sitzung 0."""
     if platform.system() != "Windows":
@@ -3389,17 +3458,40 @@ def _win_start_in_user_session(args: list) -> bool:
         wtsapi = ctypes.windll.wtsapi32
         userenv = ctypes.windll.userenv
 
-        session = k32.WTSGetActiveConsoleSessionId()
-        if session in (0xFFFFFFFF, 0):
-            _print("[screen-helper] Keine aktive Benutzersitzung gefunden "
+        # Sitzung suchen, in der wirklich jemand angemeldet ist.
+        #
+        # WICHTIG: Frueher stand hier nur WTSGetActiveConsoleSessionId(). Das
+        # liefert ausschliesslich die PHYSISCHE Konsolensitzung (Monitor +
+        # Tastatur am Geraet). Wer sich per RDP - und damit auch ueber das
+        # Guacamole-Gateway des RMM - verbindet, sitzt aber in einer EIGENEN
+        # Sitzung; die Konsole ist dann leer und liefert 0 oder die ID einer
+        # Sitzung ohne Benutzer. Ergebnis: "Keine aktive Benutzersitzung
+        # gefunden", obwohl jemand angemeldet ist. Genau dieser Fall.
+        #
+        # Deshalb werden jetzt ALLE Sitzungen durchgegangen und die erste
+        # genommen, fuer die sich ein Benutzertoken holen laesst.
+        candidates = _win_user_sessions()
+        if not candidates:
+            _print("[screen-helper] Keine Sitzung mit angemeldetem Benutzer gefunden "
                    "(niemand angemeldet?)")
             return False
 
+        session = None
         token = wintypes.HANDLE()
-        if not wtsapi.WTSQueryUserToken(wintypes.DWORD(session), ctypes.byref(token)):
-            _print(f"[screen-helper] WTSQueryUserToken fehlgeschlagen "
-                   f"(error {ctypes.GetLastError()}) - is the agent running as SYSTEM?")
+        last_err = 0
+        for cand in candidates:
+            if wtsapi.WTSQueryUserToken(wintypes.DWORD(cand), ctypes.byref(token)):
+                session = cand
+                break
+            last_err = ctypes.GetLastError()
+            _print(f"[screen-helper] Sitzung {cand}: WTSQueryUserToken "
+                   f"fehlgeschlagen (error {last_err})")
+        if session is None:
+            _print(f"[screen-helper] Kein Benutzertoken erhalten "
+                   f"(zuletzt error {last_err}) - laeuft der Agent als SYSTEM?")
             return False
+        _print(f"[screen-helper] Nutze Sitzung {session} von {candidates}")
+        _LAST_HELPER_SESSION[0] = session
 
         dup = wintypes.HANDLE()
         # 2 = SecurityImpersonation, 1 = TokenPrimary
@@ -3484,6 +3576,9 @@ class _ScreenHelper:
         self.server = server
         self.conn = conn
         self.alive = True
+        # In welcher Windows-Sitzung laeuft dieser Helfer? _ensure_helper()
+        # vergleicht das mit der aktuellen Benutzersitzung.
+        self.session = None
         # Der Socket wird von ZWEI Threads benutzt: der Event-Loop schickt
         # Eingaben (jede Mausbewegung!), der Aufnahme-Thread liest Bilder und
         # schickt Konfigurationen. Ohne Schloss ueberlappen zwei sendall() und
@@ -3551,7 +3646,12 @@ class _ScreenHelper:
             conn.settimeout(None)
         except Exception:
             pass
-        return cls(server, conn)
+        obj = cls(server, conn)
+        # Sitzung merken: _ensure_helper() vergleicht sie spaeter mit der
+        # aktuellen Benutzersitzung und startet den Helfer neu, wenn der
+        # Benutzer inzwischen woanders sitzt (Konsole <-> RDP).
+        obj.session = _LAST_HELPER_SESSION[0]
+        return obj
 
     def send(self, obj) -> bool:
         try:
@@ -3693,7 +3793,23 @@ def _ensure_helper(loop):
     """
     helper = _screen_stream.get("helper")
     if helper is not None and helper.alive:
-        return helper
+        # Sitzt der laufende Helfer noch in der RICHTIGEN Sitzung?
+        # Wechselt der Benutzer zwischen Konsole und RDP (oder meldet sich neu
+        # an), bekommt er eine ANDERE Sitzungs-ID. Der alte Helfer laeuft dann
+        # zwar noch, zeichnet aber einen Desktop auf, den niemand mehr sieht -
+        # und sein Zustimmungsdialog erscheint auf einem unsichtbaren
+        # Bildschirm. Deshalb hier vergleichen und ihn notfalls ersetzen.
+        want = _win_user_sessions()
+        have = getattr(helper, "session", None)
+        if not want or have is None or have == want[0]:
+            return helper
+        _print(f"[screen-helper] Benutzer ist jetzt in Sitzung {want[0]}, "
+               f"der Helfer laeuft in {have} - starte ihn neu.")
+        try:
+            helper.close()
+        except Exception:
+            pass
+        _screen_stream["helper"] = None
     helper = _ScreenHelper.start(loop)
     _screen_stream["helper"] = helper
     return helper
@@ -3717,8 +3833,14 @@ def _screen_capture_loop(loop):
                 "desktop from there. The helper for the user session did not "
                 "report in. Check whether anyone is signed in on the device. The "
                 "helper log is in the signed-in user's TEMP folder as "
-                "rmm-screen-helper.log (type %TEMP% in Explorer).",
-                code="agent_err_no_helper")
+                "rmm-screen-helper.log (type %TEMP% in Explorer). "
+                f"[Sessions with a signed-in user: {_win_user_sessions() or 'none'}]",
+                code="agent_err_no_helper",
+                # Die gefundenen Sitzungen mitschicken: Ohne diese Angabe war
+                # nicht zu unterscheiden, ob NIEMAND angemeldet ist oder ob der
+                # Start des Helfers in einer gefundenen Sitzung scheiterte -
+                # zwei voellig verschiedene Ursachen mit demselben Text.
+                params={"sessions": ", ".join(str(x) for x in _win_user_sessions()) or "-"})
             _screen_stream["active"] = False
             return
         try:

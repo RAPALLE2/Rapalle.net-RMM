@@ -1435,7 +1435,7 @@ const translations = {
     wb_now_app: "\"{name}\" ist jetzt eine App im Startmenü",
     // ---- Meldungen des Agenten (kommen als code+params über screen-error/-mode) ----
     agent_err_helper: "Der Bildschirm-Helfer meldet: {err}",
-    agent_err_no_helper: "Der Agent läuft als Dienst in Sitzung 0 und kann den Desktop von dort nicht aufnehmen. Der Helfer für die Benutzersitzung hat sich nicht gemeldet. Prüfen: Ist jemand am Gerät angemeldet? Die Protokolldatei des Helfers liegt im TEMP-Ordner des angemeldeten Benutzers unter rmm-screen-helper.log (im Explorer: %TEMP% eingeben).",
+    agent_err_no_helper: "Der Agent läuft als Dienst in Sitzung 0 und kann den Desktop von dort nicht aufnehmen. Der Helfer für die Benutzersitzung hat sich nicht gemeldet. Prüfen: Ist jemand am Gerät angemeldet? Die Protokolldatei des Helfers liegt im TEMP-Ordner des angemeldeten Benutzers unter rmm-screen-helper.log (im Explorer: %TEMP% eingeben). [Sitzungen mit angemeldetem Benutzer: {sessions}]",
     agent_err_capture: "Bildschirmaufnahme nicht möglich: {err}",
     agent_err_aborted: "Bildschirmaufnahme abgebrochen: {err}",
     agent_err_no_display: "Bildschirm kann nicht erfasst werden. Häufige Ursache: Der PC ist eine headless VM/Server OHNE aktive Grafiksitzung (kein Monitor, keine Anmeldung, oder nur per RDP erreichbar). Ohne echte Bildschirmsitzung gibt es nichts zu übertragen. Lösung: am Gerät angemeldet bleiben, einen (virtuellen) Monitor bereitstellen oder einen virtuellen Displaytreiber installieren. [Technisch: {tech}]",
@@ -2862,7 +2862,7 @@ const translations = {
     wb_now_app: "\"{name}\" is now an app in the start menu",
     // ---- Agent messages (arrive as code+params via screen-error/-mode) ----
     agent_err_helper: "The screen helper reports: {err}",
-    agent_err_no_helper: "The agent runs as a service in session 0 and cannot capture the desktop from there. The helper for the user session did not report in. Check whether anyone is signed in on the device. The helper log is in the signed-in user's TEMP folder as rmm-screen-helper.log (type %TEMP% in Explorer).",
+    agent_err_no_helper: "The agent runs as a service in session 0 and cannot capture the desktop from there. The helper for the user session did not report in. Check whether anyone is signed in on the device. The helper log is in the signed-in user's TEMP folder as rmm-screen-helper.log (type %TEMP% in Explorer). [Sessions with a signed-in user: {sessions}]",
     agent_err_capture: "Screen capture not possible: {err}",
     agent_err_aborted: "Screen capture aborted: {err}",
     agent_err_no_display: "The screen cannot be captured. Common cause: the PC is a headless VM/server WITHOUT an active graphical session (no monitor, nobody signed in, or reachable only via RDP). Without a real screen session there is nothing to transmit. Fix: stay signed in on the device, provide a (virtual) monitor, or install a virtual display driver. [Technical: {tech}]",
