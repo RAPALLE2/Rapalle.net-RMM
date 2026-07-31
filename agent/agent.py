@@ -2854,8 +2854,14 @@ def log(msg):
     except Exception:
         pass
 
+# Auch hier senden ZWEI Threads auf denselben Socket: der Steuer-Thread
+# (Antwort der Zustimmungsabfrage) und die Aufnahmeschleife (Bilder). Ohne
+# Schloss ueberlappen die sendall() und zerstoeren die Laengen-Praefixe.
+_SEND_LOCK = threading.Lock()
+
 def send(sock, payload):
-    sock.sendall(len(payload).to_bytes(4, "big") + payload)
+    with _SEND_LOCK:
+        sock.sendall(len(payload).to_bytes(4, "big") + payload)
 
 def recv(sock):
     def exact(n):
@@ -2969,13 +2975,84 @@ def main():
         log("Eingabe nicht verfuegbar: %s" % e)
         MB = KK = None
 
+    # Tastennamen des Browsers -> pynput. MUSS zur Tabelle _SPECIAL_KEYS im
+    # Agenten passen. Vorher stand hier nur getattr(Key, name): Das Dashboard
+    # schickt aber Browser-Namen ("Enter", "Escape", "Control", "ArrowUp"),
+    # pynput heisst die Dinger anders ("enter", "esc", "ctrl", "up"). Jeder
+    # Treffer war None, danach versuchte pynput die ZEICHENKETTE zu druecken
+    # und warf - die Tastatur-Fernsteuerung tat deshalb gar nichts.
+    SPECIAL = {}
+    if KK is not None:
+        SPECIAL = {
+            "Enter": KK.enter, "Backspace": KK.backspace, "Tab": KK.tab,
+            "Escape": KK.esc, " ": KK.space,
+            "ArrowUp": KK.up, "ArrowDown": KK.down,
+            "ArrowLeft": KK.left, "ArrowRight": KK.right,
+            "Delete": KK.delete, "Home": KK.home, "End": KK.end,
+            "PageUp": KK.page_up, "PageDown": KK.page_down,
+            "Control": KK.ctrl, "Alt": KK.alt, "Shift": KK.shift,
+            "Meta": KK.cmd,
+        }
+
+    def to_key(name):
+        # Browser-Name -> pynput-Taste. Einzelne Zeichen bleiben Zeichen.
+        # ACHTUNG: Dieser Code steht in _HELPER_SOURCE, einem r-String mit
+        # dreifachen Anfuehrungszeichen. Ein Docstring darin wuerde den String
+        # beenden und agent.py zerlegen - deshalb nur Kommentare, keine
+        # Docstrings.
+        if not name:
+            return None
+        if name in SPECIAL:
+            return SPECIAL[name]
+        if len(name) == 1:
+            return name
+        # F1..F12 und alles andere, was pynput unter kleinem Namen kennt.
+        return getattr(KK, name.lower(), None)
+
+    def set_clipboard(text):
+        # Zwischenablage der Benutzersitzung setzen (ohne Zusatzpaket).
+        import tkinter as tk
+        r = tk.Tk(); r.withdraw()
+        r.clipboard_clear(); r.clipboard_append(text)
+        r.update()          # erst dadurch uebernimmt Windows den Inhalt
+        r.destroy()
+
+    def get_clipboard():
+        import tkinter as tk
+        r = tk.Tk(); r.withdraw()
+        try:
+            return r.clipboard_get()
+        finally:
+            r.destroy()
+
     def do_input(d):
+        k = d.get("type")
+        # Tastatur/Zwischenablage brauchen keine Maus - deshalb VOR der
+        # Maus-Pruefung behandeln.
+        if k == "clipboard-set":
+            try: set_clipboard(d.get("text", ""))
+            except Exception as e: log("Zwischenablage setzen: %s" % e)
+            return
+        if k in ("key", "combo", "text") and keyboard is None:
+            return
+        if k == "text":
+            keyboard.type(d.get("text", ""))
+            return
+        if k in ("key", "combo"):
+            names = d.get("keys") or [d.get("key")]
+            keys = [to_key(n) for n in names]
+            keys = [x for x in keys if x is not None]
+            for x in keys:
+                keyboard.press(x)
+            for x in reversed(keys):
+                keyboard.release(x)
+            return
+
         if mouse is None:
             return
         ox, oy = state["left"], state["top"]
         def pos(x):
             return (int(x["x"]) + ox, int(x["y"]) + oy)
-        k = d.get("type")
         btn = {"left": "left", "right": "right", "middle": "middle"}.get(
             d.get("button", "left"), "left")
         b = getattr(MB, btn)
@@ -2987,23 +3064,12 @@ def main():
             mouse.position = pos(d); mouse.press(b)
         elif k == "up":
             mouse.position = pos(d); mouse.release(b)
-        elif k == "dblclick":
+        elif k in ("double", "dblclick"):
+            # Das Dashboard schickt "double" - der Helfer kannte bisher nur
+            # "dblclick", ein Doppelklick kam also nie an.
             mouse.position = pos(d); mouse.click(MB.left, 2)
         elif k == "scroll":
             mouse.scroll(0, int(d.get("dy", 0)))
-        elif k == "text":
-            keyboard.type(d.get("text", ""))
-        elif k in ("key", "combo"):
-            names = d.get("keys") or [d.get("key")]
-            keys = []
-            for n in names:
-                if not n:
-                    continue
-                keys.append(getattr(KK, n, None) or n)
-            for x in keys:
-                keyboard.press(x)
-            for x in reversed(keys):
-                keyboard.release(x)
 
     def control():
         while not state["stop"]:
@@ -3276,6 +3342,24 @@ class _ScreenHelper:
         self.server = server
         self.conn = conn
         self.alive = True
+        # Der Socket wird von ZWEI Threads benutzt: der Event-Loop schickt
+        # Eingaben (jede Mausbewegung!), der Aufnahme-Thread liest Bilder und
+        # schickt Konfigurationen. Ohne Schloss ueberlappen zwei sendall() und
+        # zerstoeren die Laengen-Praefixe -> der Helfer liest Muell, der
+        # Steuerkanal stirbt lautlos. Genau so fiel die Fernsteuerung aus.
+        self._send_lock = threading.Lock()
+
+    def _readable(self, timeout: float) -> bool:
+        """Wartet mit select() darauf, dass Daten anliegen.
+        Wichtig: NICHT socket.settimeout() benutzen. Das gilt fuer den ganzen
+        Socket - also auch fuer sendall() im anderen Thread, das dann mitten
+        in einer Nachricht abbrechen kann."""
+        import select as _select
+        try:
+            r, _w, _e = _select.select([self.conn], [], [], max(0.0, timeout))
+            return bool(r)
+        except Exception:
+            return False
 
     @classmethod
     def start(cls, loop, timeout: float = 25.0):
@@ -3317,11 +3401,18 @@ class _ScreenHelper:
             server.close()
             return None
         _print("[screen-helper] Helfer verbunden.")
+        # Ab jetzt blockierend: Wartezeiten regelt select() pro Leserichtung,
+        # damit ein Timeout nie ein laufendes sendall() zerreisst.
+        try:
+            conn.settimeout(None)
+        except Exception:
+            pass
         return cls(server, conn)
 
     def send(self, obj) -> bool:
         try:
-            _sock_send(self.conn, b"C" + json.dumps(obj).encode())
+            with self._send_lock:
+                _sock_send(self.conn, b"C" + json.dumps(obj).encode())
             return True
         except Exception:
             self.alive = False
@@ -3333,8 +3424,8 @@ class _ScreenHelper:
         Rueckgabe: ("frame", meta, jpeg) | ("reply", obj, None) | None
         """
         try:
-            if timeout is not None:
-                self.conn.settimeout(timeout)
+            if timeout is not None and not self._readable(timeout):
+                return None
             msg = _sock_recv(self.conn)
         except Exception:
             return None
@@ -3357,13 +3448,15 @@ class _ScreenHelper:
         """
         end = time.time() + seconds
         while time.time() < end:
+            if not self._readable(0.2):
+                return          # nichts mehr da - fertig
             try:
-                self.conn.settimeout(0.2)
                 if _sock_recv(self.conn) is None:
                     self.alive = False
                     return
             except Exception:
-                return          # nichts mehr da (Timeout) - fertig
+                self.alive = False
+                return
 
     def ask_consent(self, who: str, timeout_s: int):
         """Zustimmungsdialog IN der Benutzersitzung anzeigen lassen.

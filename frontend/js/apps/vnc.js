@@ -58,8 +58,8 @@ export function renderVnc(body, win) {
         <button class="taskbar-btn" id="vnc-clip-get-${win.key}" title="Zwischenablage des Remote-PCs holen">→📋</button>
         </span>
       </div>
-      <div style="flex:1 1 0;min-height:0;min-width:0;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative">
-        <img id="vnc-img-${win.key}" style="display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;cursor:crosshair"
+      <div id="vnc-area-${win.key}" style="flex:1 1 0;min-height:0;min-width:0;overflow:hidden;position:relative">
+        <img id="vnc-img-${win.key}" style="position:absolute;left:0;top:0;display:block"
              tabindex="0" />
       </div>
       <div class="bar-optrow" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
@@ -81,7 +81,49 @@ export function renderVnc(body, win) {
   const textInput = body.querySelector(`#vnc-text-${win.key}`);
   const sendBtn = body.querySelector(`#vnc-send-${win.key}`);
 
+  // Echte Bildschirmauflösung des Clients (kommt mit jedem Frame mit),
+  // um Klick-Koordinaten korrekt umzurechnen. Muss VOR layoutImage() stehen.
+  let remoteWidth = 1920;
+  let remoteHeight = 1080;
   const img = body.querySelector(`#vnc-img-${win.key}`);
+  const imgArea = body.querySelector(`#vnc-area-${win.key}`);
+
+  // ---- Bild einpassen: Groesse UND Position werden hier gerechnet ----------
+  // Warum nicht per CSS (max-width/max-height + object-fit:contain + flex-
+  // Zentrierung)? Weil dann DREI Dinge zusammenpassen muessen: die
+  // Elementgroesse, der von object-fit gewaehlte Ausschnitt und die
+  // Ruecktransformation der Mauskoordinaten. Sobald eines davon abweicht
+  // (Vollbild, Fenster-Resize, ein Frame mit anderer Groesse), sitzt das Bild
+  // schief UND die Klicks landen daneben - genau das Fehlerbild.
+  // Jetzt gilt: Das <img>-Element ist IMMER exakt so gross wie das
+  // dargestellte Bild und wird selbst mittig gesetzt. Damit ist
+  // getBoundingClientRect() gleichbedeutend mit der Bildflaeche und die
+  // Umrechnung der Klicks ist eine einfache Division.
+  function layoutImage() {
+    if (!imgArea || !remoteWidth || !remoteHeight) return;
+    const bw = imgArea.clientWidth;
+    const bh = imgArea.clientHeight;
+    if (bw <= 0 || bh <= 0) return;
+    const scale = Math.min(bw / remoteWidth, bh / remoteHeight);
+    const w = Math.max(1, Math.round(remoteWidth * scale));
+    const h = Math.max(1, Math.round(remoteHeight * scale));
+    img.style.width = w + "px";
+    img.style.height = h + "px";
+    img.style.left = Math.round((bw - w) / 2) + "px";
+    img.style.top = Math.round((bh - h) / 2) + "px";
+    img.style.cursor = "crosshair";
+  }
+
+  // Neu einpassen, wenn sich die Flaeche aendert: Fenster ziehen, maximieren,
+  // Vollbild, Seitenleiste ein-/ausklappen. ResizeObserver deckt all das ab,
+  // ohne dass jede Stelle im Fenstermanager davon wissen muss.
+  let areaObserver = null;
+  try {
+    areaObserver = new ResizeObserver(() => layoutImage());
+    areaObserver.observe(imgArea);
+  } catch (e) {
+    window.addEventListener("resize", layoutImage);
+  }
 
   // ---- Browser-Vollbild (Desktop + Handy): Button toggelt, Esc beendet ----
   const fsBtnV = body.querySelector(`#vnc-fs-${win.key}`);
@@ -131,7 +173,7 @@ export function renderVnc(body, win) {
     modBtns[name].addEventListener("click", () => {
       modState[name] = !modState[name];
       updateModBtn(name);
-      img.focus();
+      img.focus({ preventScroll: true });
     });
     // Doppelklick: Taste SOFORT einmal drücken+loslassen (z.B. Win öffnet das
     // Startmenü). Die zwei Einzelklicks davor haben den Toggle an+aus
@@ -141,7 +183,7 @@ export function renderVnc(body, win) {
       modState[name] = false;
       updateModBtn(name);
       dashboardSocket.emit("screen-input", { clientId, type: "key", key: name });
-      img.focus();
+      img.focus({ preventScroll: true });
     });
   });
   function activeMods() {
@@ -163,8 +205,8 @@ export function renderVnc(body, win) {
   function releaseMods() {
     Object.keys(modState).forEach((k) => { modState[k] = false; updateModBtn(k); });
   }
-  body.querySelector(`#vnc-key-tab-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Tab"); img.focus(); });
-  body.querySelector(`#vnc-key-esc-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Escape"); img.focus(); });
+  body.querySelector(`#vnc-key-tab-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Tab"); img.focus({ preventScroll: true }); });
+  body.querySelector(`#vnc-key-esc-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Escape"); img.focus({ preventScroll: true }); });
 
   // --- Zwischenablage synchronisieren ---
   // Senden: lokale Zwischenablage lesen -> Agent setzt sie am Remote-PC.
@@ -198,10 +240,6 @@ export function renderVnc(body, win) {
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
 
-  // Echte Bildschirmauflösung des Clients (kommt mit jedem Frame mit),
-  // um Klick-Koordinaten korrekt umzurechnen.
-  let remoteWidth = 1920;
-  let remoteHeight = 1080;
   let framesReceived = 0;
   let monitorCount = 1;
   let monitorIndex = 1;
@@ -233,6 +271,7 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
     dashboardSocket.off("screen-clipboard", onClipboard);
+    try { areaObserver?.disconnect(); } catch (e) {}
     window.removeEventListener("mouseup", onMouseUp);
 
     // Fenster leeren, Hinweis-Banner (inkl. Guacamole-Option) + Terminal einsetzen
@@ -271,8 +310,12 @@ export function renderVnc(body, win) {
     const overlay = body.querySelector(`#rdp-offer-${win.key}`);
     if (overlay) overlay.remove();
     img.src = "data:image/jpeg;base64," + data.image;
+    const sizeChanged = (remoteWidth !== data.width || remoteHeight !== data.height);
     remoteWidth = data.width;
     remoteHeight = data.height;
+    // Beim ersten Bild und bei jedem Auflösungswechsel (Monitorwechsel,
+    // Aufloesungsaenderung am Client) neu einpassen.
+    if (sizeChanged || !img.style.width) layoutImage();
     // Multi-Monitor: Button anzeigen/aktualisieren, wenn mehr als ein Bildschirm da ist.
     if (typeof data.monitor_count === "number") {
       monitorCount = data.monitor_count;
@@ -397,33 +440,21 @@ export function renderVnc(body, win) {
 
   // --- Koordinaten vom angezeigten Bild auf die echte Auflösung umrechnen ---
   function mapCoords(clientX, clientY) {
+    // Seit layoutImage() ist das <img>-Element GENAU die dargestellte
+    // Bildfläche - keine Balken durch object-fit, keine Offsets. Deshalb
+    // reicht eine Division. Vorher wurde der Offset ein zweites Mal
+    // herausgerechnet, obwohl das Element schon versetzt war: Klicks landeten
+    // umso weiter daneben, je stärker das Fenster von der Bildform abwich.
     const rect = img.getBoundingClientRect();
-    // Das Bild wird mit object-fit:contain angezeigt -> tatsächlich sichtbarer
-    // Bildbereich kann schmaler/niedriger als das <img>-Element sein.
-    const imgRatio = remoteWidth / remoteHeight;
-    const boxRatio = rect.width / rect.height;
-
-    let renderW, renderH, offsetX, offsetY;
-    if (boxRatio > imgRatio) {
-      // seitliche Balken
-      renderH = rect.height;
-      renderW = rect.height * imgRatio;
-      offsetX = (rect.width - renderW) / 2;
-      offsetY = 0;
-    } else {
-      // oben/unten Balken
-      renderW = rect.width;
-      renderH = rect.width / imgRatio;
-      offsetX = 0;
-      offsetY = (rect.height - renderH) / 2;
-    }
-
-    const relX = clientX - rect.left - offsetX;
-    const relY = clientY - rect.top - offsetY;
-    // in echte Bildschirmkoordinaten umrechnen
-    const x = Math.round((relX / renderW) * remoteWidth);
-    const y = Math.round((relY / renderH) * remoteHeight);
-    return { x, y };
+    if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+    const x = Math.round(((clientX - rect.left) / rect.width) * remoteWidth);
+    const y = Math.round(((clientY - rect.top) / rect.height) * remoteHeight);
+    // Auf den Bildschirm begrenzen - ein Klick 2 px neben dem Rand soll den
+    // Rand treffen und nicht auf einem Nachbarmonitor landen.
+    return {
+      x: Math.max(0, Math.min(x, remoteWidth - 1)),
+      y: Math.max(0, Math.min(y, remoteHeight - 1)),
+    };
   }
 
   function controlEnabled() {
@@ -474,7 +505,7 @@ export function renderVnc(body, win) {
 
   img.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse" || !controlEnabled()) return;
-    img.focus();
+    img.focus({ preventScroll: true });
     touchStart = { cx: e.clientX, cy: e.clientY };
     touchDragging = false;
     clearTimeout(touchHoldTimer);
@@ -535,7 +566,7 @@ export function renderVnc(body, win) {
   img.addEventListener("mousedown", (e) => {
     if (!controlEnabled()) return;
     e.preventDefault();
-    img.focus(); // damit Tastatureingaben ankommen
+    img.focus({ preventScroll: true }); // damit Tastatureingaben ankommen
     mouseDown = true;
     const { x, y } = mapCoords(e.clientX, e.clientY);
     const button = e.button === 2 ? "right" : "left";
@@ -636,6 +667,7 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
     dashboardSocket.off("screen-clipboard", onClipboard);
+    try { areaObserver?.disconnect(); } catch (e) {}
     dashboardSocket.emit("screen-stop", { clientId });
     if (rdpActive) dashboardSocket.emit("rdp-stop", { clientId });
     window.removeEventListener("mouseup", onMouseUp);
