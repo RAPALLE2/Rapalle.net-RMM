@@ -372,7 +372,7 @@ export const PRESETS = [
   {
     id: "fleet.agentDist", scope: "fleet", group: "Verteilung", get label() { return t("mk_fleet_agentDist"); },
     charts: ["pie", "table"],
-    rows: (s) => distByDevice(hosts(s), (c) => c.agent_version || "unbekannt"),
+    rows: (s) => distByDevice(hosts(s), (c) => c.agent_version || t("unknown")),
   },
   // ---------- FLOTTEN-ÜBERSICHT (interaktive Donuts wie im Dashboard) ----------
   // Diese drei Presets sind die frühere feste "Flotten-Übersicht" - jetzt als
@@ -397,8 +397,8 @@ export const PRESETS = [
   {
     id: "fleet.versionDonut", scope: "fleet", group: "Flotten-Übersicht",
     get label() { return t("u_agent_versionen"); }, charts: ["fleetdonut", "pie", "bar", "table"],
-    segments: (s) => segByDevice(hosts(s), (c) => c.agent_version || "unbekannt"),
-    rows: (s) => distByDevice(hosts(s), (c) => c.agent_version || "unbekannt"),
+    segments: (s) => segByDevice(hosts(s), (c) => c.agent_version || t("unknown")),
+    rows: (s) => distByDevice(hosts(s), (c) => c.agent_version || t("unknown")),
   },
   {
     // Kompakte "Flotten-Übersicht" als EIN Widget: Online/Offline, Betriebs-
@@ -408,7 +408,7 @@ export const PRESETS = [
     sections: (s) => [
       { title: "Online / Offline", rows: statusRows(s, false) },
       { title: "Betriebssysteme", rows: distByDevice(hosts(s), (c) => osKey(c)) },
-      { title: "Agent-Versionen", rows: distByDevice(hosts(s), (c) => c.agent_version || "unbekannt") },
+      { title: "Agent-Versionen", rows: distByDevice(hosts(s), (c) => c.agent_version || t("unknown")) },
     ],
   },
 
@@ -425,19 +425,28 @@ export const PRESETS = [
   },
   {
     id: "fleet.warrantyStatus", scope: "fleet", group: "Garantie",
-    label: "Garantie-Status (Verteilung)", charts: ["donut", "pie", "table", "bar"],
+    get label() { return t("mc_warranty_dist"); }, charts: ["donut", "pie", "table", "bar"],
     rows: (s) => {
+      // Die Kategorie wird als ÜBERSETZTER Text gebildet, Farbe und Reihenfolge
+      // haengen aber an einem internen Schluessel. Vorher war der deutsche Text
+      // gleichzeitig Anzeige, Farb-Schluessel UND Sortierschluessel - auf
+      // Englisch waeren damit Farben und Sortierung verlorengegangen.
       const days = (c) => (c.warranty_until - Date.now()) / 86400000;
-      const bucket = (c) => !c.warranty_until ? "kein Datum"
-        : days(c) < 0 ? "Abgelaufen"
-        : days(c) <= 30 ? "\u2264 30 Tage"
-        : days(c) <= 90 ? "\u2264 90 Tage" : "> 90 Tage";
-      const COLORS = { "Abgelaufen": "#ff4d6d", "\u2264 30 Tage": "#ff8b3d",
-                       "\u2264 90 Tage": "#f5a524", "> 90 Tage": "#3ecf8e",
-                       "kein Datum": "#64748b" };
-      const order = ["Abgelaufen", "\u2264 30 Tage", "\u2264 90 Tage", "> 90 Tage", "kein Datum"];
-      const rows = distByDevice(hosts(s), bucket, (label) => COLORS[label] || "#64748b");
-      const rank = (r) => order.findIndex((o) => r.label.startsWith(o));
+      const bucketKey = (c) => !c.warranty_until ? "none"
+        : days(c) < 0 ? "expired"
+        : days(c) <= 30 ? "d30"
+        : days(c) <= 90 ? "d90" : "over90";
+      const LABEL = { expired: t("mc_w_expired"), d30: "\u2264 30 " + t("au_days"),
+                      d90: "\u2264 90 " + t("au_days"), over90: "> 90 " + t("au_days"),
+                      none: t("mc_w_nodate") };
+      const COLORS = { expired: "#ff4d6d", d30: "#ff8b3d", d90: "#f5a524",
+                       over90: "#3ecf8e", none: "#64748b" };
+      const order = ["expired", "d30", "d90", "over90", "none"];
+      const bucket = (c) => LABEL[bucketKey(c)];
+      const colorOf = {};
+      for (const k of order) colorOf[LABEL[k]] = COLORS[k];
+      const rows = distByDevice(hosts(s), bucket, (label) => colorOf[label] || "#64748b");
+      const rank = (r) => order.findIndex((o) => r.label.startsWith(LABEL[o]));
       return rows.sort((a, b) => (rank(a) - rank(b)) || (a.kind === "phys" ? -1 : 1));
     },
   },
@@ -451,17 +460,17 @@ export const PRESETS = [
     rows: (s) => hosts(s).map((c) => {
       const has = !!c.warranty_until;
       const days = has ? Math.floor((c.warranty_until - Date.now()) / 86400000) : null;
-      const date = has ? new Date(c.warranty_until).toLocaleDateString("de-DE") : null;
+      const date = has ? new Date(c.warranty_until).toLocaleDateString() : null;
       const color = !has ? "#64748b"
         : days < 0 ? "#ff4d6d" : days <= 30 ? "#ff8b3d" : days <= 90 ? "#f5a524" : "#3ecf8e";
-      const text = !has ? "kein Datum"
-        : days < 0 ? `abgelaufen (${Math.abs(days)} T.)`
-        : days > 365 ? `noch ${Math.floor(days / 365)} J. ${Math.floor((days % 365) / 30)} Mon.`
-        : days > 60 ? `noch ${Math.floor(days / 30)} Monate` : `noch ${days} Tage`;
+      const text = !has ? t("mc_w_nodate")
+        : days < 0 ? t("mc_w_expired_days", { n: Math.abs(days) })
+        : days > 365 ? t("dw_years_left", { y: Math.floor(days / 365), m: Math.floor((days % 365) / 30) })
+        : days > 60 ? t("dw_months_left", { n: Math.floor(days / 30) }) : t("dw_days_left", { n: days });
       return {
         label: c.hostname || c.id,
         value: has ? Math.max(0, days) : 0,
-        raw: has ? `${text} (bis ${date})` : "kein Datum",
+        raw: has ? t("mc_w_until", { text, date }) : t("mc_w_nodate"),
         status: text, until: date, days, color,
         kind: deviceKind(c),
       };
@@ -568,7 +577,7 @@ export const PRESETS = [
   {
     id: "host.deviceTypeList", scope: "perhost", group: "Identität", get label() { return t("mk_host_deviceTypeList"); },
     charts: ["table"],
-    rows: (s) => hosts(s).map((c) => ({ label: c.hostname, raw: ({ vm: "VM", lxc: "LXC", physical: "Physisch" }[c.device_type || "physical"]) })),
+    rows: (s) => hosts(s).map((c) => ({ label: c.hostname, raw: ({ vm: "VM", lxc: "LXC", physical: t("mc_physical") }[c.device_type || "physical"]) })),
   },
   // ---------- RAM/GPU/Disk-Aggregate über die Flotte ----------
   {
@@ -744,6 +753,6 @@ function fmtUptime(sec) {
 // übersetzen, greifen diese Filter still nicht mehr und VMs bekämen
 // plötzlich GPU- und Hardware-Panels angeboten.
 export function groupLabel(group) {
-  const keys = {"CPU": "mg_cpu", "GPU": "mg_gpu", "RAM": "mg_ram", "Disk": "mg_disk", "Netzwerk": "mg_netzwerk", "Strom & Sensoren": "mg_strom_sensoren", "Hardware": "mg_hardware", "System": "mg_system", "Identität": "mg_identit_t", "Flotte": "mg_flotte", "Verteilung": "mg_verteilung", "Strom": "mg_strom", "Sensorik": "mg_sensorik", "Temperatur": "mg_temperatur", "Updates": "mg_updates"};
+  const keys = {"CPU": "mg_cpu", "GPU": "mg_gpu", "RAM": "mg_ram", "Disk": "mg_disk", "Netzwerk": "mg_netzwerk", "Strom & Sensoren": "mg_strom_sensoren", "Hardware": "mg_hardware", "System": "mg_system", "Identität": "mg_identit_t", "Flotten-Übersicht": "mg_fleet_overview", "Garantie": "mg_warranty", "Flotte": "mg_flotte", "Verteilung": "mg_verteilung", "Strom": "mg_strom", "Sensorik": "mg_sensorik", "Temperatur": "mg_temperatur", "Updates": "mg_updates"};
   return keys[group] ? t(keys[group]) : group;
 }

@@ -139,7 +139,7 @@ export function renderNotifyCenter(body, win) {
         <span id="nc-counts" style="font-size:11px;color:var(--subtext)"></span>
         <span style="flex:1"></span>
         <button class="taskbar-btn" id="nc-markall">✓ Alle als gelesen</button>
-        <button class="taskbar-btn" id="nc-delread" style="border-color:var(--danger);color:var(--danger);display:none">🗑 Alle gelesenen löschen</button>
+        <button class="taskbar-btn" id="nc-delread" style="border-color:var(--danger);color:var(--danger);display:none">🗑 ${t("nc_clear_read")}</button>
       </div>
       <div id="nc-list" style="flex:1;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:8px"></div>
       <div id="nc-empty" style="display:none;color:var(--subtext);font-size:13px;padding:14px;text-align:center"></div>

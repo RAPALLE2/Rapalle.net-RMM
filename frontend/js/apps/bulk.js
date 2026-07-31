@@ -22,15 +22,14 @@ export function renderBulk(body, win) {
       <div class="settings-section">
         <h3>Bulk Remote Shell</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Wähle Geräte aus und führe einen Befehl oder ein gespeichertes Skript
-          gleichzeitig auf allen aus.
+          ${t("bk_hint")}
         </p>
 
         <div class="form-row">
-          <label>Geräte auswählen (${clients.length} online)</label>
+          <label>${t("bk_pick_devices", { n: clients.length })}</label>
           <div style="max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px">
             <label style="display:block;padding:3px 0;font-size:13px">
-              <input type="checkbox" id="bulk-all" /> <b>Alle auswählen</b>
+              <input type="checkbox" id="bulk-all" /> <b>${t("bk_select_all")}</b>
             </label>
             ${clients.map((c) => `
               <label style="display:block;padding:3px 0;font-size:13px">
@@ -42,16 +41,16 @@ export function renderBulk(body, win) {
         </div>
 
         <div class="form-row">
-          <label>Gespeichertes Skript einsetzen (optional)</label>
-          <button class="taskbar-btn" id="bulk-script" style="width:auto;align-self:flex-start;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 Skript wählen…</button>
+          <label>${t("bk_use_script")}</label>
+          <button class="taskbar-btn" id="bulk-script" style="width:auto;align-self:flex-start;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 ${t("bk_pick_script")}</button>
         </div>
 
         <div class="form-row">
-          <label>Befehl</label>
+          <label>${t("bk_command")}</label>
           <textarea id="bulk-cmd" style="min-height:60px;font-family:monospace;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" placeholder="z.B. hostname"></textarea>
         </div>
 
-        <button class="btn-primary" id="bulk-run" style="margin-top:4px">⚡ Auf allen ausgewählten ausführen</button>
+        <button class="btn-primary" id="bulk-run" style="margin-top:4px">⚡ ${t("bk_run_all")}</button>
 
         <h3 style="margin-top:24px">Ergebnisse</h3>
         <div id="bulk-results"></div>
@@ -78,10 +77,10 @@ export function renderBulk(body, win) {
       const command = body.querySelector("#bulk-cmd").value.trim();
       const resultsEl = body.querySelector("#bulk-results");
 
-      if (!selected.length) { resultsEl.innerHTML = `<span style="color:var(--warn)">Keine Geräte ausgewählt.</span>`; return; }
-      if (!command) { resultsEl.innerHTML = `<span style="color:var(--warn)">Kein Befehl eingegeben.</span>`; return; }
+      if (!selected.length) { resultsEl.innerHTML = `<span style="color:var(--warn)">${t("bk_none_selected")}</span>`; return; }
+      if (!command) { resultsEl.innerHTML = `<span style="color:var(--warn)">${t("bk_no_command")}</span>`; return; }
 
-      resultsEl.innerHTML = `<span style="color:var(--subtext)">Führe auf ${selected.length} Geräten aus...</span>`;
+      resultsEl.innerHTML = `<span style="color:var(--subtext)">${t("bk_running", { n: selected.length })}</span>`;
       try {
         const results = await api.bulkExec(selected, command);
         // results: { clientId: {ok, stdout, stderr, code, error} }

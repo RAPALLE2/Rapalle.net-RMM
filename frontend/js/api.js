@@ -52,37 +52,41 @@ function _permissionDialog(message, path) {
 
 // Technische Rechte-Schlüssel in Klartext. Unbekannte Schlüssel werden
 // unverändert durchgereicht - besser der Schlüssel als gar nichts.
-const _PERM_TEXT = {
-  admin_settings: "Server-Einstellungen ändern",
-  manage_settings: "Einstellungen ändern",
-  see_source: "Quellcode ansehen",
-  edit_source: "Quellcode bearbeiten",
-  see_audit: "Audit-Log ansehen",
-  see_permissions: "Berechtigungen ansehen",
-  manage_permissions: "Berechtigungen ändern",
-  create_users: "Benutzer anlegen",
-  manage_clients: "Client bearbeiten",
-  manage_agent: "Agent aktualisieren",
-  access_clients: "auf diesen Client zugreifen",
-  c_terminal: "Terminal öffnen",
-  c_screen: "Remote-Bildschirm starten",
-  c_explorer_view: "Dateien ansehen",
-  c_explorer_edit: "Dateien ändern",
-  c_taskmanager_view: "Task-Manager öffnen",
-  c_taskmanager_kill: "Prozesse beenden",
-  c_power: "Client herunterfahren oder neu starten",
-  c_relay: "Relay freigeben",
-  c_delete: "Client löschen",
-  use_relay: "das Relay benutzen",
-  ticket_create: "ein Ticket erstellen",
-  manage_privacy: "Datenschutz-Vorgänge bearbeiten",
-  manage_patching: "Updates verwalten",
-  customize_dashboard: "das Dashboard anpassen",
+// Technische Rechte-Schluessel -> Uebersetzungsschluessel. Bewusst NUR die
+// Schluesselnamen: Diese Tabelle wird beim Laden des Moduls ausgewertet, da
+// steht die Sprache noch nicht fest. Ein t() direkt in der Tabelle wuerde den
+// Text auf die Ladezeit-Sprache einfrieren. Uebersetzt wird erst in permText().
+const _PERM_KEY = {
+  admin_settings: "perm_admin_settings",
+  manage_settings: "perm_manage_settings",
+  see_source: "perm_see_source",
+  edit_source: "perm_edit_source",
+  see_audit: "perm_see_audit",
+  see_permissions: "perm_see_permissions",
+  manage_permissions: "perm_manage_permissions",
+  create_users: "perm_create_users",
+  manage_clients: "perm_manage_clients",
+  manage_agent: "perm_manage_agent",
+  access_clients: "perm_access_clients",
+  c_terminal: "perm_c_terminal",
+  c_screen: "perm_c_screen",
+  c_explorer_view: "perm_c_explorer_view",
+  c_explorer_edit: "perm_c_explorer_edit",
+  c_taskmanager_view: "perm_c_taskmanager_view",
+  c_taskmanager_kill: "perm_c_taskmanager_kill",
+  c_power: "perm_c_power",
+  c_relay: "perm_c_relay",
+  c_delete: "perm_c_delete",
+  use_relay: "perm_use_relay",
+  ticket_create: "perm_ticket_create",
+  manage_privacy: "perm_manage_privacy",
+  manage_patching: "perm_manage_patching",
+  customize_dashboard: "perm_customize_dashboard",
 };
 
 function _actionFromPerm(perm) {
   if (!perm) return null;
-  return _PERM_TEXT[perm] || perm;
+  return _PERM_KEY[perm] ? t(_PERM_KEY[perm]) : perm;
 }
 
 async function request(path, options = {}) {
@@ -93,7 +97,7 @@ async function request(path, options = {}) {
   const res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
 
   if (!res.ok) {
-    let message = `Fehler ${res.status}`;
+    let message = `${t("error")} ${res.status}`;
     let hadDetail = false;
     try {
       const body = await res.json();
@@ -104,9 +108,7 @@ async function request(path, options = {}) {
     // eine Begründung mit. Kommt stattdessen HTML oder gar nichts, hat ein
     // Proxy/Rate-Limiter davor (Cloudflare, nginx, ...) abgewiesen.
     if (res.status === 429 && !hadDetail) {
-      message = "Die Anfrage wurde von einem vorgeschalteten Proxy abgewiesen "
-        + "(429, zu viele Anfragen). Das kommt nicht vom RMM selbst - bitte das "
-        + "Rate-Limit bei Cloudflare bzw. dem Reverse Proxy prüfen.";
+      message = t("api_proxy_429");
     }
     // Fehlt ein Recht, soll der Benutzer nicht nur eine rote Zeile sehen,
     // sondern gleich die Möglichkeit bekommen, sich beim Support zu melden.
@@ -381,7 +383,7 @@ export const api = {
     const res = await fetch(`${BACKEND_URL}${path}`, {
       headers: { Authorization: `Bearer ${getToken()}` } });
     if (!res.ok) {
-      let msg = `Fehler ${res.status}`;
+      let msg = `${t("error")} ${res.status}`;
       try { msg = (await res.json()).detail || msg; } catch {}
       throw new Error(msg);
     }
@@ -582,9 +584,9 @@ export const api = {
       let body = {};
       try { body = JSON.parse(xhr.responseText || "{}"); } catch {}
       if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-      else reject(new Error(body.detail || `Fehler ${xhr.status}`));
+      else reject(new Error(body.detail || `${t("error")} ${xhr.status}`));
     };
-    xhr.onerror = () => reject(new Error("Verbindung zum Server verloren"));
+    xhr.onerror = () => reject(new Error(t("api_conn_lost")));
     xhr.send(file);
   }),
   sourceList: (path = "") => request(`/api/source/list?path=${encodeURIComponent(path)}`),

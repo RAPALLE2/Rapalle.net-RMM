@@ -234,7 +234,7 @@ export function renderSudoku(body) {
           <option value="54">Schwer</option>
         </select>
         <button class="btn-primary" id="su-new" style="margin:0;width:auto;font-size:12px">🎲 Neues Spiel</button>
-        <button class="taskbar-btn" id="su-check" style="font-size:12px">✔ Prüfen</button>
+        <button class="taskbar-btn" id="su-check" style="font-size:12px">✔ ${t("mi_check")}</button>
         <span id="su-msg" style="font-weight:700"></span>
       </div>
       <div id="su-grid"></div>
@@ -434,9 +434,9 @@ export function renderMinesweeper(body) {
     <div style="display:flex;flex-direction:column;height:100%;align-items:center;background:#0a1420;overflow:auto;padding:12px">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:13px;flex-wrap:wrap;justify-content:center">
         <select id="ms-size" style="font-size:12px">
-          <option value="9,9,10">Klein (9×9, 10 💣)</option>
-          <option value="12,10,16" selected>Mittel (12×10, 16 💣)</option>
-          <option value="18,12,36">Groß (18×12, 36 💣)</option>
+          <option value="9,9,10">${t("mi_small")} (9×9, 10 💣)</option>
+          <option value="12,10,16" selected>${t("mi_medium")} (12×10, 16 💣)</option>
+          <option value="18,12,36">${t("mi_large")} (18×12, 36 💣)</option>
         </select>
         <button class="btn-primary" id="ms-new" style="margin:0;width:auto;font-size:12px">🎲 Neu</button>
         <span>🚩 <b id="ms-flags">0</b>/<b id="ms-mines">0</b></span>

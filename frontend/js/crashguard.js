@@ -91,7 +91,7 @@ function _onError(ev) {
 function _panic(reason) {
   if (_panicking) return;
   _panicking = true;
-  _report(`Fehlerhäufung erkannt (${reason}) – nur protokolliert, kein Eingriff.`, "frontend.crash");
+  _report(`error burst detected (${reason}) – logged only, no intervention.`, "frontend.crash");
   _errTimes = [];
   _freezeStrikes = 0;
   // Panik-Sperre nach kurzer Zeit wieder lösen, damit weitere Häufungen erneut

@@ -31,6 +31,10 @@ from pydantic import BaseModel
 from app import db
 from app.auth import get_current_user, require_admin, require_perm
 from app.config import AGENT_TOKEN
+# Sprache der erzeugten Skripte: Die laufen SPAETER auf einem fremden
+# Rechner - dort gibt es weder Anmeldung noch Servereinstellung. Die
+# Sprache muss deshalb beim Erzeugen feststehen (?lang=de|en).
+from app.i18n import t as _t, _norm as _lang, server_lang
 
 router = APIRouter(tags=["enrollment"])
 
@@ -249,6 +253,11 @@ def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.B
         f"AGENT_TOKEN={AGENT_TOKEN}\n"
         f"ENROLLMENT_TOKEN={enrollment_token}\n"
         f"DEVICE_NAME=\n"
+        # Sprache der Dialoge AM GERAET (Zustimmung zum Remote-Bildschirm).
+        # Das ist NICHT die Dashboard-Sprache: den Dialog sieht die Person vor
+        # dem Geraet, und mehrere Dashboard-Benutzer mit verschiedenen Sprachen
+        # koennen dasselbe Geraet ansehen. de|en, Voreinstellung de.
+        f"AGENT_LANG=de\n"
     )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -289,10 +298,15 @@ async def download_agent_zip(token: str, request: Request):
 
 
 @router.get("/enroll/{token}/install.sh", response_class=PlainTextResponse)
-async def install_script_linux(token: str, request: Request):
+async def install_script_linux(token: str, request: Request, lang: str = ""):
     """Fertiger Bash-Einzeiler: installiert den Agenten inkl. systemd-Autostart (Linux)."""
     _require_valid_token(token)
     backend_url = _backend_url(request)
+
+    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    _L = _lang(lang) if lang else server_lang()
+    def L(key, **kw):
+        return _t(key, _L, **kw)
 
     script = f"""#!/bin/bash
 # RAPALLE.net RMM - automatische Agent-Installation (Linux)
@@ -401,10 +415,15 @@ echo "Status prüfen mit: sudo systemctl status rapalle-agent"
 
 
 @router.get("/enroll/{token}/install.ps1", response_class=PlainTextResponse)
-async def install_script_windows(token: str, request: Request):
+async def install_script_windows(token: str, request: Request, lang: str = ""):
     """Fertiges PowerShell-Skript: installiert den Agenten inkl. Autostart (Windows)."""
     _require_valid_token(token)
     backend_url = _backend_url(request)
+
+    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    _L = _lang(lang) if lang else server_lang()
+    def L(key, **kw):
+        return _t(key, _L, **kw)
 
     script = f"""# RAPALLE.net RMM - automatische Agent-Installation (Windows)
 $ErrorActionPreference = "Stop"
@@ -571,7 +590,7 @@ async def agent_dist_zip(request: Request):
 
 
 @router.get("/agent-dist/update.sh", response_class=PlainTextResponse)
-async def agent_update_sh(request: Request):
+async def agent_update_sh(request: Request, lang: str = ""):
     """
     Aktualisiert den Agenten (Linux) und startet den Autostart-Dienst NEU.
     Die systemd-Unit wird sicherheitshalber neu geschrieben, damit der Neustart
@@ -579,6 +598,11 @@ async def agent_update_sh(request: Request):
     bleibt erhalten -> gleiche Client-Identität.
     """
     backend_url = _backend_url(request)
+    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    _L = _lang(lang) if lang else server_lang()
+    def L(key, **kw):
+        return _t(key, _L, **kw)
+
     script = f"""#!/bin/bash
 # RAPALLE.net RMM - Agent-Update (Linux)
 set -e
@@ -593,17 +617,17 @@ fi
 # Alles mitprotokollieren - das Skript laeuft losgeloest ohne Terminal.
 sudo mkdir -p "$INSTALL_DIR"
 exec > >(sudo tee -a "$INSTALL_DIR/update.log") 2>&1
-echo "=== RAPALLE.net RMM - Agent NEU AUSROLLEN ($(date)) ==="
+echo "=== {L('ins_upd_title')} ($(date)) ==="
 
 # --- 1. Neues Paket holen ---------------------------------------------------
-echo "Lade neueste Agent-Version..."
+echo "{L('ins_downloading')}"
 curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/rapalle-agent.zip
 rm -rf /tmp/rapalle-agent-extract
 mkdir -p /tmp/rapalle-agent-extract
 unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract >/dev/null
 
 # --- 2. Laufenden Agenten stoppen -------------------------------------------
-echo "Stoppe laufenden Agenten..."
+echo "{L('ins_stopping')}"
 sudo systemctl stop rapalle-agent 2>/dev/null || true
 sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
 sleep 2
@@ -620,12 +644,12 @@ done
 # --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
 # Alte .pyc, verwaiste Skripte und eine halb kaputte venv sollen weg. Nur die
 # Logdateien bleiben fuer die Fehlersuche stehen.
-echo "Raeume alten Programmordner auf..."
+echo "{L('ins_cleaning')}"
 sudo find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
      ! -name 'agent.log' ! -name 'update.log' -exec rm -rf {{}} ';' 2>/dev/null || true
 
 # --- 5. Neue Dateien auslegen (rekursiv) ------------------------------------
-echo "Rolle neue Agent-Dateien aus..."
+echo "{L('ins_deploying')}"
 sudo cp -a /tmp/rapalle-agent-extract/agent/. "$INSTALL_DIR/"
 for f in .env .device-id; do
   [ -f "$KEEP/$f" ] && sudo cp "$KEEP/$f" "$INSTALL_DIR/$f"
@@ -640,19 +664,19 @@ cd "$INSTALL_DIR"
 # faellt der Dienst auf das System-Python zurueck statt gar nicht zu starten.
 SYSPY="$(command -v python3 || true)"
 if [ -n "$SYSPY" ]; then
-  echo "Baue virtuelle Umgebung neu mit $SYSPY ..."
+  echo "{L('ins_venv', py='$SYSPY')}"
   sudo rm -rf "$INSTALL_DIR/venv.new"
   if sudo "$SYSPY" -m venv "$INSTALL_DIR/venv.new" 2>/dev/null; then
     sudo rm -rf "$INSTALL_DIR/venv"
     sudo mv "$INSTALL_DIR/venv.new" "$INSTALL_DIR/venv"
   else
-    echo "WARNUNG: venv konnte nicht gebaut werden (python3-venv installiert?)."
+    echo "{L('ins_warn_venv')}"
     sudo rm -rf "$INSTALL_DIR/venv.new"
   fi
 fi
 if [ -x "$INSTALL_DIR/venv/bin/python" ]; then
   PYEXEC="$INSTALL_DIR/venv/bin/python"
-  echo "Installiere Abhaengigkeiten..."
+  echo "{L('ins_deps')}"
   sudo "$INSTALL_DIR/venv/bin/pip" install --upgrade pip --quiet || true
   sudo "$INSTALL_DIR/venv/bin/pip" install -r requirements.txt
 else
@@ -689,10 +713,15 @@ echo "Update fertig - Agent neu gestartet."
 
 
 @router.get("/agent-dist/update.ps1", response_class=PlainTextResponse)
-async def agent_update_ps1(request: Request):
+async def agent_update_ps1(request: Request, lang: str = ""):
     """Aktualisiert den Agenten (Windows) und startet den Autostart-Task NEU
     (Task wird bei Bedarf neu registriert)."""
     backend_url = _backend_url(request)
+    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    _L = _lang(lang) if lang else server_lang()
+    def L(key, **kw):
+        return _t(key, _L, **kw)
+
     script = f"""# RAPALLE.net RMM - Agent-Update (Windows) - als Administrator ausfuehren
 $ErrorActionPreference = "Stop"
 $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
@@ -711,10 +740,10 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 # nachvollziehbar, WO es klemmte.
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 try {{ Start-Transcript -Path "$InstallDir\\update.log" -Force | Out-Null }} catch {{}}
-Write-Host "=== RAPALLE.net RMM - Agent NEU AUSROLLEN ($(Get-Date)) ==="
+Write-Host "=== {L('ins_upd_title')} ($(Get-Date)) ==="
 
 # --- 1. Neues Paket holen ---------------------------------------------------
-Write-Host "Lade neueste Agent-Version..."
+Write-Host "{L('ins_downloading')}"
 Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
 if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
 Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
@@ -723,7 +752,7 @@ $Src = "$env:TEMP\\rapalle-agent-extract\\agent"
 # --- 2. Laufenden Agenten UND Bildschirm-Helfer beenden ---------------------
 # Der Helfer (_screen_helper.py) laeuft in der Benutzersitzung und haelt sonst
 # eine alte Datei offen -> die neue Fassung wuerde erst nach Reboot greifen.
-Write-Host "Stoppe Agent und Bildschirm-Helfer..."
+Write-Host "{L('ins_stopping')}"
 try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
 try {{
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
@@ -745,13 +774,13 @@ foreach ($f in @(".env", ".device-id")) {{
 # --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
 # Bewusst alles weg: alte .pyc, verwaiste Helfer-Skripte und eine womoeglich
 # halb kaputte venv. Nur agent.log bleibt fuer die Fehlersuche stehen.
-Write-Host "Raeume alten Programmordner auf..."
+Write-Host "{L('ins_cleaning')}"
 Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue |
     Where-Object {{ $_.Name -notin @("agent.log", "update.log") }} |
     ForEach-Object {{ Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }}
 
 # --- 5. Neue Dateien auslegen (rekursiv, inkl. Unterordner) -----------------
-Write-Host "Rolle neue Agent-Dateien aus..."
+Write-Host "{L('ins_deploying')}"
 Copy-Item -Path "$Src\\*" -Destination $InstallDir -Recurse -Force
 foreach ($f in @(".env", ".device-id")) {{
     if (Test-Path "$Keep\\$f") {{ Copy-Item "$Keep\\$f" "$InstallDir\\$f" -Force }}
@@ -783,29 +812,29 @@ if (-not $SysPy) {{
     }}
 }}
 if ($SysPy) {{
-    Write-Host "Baue virtuelle Umgebung neu mit $SysPy ..."
+    Write-Host "{L('ins_venv', py='$SysPy')}"
     if (Test-Path "$InstallDir\\venv.new") {{ Remove-Item -Recurse -Force "$InstallDir\\venv.new" }}
     & $SysPy -m venv "$InstallDir\\venv.new"
     if ($LASTEXITCODE -eq 0 -and (Test-Path "$InstallDir\\venv.new\\Scripts\\python.exe")) {{
         if (Test-Path "$InstallDir\\venv") {{ Remove-Item -Recurse -Force "$InstallDir\\venv" -ErrorAction SilentlyContinue }}
         Rename-Item "$InstallDir\\venv.new" "venv"
     }} else {{
-        Write-Host "WARNUNG: Neue venv konnte nicht gebaut werden - nutze die vorhandene." -ForegroundColor Yellow
+        Write-Host "{L('ins_warn_venv')}" -ForegroundColor Yellow
         Remove-Item -Recurse -Force "$InstallDir\\venv.new" -ErrorAction SilentlyContinue
     }}
 }} else {{
-    Write-Host "WARNUNG: Kein System-Python gefunden - venv bleibt unveraendert." -ForegroundColor Yellow
+    Write-Host "{L('ins_warn_nopy')}" -ForegroundColor Yellow
 }}
 if (-not (Test-Path "$InstallDir\\venv\\Scripts\\python.exe")) {{
-    Write-Host "FEHLER: Keine lauffaehige venv vorhanden. Bitte install.ps1 erneut ausfuehren." -ForegroundColor Red
+    Write-Host "{L('ins_err_novenv')}" -ForegroundColor Red
     try {{ Stop-Transcript | Out-Null }} catch {{}}
     exit 1
 }}
-Write-Host "Installiere Abhaengigkeiten..."
+Write-Host "{L('ins_deps')}"
 & "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
 & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt"
 if ($LASTEXITCODE -ne 0) {{
-    Write-Host "FEHLER bei der Paket-Installation - Agent kann so nicht starten." -ForegroundColor Red
+    Write-Host "{L('ins_err_deps')}" -ForegroundColor Red
     try {{ Stop-Transcript | Out-Null }} catch {{}}
     exit 1
 }}
@@ -814,7 +843,7 @@ if ($LASTEXITCODE -ne 0) {{
 # Frueher wurde der Task nur angefasst, wenn er nicht auf SYSTEM lief. Dadurch
 # behielten Altinstallationen fehlerhafte Einstellungen (z.B. das 72-Stunden-
 # Zeitlimit) und der "neue" Agent verhielt sich weiter wie der alte.
-Write-Host "Registriere Autostart-Task neu (SYSTEM, beim Systemstart)..."
+Write-Host "{L('ins_task')}"
 $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
 $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
 $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
@@ -829,7 +858,7 @@ try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catc
 # --- 9. NEU STARTEN ---------------------------------------------------------
 New-Item -ItemType File -Force "$InstallDir\\.updated" | Out-Null
 Start-ScheduledTask -TaskName "RapalleRmmAgent"
-Write-Host "=== Neuausrollung fertig - Agent neu gestartet. ==="
+Write-Host "=== {L('ins_done')} ==="
 try {{ Stop-Transcript | Out-Null }} catch {{}}
 """
     return PlainTextResponse(script, media_type="text/plain")
@@ -948,13 +977,18 @@ Write-Host "Pruefen mit:  schtasks /query /tn RapalleRmmUninstall"
 
 
 @router.get("/agent-dist/uninstall.sh", response_class=PlainTextResponse)
-async def agent_uninstall_sh(request: Request):
+async def agent_uninstall_sh(request: Request, lang: str = ""):
     """
     Deinstalliert den Agenten (Linux) SYNCHRON: Dienst stoppen/entfernen,
     Prozesse killen, dann Programmordner löschen. Läuft in einem eigenen
     systemd-Scope (siehe agent.py), daher überlebt das Skript den Stop des
     eigenen Dienstes und löscht die Dateien tatsächlich. KEIN Hintergrund-Job.
     """
+    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    _L = _lang(lang) if lang else server_lang()
+    def L(key, **kw):
+        return _t(key, _L, **kw)
+
     script = """#!/bin/bash
 # RAPALLE.net RMM - Agent-Deinstallation (Linux)
 # Laeuft in einem eigenen systemd-Scope (siehe agent.py) und ueberlebt daher
@@ -999,12 +1033,17 @@ fi
 
 
 @router.get("/agent-dist/uninstall.ps1", response_class=PlainTextResponse)
-async def agent_uninstall_ps1(request: Request):
+async def agent_uninstall_ps1(request: Request, lang: str = ""):
     """
     Deinstalliert den Agenten (Windows) SYNCHRON: Task entfernen, Prozesse
     killen, dann Programmordner löschen (kein Start-Job, der beim Beenden der
     Shell abgebrochen würde).
     """
+    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    _L = _lang(lang) if lang else server_lang()
+    def L(key, **kw):
+        return _t(key, _L, **kw)
+
     script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows)
 # Wird bevorzugt als SYSTEM-Task ausgefuehrt (elevated). Reihenfolge:
 # Autostart entfernen -> Prozesse hart beenden -> alle Daten loeschen.

@@ -65,59 +65,51 @@ export function renderProfile(body, win) {
       <div class="form-row">
         <label>Symbole</label>
         <select id="pr-icons">
-          <option value="svg">SVG-Icons (empfohlen, auf jedem System gleich)</option>
-          <option value="emoji">System-Emojis</option>
+          <option value="svg">${t("pr_icons_svg")}</option>
+          <option value="emoji">${t("pr_icons_emoji")}</option>
         </select>
       </div>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
-        SVG-Icons sehen auf Windows, Linux, macOS und Android identisch aus.
-        System-Emojis nutzen die Emoji-Schrift des Geräts (kann auf Linux/Android
-        fehlen und als leere Kästchen erscheinen).
+        ${t("pr_icons_hint")}
       </p>
-      <button class="btn-primary" id="pr-save" style="margin-top:6px">Profil speichern</button>
+      <button class="btn-primary" id="pr-save" style="margin-top:6px">${t("pr_save")}</button>
 
       <h3 style="margin-top:26px" ${mayCustomizeDash ? "" : 'hidden'}>Dashboard</h3>
       <div class="form-row" style="align-items:center" ${mayCustomizeDash ? "" : 'hidden'}>
-        <label>Layout-Bearbeitung</label>
+        <label>${t("pr_layout_edit")}</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-dashedit" ${getDashEdit() ? "checked" : ""} />
-          Ansichten frei verschieben, in Größe ändern & Ordner anpassen
+          ${t("pr_layout_edit_label")}
         </label>
       </div>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${mayCustomizeDash ? "" : 'hidden'}>
-        Ist die Bearbeitung an, kannst du in der Client-Ansicht Status, Aktionen und
-        Übersicht-Ordner per Ziehen anordnen, ihre Breite ziehen, weitere Ordner
-        anlegen und Sub-Ansichten (Metrics/Notes/Disk) zwischen Ordnern verschieben.
-        Über das ↗️-Symbol lässt sich jeder Baustein als eigenes Fenster herauslösen
-        (auch ohne Bearbeitung). Clients kannst du aus der Seitenleiste direkt auf
-        die Arbeitsfläche ziehen.
+        ${t("pr_layout_edit_hint")}
       </p>
 
-      <h3 style="margin-top:26px" ${mayRestore ? "" : "hidden"}>Nach dem Anmelden</h3>
+      <h3 style="margin-top:26px" ${mayRestore ? "" : "hidden"}>${t("pr_after_login")}</h3>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${mayRestore ? "" : "hidden"}>
-        Lege fest, was beim erneuten Anmelden wiederhergestellt wird. Ist ein Punkt
-        deaktiviert, startest du an dieser Stelle „sauber" vom Dashboard.
+        ${t("pr_restore_hint")}
       </p>
       <div class="form-row" style="align-items:center" ${mayRestore ? "" : "hidden"}>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-restore-client" ${_rp.client ? "checked" : ""} />
-          Zuletzt geöffneten Client wiederherstellen
+          ${t("pr_restore_client")}
         </label>
       </div>
       <div class="form-row" style="align-items:center" ${mayRestore ? "" : "hidden"}>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-restore-folder" ${_rp.folder ? "checked" : ""} />
-          Zuletzt geöffnete Ordner (Seitenleiste) wiederherstellen
+          ${t("pr_restore_folder")}
         </label>
       </div>
       <div class="form-row" style="align-items:center" ${mayRestore ? "" : "hidden"}>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
           <input type="checkbox" id="pr-restore-apps" ${_rp.apps ? "checked" : ""} />
-          Zuletzt geöffnete Apps/Fenster wiederherstellen
+          ${t("pr_restore_apps")}
         </label>
       </div>
 
-      <h3 style="margin-top:26px" ${maySilent ? "" : "hidden"}>Remote-Bildschirm</h3>
+      <h3 style="margin-top:26px" ${maySilent ? "" : "hidden"}>${t("remote_screen")}</h3>
       <style>
         /* Toggle-Schalter für den Silent-Modus */
         .pr-toggle { position:relative;display:inline-block;width:46px;height:24px;flex:none }
@@ -139,33 +131,26 @@ export function renderProfile(body, win) {
         <span id="pr-silent-state" style="font-size:13px;color:var(--subtext)">…</span>
       </div>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${maySilent ? "" : "hidden"}>
-        Ist der Modus aktiv, wird bei der nächsten Remote-Bildschirm-Sitzung der
-        Zustimmungs-Dialog am Gerät übersprungen. Nach dem Verbindungsaufbau
-        schaltet sich der Modus automatisch wieder aus. Nützlich z.B. wenn jemand
-        angemeldet, aber AFK ist und dringend etwas erledigt werden muss. Jede
-        Nutzung wird im Audit-Log protokolliert.
+        ${t("pr_silent_hint")}
       </p>
       <div id="pr-silent-msg" style="font-size:12px;color:var(--subtext)" ${maySilent ? "" : "hidden"}></div>
 
       <h3 style="margin-top:26px">Terminal</h3>
       <div class="form-row" style="align-items:center">
-        <label>Rechtsklick</label>
+        <label>${t("pr_rightclick")}</label>
         <select id="pr-term-rc" style="max-width:340px">
-          <option value="direct">Direkt: markiert = Kopieren, sonst Einfügen (PuTTY-Stil)</option>
-          <option value="menu">Kontextmenü: Kopieren / Einfügen / Alles kopieren</option>
+          <option value="direct">${t("pr_rc_direct")}</option>
+          <option value="menu">${t("pr_rc_menu")}</option>
         </select>
       </div>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
-        Shortcuts funktionieren immer: <b>Strg+Shift+C</b> kopieren (bzw. Strg+C
-        bei Markierung), <b>Strg+V</b> einfügen, <b>Strg+Einfg</b>/<b>Shift+Einfg</b>
-        klassisch. Die Einstellung wirkt sofort, auch in offenen Terminals.
+        ${t("pr_shortcuts_hint")}
       </p>
 
-      <h3 style="margin-top:26px">Passwort ändern</h3>
+      <h3 style="margin-top:26px">${t("pr_change_pw")}</h3>
       ${u.auth_realm ? `
       <p style="color:var(--subtext);font-size:13px;max-width:520px">
-        🔒 Dein Konto wird zentral über das Verzeichnis (AD/LDAP/SSO) verwaltet.
-        Das Passwort kann nur dort geändert werden — nicht im RMM.
+        🔒 ${t("pr_realm_pw")}
       </p>
       ` : `
       <div class="form-row">
@@ -177,16 +162,14 @@ export function renderProfile(body, win) {
         <input type="password" id="pr-new" />
       </div>
       <div id="pr-msg" style="margin:8px 0;font-size:13px"></div>
-      <button class="btn-primary" id="pr-changepw" style="margin-top:6px">Passwort ändern</button>
+      <button class="btn-primary" id="pr-changepw" style="margin-top:6px">${t("pr_change_pw")}</button>
       `}
 
-      <h3 style="margin-top:26px">Zwei-Faktor-Anmeldung</h3>
+      <h3 style="margin-top:26px">${t("pr_2fa")}</h3>
       <p style="color:var(--subtext);font-size:13px;max-width:560px">
-        Zusätzlich zum Passwort ein Einmalcode aus einer Authenticator-App
-        (Aegis, FreeOTP, Google/Microsoft Authenticator, 1Password, Bitwarden …).
-        Damit nützt ein gestohlenes Passwort allein nichts mehr.
+        ${t("pr_2fa_hint")}
       </p>
-      <div id="pr-2fa" style="max-width:560px">Lade…</div>
+      <div id="pr-2fa" style="max-width:560px">${t("loading")}</div>
     </div>
   `;
 
@@ -241,7 +224,7 @@ export function renderProfile(body, win) {
         }
       } catch (e) {
         if (silentMsg) silentMsg.textContent =
-          `Status nicht ladbar: ${e.message} - läuft das Backend mit der aktuellen Version (auth_routes.py/sockets.py)?`;
+          t("pr_status_unavailable", { msg: e.message });
       }
     };
     refresh();
@@ -257,7 +240,7 @@ export function renderProfile(body, win) {
       silentCb.checked = false;
       setStateText(false);
       if (silentMsg) silentMsg.textContent =
-        `Silent-Modus wurde für die Sitzung${e.detail?.client ? ` auf "${e.detail.client}"` : ""} genutzt und ist wieder AUS.`;
+        t("pr_silent_used", { on: e.detail?.client ? ` (${e.detail.client})` : "" });
     };
     window.addEventListener("silent-screen-consumed", onConsumed);
 
@@ -299,7 +282,7 @@ export function renderProfile(body, win) {
       } catch (err) {
         e.target.checked = !on;   // zurückrollen
         setStateText(!on);
-        if (silentMsg) silentMsg.textContent = `Fehler: ${err.message}`;
+        if (silentMsg) silentMsg.textContent = `${t("error")}: ${err.message}`;
       } finally {
         silentCb.disabled = false;
       }
@@ -376,7 +359,7 @@ export function renderProfile(body, win) {
         body.querySelector("#pr-cur").value,
         body.querySelector("#pr-new").value
       );
-      msg.innerHTML = `<span style="color:var(--accent)">Passwort geändert.</span>`;
+      msg.innerHTML = `<span style="color:var(--accent)">${t("pr_pw_changed")}</span>`;
       body.querySelector("#pr-cur").value = "";
       body.querySelector("#pr-new").value = "";
     } catch (e) {
@@ -401,7 +384,7 @@ async function render2fa(host) {
     status = await api.totpStatus();
   } catch {
     host.innerHTML = `<div style="color:var(--subtext);font-size:13px">
-      Dieses Backend unterstützt die Zwei-Faktor-Anmeldung noch nicht.</div>`;
+      ${t("pr_2fa_unsupported")}</div>`;
     return;
   }
 
@@ -411,9 +394,9 @@ async function render2fa(host) {
                   border:1px solid var(--accent);border-radius:8px">
         <span style="font-size:18px">🔐</span>
         <div style="flex:1">
-          <div style="color:var(--accent);font-weight:600;font-size:13px">Aktiv</div>
+          <div style="color:var(--accent);font-weight:600;font-size:13px">${t("pr_2fa_active")}</div>
           <div style="font-size:12px;color:var(--subtext)">
-            Noch ${status.backup_left} Wiederherstellungscodes übrig.
+            ${t("pr_2fa_codes_left", { n: status.backup_left })}
           </div>
         </div>
       </div>
@@ -483,7 +466,7 @@ async function render2fa(host) {
                    placeholder="123456" />
           </div>
           <button class="btn-primary" id="pr-2fa-confirm" style="width:auto;margin-top:6px">
-            Bestätigen und aktivieren</button>
+            ${t("pr_2fa_confirm")}</button>
           <div id="pr-2fa-err" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
         </div>
       </div>`;
@@ -513,19 +496,18 @@ function showBackupCodes(host, codes, activated = false) {
   host.innerHTML = `
     <div style="border:1px solid var(--warn,#f5a524);border-radius:8px;padding:12px">
       <div style="font-weight:600;font-size:13px;margin-bottom:4px">
-        ${activated ? "🔐 Aktiv – " : ""}Wiederherstellungscodes</div>
+        ${activated ? `🔐 ${t("pr_2fa_active")} – ` : ""}${t("pr_2fa_codes")}</div>
       <div style="font-size:12px;color:var(--subtext);margin-bottom:8px">
-        Jetzt sichern: Sie werden <b>nur dieses eine Mal</b> angezeigt. Mit einem
-        dieser Codes kommst du auch ohne Handy hinein – jeder gilt einmal.
+        ${t("pr_2fa_codes_hint")}
       </div>
       <pre style="background:var(--panel-2);padding:10px;border-radius:6px;
                   font-size:13px;letter-spacing:1px;margin:0">${codes.map(esc).join("\n")}</pre>
-      <button class="action-btn" id="pr-2fa-copy" style="margin-top:8px">Kopieren</button>
-      <button class="action-btn" id="pr-2fa-done" style="margin-top:8px">Fertig</button>
+      <button class="action-btn" id="pr-2fa-copy" style="margin-top:8px">${t("copy")}</button>
+      <button class="action-btn" id="pr-2fa-done" style="margin-top:8px">${t("done")}</button>
     </div>`;
   host.querySelector("#pr-2fa-copy").addEventListener("click", () => {
     navigator.clipboard?.writeText(codes.join("\n"));
-    window.notify?.("Codes in die Zwischenablage kopiert", "success");
+    window.notify?.(t("pr_2fa_copied"), "success");
   });
   host.querySelector("#pr-2fa-done").addEventListener("click", () => render2fa(host));
 }
@@ -542,15 +524,10 @@ function showBackupCodes(host, codes, activated = false) {
 async function askConfirmation(status, title) {
   const isRealm = !!status.realm;
   const value = await uiPrompt(title, {
-    description: isRealm
-      ? "Dein Konto wird über ein Verzeichnis (AD/LDAP/SSO) verwaltet.\n"
-        + "Gib einen aktuellen Code aus der Authenticator-App ein – oder dein "
-        + "Verzeichnis-Passwort."
-      : "Zur Sicherheit bitte das eigene Passwort eingeben – "
-        + "ein aktueller Code aus der App geht auch.",
-    placeholder: isRealm ? "123456 oder Passwort" : "Passwort oder 123456",
+    description: isRealm ? t("pr_confirm_realm") : t("pr_confirm_local"),
+    placeholder: isRealm ? t("pr_confirm_ph_realm") : t("pr_confirm_ph_local"),
     type: "password",
-    okText: "Bestätigen",
+    okText: t("pr_confirm_ok"),
   });
   if (!value) return null;
   // Reine Ziffern in TOTP-Länge bzw. das Format der Wiederherstellungscodes

@@ -48,13 +48,13 @@ export function renderAutomation(body, win) {
           </div>
         </div>
         <div class="form-row">
-          <label>Ausführen alle</label>
+          <label>${t("au_run_every")}</label>
           <div style="display:flex;gap:8px">
             <input type="number" id="au-interval" value="60" min="1" style="width:100px" />
             <select id="au-unit">
-              <option value="60">Minuten</option>
-              <option value="3600">Stunden</option>
-              <option value="86400">Tage</option>
+              <option value="60">${t("au_minutes")}</option>
+              <option value="3600">${t("au_hours")}</option>
+              <option value="86400">${t("au_days")}</option>
             </select>
           </div>
         </div>
@@ -95,7 +95,7 @@ export function renderAutomation(body, win) {
     try {
       const autos = await api.getAutomations();
       if (!autos.length) {
-        listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Noch keine Automationen angelegt.</div>`;
+        listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${t("au_none")}</div>`;
         return;
       }
       listEl.innerHTML = autos.map((a) => {
@@ -118,8 +118,8 @@ export function renderAutomation(body, win) {
             <div style="font-size:12px;color:var(--subtext)">Alle ${every} · Ziele: ${targets || "—"}${a.last_run ? " · zuletzt: " + new Date(a.last_run).toLocaleString("de-DE") : ""}</div>
             <div style="display:flex;gap:6px;margin-top:8px">
               <button class="taskbar-btn" data-runs="${a.id}">📋 Ergebnisse</button>
-              <button class="taskbar-btn" data-toggle="${a.id}">${a.enabled ? "Pausieren" : "Aktivieren"}</button>
-              <button class="taskbar-btn" data-del="${a.id}">Löschen</button>
+              <button class="taskbar-btn" data-toggle="${a.id}">${a.enabled ? t("au_pause") : t("au_enable")}</button>
+              <button class="taskbar-btn" data-del="${a.id}">${t("delete")}</button>
             </div>
             <div class="au-runs" id="au-runs-${a.id}" style="display:none;margin-top:8px"></div>
           </div>`;
@@ -144,7 +144,7 @@ export function renderAutomation(body, win) {
           try {
             const { runs } = await api.getAutomationRuns(btn.dataset.runs);
             if (!runs.length) {
-              box.innerHTML = `<div style="color:var(--subtext);font-size:12px">Noch keine Durchläufe.</div>`;
+              box.innerHTML = `<div style="color:var(--subtext);font-size:12px">${t("au_no_runs")}</div>`;
               return;
             }
             box.innerHTML = runs.map((run) => {

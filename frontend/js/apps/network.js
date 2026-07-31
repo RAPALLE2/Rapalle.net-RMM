@@ -36,7 +36,7 @@ export function renderNetwork(body, win) {
             `<button class="taskbar-btn net-speed" data-speed="${k}" title="${esc(v.hint)}">${v.label}</button>`).join("")}
         </div>
         <button class="btn-primary" id="net-scan" style="width:auto;margin:0">🔍 Scannen</button>
-        <button class="taskbar-btn" id="net-stop" style="display:none">✋ Abbrechen</button>
+        <button class="taskbar-btn" id="net-stop" style="display:none">✋ ${t("cancel")}</button>
       </div>
       <div id="net-status" style="padding:6px 10px;font-size:12px;color:var(--subtext)"></div>
       <div id="net-progress" style="display:none;padding:0 10px 6px">
@@ -47,7 +47,7 @@ export function renderNetwork(body, win) {
       <div style="flex:1;overflow:auto">
         <table class="data-table">
           <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th style="width:130px">Ports</th></tr></thead>
-          <tbody id="net-body"><tr><td colspan="4" style="color:var(--subtext)">Noch nicht gescannt.</td></tr></tbody>
+          <tbody id="net-body"><tr><td colspan="4" style="color:var(--subtext)">${t("nw_not_scanned")}</td></tr></tbody>
         </table>
       </div>
     </div>`;
@@ -82,8 +82,8 @@ export function renderNetwork(body, win) {
         const p = await api.scanPreview(subnetInput.value.trim() || null);
         const est = estimate(p.hosts, speed);
         statusEl.textContent =
-          `${p.label}: ${p.subnets} Subnetz${p.subnets === 1 ? "" : "e"}, `
-          + `${p.hosts.toLocaleString("de-DE")} Adressen – geschätzt ${est}.`;
+          `${p.label}: ${t("nw_subnets", { n: p.subnets })}, `
+          + t("nw_addresses_est", { n: p.hosts.toLocaleString(), est });
         statusEl.style.color = "var(--subtext)";
       } catch (e) {
         statusEl.textContent = e.message;
@@ -109,7 +109,7 @@ export function renderNetwork(body, win) {
   // ---- Scan starten / verfolgen ----
   async function scan() {
     if (jobId) return;
-    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">Scan läuft…</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_scanning")}</td></tr>`;
     scanBtn.disabled = true;
     try {
       const res = await api.scanStart(subnetInput.value.trim() || null, speed);
@@ -136,25 +136,25 @@ export function renderNetwork(body, win) {
     barEl.style.width = Math.min(100, pct).toFixed(1) + "%";
     statusEl.style.color = "var(--subtext)";
     statusEl.textContent =
-      `${job.label} · ${job.done_subnets}/${job.total_subnets} Subnetze · `
-      + `${job.done_hosts.toLocaleString("de-DE")}/${job.total_hosts.toLocaleString("de-DE")} Adressen `
-      + `(${pct.toFixed(1)} %) · ${job.found} Geräte gefunden`
-      + (job.max_parallel ? ` · ${job.max_parallel} Pings parallel` : "");
+      `${job.label} · ${job.done_subnets}/${job.total_subnets} ${t("nw_subnets_word")} · `
+      + `${job.done_hosts.toLocaleString()}/${job.total_hosts.toLocaleString()} ${t("nw_addresses")} `
+      + `(${pct.toFixed(1)} %) · ${t("nw_found", { n: job.found })}`
+      + (job.max_parallel ? ` · ${t("nw_parallel", { n: job.max_parallel })}` : "");
 
     if (job.status === "done" || job.status === "cancelled" || job.status === "error") {
       finish();
       if (job.status === "error") {
         statusEl.style.color = "var(--danger)";
-        statusEl.textContent = job.error || "Scan fehlgeschlagen";
+        statusEl.textContent = job.error || t("nw_scan_failed");
         tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(job.error || t("u_fehler"))}</td></tr>`;
         return;
       }
       renderDevices(job.devices || []);
       const dur = job.finished && job.started ? Math.round((job.finished - job.started) / 1000) : null;
       statusEl.textContent =
-        `${(job.devices || []).length} Geräte in ${job.label}`
+        t("nw_devices_in", { n: (job.devices || []).length, label: job.label })
         + (dur != null ? ` · ${dur < 90 ? dur + " s" : Math.round(dur / 60) + " min"}` : "")
-        + (job.status === "cancelled" ? " (abgebrochen)" : "");
+        + (job.status === "cancelled" ? ` (${t("nw_cancelled")})` : "");
     }
   }
 
@@ -173,7 +173,7 @@ export function renderNetwork(body, win) {
 
   function renderDevices(devices) {
     if (!devices.length) {
-      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">Keine Geräte gefunden.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_none_found")}</td></tr>`;
       return;
     }
     tbody.innerHTML = devices.map((d) => `
@@ -199,7 +199,7 @@ export function renderNetwork(body, win) {
   api.lastScan().then((res) => {
     if (res.devices && res.devices.length) {
       renderDevices(res.devices);
-      statusEl.textContent = `${res.devices.length} Geräte (letzter Scan).`;
+      statusEl.textContent = t("nw_devices_last", { n: res.devices.length });
     } else showPreview();
   }).catch(() => showPreview());
 

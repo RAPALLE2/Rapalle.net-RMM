@@ -19,7 +19,7 @@ export function renderScripts(body, win) {
           <input type="text" id="sc-name" placeholder="z.B. update" />
         </div>
         <div class="form-row">
-          <label>Befehl (mehrzeilig möglich)</label>
+          <label>${t("sc_command")}</label>
           <textarea id="sc-cmd" style="min-height:70px;font-family:monospace;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" placeholder="apt update && apt upgrade -y"></textarea>
         </div>
         <div class="form-row">
@@ -65,7 +65,7 @@ export function renderScripts(body, win) {
     try {
       const scripts = await api.getScripts();
       if (!scripts.length) {
-        listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Noch keine Skripte gespeichert.</div>`;
+        listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${t("sc_none")}</div>`;
         return;
       }
       // Online-Clients für die "Ausführen auf..."-Auswahl
@@ -86,16 +86,16 @@ export function renderScripts(body, win) {
           <pre style="background:var(--panel-2);padding:8px;border-radius:6px;margin:8px 0;font-size:12px;white-space:pre-wrap;overflow-x:auto">${esc(s.command)}</pre>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
             <select data-run-target="${s.id}" style="padding:5px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
-              <option value="">Client wählen...</option>${clientOptions}
+              <option value="">${t("sc_pick_client")}</option>${clientOptions}
             </select>
-            <button class="action-btn" data-run="${s.id}">▶ Ausführen</button>
+            <button class="action-btn" data-run="${s.id}">▶ ${t("src_run")}</button>
             <select data-move="${s.id}" title="In Ordner verschieben" style="padding:5px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
               <option value="">📁 ${(s.folder || "").trim() ? esc(s.folder) : "Kein Ordner"}</option>
               ${(s.folder || "").trim() ? `<option value="__root__">(Kein Ordner)</option>` : ""}
               ${folders.filter((f) => f !== (s.folder || "").trim()).map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")}
-              <option value="__new__">+ Neuer Ordner…</option>
+              <option value="__new__">+ ${t("exp_new_folder")}…</option>
             </select>
-            <button class="taskbar-btn" data-del="${s.id}">Löschen</button>
+            <button class="taskbar-btn" data-del="${s.id}">${t("delete")}</button>
             <span data-result="${s.id}" style="font-size:12px;color:var(--subtext)"></span>
           </div>
         </div>`;

@@ -18,12 +18,15 @@ import { api } from "./api.js";
 import { esc } from "./utils.js";
 import { state } from "./state.js";
 import { RMM_TARGET, targetLabel } from "./tickettarget.js";
+import { t } from "./i18n.js";
 
-const PRIO = {
-  low: "Niedrig",
-  normal: "Normal",
-  high: "Hoch",
-  urgent: "Dringend",
+// Nur Schluessel: Die Tabelle wird beim Laden des Moduls ausgewertet, die
+// Sprache steht da noch nicht fest. Uebersetzt wird beim Aufbau des Dialogs.
+const PRIO_KEY = {
+  low: "tk_p_low",
+  normal: "tk_p_normal",
+  high: "tk_p_high",
+  urgent: "pd_p_urgent",
 };
 
 /**
@@ -55,20 +58,19 @@ export function showPermissionDenied(opts = {}) {
                 border:1px solid var(--border,#2a3648);border-radius:12px;
                 width:520px;max-width:94vw;max-height:92vh;overflow:auto;padding:18px;
                 box-shadow:0 16px 48px rgba(0,0,0,0.5)">
-      <div style="font-size:15px;font-weight:700;margin-bottom:6px">🔒 Fehlende Berechtigung</div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:6px">🔒 ${t("pd_title")}</div>
       <div style="font-size:13px;color:var(--subtext);line-height:1.5">
-        Für <b style="color:var(--text)">${esc(action)}</b> fehlt dir die
-        Berechtigung${clientId ? ` auf <b style="color:var(--text)">${esc(clientName(clientId))}</b>` : ""}.
+        ${t("pd_missing", { action: `<b style="color:var(--text)">${esc(action)}</b>` })}${clientId ? ` ${t("pd_on")} <b style="color:var(--text)">${esc(clientName(clientId))}</b>` : ""}.
         ${opts.detail ? `<div style="margin-top:6px">${esc(opts.detail)}</div>` : ""}
-        ${opts.perm ? `<div style="margin-top:6px;font-size:11.5px">Benötigtes Recht: <code>${esc(opts.perm)}</code></div>` : ""}
+        ${opts.perm ? `<div style="margin-top:6px;font-size:11.5px">${t("pd_needed")}: <code>${esc(opts.perm)}</code></div>` : ""}
       </div>
 
       <div id="pd-form" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <div style="font-size:13px;font-weight:600;margin-bottom:8px">Anfrage an den Support</div>
 
-        <div class="form-row"><label>Titel</label>
+        <div class="form-row"><label>${t("tk_title_label")}</label>
           <input id="pd-title" value="${esc(title)}" readonly
-                 title="Der Titel beschreibt die fehlende Berechtigung und ist deshalb festgelegt."
+                 title="${t("pd_title_fixed")}"
                  style="opacity:.7;cursor:not-allowed" /></div>
 
         <div class="form-row"><label>Betrifft</label>
@@ -80,10 +82,10 @@ export function showPermissionDenied(opts = {}) {
           <input id="pd-assign" value="👥 Support" readonly
                  style="opacity:.7;cursor:not-allowed" /></div>
 
-        <div class="form-row"><label>Priorität</label>
+        <div class="form-row"><label>${t("tk_priority")}</label>
           <select id="pd-prio">
-            ${Object.entries(PRIO).map(([k, v]) =>
-              `<option value="${k}"${k === "normal" ? " selected" : ""}>${v}</option>`).join("")}
+            ${Object.keys(PRIO_KEY).map((k) =>
+              `<option value="${k}"${k === "normal" ? " selected" : ""}>${t(PRIO_KEY[k])}</option>`).join("")}
           </select></div>
 
         <div class="form-row"><label>Beschreibung</label></div>
@@ -96,7 +98,7 @@ export function showPermissionDenied(opts = {}) {
       </div>
 
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap">
-        <button class="taskbar-btn" id="pd-close">Schließen</button>
+        <button class="taskbar-btn" id="pd-close">${t("close")}</button>
         <button class="btn-primary" id="pd-open" style="width:auto;margin:0">🎫 Ticket erstellen</button>
         <button class="btn-primary" id="pd-send" style="width:auto;margin:0;display:none">Absenden</button>
       </div>

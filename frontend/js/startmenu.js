@@ -347,7 +347,7 @@ function folderDrawer(folder) {
   head.innerHTML = `<b>${folder.name}</b>
     <span class="sm-drawer-tools">
       ${editMode ? `<button class="sm-ren" title="Umbenennen">Umbenennen</button>` : ""}
-      <button class="sm-close" title="${t("close")}">Schließen</button>
+      <button class="sm-close" title="${t("close")}">${t("close")}</button>
     </span>`;
   head.querySelector(".sm-close").addEventListener("click", () => {
     folder.open = false; save(); render();
@@ -572,8 +572,8 @@ async function deleteFolder(idx) {
   if (!it || it.t !== "folder") return;
   const apps = it.apps || [];
   if (apps.length) {
-    const ok = await uiConfirm(`Ordner „${it.name}" löschen?`, {
-      description: `Die ${apps.length} enthaltene(n) App(s) wandern zurück ins Menü.`,
+    const ok = await uiConfirm(t("sm_del_folder_q", { name: it.name }), {
+      description: t("sm_del_folder_desc", { n: apps.length }),
       okText: t("delete"), danger: true,
     });
     if (!ok) return;

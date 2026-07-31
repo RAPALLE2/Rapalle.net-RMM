@@ -18,7 +18,7 @@ export function setEditOnChanged(fn) { onChanged = fn; }
 export function renderEditClient(body, win) {
   const client = findClient(win.props.clientId);
   if (!client) {
-    body.innerHTML = `<div style="padding:20px;color:var(--danger)">Client nicht gefunden.</div>`;
+    body.innerHTML = `<div style="padding:20px;color:var(--danger)">${tr("client_not_found")}</div>`;
     return;
   }
 
@@ -61,49 +61,49 @@ export function renderEditClient(body, win) {
 
       <div class="form-row">
         <label>Tenant</label>
-        <select id="ec-tenant"><option value="">— nicht zugeordnet —</option>${tenantOptions}</select>
+        <select id="ec-tenant"><option value="">${tr("ec_unassigned")}</option>${tenantOptions}</select>
       </div>
 
       <div class="form-row">
-        <label>Standort</label>
-        <select id="ec-location"><option value="">— keiner —</option>${locationOptionsFor(client.tenant_id)}</select>
+        <label>${tr("ec_location")}</label>
+        <select id="ec-location"><option value="">${tr("ac_none")}</option>${locationOptionsFor(client.tenant_id)}</select>
       </div>
 
       <div class="form-row">
-        <label>Ordner</label>
-        <select id="ec-folder"><option value="">— keiner —</option>${folderOptionsFor(client.location_id, client.folder_id)}</select>
+        <label>${tr("ec_folder")}</label>
+        <select id="ec-folder"><option value="">${tr("ac_none")}</option>${folderOptionsFor(client.location_id, client.folder_id)}</select>
       </div>
 
       <div class="form-row">
-        <label>Farbe (Identität in Taskleiste/Sidebar)</label>
+        <label>${tr("ec_color")}</label>
         <input type="color" id="ec-color" value="${esc(client.color || "#38bdf8")}" style="height:38px" />
       </div>
 
       <div class="form-row">
         <label>Status</label>
         <select id="ec-status">
-          <option value="" ${!client.status_override ? "selected" : ""}>Automatisch (online/offline)</option>
-          <option value="maintenance" ${client.status_override === "maintenance" ? "selected" : ""}>Wartung</option>
+          <option value="" ${!client.status_override ? "selected" : ""}>${tr("ec_status_auto")}</option>
+          <option value="maintenance" ${client.status_override === "maintenance" ? "selected" : ""}>${tr("status_maintenance")}</option>
         </select>
       </div>
 
       <div class="form-row">
-        <label><input type="checkbox" id="ec-active" ${client.active ? "checked" : ""} /> Aktiv (deaktivierte Clients bleiben sichtbar, werden aber nicht überwacht)</label>
+        <label><input type="checkbox" id="ec-active" ${client.active ? "checked" : ""} /> ${tr("ec_active")}</label>
       </div>
 
       <div class="form-row">
-        <label>Gerätetyp</label>
+        <label>${tr("ec_devtype")}</label>
         <select id="ec-devtype">
-          <option value="physical" ${(client.device_type || "physical") === "physical" ? "selected" : ""}>💻 Physisches Gerät</option>
-          <option value="vm" ${client.device_type === "vm" ? "selected" : ""}>🖥️ Virtuelle Maschine (VM)</option>
-          <option value="lxc" ${client.device_type === "lxc" ? "selected" : ""}>📦 LXC-Container</option>
+          <option value="physical" ${(client.device_type || "physical") === "physical" ? "selected" : ""}>💻 ${tr("ec_dev_physical")}</option>
+          <option value="vm" ${client.device_type === "vm" ? "selected" : ""}>🖥️ ${tr("ec_dev_vm")}</option>
+          <option value="lxc" ${client.device_type === "lxc" ? "selected" : ""}>📦 ${tr("ec_dev_lxc")}</option>
         </select>
       </div>
 
       <div class="form-row" id="ec-host-row" style="${client.device_type === "vm" || client.device_type === "lxc" ? "" : "display:none"}">
-        <label>Host (optional) — auf welchem physischen Gerät läuft diese VM/CT?</label>
+        <label>${tr("ec_host")}</label>
         <select id="ec-host">
-          <option value="">— kein Host / unbekannt —</option>
+          <option value="">${tr("ec_no_host")}</option>
           ${state.clients
             .filter((c) => c.id !== client.id && (c.device_type || "physical") === "physical")
             .map((c) => `<option value="${c.id}" ${client.parent_client_id === c.id ? "selected" : ""}>${esc(c.hostname)}</option>`)
@@ -112,29 +112,26 @@ export function renderEditClient(body, win) {
       </div>
 
       <div class="form-row">
-        <label>Automatisches Agent-Update</label>
+        <label>${tr("ec_autoupdate")}</label>
         <select id="ec-autoupdate">
-          <option value="global" ${(client.auto_update || "global") === "global" ? "selected" : ""}>Globale Einstellung verwenden</option>
-          <option value="on" ${client.auto_update === "on" ? "selected" : ""}>An — veralteter Agent aktualisiert sich selbst</option>
-          <option value="off" ${client.auto_update === "off" ? "selected" : ""}>Aus — nie automatisch aktualisieren</option>
+          <option value="global" ${(client.auto_update || "global") === "global" ? "selected" : ""}>${tr("ec_au_global")}</option>
+          <option value="on" ${client.auto_update === "on" ? "selected" : ""}>${tr("ec_au_on")}</option>
+          <option value="off" ${client.auto_update === "off" ? "selected" : ""}>${tr("ec_au_off")}</option>
         </select>
       </div>
 
       <div id="ec-error" class="form-error hidden"></div>
 
       <div style="display:flex;gap:8px;margin-top:16px">
-        <button class="btn-primary" id="ec-save" style="margin:0">Speichern</button>
-        <button class="action-btn" id="ec-delete" style="border-color:var(--danger);color:var(--danger)">Löschen</button>
+        <button class="btn-primary" id="ec-save" style="margin:0">${tr("save")}</button>
+        <button class="action-btn" id="ec-delete" style="border-color:var(--danger);color:var(--danger)">${tr("delete")}</button>
       </div>
 
-      <h3 style="margin-top:22px">🔗 Verknüpfte Websites</h3>
+      <h3 style="margin-top:22px">🔗 ${tr("ec_websites")}</h3>
       <p style="color:var(--subtext);font-size:12px;margin:4px 0 10px">
-        Websites werden jetzt komplett im <b>Websites-Widget</b> der Client-Ansicht
-        verwaltet – dort legst du sie an, änderst Name/URL, die Öffnungsart
-        (interner oder externer Browser) und das Uptime-Monitoring inkl.
-        Benachrichtigungs-Modus und Scan-Intervall.
+        ${tr("ec_websites_hint")}
       </p>
-      <button class="action-btn" id="ec-ws-goto" style="width:auto">🔗 Websites-Widget öffnen</button>
+      <button class="action-btn" id="ec-ws-goto" style="width:auto">🔗 ${tr("ec_websites_open")}</button>
 
     </div>
   `;
@@ -160,7 +157,7 @@ export function renderEditClient(body, win) {
       return;
     }
     const cur = tenantSel.value;
-    tenantSel.innerHTML = `<option value="">— nicht zugeordnet —</option>` +
+    tenantSel.innerHTML = `<option value="">${tr("ec_unassigned")}</option>` +
       state.hierarchy.tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
     if ([...tenantSel.options].some((o) => o.value === cur)) tenantSel.value = cur;
     tenantSel.dispatchEvent(new Event("change"));
@@ -194,7 +191,7 @@ export function renderEditClient(body, win) {
 
   // Ordner-Auswahl passend zur aktuell gewählten Location neu aufbauen.
   function refreshFolders() {
-    folderSel.innerHTML = `<option value="">— keiner —</option>` +
+    folderSel.innerHTML = `<option value="">${tr("ac_none")}</option>` +
       folderOptionsFor(locationSel.value, null);
   }
 
@@ -207,7 +204,7 @@ export function renderEditClient(body, win) {
   // Wenn der Tenant gewechselt wird, die Standort-Auswahl passend neu befüllen
   // (und danach die Ordner-Auswahl zurücksetzen, da sie an der Location hängt).
   tenantSel.addEventListener("change", () => {
-    locationSel.innerHTML = `<option value="">— keiner —</option>` +
+    locationSel.innerHTML = `<option value="">${tr("ac_none")}</option>` +
       state.hierarchy.locations
         .filter((l) => l.tenant_id === tenantSel.value)
         .map((l) => `<option value="${l.id}">${esc(l.name)}</option>`)
@@ -245,7 +242,7 @@ export function renderEditClient(body, win) {
   });
 
   body.querySelector("#ec-delete").addEventListener("click", async () => {
-    if (!(await uiConfirm(`Client "${client.hostname}" wirklich löschen?`, { okText: tr("u_client_loschen"), danger: true }))) return;
+    if (!(await uiConfirm(tr("ec_delete_q", { name: client.hostname }), { okText: tr("u_client_loschen"), danger: true }))) return;
     await api.deleteClient(client.id);
     state.selection = null;
     closeWindow(win.key);

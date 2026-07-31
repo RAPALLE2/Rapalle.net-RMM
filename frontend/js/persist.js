@@ -203,7 +203,7 @@ export async function hydrateFromServer() {
   } catch (e) {
     // Server nicht erreichbar o.ä. -> lokaler Stand bleibt bestehen, ABER es
     // wird nichts hochgeladen (siehe _hydrated-Sperre in syncToServerSoon).
-    console.warn("[persist] Server-UI-Einstellungen nicht ladbar:", e);
+    console.warn("[persist] could not load server UI prefs:", e);
   }
 }
 
@@ -244,7 +244,7 @@ export async function flushToServer() {
         .sort((a, b) => String(a[1] || "").length - String(b[1] || "").length);
       for (const [k, v] of entries) {
         try { await api.mergeUiPrefs({ [k]: v }); }
-        catch (e2) { console.warn("[persist] Schlüssel nicht speicherbar:", k, e2); }
+        catch (e2) { console.warn("[persist] could not store key:", k, e2); }
       }
     }
   } catch (e) {
@@ -301,7 +301,7 @@ export function saveNow(state) {
     syncToServerSoon();
   } catch (e) {
     // localStorage kann voll/deaktiviert sein - dann eben keine Persistenz.
-    console.warn("[persist] Speichern fehlgeschlagen:", e);
+    console.warn("[persist] save failed:", e);
   }
 }
 

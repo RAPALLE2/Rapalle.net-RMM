@@ -134,7 +134,7 @@ export async function openPin(pin) {
     }
     if (pin.kind === "session") {
       const client = state.clients.find((c) => c.id === pin.clientId);
-      if (!client) { window.notify?.("Client nicht (mehr) verfügbar.", "warn", 4000); return; }
+      if (!client) { window.notify?.("${t("sb_client_gone")}", "warn", 4000); return; }
       const { handleAction } = await import("./panel.js");
       handleAction(pin.action || "terminal", client);
       return;
@@ -147,7 +147,7 @@ export async function openPin(pin) {
     if (pin.kind === "client") { revealClient(pin.targetId); select("client", pin.targetId); return; }
     if (pin.kind === "tenant") { select("tenant", pin.targetId); return; }
   } catch (e) {
-    window.notify?.("Favorit konnte nicht geöffnet werden: " + e.message, "error", 6000);
+    window.notify?.(t("sb_fav_failed") + ": " + e.message, "error", 6000);
   }
 }
 
@@ -567,7 +567,7 @@ function renderFavorites() {
   const pins = favPinList("s");
 
   if (!favTenants.length && !favClients.length && !favSites.length && !pins.length) {
-    box.innerHTML = `<div class="fav-empty">Noch keine Favoriten – tippe auf ☆ neben einem Client, Tenant oder einer Website, oder lege über den ★-Knopf oben einen eigenen Favoriten an (App, App-Unterseite, Client-Sitzung, …).</div>`;
+    box.innerHTML = `<div class="fav-empty">${t("sb_no_favs")}</div>`;
   } else {
     let h = "";
     // Selbst angeheftete Einträge zuerst (Apps, Sitzungen, Links).

@@ -26,20 +26,20 @@ export function renderRecordings(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div class="explorer-toolbar">
-        <span style="flex:1;color:var(--subtext)">Aufgezeichnete Remote-Sessions (Auto-Löschung nach 10 Tagen)</span>
+        <span style="flex:1;color:var(--subtext)">${t("rc_title")}</span>
         <button id="rec-refresh-${win.key}">🔄</button>
       </div>
       <div style="flex:1;display:flex;min-height:0">
         <!-- Linke Spalte: Liste -->
         <div style="width:280px;border-right:1px solid var(--border);overflow:auto">
           <table class="data-table">
-            <tbody id="rec-list-${win.key}"><tr><td style="color:var(--subtext)">Lädt...</td></tr></tbody>
+            <tbody id="rec-list-${win.key}"><tr><td style="color:var(--subtext)">${t("loading")}</td></tr></tbody>
           </table>
         </div>
         <!-- Rechte Spalte: Player -->
         <div style="flex:1;display:flex;flex-direction:column;background:#000;min-width:0">
           <div id="rec-player-${win.key}" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">
-            <span style="color:var(--subtext)">Wähle links eine Aufzeichnung.</span>
+            <span style="color:var(--subtext)">${t("rc_pick")}</span>
           </div>
           <div id="rec-controls-${win.key}" style="padding:8px;background:var(--panel-2);display:none;align-items:center;gap:10px">
             <button class="taskbar-btn" id="rec-play-${win.key}">▶</button>
@@ -148,7 +148,7 @@ export function renderRecordings(body, win) {
     releaseVideo();
     disposeTerm();
     const rec = allRecordings.find((r) => r.id === recId);
-    playerEl.innerHTML = `<span style="color:var(--subtext)">Lädt Aufzeichnung...</span>`;
+    playerEl.innerHTML = `<span style="color:var(--subtext)">${t("rc_loading_one")}</span>`;
 
     // Terminal-Replays (format 'term'): rohe Shell-Ausgabe mit Zeitstempeln,
     // Wiedergabe über den eingebauten Terminal-Emulator (MiniTerm).
@@ -221,7 +221,7 @@ export function renderRecordings(body, win) {
       const recordings = await api.getRecordings();
       allRecordings = recordings;
       if (!recordings.length) {
-        listEl.innerHTML = `<tr><td style="color:var(--subtext)">Noch keine Aufzeichnungen.</td></tr>`;
+        listEl.innerHTML = `<tr><td style="color:var(--subtext)">${t("rc_none")}</td></tr>`;
         return;
       }
       listEl.innerHTML = recordings.map((r) => {

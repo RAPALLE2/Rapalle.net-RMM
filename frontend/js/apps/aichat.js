@@ -93,7 +93,7 @@ export function renderAiChat(body, win) {
         <div id="ai-conns" style="flex:1;overflow:auto"></div>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;min-width:0">
-        <div id="ai-head" style="padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px;color:var(--subtext)">Keine Verbindung ausgewählt</div>
+        <div id="ai-head" style="padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px;color:var(--subtext)">${t("ai_no_conn_selected")}</div>
         <div id="ai-msgs" style="flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px"></div>
         <div style="display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--border)">
           <textarea id="ai-input" rows="2" placeholder="Nachricht eingeben… (Enter = senden, Shift+Enter = Zeilenumbruch)"
@@ -118,7 +118,7 @@ export function renderAiChat(body, win) {
   function drawConns() {
     if (!connections.length) {
       connsEl.innerHTML = `<div style="padding:12px;color:var(--subtext);font-size:12px">
-        Noch keine Verbindungen. Lege mit ＋ eine an (API-URL, API-Key, Modell).</div>`;
+        ${t("ai_no_conns")}</div>`;
       return;
     }
     connsEl.innerHTML = connections.map((c) => `
@@ -148,12 +148,12 @@ export function renderAiChat(body, win) {
     connsEl.querySelectorAll("[data-del]").forEach((b) =>
       b.addEventListener("click", async () => {
         const c = connections.find((x) => x.id === b.dataset.del);
-        if (!(await uiConfirm(`Verbindung "${c.name}" löschen?`, { danger: true }))) return;
+        if (!(await uiConfirm(t("ai_del_conn_q", { name: c.name }), { danger: true }))) return;
         try {
           await api.aiDeleteConnection(c.id);
           if (currentId === c.id) { currentId = null; messages = []; drawChat(); }
           await load();
-        } catch (e) { window.notify?.(`Löschen fehlgeschlagen: ${e.message}`, "error"); }
+        } catch (e) { window.notify?.(t("src_delete_fail", { err: e.message }), "error"); }
       }));
   }
 
@@ -195,7 +195,7 @@ export function renderAiChat(body, win) {
       const res = await api.aiChat(c.id, messages);
       messages.push({ role: "assistant", content: res.reply });
     } catch (e) {
-      messages.push({ role: "assistant", content: `⚠ Fehler: ${e.message}` });
+      messages.push({ role: "assistant", content: `⚠ ${t("error")}: ${e.message}` });
     }
     busy = false; sendBtn.disabled = false;
     drawChat();
@@ -219,32 +219,30 @@ export function renderAiChat(body, win) {
         <div class="form-row"><label>API-URL</label>
           <input id="aie-url" value="${esc(existing?.api_url || "")}" placeholder="https://api.openai.com" /></div>
         <p style="color:var(--subtext);font-size:11px;margin:2px 0 8px">
-          OpenAI-kompatible APIs (OpenAI, OpenRouter, Ollama, LM Studio, vLLM …)
-          und Anthropic werden unterstützt. Der Pfad (/v1/chat/completions bzw.
-          /v1/messages) wird automatisch ergänzt.</p>
-        <div class="form-row"><label>Modell</label>
+          ${t("ai_api_hint")}</p>
+        <div class="form-row"><label>${t("ai_model")}</label>
           <input id="aie-model" value="${esc(existing?.model || "")}" placeholder="z.B. gpt-4o-mini" /></div>
         <div class="form-row"><label>API-Key</label>
-          <input id="aie-key" type="password" placeholder="${isEdit ? "leer lassen = Key behalten" : "sk-…"}" /></div>
-        <div class="form-row"><label>Sichtbarkeit</label>
+          <input id="aie-key" type="password" placeholder="${isEdit ? t("ai_key_keep") : "sk-…"}" /></div>
+        <div class="form-row"><label>${t("ai_visibility")}</label>
           <select id="aie-vis">
-            <option value="private" ${(existing?.visibility ?? "private") === "private" ? "selected" : ""}>🔒 Privat (nur ich)</option>
-            <option value="all" ${existing?.visibility === "all" ? "selected" : ""}>🌐 Alle Benutzer</option>
-            <option value="shared" ${existing?.visibility === "shared" ? "selected" : ""}>👥 Bestimmte Benutzer/Gruppen</option>
+            <option value="private" ${(existing?.visibility ?? "private") === "private" ? "selected" : ""}>🔒 ${t("ai_vis_private")}</option>
+            <option value="all" ${existing?.visibility === "all" ? "selected" : ""}>🌐 ${t("ai_vis_all")}</option>
+            <option value="shared" ${existing?.visibility === "shared" ? "selected" : ""}>👥 ${t("ai_vis_shared")}</option>
           </select></div>
         <div id="aie-shares" style="display:${existing?.visibility === "shared" ? "block" : "none"};border:1px solid var(--border);border-radius:8px;padding:8px;max-height:180px;overflow:auto;font-size:12px">
-          <div style="font-weight:700;margin-bottom:4px">Benutzer</div>
+          <div style="font-weight:700;margin-bottom:4px">${t("tab_users")}</div>
           ${subjects.users.map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-stype="user" data-sid="${esc(u.id)}" ${isChecked("user", u.id) ? "checked" : ""}/> ${esc(u.label)}</label>`).join("")}
-          <div style="font-weight:700;margin:8px 0 4px">Gruppen</div>
+          <div style="font-weight:700;margin:8px 0 4px">${t("pm_groups")}</div>
           ${subjects.groups.map((g) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-stype="group" data-sid="${esc(g.id)}" ${isChecked("group", g.id) ? "checked" : ""}/> ${esc(g.label)}</label>`).join("")
-          || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`}
+          || `<div style="color:var(--subtext)">${t("set_no_groups")}</div>`}
         </div>
         <div id="aie-error" class="hidden" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-          <button class="taskbar-btn" id="aie-cancel">Abbrechen</button>
-          <button class="btn-primary" id="aie-save" style="margin:0;width:auto">${isEdit ? t("save") : "Anlegen"}</button>
+          <button class="taskbar-btn" id="aie-cancel">${t("cancel")}</button>
+          <button class="btn-primary" id="aie-save" style="margin:0;width:auto">${isEdit ? t("save") : t("ai_create")}</button>
         </div>
       </div>
     `;

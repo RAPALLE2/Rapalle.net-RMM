@@ -162,8 +162,8 @@ function renderBackendLog(panel) {
 
   panel.querySelector("#src-log-restart").addEventListener("click", async () => {
     const ok = await uiConfirm(t("src_restart_q"), {
-      description: "Das Dashboard trennt sich kurz und verbindet sich danach automatisch wieder.",
-      okText: "Neu starten", danger: true,
+      description: t("src_restart_desc"),
+      okText: t("src_restart_ok"), danger: true,
     });
     if (!ok) return;
     try {
@@ -237,8 +237,8 @@ async function renderExplorer(panel) {
       </div>
       <div style="flex:1;min-width:0;border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;max-height:440px">
         <div id="src-file-bar" style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px;display:flex;align-items:center;gap:8px">
-          <span id="src-file-name" style="flex:1;color:var(--subtext)">Keine Datei geöffnet</span>
-          <button class="btn-primary" id="src-file-save" style="width:auto;margin:0;display:none">Speichern</button>
+          <span id="src-file-name" style="flex:1;color:var(--subtext)">${t("src_no_file")}</span>
+          <button class="btn-primary" id="src-file-save" style="width:auto;margin:0;display:none">${t("save")}</button>
         </div>
         <textarea id="src-file-content" spellcheck="false"
           style="flex:1;min-height:360px;border:0;background:#0b0f14;color:#e6edf3;font-family:monospace;font-size:12px;padding:10px;resize:none;outline:none" placeholder="${t("src_pick_file")}"></textarea>
@@ -266,8 +266,8 @@ async function renderExplorer(panel) {
       const kb = Math.round((r.freed || 0) / 1024);
       status.textContent = r.note
         ? r.note
-        : `${r.removed} Einträge gelöscht (${kb} KB frei)` +
-          (r.errors && r.errors.length ? ` — ${r.errors.length} Fehler` : "");
+        : t("src_dist_cleared", { n: r.removed, kb }) +
+          (r.errors && r.errors.length ? ` — ${r.errors.length} ${t("errors")}` : "");
       // Ansicht auffrischen, falls dist gerade offen ist.
       if (curDir === "dist" || String(curDir).startsWith("dist/")) loadDir(curDir);
     } catch (e) {
@@ -283,12 +283,12 @@ async function renderExplorer(panel) {
   zipInput.addEventListener("change", async () => {
     const f = zipInput.files && zipInput.files[0];
     if (!f) return;
-    zipStatus.textContent = `Extrahiere ${f.name}…`;
+    zipStatus.textContent = t("src_extracting", { name: f.name });
     try {
       const res = await api.sourceUploadZip(f, curDir);
-      const where = res.project_update ? "Projekt-Root" : ("/" + (res.dest || ""));
-      zipStatus.textContent = `${res.count} Datei(en) nach ${where} extrahiert.`;
-      window.notify?.(`${res.count} Datei(en) aus ${f.name} nach ${where} extrahiert${res.skipped?.length ? ` (${res.skipped.length} übersprungen)` : ""}.`, "success", 8000);
+      const where = res.project_update ? t("src_project_root") : ("/" + (res.dest || ""));
+      zipStatus.textContent = t("src_extracted", { n: res.count, where });
+      window.notify?.(t("src_extracted_from", { n: res.count, name: f.name, where }) + (res.skipped?.length ? ` (${t("src_skipped", { n: res.skipped.length })})` : ""), "success", 8000);
       loadDir(curDir);   // Ansicht aktualisieren
     } catch (e) {
       zipStatus.textContent = "";
@@ -380,7 +380,7 @@ async function renderExplorer(panel) {
           const target = btn.dataset.del;
           const isDir = btn.dataset.isdir === "1";
           const ok = isDir
-            ? await uiConfirmTwice(`Ordner "/${target}" löschen?`, {
+            ? await uiConfirmTwice(t("src_folder_del_q", { path: target }), {
                 description: t("src_folder_del_desc"),
                 okText: t("src_folder_del") })
             : await uiConfirm(t("src_file_del_q", { path: target }), { okText: t("delete"), danger: true });
@@ -402,11 +402,11 @@ async function renderExplorer(panel) {
       const f = await api.sourceRead(path);
       openPath = path;
       nameEl.textContent = "/" + path;
-      if (f.too_large) { contentEl.value = `[Datei zu groß: ${formatBytes(f.size)}]`; saveBtn.style.display = "none"; }
-      else if (f.binary) { contentEl.value = "[Binärdatei — nicht anzeigbar]"; saveBtn.style.display = "none"; }
+      if (f.too_large) { contentEl.value = `[${t("src_too_large", { size: formatBytes(f.size) })}]`; saveBtn.style.display = "none"; }
+      else if (f.binary) { contentEl.value = `[${t("src_binary")}]`; saveBtn.style.display = "none"; }
       else { contentEl.value = f.content; saveBtn.style.display = ""; }
     } catch (e) {
-      nameEl.textContent = "Fehler: " + e.message;
+      nameEl.textContent = t("error") + ": " + e.message;
     }
   }
 
@@ -431,19 +431,19 @@ async function renderDb(panel) {
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <button class="taskbar-btn" id="src-db-reload" title="${t("src_reload_tables")}">🔄 ${t("exp_refresh")}</button>
       <button class="taskbar-btn" id="src-db-newtable" title="${t("src_newtable_tip")}">${t("src_newtable_btn")}</button>
-      <button class="taskbar-btn" id="src-db-backup" title="Konsistente Kopie der Datenbank als backend/data.sqlite.bak erstellen">💾 Backup (data.sqlite.bak)</button>
-      <span style="font-size:11px;color:var(--subtext)">Doppelklick = Zelle editieren · Rechtsklick = Zelle löschen (NULL) · Buttons je Zeile/Tabelle</span>
+      <button class="taskbar-btn" id="src-db-backup" title="${t("src_db_backup_tip")}">💾 ${t("src_db_backup_btn")}</button>
+      <span style="font-size:11px;color:var(--subtext)">${t("src_db_hint")}</span>
     </div>
     <div style="display:flex;gap:10px;min-height:0">
       <div style="flex:0 0 220px;border:1px solid var(--border);border-radius:8px;overflow:auto;max-height:440px">
-        <div style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--subtext)">Tabellen</div>
+        <div style="padding:6px 8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--subtext)">${t("set_db_tables")}</div>
         <div id="src-tables"></div>
       </div>
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;gap:6px">
           <input id="src-sql" placeholder="${t("src_sql_ph")}"
             style="flex:1;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-family:monospace;font-size:12px" />
-          <button class="btn-primary" id="src-sql-run" style="width:auto;margin:0">Ausführen</button>
+          <button class="btn-primary" id="src-sql-run" style="width:auto;margin:0">${t("src_run")}</button>
         </div>
         <div id="src-db-toolbar" style="display:none;gap:6px;align-items:center">
           <strong id="src-db-tname" style="font-size:12px"></strong>
@@ -514,10 +514,10 @@ async function renderDb(panel) {
   // ---- Tabelle löschen (doppelte Nachfrage) ----
   panel.querySelector("#src-db-droptable").addEventListener("click", async () => {
     if (!curTable) return;
-    const ok = await uiConfirmTwice(`Tabelle "${curTable}" komplett löschen?`, {
+    const ok = await uiConfirmTwice(t("src_table_drop_q", { table: curTable }), {
       description: t("src_table_drop_desc"),
       okText: t("src_table_drop"),
-      secondTitle: `"${curTable}" endgültig löschen?`,
+      secondTitle: t("src_drop_final_q", { name: curTable }),
       secondDescription: t("src_table_drop_warn") });
     if (!ok) return;
     try {
@@ -558,7 +558,7 @@ async function renderDb(panel) {
     resultEl.querySelectorAll("[data-delrow]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         const rid = Number(btn.dataset.delrow);
-        const ok = await uiConfirmTwice(`Zeile (rowid ${rid}) aus "${curTable}" löschen?`, {
+        const ok = await uiConfirmTwice(t("src_row_del_q", { rid, table: curTable }), {
           okText: t("src_row_delete") });
         if (!ok) return;
         try {
@@ -575,7 +575,7 @@ async function renderDb(panel) {
         const tr = td.closest("tr");
         const rid = Number(tr.dataset.rowid);
         const colName = columns[Number(td.dataset.col)];
-        const ok = await uiConfirmTwice(`Zelle "${curTable}"."${colName}" (rowid ${rid}) löschen?`, {
+        const ok = await uiConfirmTwice(t("src_cell_del_q", { table: curTable, col: colName, rid }), {
           description: t("src_cell_del_desc"),
           okText: t("src_cell_delete") });
         if (!ok) return;
@@ -583,7 +583,7 @@ async function renderDb(panel) {
           await api.sourceDbSetCell(curTable, rid, colName, null);
           window.notify?.(t("src_cell_deleted"), "success");
           loadTable(curTable);
-        } catch (err) { window.notify?.("Löschen fehlgeschlagen: " + err.message, "error"); }
+        } catch (err) { window.notify?.(t("src_delete_fail", { err: err.message }), "error"); }
       }));
 
     // Zelle per Doppelklick editieren (leerer Wert nach Nachfrage = NULL / Zelle leeren)
@@ -664,76 +664,68 @@ async function renderMigrate(host) {
   host.innerHTML = `
     <div style="max-width:760px">
 
-      <h3 style="margin:2px 0 4px;font-size:14px">Diese Instanz sichern / umziehen</h3>
+      <h3 style="margin:2px 0 4px;font-size:14px">${t("mg_title")}</h3>
       <p style="color:var(--subtext);font-size:13px">
-        Erzeugt ein einziges Archiv mit dem kompletten Stand: Datenbank
-        (${info.database.tables} Tabellen, ${info.database.rows.toLocaleString("de-DE")} Zeilen –
-        Clients, Benutzer, Rechte, Einstellungen, Widgets, Tickets, Skripte, Audit-Log),
-        dazu die ausgewählten Ordner. Auf dem neuen Server unten wieder einspielen.
+        ${t("mg_hint", { tables: info.database.tables, rows: info.database.rows.toLocaleString() })}
       </p>
 
       <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin:10px 0">
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0">
           <input type="checkbox" checked disabled />
-          <span>Datenbank <span style="color:var(--subtext)">(${mb(info.database.size)}) – immer dabei</span></span>
+          <span>${t("set_db")} <span style="color:var(--subtext)">(${mb(info.database.size)}) – ${t("mg_always")}</span></span>
         </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
           <input type="checkbox" id="mg-rec" checked />
-          <span>Aufzeichnungen / Replays
-            <span style="color:var(--subtext)">(${d.recordings?.files || 0} Dateien, ${mb(d.recordings?.size || 0)})</span></span>
+          <span>${t("mg_recordings")}
+            <span style="color:var(--subtext)">(${t("mg_files", { n: d.recordings?.files || 0 })}, ${mb(d.recordings?.size || 0)})</span></span>
         </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
           <input type="checkbox" id="mg-media" checked />
-          <span>Medien-Bibliothek
-            <span style="color:var(--subtext)">(${d.media_files?.files || 0} Dateien, ${mb(d.media_files?.size || 0)})</span></span>
+          <span>${t("mg_media")}
+            <span style="color:var(--subtext)">(${t("mg_files", { n: d.media_files?.files || 0 })}, ${mb(d.media_files?.size || 0)})</span></span>
         </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
           <input type="checkbox" id="mg-brand" checked />
-          <span>Branding
-            <span style="color:var(--subtext)">(${d.branding?.files || 0} Dateien, ${mb(d.branding?.size || 0)})</span></span>
+          <span>${t("set_br_title")}
+            <span style="color:var(--subtext)">(${t("mg_files", { n: d.branding?.files || 0 })}, ${mb(d.branding?.size || 0)})</span></span>
         </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
           <input type="checkbox" id="mg-secrets" />
-          <span>Geheimnisse (.env: AGENT_TOKEN, JWT_SECRET)
-            ${helpDot("Mit den Geheimnissen erreichen die bestehenden Agenten den neuen Server " +
-                      "ohne Neuinstallation, und Anmeldungen bleiben gültig. Das Archiv enthält " +
-                      "dann allerdings die Schlüssel dieser Installation im Klartext - also nur " +
-                      "über einen sicheren Weg übertragen und danach löschen.")}</span>
+          <span>${t("mg_secrets")}
+            ${helpDot(t("mg_secrets_help"))}</span>
         </label>
         <div style="font-size:12px;color:var(--subtext);margin-top:6px">
-          Geschätzte Größe: <b id="mg-size">${mb(info.total_size)}</b> (vor Komprimierung)
+          ${t("mg_est_size")}: <b id="mg-size">${mb(info.total_size)}</b> (${t("mg_before_zip")})
         </div>
         <button class="btn-primary" id="mg-export" style="width:auto;margin-top:10px">
-          ⬇ Archiv erstellen und herunterladen
+          ⬇ ${t("mg_export")}
         </button>
         <span id="mg-export-msg" style="margin-left:10px;font-size:12px;color:var(--subtext)"></span>
       </div>
 
-      <h3 style="margin:18px 0 4px;font-size:14px">Archiv hier einspielen</h3>
+      <h3 style="margin:18px 0 4px;font-size:14px">${t("mg_import_title")}</h3>
       <div style="background:var(--panel-2);border-left:3px solid var(--warn,#f5a524);
                   border-radius:6px;padding:10px;font-size:13px;margin-bottom:10px">
-        <b>Der gesamte Bestand dieser Instanz wird ersetzt.</b> Der bisherige Stand
-        wird vorher automatisch nach <code>backend/backup-vor-migration-&lt;Zeitstempel&gt;/</code>
-        gesichert. Das Backend startet danach neu.
+        ${t("mg_import_warn")}
       </div>
       <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
         <input type="checkbox" id="mg-in-secrets" />
-        <span>Enthaltene Geheimnisse ebenfalls übernehmen (.env überschreiben)</span>
+        <span>${t("mg_in_secrets")}</span>
       </label>
       <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
         <input type="checkbox" id="mg-in-backup" checked />
-        <span>Vorher Sicherung des jetzigen Standes anlegen</span>
+        <span>${t("mg_in_backup")}</span>
       </label>
       <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-        <button class="taskbar-btn" id="mg-pick">📂 Archiv wählen…</button>
-        <span id="mg-file" style="font-size:12px;color:var(--subtext)">Keine Datei gewählt</span>
+        <button class="taskbar-btn" id="mg-pick">📂 ${t("mg_pick")}</button>
+        <span id="mg-file" style="font-size:12px;color:var(--subtext)">${t("mg_no_file")}</span>
       </div>
       <div id="mg-bar-box" style="display:none;height:6px;border-radius:3px;background:var(--panel-2);margin-top:10px">
         <div id="mg-bar" style="height:100%;width:0%;background:var(--accent);border-radius:3px"></div>
       </div>
       <button class="btn-primary" id="mg-import" disabled
               style="width:auto;margin-top:10px;background:var(--danger)">
-        ⚠ Diese Instanz überschreiben
+        ⚠ ${t("mg_overwrite")}
       </button>
       <div id="mg-import-msg" style="font-size:12px;color:var(--subtext);margin-top:8px;white-space:pre-wrap"></div>
       <input type="file" id="mg-input" accept=".zip" hidden />
@@ -761,7 +753,7 @@ async function renderMigrate(host) {
 
   host.querySelector("#mg-export").addEventListener("click", () => {
     const msg = host.querySelector("#mg-export-msg");
-    msg.textContent = "Archiv wird gebaut – der Download startet gleich von selbst…";
+    msg.textContent = t("mg_building");
     // Der Server baut das Archiv erst beim Abruf; bei vielen Aufzeichnungen
     // dauert das eine Weile. Deshalb ein einfacher Link statt fetch:
     // der Browser zeigt den Fortschritt dann selbst an.
@@ -778,17 +770,16 @@ async function renderMigrate(host) {
   fileIn.addEventListener("change", () => {
     chosen = fileIn.files[0] || null;
     host.querySelector("#mg-file").textContent = chosen
-      ? `${chosen.name} (${mb(chosen.size)})` : "Keine Datei gewählt";
+      ? `${chosen.name} (${mb(chosen.size)})` : t("mg_no_file");
     importBtn.disabled = !chosen;
   });
 
   importBtn.addEventListener("click", async () => {
     if (!chosen) return;
     const sure = await uiConfirm(
-      "Diese Instanz mit dem Archiv überschreiben?",
-      { description: "Datenbank, Aufzeichnungen, Medien und Branding werden ersetzt. "
-                   + "Der jetzige Stand wird vorher gesichert. Das Backend startet danach neu.",
-        okText: "Überschreiben", danger: true });
+      t("mg_overwrite_q"),
+      { description: t("mg_overwrite_desc"),
+        okText: t("mg_overwrite_ok"), danger: true });
     if (!sure) return;
 
     const msg = host.querySelector("#mg-import-msg");
@@ -796,7 +787,7 @@ async function renderMigrate(host) {
     const bar = host.querySelector("#mg-bar");
     importBtn.disabled = true;
     box.style.display = "";
-    msg.textContent = "Archiv wird übertragen…";
+    msg.textContent = t("mg_uploading");
     try {
       const r = await api.migrateImport(chosen, {
         secrets: host.querySelector("#mg-in-secrets").checked,
@@ -804,13 +795,13 @@ async function renderMigrate(host) {
       }, (p) => { bar.style.width = (p * 100).toFixed(0) + "%"; });
       const m = r.manifest || {};
       msg.textContent =
-        `Fertig. Übernommen: ${(r.restored || []).join(", ")}\n`
-        + `Quelle: ${m.created_iso || "?"} (Version ${m.version || "?"})\n`
-        + (r.backup ? `Sicherung: ${r.backup}\n` : "")
-        + "Das Backend startet jetzt neu – die Seite bitte in ein paar Sekunden neu laden.";
-      window.notify?.("Migration eingespielt – Backend startet neu", "success", 12000);
+        t("mg_done", { list: (r.restored || []).join(", ") }) + "\n"
+        + t("mg_source", { date: m.created_iso || "?", version: m.version || "?" }) + "\n"
+        + (r.backup ? t("mg_backup_at", { path: r.backup }) + "\n" : "")
+        + t("mg_restart_note");
+      window.notify?.(t("mg_applied"), "success", 12000);
     } catch (e) {
-      msg.textContent = "Fehlgeschlagen: " + e.message;
+      msg.textContent = t("mg_failed") + ": " + e.message;
       importBtn.disabled = false;
     }
   });

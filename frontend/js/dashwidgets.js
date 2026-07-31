@@ -291,9 +291,9 @@ export function warrantyInfo(untilMs) {
   }
   const color = days > 90 ? "#3ecf8e" : days > 30 ? "#f5a524" : "#ff8b3d";
   const years = Math.floor(days / 365), rest = days % 365, months = Math.floor(rest / 30);
-  let human = `noch ${days} Tage`;
-  if (years >= 1) human = `noch ${years} J. ${months} Mon.`;
-  else if (days > 60) human = `noch ${Math.floor(days / 30)} Monate`;
+  let human = t("dw_days_left", { n: days });
+  if (years >= 1) human = t("dw_years_left", { y: years, m: months });
+  else if (days > 60) human = t("dw_months_left", { n: Math.floor(days / 30) });
   return { known: true, days, color, text: human, sub: `Garantie bis ${dateTxt}` };
 }
 
@@ -894,12 +894,12 @@ function renderMediaFavorites(target, widget) {
         api.getPlaylists(true).catch(() => []),
       ]);
     } catch {
-      box.innerHTML = `<div style="color:var(--subtext)">Favoriten nicht verfügbar.</div>`;
+      box.innerHTML = `<div style="color:var(--subtext)">${t("dw_fav_unavailable")}</div>`;
       return;
     }
     if (!items.length && !lists.length) {
       box.innerHTML = `<div style="color:var(--subtext);line-height:1.5">
-        Noch keine Favoriten. Im Audio-Player über das ☆ markieren.</div>`;
+        ${t("dw_no_favs")}</div>`;
       return;
     }
     const row = (id, type, ico, title, sub) => `
@@ -913,7 +913,7 @@ function renderMediaFavorites(target, widget) {
         <span style="color:#f5c542">★</span>
       </div>`;
     box.innerHTML =
-      lists.map((pl) => row(pl.id, "playlist", "🗂", pl.name, `${pl.count} Einträge`)).join("") +
+      lists.map((pl) => row(pl.id, "playlist", "🗂", pl.name, t("dw_entries", { n: pl.count }))).join("") +
       items.map((it) => row(it.id, "item", icon(it), it.title, it.subtitle || it.owner_name)).join("");
 
     box.querySelectorAll("[data-fav]").forEach((el) => {

@@ -17,33 +17,25 @@ export function renderAddClient(body, win) {
 
   body.innerHTML = `
     <div class="settings-section">
-      <h3>Neuen Client hinzufügen ${helpDot(
-        "Was bei der Installation passiert: Der Agent wird nach " +
-        "C:\\Program Files\\RapalleRmmAgent (Windows) bzw. /opt/rapalle-rmm-agent (Linux) " +
-        "installiert. Fehlt Python, wird es automatisch mitinstalliert. Die nötigen " +
-        "Bibliotheken kommen in eine eigene Umgebung. Der Agent wird als Dienst " +
-        "eingerichtet, der beim Booten startet - auch ohne Anmeldung - und meldet sich " +
-        "danach selbstständig hier im Dashboard an."
-      )}</h3>
+      <h3>${tr("ac_title")} ${helpDot(tr("ac_help"))}</h3>
 
       <div class="form-row" style="margin-top:14px">
-        <label>Wunschname für den Client (optional)</label>
+        <label>${tr("ac_wish_name")}</label>
         <input type="text" id="ac-name" placeholder="${tr("u_leer_lassen_echter_hostname_des_ge")}" />
       </div>
       <div class="form-row">
         <label>Tenant (optional)</label>
-        <select id="ac-tenant"><option value="">— nicht zuordnen (&rarr; „Uncategorized")</option>${tenantOptions}</select>
+        <select id="ac-tenant"><option value="">${tr("ac_no_tenant")}</option>${tenantOptions}</select>
       </div>
       <div class="form-row">
-        <label>Standort (optional)</label>
-        <select id="ac-location"><option value="">— keiner —</option></select>
+        <label>${tr("ac_location_opt")}</label>
+        <select id="ac-location"><option value="">${tr("ac_none")}</option></select>
       </div>
       <p style="color:var(--subtext);font-size:12px;margin:4px 0 0">
-        Ohne Tenant/Standort landet der Client automatisch im Tenant <b>„Uncategorized"</b>
-        und kann später jederzeit per „Bearbeiten" verschoben werden.
+        ${tr("ac_uncat_hint")}
       </p>
 
-      <button class="btn-primary" id="ac-generate" style="margin-top:12px">Installations-Link erzeugen</button>
+      <button class="btn-primary" id="ac-generate" style="margin-top:12px">${tr("ac_make_link")}</button>
 
       <div id="ac-result" style="margin-top:20px"></div>
     </div>
@@ -61,7 +53,7 @@ export function renderAddClient(body, win) {
       return;
     }
     const cur = tenantSel.value;
-    tenantSel.innerHTML = `<option value="">— nicht zuordnen (&rarr; „Uncategorized")</option>` +
+    tenantSel.innerHTML = `<option value="">${tr("ac_no_tenant")}</option>` +
       state.hierarchy.tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
     if ([...tenantSel.options].some((o) => o.value === cur)) tenantSel.value = cur;
     tenantSel.dispatchEvent(new Event("change"));   // Standort-Liste nachziehen
@@ -105,24 +97,23 @@ export function renderAddClient(body, win) {
       ];
 
       resultEl.innerHTML = `
-        <h3 style="font-size:13px">Weg 1 — Download-Seite (Link weitergeben)</h3>
+        <h3 style="font-size:13px">${tr("ac_way1")}</h3>
         ${copyRow(copyTexts[0], 0)}
 
-        <h3 style="font-size:13px;margin-top:16px">Weg 2 — Ein-Zeiler Linux (als root)</h3>
+        <h3 style="font-size:13px;margin-top:16px">${tr("ac_way2_linux")}</h3>
         ${copyRow(copyTexts[1], 1)}
 
-        <h3 style="font-size:13px;margin-top:16px">Weg 2 — Ein-Zeiler Windows (PowerShell als Admin)</h3>
+        <h3 style="font-size:13px;margin-top:16px">${tr("ac_way2_win")}</h3>
         ${copyRow(copyTexts[2], 2)}
         <p style="color:var(--subtext);font-size:12px;margin-top:4px">
-          Der Windows-Installer installiert Python bei Bedarf selbst und richtet den
-          unsichtbaren Autostart ein. Danach kannst du die PowerShell einfach schließen.
+          ${tr("ac_win_hint")}
         </p>
 
-        <h3 style="font-size:13px;margin-top:16px">Weg 3 — Direkter Download</h3>
+        <h3 style="font-size:13px;margin-top:16px">${tr("ac_way3")}</h3>
         <a class="btn-primary" style="display:inline-block;width:auto;text-decoration:none"
-           href="${esc(downloadUrl)}">Agent .zip herunterladen</a>
+           href="${esc(downloadUrl)}">${tr("ac_download_zip")}</a>
 
-        <h3 style="font-size:13px;margin-top:16px">Weg 4 — Fertiges Installationspaket</h3>
+        <h3 style="font-size:13px;margin-top:16px">${tr("ac_way4")}</h3>
         <div id="ac-installers" style="font-size:12px;color:var(--subtext)">Lade Pakete…</div>
       `;
 
@@ -198,7 +189,7 @@ async function renderInstallers(host, token, abs, backendUrl) {
   try {
     info = await api.listInstallers();
   } catch {
-    host.textContent = "Installationspakete werden von diesem Backend noch nicht unterstützt.";
+    host.textContent = tr("ac_no_installer_support");
     return;
   }
 
@@ -214,7 +205,7 @@ async function renderInstallers(host, token, abs, backendUrl) {
           <code style="font-size:11px">${esc(hint)}</code>
         </div>
         <span style="white-space:nowrap">${fmtSize(p.size || 0)}</span>
-        <a class="action-btn" style="text-decoration:none" href="${esc(url)}">⬇ Laden</a>
+        <a class="action-btn" style="text-decoration:none" href="${esc(url)}">⬇ ${tr("ac_get")}</a>
       </div>`;
   }).join("");
 
@@ -222,12 +213,12 @@ async function renderInstallers(host, token, abs, backendUrl) {
     .filter(([, v]) => v).map(([k]) => k);
 
   host.innerHTML = `
-    ${list.length ? rows : `<p style="margin:0">Noch keine Pakete gebaut.</p>`}
+    ${list.length ? rows : `<p style="margin:0">${tr("ac_no_packages")}</p>`}
     <p style="margin:8px 0 0">
-      Baubar auf diesem Server: <b>${buildable.length ? esc(buildable.join(", ")) : "—"}</b>
+      ${tr("ac_buildable")}: <b>${buildable.length ? esc(buildable.join(", ")) : "—"}</b>
     </p>
     ${info.build_available ? `
-      <button class="action-btn" id="ac-build" style="margin-top:8px">🔨 Pakete jetzt bauen</button>
+      <button class="action-btn" id="ac-build" style="margin-top:8px">🔨 ${tr("ac_build_now")}</button>
       <pre id="ac-build-log" style="display:none;margin-top:8px;max-height:220px;overflow:auto;
            background:var(--panel-2);padding:8px;border-radius:6px;font-size:11px"></pre>` : ""}
   `;
@@ -237,12 +228,12 @@ async function renderInstallers(host, token, abs, backendUrl) {
   btn.addEventListener("click", async () => {
     const logEl = host.querySelector("#ac-build-log");
     btn.disabled = true;
-    btn.textContent = "🔨 Baue… (kann 1-2 Minuten dauern)";
+    btn.textContent = "🔨 " + tr("ac_building");
     logEl.style.display = "block";
-    logEl.textContent = "Build läuft…";
+    logEl.textContent = tr("ac_build_running");
     try {
       const r = await api.buildInstallers("auto");
-      logEl.textContent = r.log || "(keine Ausgabe)";
+      logEl.textContent = r.log || tr("ac_no_output");
       // Liste danach frisch aufbauen - der Build-Log bleibt darunter stehen.
       await renderInstallers(host, token, abs, backendUrl);
       const again = host.querySelector("#ac-build-log");

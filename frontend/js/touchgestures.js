@@ -117,6 +117,13 @@ export function attachPinchZoom(box, el, opts = {}) {
     // bleibt es mittig; sonst wird der Rand begrenzt.
     const bw = box.clientWidth, bh = box.clientHeight;
     const w = el.offsetWidth * scale, h = el.offsetHeight * scale;
+    // WICHTIG: Solange das Element noch keine Größe hat (ein <img> ohne Bild
+    // ist 0x0), darf hier NICHT gerechnet werden. Sonst ergibt die Zentrierung
+    // (bw - 0) / 2 = halbe Bereichsbreite - das Bild wurde dann um eine halbe
+    // Fensterbreite nach rechts und eine halbe Fensterhöhe nach unten
+    // geschoben und blieb dort, weil apply() danach nie wieder lief. Genau so
+    // sah der "off-center" Remote-Bildschirm aus.
+    if (!w || !h) return;
     tx = w <= bw ? (bw - w) / 2 : Math.min(0, Math.max(bw - w, tx));
     ty = h <= bh ? (bh - h) / 2 : Math.min(0, Math.max(bh - h, ty));
     el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
@@ -197,6 +204,20 @@ export function attachPinchZoom(box, el, opts = {}) {
   box.addEventListener("pointerup", onTap, { passive: true });
   window.addEventListener("resize", apply);
 
+  // Neu ausrichten, sobald das Element tatsächlich eine Größe bekommt.
+  // Bei einem <img> ist das erst nach dem ersten geladenen Bild der Fall -
+  // und beim Remote-Bildschirm wechselt die Größe später erneut (anderer
+  // Monitor, andere Auflösung). Ohne das blieb die einmal berechnete
+  // Verschiebung für immer stehen.
+  let ro = null;
+  if (typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(() => apply());
+    ro.observe(el);
+    ro.observe(box);
+  }
+  const onLoad = () => apply();
+  el.addEventListener("load", onLoad);
+
   apply();
 
   return {
@@ -216,6 +237,8 @@ export function attachPinchZoom(box, el, opts = {}) {
     },
     reset() { scale = 1; tx = 0; ty = 0; apply(); },
     destroy() {
+      try { ro?.disconnect(); } catch {}
+      el.removeEventListener("load", onLoad);
       box.removeEventListener("pointerdown", onDown);
       box.removeEventListener("pointermove", onMove);
       box.removeEventListener("pointerup", onUp);

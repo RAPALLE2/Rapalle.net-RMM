@@ -353,7 +353,7 @@ async function startSession(user) {
     restorePrefs = savedPrefs;
   }
   if (freshStart) {
-    try { console.info("[startSession] Sauberer Neustart: offene Fenster werden nicht wiederhergestellt."); } catch {}
+    try { console.info("[startSession] clean start: open windows will not be restored."); } catch {}
   }
   // WICHTIG: Restore/Crash-Guard-Init defensiv kapseln. Ein Fehler hier darf den
   // Login/das Dashboard NIEMALS blockieren (sonst bleibt man im leeren, „blurry"
@@ -433,11 +433,11 @@ async function startSession(user) {
       const unread = await api.chatUnread();
       if (unread && unread.total > 0) {
         const lines = (unread.conversations || []).slice(0, 5)
-          .map((c) => `• ${c.name}: ${c.unread} neu`).join("\n");
+          .map((c) => `• ${c.name}: ${t("app_unread_n", { n: c.unread })}`).join("\n");
         const more = unread.conversations.length > 5
-          ? `\n… und ${unread.conversations.length - 5} weitere` : "";
+          ? "\n… " + t("app_and_more", { n: unread.conversations.length - 5 }) : "";
         window.notify?.(
-          `💬 ${unread.total} ungelesene Chat-Nachricht${unread.total === 1 ? "" : "en"}\n${lines}${more}`,
+          `💬 ${t("app_unread_chats", { n: unread.total })}\n${lines}${more}`,
           "info", 12000, { source: "chat" });
       }
     }
@@ -463,7 +463,7 @@ function restoreWindows(saved) {
         focus: false,   // Fokus am Ende gesetzt (Reihenfolge)
       });
     } catch (e) {
-      console.warn("[persist] Fenster konnte nicht wiederhergestellt werden:", w.key, e);
+      console.warn("[persist] could not restore window:", w.key, e);
     }
   }
 }
@@ -823,8 +823,8 @@ function initLiveUpdates() {
   // Agent-Absturz: Der Agent hat sich selbst neu gestartet und meldet den
   // Fehler - dem Nutzer deutlich anzeigen (letzte Traceback-Zeile reicht).
   dashboardSocket.on("client:agent-crashed", (d) => {
-    const lastLine = String(d.error || "").trim().split("\n").filter(Boolean).slice(-1)[0] || "unbekannter Fehler";
-    notifyError(`⚠️ Agent auf ${d.hostname || d.id} ist abgestürzt und wurde automatisch neu gestartet.\nFehler: ${lastLine}\n(Details im Audit-Log)`,
+    const lastLine = String(d.error || "").trim().split("\n").filter(Boolean).slice(-1)[0] || t("app_unknown_error");
+    notifyError(`⚠️ ${t("app_agent_crashed", { host: d.hostname || d.id, err: lastLine })}`,
       "error", `agent-crash-${d.id}`, 20000);
   });
 

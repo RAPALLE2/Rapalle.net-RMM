@@ -287,7 +287,7 @@ export function renderAudioPlayer(body, win) {
 
   async function drawLib() {
     drawLibTabs();
-    libBodyEl.innerHTML = `<div style="color:#8ea2c6;font-size:12px;padding:8px">Lädt…</div>`;
+    libBodyEl.innerHTML = `<div style="color:#8ea2c6;font-size:12px;padding:8px">${t("loading")}</div>`;
     if (libTab === "fav") return drawFavTab();
     if (libTab === "lists") return drawListsTab();
     if (libTab === "radio") return drawRadioTab();
@@ -360,16 +360,16 @@ export function renderAudioPlayer(body, win) {
     libBodyEl.innerHTML = `
       ${playlists.length ? playlists.map((pl) => `
         <div data-playlist="${esc(pl.id)}">${libRow("🗂", pl.name,
-          `${pl.count} Einträge · ${pl.owner_name}${pl.shared ? " · geteilt" : ""}`,
-          `<button class="ap-btn" data-plfav="${esc(pl.id)}" title="Favorit"
+          `${t("dw_entries", { n: pl.count })} · ${pl.owner_name}${pl.shared ? " · " + t("ap_shared") : ""}`,
+          `<button class="ap-btn" data-plfav="${esc(pl.id)}" title="${t("ap_favorite")}"
              style="width:24px;height:24px;font-size:12px;flex:none;${pl.favorite ? "background:rgba(245,197,66,.3);border-color:#f5c542" : ""}">${pl.favorite ? "★" : "☆"}</button>` +
-          (pl.can_edit ? `<button class="ap-btn" data-pledit="${esc(pl.id)}" title="Einträge wählen"
+          (pl.can_edit ? `<button class="ap-btn" data-pledit="${esc(pl.id)}" title="${t("ap_pick_items")}"
              style="width:24px;height:24px;font-size:11px;flex:none">✎</button>
-            <button class="ap-btn" data-pldel="${esc(pl.id)}" title="Liste löschen"
+            <button class="ap-btn" data-pldel="${esc(pl.id)}" title="${t("ap_del_list")}"
              style="width:24px;height:24px;font-size:11px;flex:none">🗑</button>` : ""))}</div>`).join("")
-        : `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Noch keine Wiedergabelisten.</div>`}
+        : `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">${t("ap_no_lists")}</div>`}
       <button class="ap-chip" id="ap-add-list" style="width:100%;text-align:center;margin-top:8px;font-size:12px">
-        ＋ Neue Wiedergabeliste</button>
+        ＋ ${t("ap_new_list")}</button>
       <div id="ap-pl-edit" style="margin-top:8px"></div>`;
 
     libBodyEl.querySelectorAll("[data-playlist]").forEach((el) =>
@@ -380,14 +380,14 @@ export function renderAudioPlayer(body, win) {
     libBodyEl.querySelectorAll("[data-pldel]").forEach((b) =>
       b.addEventListener("click", async (e) => {
         e.stopPropagation();
-        if (!confirm("Diese Wiedergabeliste löschen? Die Einträge selbst bleiben erhalten.")) return;
+        if (!(await uiConfirm(t("ap_del_list_q"), { danger: true }))) return;
         try { await api.deletePlaylist(b.dataset.pldel); await loadLibItems(); drawLib(); }
         catch (err) { window.notify?.(err.message, "error"); }
       }));
     libBodyEl.querySelectorAll("[data-pledit]").forEach((b) =>
       b.addEventListener("click", (e) => { e.stopPropagation(); editPlaylist(b.dataset.pledit); }));
     libBodyEl.querySelector("#ap-add-list").addEventListener("click", async () => {
-      const name = prompt("Name der Wiedergabeliste:");
+      const name = await uiPrompt(t("ap_list_name"));
       if (!name) return;
       try {
         const pl = await api.createPlaylist({ name });
@@ -405,16 +405,16 @@ export function renderAudioPlayer(body, win) {
     const chosen = new Set((pl.items || []).map((i) => i.id));
     box.innerHTML = `
       <div style="border-top:1px solid rgba(255,255,255,.12);padding-top:8px">
-        <div style="font-size:11px;color:#8ea2c6;margin-bottom:5px">Einträge für „${esc(pl.name)}“</div>
+        <div style="font-size:11px;color:#8ea2c6;margin-bottom:5px">${t("ap_items_for", { name: esc(pl.name) })}</div>
         ${libItems.map((it) => `
           <label style="display:flex;gap:8px;align-items:center;padding:4px 6px;font-size:12px;cursor:pointer">
             <input type="checkbox" data-plitem="${esc(it.id)}" ${chosen.has(it.id) ? "checked" : ""} />
             <span>${kindIcon(it)}</span>
             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.title)}</span>
-          </label>`).join("") || `<div style="font-size:11.5px;color:#8ea2c6">Die Bibliothek ist noch leer.</div>`}
+          </label>`).join("") || `<div style="font-size:11.5px;color:#8ea2c6">${t("ap_lib_empty")}</div>`}
         <div style="display:flex;gap:6px;margin-top:8px">
-          <button class="ap-chip" id="ap-pl-save" style="flex:1;text-align:center;font-size:12px">Speichern</button>
-          <button class="ap-chip" id="ap-pl-cancel" style="flex:1;text-align:center;font-size:12px">Abbrechen</button>
+          <button class="ap-chip" id="ap-pl-save" style="flex:1;text-align:center;font-size:12px">${t("save")}</button>
+          <button class="ap-chip" id="ap-pl-cancel" style="flex:1;text-align:center;font-size:12px">${t("cancel")}</button>
         </div>
       </div>`;
     box.querySelector("#ap-pl-cancel").addEventListener("click", () => { box.innerHTML = ""; });
@@ -506,9 +506,7 @@ export function renderAudioPlayer(body, win) {
     if (!spotifyLoggedIn()) {
       libBodyEl.innerHTML = `
         <div style="font-size:12px;color:#8ea2c6;padding:8px 4px;line-height:1.5">
-          Nicht mit Spotify verbunden.<br>
-          Melde dich oben rechts an, dann erscheinen hier deine
-          <b>Playlists</b>, <b>gespeicherten Songs</b> und <b>Alben</b>.
+          ${t("ap_sp_not_connected")}
         </div>`;
       return;
     }
@@ -541,9 +539,8 @@ export function renderAudioPlayer(body, win) {
         }));
     } catch (e) {
       libBodyEl.innerHTML = `<div style="font-size:12px;color:#ff8ba0;padding:8px 4px">
-        Spotify-Bibliothek nicht abrufbar: ${esc(e.message)}<br>
-        <span style="color:#8ea2c6">Tipp: einmal ab- und wieder anmelden – die Berechtigung
-        für die Bibliothek ist neu hinzugekommen.</span></div>`;
+        ${t("ap_sp_lib_failed")}: ${esc(e.message)}<br>
+        <span style="color:#8ea2c6">${t("ap_sp_relogin_tip")}</span></div>`;
     }
   }
 
@@ -595,19 +592,19 @@ export function renderAudioPlayer(body, win) {
         || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Noch nichts hochgeladen.</div>`}
 
       <div style="display:flex;gap:6px;margin-top:8px">
-        <button class="ap-chip" id="ap-upload" style="flex:1;text-align:center;font-size:12px">⬆️ Hochladen</button>
-        <button class="ap-chip" id="ap-openlocal" style="flex:1;text-align:center;font-size:12px">📂 Öffnen</button>
+        <button class="ap-chip" id="ap-upload" style="flex:1;text-align:center;font-size:12px">⬆️ ${t("ap_upload")}</button>
+        <button class="ap-chip" id="ap-openlocal" style="flex:1;text-align:center;font-size:12px">📂 ${t("ap_open")}</button>
       </div>
       ${canShare ? `
       <label style="display:flex;gap:7px;align-items:center;margin-top:6px;font-size:11.5px;color:#8ea2c6;cursor:pointer">
         <input type="checkbox" id="ap-up-shared" />
-        Für alle Benutzer bereitstellen (gemeinsame Bibliothek)
+        ${t("ap_share_all")}
       </label>` : ""}
       <div id="ap-up-progress" style="display:none;height:5px;border-radius:3px;background:rgba(255,255,255,.15);margin-top:6px">
         <div id="ap-up-bar" style="height:100%;width:0%;background:#3ecf8e;border-radius:3px"></div>
       </div>
       <div style="font-size:10.5px;color:#8ea2c6;margin-top:4px">
-        „Öffnen“ spielt Dateien direkt von diesem Rechner – ohne Upload.
+        ${t("ap_open_hint")}
       </div>
 
       ${localQueue.length ? `
@@ -704,12 +701,9 @@ export function renderAudioPlayer(body, win) {
     stage.innerHTML = `
       <div style="max-width:520px;width:100%;text-align:center">
         <div style="font-size:56px;margin-bottom:4px">🎧</div>
-        <div style="font-weight:800;font-size:18px;margin-bottom:2px">Was möchtest du hören?</div>
+        <div style="font-weight:800;font-size:18px;margin-bottom:2px">${t("ap_what_listen")}</div>
         <div style="color:#8ea2c6;font-size:12.5px;line-height:1.6">
-          Links in der <b>Bibliothek</b> stöbern – Radio, deine Spotify-Playlists,
-          gemerkte YouTube-Links und lokale Dateien.<br>
-          Oder oben einen Link einfügen. Das Menü kannst du jederzeit mit ☰
-          ein- und ausblenden, auch während etwas läuft.
+          ${t("ap_welcome_hint")}
         </div>
       </div>`;
   }
@@ -760,7 +754,7 @@ export function renderAudioPlayer(body, win) {
     currentKind = "youtube";
     stage.innerHTML = `<div style="width:100%;max-width:860px;aspect-ratio:16/9;border-radius:14px;overflow:hidden;
       box-shadow:0 12px 40px rgba(0,0,0,.55);background:#000" id="ap-yt-frame">
-      <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#8ea2c6">⏳ YouTube lädt…</div></div>`;
+      <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#8ea2c6">⏳ ${t("ap_yt_loading")}</div></div>`;
     titleEl.textContent = ""; subEl.textContent = "YouTube";
     try {
       const YT = await loadYouTubeApi();
@@ -913,7 +907,7 @@ export function renderAudioPlayer(body, win) {
       return;
     }
     box.innerHTML = `
-      <div style="font-size:11px;color:#8ea2c6;margin:0 2px 5px">Als Nächstes (${next.length})</div>
+      <div style="font-size:11px;color:#8ea2c6;margin:0 2px 5px">${t("ap_up_next")} (${next.length})</div>
       ${next.slice(0, 8).map((tr, i) => `
         <div style="display:flex;gap:8px;align-items:center;padding:4px 6px;border-radius:8px;
              background:rgba(255,255,255,.05);margin-bottom:4px">
@@ -1052,7 +1046,7 @@ export function renderAudioPlayer(body, win) {
     localIndex = i;
     const f = localQueue[i];
     const url = URL.createObjectURL(f);
-    playMedia(url, f.name, `Lokale Datei · ${i + 1}/${localQueue.length}`,
+    playMedia(url, f.name, `${t("ap_local_file")} · ${i + 1}/${localQueue.length}`,
       (f.type || "").startsWith("video"),
       () => playLocalIndex(shuffleOn
         ? Math.floor(Math.random() * localQueue.length) : localIndex + 1));
@@ -1221,38 +1215,37 @@ export function renderAudioPlayer(body, win) {
     currentKind = null;
     controls.style.display = "none";
     progressRow.style.display = "none";
-    titleEl.textContent = "Spotify einrichten"; subEl.textContent = "";
+    titleEl.textContent = t("ap_sp_setup"); subEl.textContent = "";
     const uri = diag.redirectUri || (window.location.origin + "/");
     const problem = diag.uriError
       ? esc(diag.uriError)
       : !diag.schemeOk
-        ? `Spotify akzeptiert <code>${esc(uri)}</code> nicht. Erlaubt sind nur
-           <b>https://…</b> oder die Loopback-Adresse
-           <code>${esc(`http://127.0.0.1:${window.location.port || "80"}/`)}</code>.`
+        ? t("ap_sp_scheme_bad", {
+             uri: `<code>${esc(uri)}</code>`,
+             loopback: `<code>${esc(`http://127.0.0.1:${window.location.port || "80"}/`)}</code>`,
+           })
         : "";
     stage.innerHTML = `
       <div style="max-width:620px;width:100%;font-size:13px;line-height:1.6">
         <div style="font-size:34px;text-align:center">🎧</div>
         <div style="font-weight:800;font-size:16px;text-align:center;margin-bottom:10px">
-          Spotify-Login einrichten</div>
+          ${t("ap_sp_setup")}</div>
         ${problem ? `<div style="background:rgba(255,77,109,.14);border:1px solid #ff4d6d;
           border-radius:10px;padding:9px 12px;margin-bottom:12px">⚠ ${problem}</div>` : ""}
         <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);
              border-radius:10px;padding:10px 12px;margin-bottom:12px">
           <div style="color:#8ea2c6;font-size:11.5px;margin-bottom:4px">
-            Diese Redirect-URI wird gesendet
-            (${diag.fromSetting ? "aus „Vollständige URL“" : "aktuelle Adresse dieser Seite"}):</div>
+            ${t("ap_sp_uri_sent")}
+            (${diag.fromSetting ? t("ap_sp_from_setting") : t("ap_sp_from_page")}):</div>
           <div style="display:flex;gap:6px;align-items:center">
             <code id="ap-sp-uri" style="flex:1;padding:5px 8px;background:rgba(0,0,0,.35);
               border-radius:6px;overflow-wrap:anywhere">${esc(uri)}</code>
-            <button class="ap-btn" id="ap-sp-copy" title="Kopieren"
+            <button class="ap-btn" id="ap-sp-copy" title="${t("copy")}"
               style="width:30px;height:30px;font-size:13px;flex:none">📋</button>
           </div>
           ${diag.altUri ? `
           <div style="color:#8ea2c6;font-size:11.5px;margin:8px 0 4px">
-            Trage im Dashboard am besten <b>beide</b> Schreibweisen ein – Spotify
-            vergleicht zeichengenau, und der Schrägstrich am Ende ist die häufigste
-            Fehlerquelle:</div>
+            ${t("ap_sp_both_hint")}</div>
           <div style="display:flex;gap:6px;align-items:center">
             <code style="flex:1;padding:5px 8px;background:rgba(0,0,0,.35);
               border-radius:6px;overflow-wrap:anywhere">${esc(diag.altUri)}</code>
@@ -1261,30 +1254,22 @@ export function renderAudioPlayer(body, win) {
           </div>` : ""}
         </div>
         <ol style="margin:0 0 12px 18px;padding:0;color:#c9d6ee">
-          <li>Auf <b>developer.spotify.com/dashboard</b> deine App öffnen (oder neu anlegen).</li>
-          <li><b>Settings</b> → <b>Redirect URIs</b>: obige URI(s) einfügen, jeweils auf
-              <b>Add</b> klicken und unten <b>Save</b> nicht vergessen – ohne Speichern
-              meldet Spotify „No redirect URI configured“.</li>
-          <li>Schreibweise <b>exakt</b> vergleichen: Groß-/Kleinschreibung, jeder Buchstabe
-              im Hostnamen, Port und Schrägstrich. Schon ein Zeichen Unterschied ergibt
-              „redirect_uri: Not matching configuration“.</li>
-          <li>Unter <b>APIs used</b> muss <b>Web API</b> (und für den Vollplayer
-              <b>Web Playback SDK</b>) aktiviert sein.</li>
-          <li>Die <b>Client ID</b> aus der App in
-              <b>Einstellungen → Allgemein → Spotify</b> eintragen.</li>
+          <li>${t("ap_sp_step1")}</li>
+          <li>${t("ap_sp_step2")}</li>
+          <li>${t("ap_sp_step3")}</li>
+          <li>${t("ap_sp_step4")}</li>
+          <li>${t("ap_sp_step5")}</li>
         </ol>
         <div style="color:#8ea2c6;font-size:12px">
-          Die Redirect-URI wird aus <b>Einstellungen → Allgemein → „Vollständige URL“</b>
-          gebildet. Läuft das Dashboard nur über HTTP im LAN, öffne es über
-          <code>${esc(`http://127.0.0.1:${window.location.port || "80"}/`)}</code> – Spotify lässt HTTP sonst nicht zu.
+          ${t("ap_sp_http_hint", { url: esc(`http://127.0.0.1:${window.location.port || "80"}/`) })}
         </div>
         <div style="text-align:center;margin-top:14px">
           <button class="btn-primary" id="ap-sp-retry" style="width:auto;margin:0;border-radius:20px">
-            Erneut versuchen</button>
+            ${t("ap_retry")}</button>
         </div>
       </div>`;
     const copyTo = async (text) => {
-      try { await navigator.clipboard.writeText(text); window.notify?.("URI kopiert", "success", 2000); }
+      try { await navigator.clipboard.writeText(text); window.notify?.(t("ap_uri_copied"), "success", 2000); }
       catch { window.notify?.(t("u_bitte_manuell_kopieren") + text, "info", 8000); }
     };
     stage.querySelector("#ap-sp-copy").addEventListener("click", () => copyTo(uri));
@@ -1318,16 +1303,13 @@ export function renderAudioPlayer(body, win) {
     if (!spState.error) { showSpotifySetup(await spotifyDiagnostics()); return; }
     if (spState.error) {
       window.notify?.(
-        "Spotify-Login: Backend-Endpunkt fehlt (/api/auth/spotify-config). " +
+        t("ap_sp_endpoint_missing") + " " +
         t("u_bitte_auth_routes_py_admin_routes_") +
-        "und das Backend neu starten. (" + spState.error + ")", "error", 12000);
+        t("ap_sp_restart_backend") + " (" + spState.error + ")", "error", 12000);
     } else {
       window.notify?.(
-        "Spotify-Login einrichten: 1) Auf developer.spotify.com eine App anlegen, " +
-        "2) dort als Redirect-URI \"" + (spState.redirectUri || window.location.origin + "/") +
-        "\" eintragen (zeichengenau, mit / am Ende), " +
-        "3) die Client-ID in Einstellungen → Allgemein → Spotify speichern. " +
-        "Danach erscheint hier \"Mit Spotify anmelden\".", "info", 14000);
+        t("ap_sp_setup_toast", { uri: spState.redirectUri || window.location.origin + "/" }),
+        "info", 14000);
     }
   });
   refreshSpotifyChip();

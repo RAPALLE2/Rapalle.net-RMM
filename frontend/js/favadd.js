@@ -17,16 +17,20 @@
 import { esc } from "./utils.js";
 import { state } from "./state.js";
 import { addPin } from "./sidebar.js";
+import { t } from "./i18n.js";
 
 // Apps, die eine sinnvolle Unterseite kennen. Der Schlüssel ist die appId, der
 // Wert die Liste möglicher props.tab-Werte mit Anzeigename.
+// Nur Schluessel, keine fertigen Texte: Diese Tabelle wird beim Laden des
+// Moduls ausgewertet, da steht die Sprache noch nicht fest. `label` ist ein
+// Getter, damit t() erst beim Zugriff laeuft.
 const APP_SUBPAGES = {
   settings: [
-    { value: "general", label: "Allgemein" },
-    { value: "users", label: "Benutzer" },
+    { value: "general", get label() { return t("tab_general"); } },
+    { value: "users", get label() { return t("tab_users"); } },
     { value: "sso", label: "SSO" },
     { value: "branding", label: "Branding" },
-    { value: "notifications", label: "Benachrichtigungen" },
+    { value: "notifications", get label() { return t("fa_notifications"); } },
     { value: "source", label: "Source" },
   ],
 };
@@ -38,10 +42,10 @@ const APP_SIZE = {
 
 const SESSION_ACTIONS = [
   { value: "terminal", label: "Terminal", icon: "🖥️" },
-  { value: "explorer", label: "Datei-Explorer", icon: "📁" },
-  { value: "vnc", label: "Bildschirm (Remote)", icon: "🖵" },
+  { value: "explorer", get label() { return t("fa_explorer"); }, icon: "📁" },
+  { value: "vnc", get label() { return t("fa_screen"); }, icon: "🖵" },
   { value: "guacamole", label: "Guacamole (RDP/SSH)", icon: "🪟" },
-  { value: "taskmanager", label: "Task-Manager", icon: "📈" },
+  { value: "taskmanager", get label() { return t("fa_taskmanager"); }, icon: "📈" },
 ];
 
 // App-Katalog aus den (versteckten) Startmenü-Knöpfen in index.html lesen -
@@ -59,7 +63,7 @@ function readAppCatalog() {
       label: labelEl ? labelEl.textContent.trim() : id,
     });
   });
-  return out.sort((a, b) => a.label.localeCompare(b.label, "de"));
+  return out.sort((a, b) => a.label.localeCompare(b.label));
 }
 
 const FIELD_CSS = `width:100%;box-sizing:border-box;padding:7px 10px;border-radius:6px;
@@ -81,28 +85,28 @@ export function openAddFavoriteDialog() {
     <div class="favadd-box" style="background:var(--panel,#131c2b);color:var(--text,#e8eef7);
       border:1px solid var(--border,#2a3648);border-radius:12px;min-width:400px;max-width:520px;
       width:92vw;padding:18px;box-shadow:0 16px 48px rgba(0,0,0,0.5)">
-      <div style="font-size:14px;font-weight:600;margin-bottom:4px">★ Favorit anheften</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px">★ ${t("fa_title")}</div>
       <div style="font-size:12px;color:var(--subtext,#8fa3bd);margin-bottom:14px">
-        Apps, einzelne App-Unterseiten, Client-Sitzungen oder Links festpinnen.
+        ${t("fa_hint")}
       </div>
 
-      <label style="display:block;font-size:12px;color:var(--subtext);margin-bottom:4px">Art</label>
+      <label style="display:block;font-size:12px;color:var(--subtext);margin-bottom:4px">${t("fa_kind")}</label>
       <select id="fa-kind" style="${FIELD_CSS};margin-bottom:12px">
         <option value="app">App</option>
-        <option value="session">Client-Sitzung (Terminal, Explorer, Bildschirm …)</option>
-        <option value="website">Website / Link</option>
-        <option value="client">Client (in Seitenleiste auswählen)</option>
-        <option value="tenant">Tenant (in Seitenleiste auswählen)</option>
+        <option value="session">${t("fa_k_session")}</option>
+        <option value="website">${t("fa_k_website")}</option>
+        <option value="client">${t("fa_k_client")}</option>
+        <option value="tenant">${t("fa_k_tenant")}</option>
       </select>
 
       <div id="fa-fields"></div>
 
-      <label style="display:block;font-size:12px;color:var(--subtext);margin:12px 0 4px">Anzeigename</label>
-      <input id="fa-label" type="text" placeholder="wird automatisch vorgeschlagen" style="${FIELD_CSS}" />
+      <label style="display:block;font-size:12px;color:var(--subtext);margin:12px 0 4px">${t("set_display_name")}</label>
+      <input id="fa-label" type="text" placeholder="${t("fa_auto_label")}" style="${FIELD_CSS}" />
 
       <div style="display:flex;gap:16px;margin-top:12px;font-size:12px;color:var(--subtext)">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="fa-dim-s" checked /> Seitenleiste
+          <input type="checkbox" id="fa-dim-s" checked /> ${t("fa_sidebar")}
         </label>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
           <input type="checkbox" id="fa-dim-d" /> Dashboard
@@ -110,9 +114,9 @@ export function openAddFavoriteDialog() {
       </div>
 
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-        <button class="fa-cancel taskbar-btn">Abbrechen</button>
+        <button class="fa-cancel taskbar-btn">${t("cancel")}</button>
         <button class="fa-ok" style="border:1px solid var(--accent,#4da6ff);background:var(--accent,#4da6ff)22;
-          color:var(--accent,#4da6ff);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px">Anheften</button>
+          color:var(--accent,#4da6ff);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px">${t("fa_pin")}</button>
       </div>
     </div>`;
 
@@ -143,7 +147,7 @@ export function openAddFavoriteDialog() {
         const subs = APP_SUBPAGES[appSel.value];
         if (subs) {
           wrap.style.display = "";
-          subSel.innerHTML = opt("", "— ganze App —") + subs.map((s) => opt(s.value, s.label)).join("");
+          subSel.innerHTML = opt("", t("fa_whole_app")) + subs.map((s) => opt(s.value, s.label)).join("");
         } else {
           wrap.style.display = "none";
           subSel.innerHTML = "";
@@ -169,7 +173,7 @@ export function openAddFavoriteDialog() {
       fields.innerHTML = `
         <label style="display:block;font-size:12px;color:var(--subtext);margin-bottom:4px">URL</label>
         <input id="fa-url" type="text" placeholder="https://…" style="${FIELD_CSS}" />
-        <label style="display:block;font-size:12px;color:var(--subtext);margin:10px 0 4px">Öffnen in</label>
+        <label style="display:block;font-size:12px;color:var(--subtext);margin:10px 0 4px">${t("fa_open_in")}</label>
         <select id="fa-mode" style="${FIELD_CSS}">
           ${opt("internal", "🪟 internem Browser-Fenster")}
           ${opt("external", "🔗 neuem Browser-Tab")}
@@ -255,12 +259,12 @@ export function openAddFavoriteDialog() {
     const typed = labelInput.value.trim();
     if (typed) meta.label = typed;
     if (meta.kind === "website" && !meta.url) {
-      window.notify?.("Bitte eine URL angeben.", "warn", 4000);
+      window.notify?.(t("fa_need_url"), "warn", 4000);
       return;
     }
     if ((meta.kind === "session" && !meta.clientId) ||
         ((meta.kind === "client" || meta.kind === "tenant") && !meta.targetId)) {
-      window.notify?.("Bitte einen Eintrag auswählen.", "warn", 4000);
+      window.notify?.(t("fa_need_entry"), "warn", 4000);
       return;
     }
     const dims = {
@@ -269,7 +273,7 @@ export function openAddFavoriteDialog() {
     };
     if (!dims.s && !dims.d) dims.s = true;
     addPin(meta, dims);
-    window.notify?.(`„${meta.label}" angeheftet.`, "success", 2500);
+    window.notify?.(t("fa_pinned", { name: meta.label }), "success", 2500);
     close();
   });
 

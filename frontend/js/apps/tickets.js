@@ -18,18 +18,32 @@ import { RMM_TARGET, RMM_LABEL, targetLabel } from "../tickettarget.js";
 import { t as tr } from "../i18n.js";
 import { condenseHints } from "../help.js";
 
-const STATUS = {
-  open:        { label: "Offen",         color: "#4da6ff" },
-  in_progress: { label: "In Bearbeitung", color: "#ffd166" },
-  resolved:    { label: tr("u_gelost"),        color: "#3ecf8e" },
-  closed:      { label: "Geschlossen",   color: "#8892a6" },
+// Farben sind fest, die Bezeichnungen werden ERST BEIM ZUGRIFF uebersetzt.
+// Wichtig: Diese Tabellen werden beim Laden des Moduls ausgewertet - zu diesem
+// Zeitpunkt steht die Sprache noch nicht fest. Ein direktes tr(...) hier
+// (wie es bei "resolved" schon stand) friert den Text auf die Sprache zum
+// Ladezeitpunkt ein und ignoriert einen spaeteren Sprachwechsel.
+const STATUS_COLOR = {
+  open: "#4da6ff", in_progress: "#ffd166", resolved: "#3ecf8e", closed: "#8892a6",
 };
-const PRIO = {
-  low:      { label: "Niedrig",  color: "#8892a6" },
-  normal:   { label: "Normal",   color: "#4da6ff" },
-  high:     { label: "Hoch",     color: "#ffd166" },
-  critical: { label: "Kritisch", color: "#ff4d6d" },
+const STATUS_KEY = {
+  open: "tk_s_open", in_progress: "tk_s_progress",
+  resolved: "tk_s_resolved", closed: "tk_s_closed",
 };
+const PRIO_COLOR = {
+  low: "#8892a6", normal: "#4da6ff", high: "#ffd166", critical: "#ff4d6d",
+};
+const PRIO_KEY = {
+  low: "tk_p_low", normal: "tk_p_normal", high: "tk_p_high", critical: "tk_p_critical",
+};
+const statusOf = (k) => ({
+  label: tr(STATUS_KEY[k] || STATUS_KEY.open),
+  color: STATUS_COLOR[k] || STATUS_COLOR.open,
+});
+const prioOf = (k) => ({
+  label: tr(PRIO_KEY[k] || PRIO_KEY.normal),
+  color: PRIO_COLOR[k] || PRIO_COLOR.normal,
+});
 
 const fmtDate = (ms) => ms ? new Date(ms).toLocaleString("de-DE",
   { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
@@ -71,12 +85,12 @@ export function renderTickets(body, win) {
       <div style="width:300px;min-width:300px;border-right:1px solid var(--border);display:flex;flex-direction:column">
         <div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;gap:6px;align-items:center">
           <select id="tk-filter" style="font-size:12px">
-            <option value="active">Aktive</option>
-            <option value="all">Alle</option>
-            <option value="open">Offen</option>
-            <option value="in_progress">In Bearbeitung</option>
-            <option value="resolved">Gelöst</option>
-            <option value="closed">Geschlossen</option>
+            <option value="active">${tr("tk_f_active")}</option>
+            <option value="all">${tr("tk_f_all")}</option>
+            <option value="open">${tr("tk_s_open")}</option>
+            <option value="in_progress">${tr("tk_s_progress")}</option>
+            <option value="resolved">${tr("tk_s_resolved")}</option>
+            <option value="closed">${tr("tk_s_closed")}</option>
           </select>
           <span style="flex:1"></span>
           ${may("ticket_create") ? `<button class="btn-primary" id="tk-new" style="margin:0;width:auto;font-size:12px">＋ Ticket</button>` : ""}
@@ -114,20 +128,20 @@ export function renderTickets(body, win) {
       return;
     }
     listEl.innerHTML = rows.map((t) => {
-      const st = STATUS[t.status] || STATUS.open;
-      const pr = PRIO[t.priority] || PRIO.normal;
+      const st = statusOf(t.status);
+      const pr = prioOf(t.priority);
       const overdue = t.due_date && t.due_date < Date.now() && t.status !== "resolved" && t.status !== "closed";
       return `
       <div data-id="${esc(t.id)}" style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;
            background:${t.id === currentId ? "var(--panel-2)" : "transparent"}">
         <div style="font-weight:600;font-size:13px;display:flex;gap:6px;align-items:center">
-          <span style="width:8px;height:8px;border-radius:50%;background:${pr.color};flex:none" title="Priorität: ${pr.label}"></span>
+          <span style="width:8px;height:8px;border-radius:50%;background:${pr.color};flex:none" title="${tr("tk_priority")}: ${pr.label}"></span>
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</span>
         </div>
         <div style="display:flex;gap:8px;font-size:11px;color:var(--subtext);margin-top:2px;align-items:center">
           <span style="color:${st.color}">● ${st.label}</span>
           <span>${fmtDay(t.created_at)}</span>
-          ${overdue ? `<span style="color:#ff4d6d">⏰ überfällig</span>` : t.due_date ? `<span>⏰ ${fmtDay(t.due_date)}</span>` : ""}
+          ${overdue ? `<span style="color:#ff4d6d">⏰ ${tr("tk_overdue")}</span>` : t.due_date ? `<span>⏰ ${fmtDay(t.due_date)}</span>` : ""}
           ${t.assignees?.length ? `<span>👥 ${t.assignees.length}</span>` : ""}
         </div>
       </div>`;
@@ -150,64 +164,64 @@ export function renderTickets(body, win) {
 
   // ---------------- Detail ----------------
   function drawDetail(t) {
-    const st = STATUS[t.status] || STATUS.open;
-    const pr = PRIO[t.priority] || PRIO.normal;
+    const st = statusOf(t.status);
+    const pr = prioOf(t.priority);
     detailEl.innerHTML = `
       <div style="padding:16px 18px">
         <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
           <h2 style="margin:0;flex:1;min-width:200px">${esc(t.title)}</h2>
           ${may("ticket_edit") ? `<button class="taskbar-btn" id="tkd-edit" style="font-size:12px">✏️ Bearbeiten</button>` : ""}
-          ${may("ticket_delete") ? `<button class="taskbar-btn" id="tkd-del" style="font-size:12px">🗑 Löschen</button>` : ""}
+          ${may("ticket_delete") ? `<button class="taskbar-btn" id="tkd-del" style="font-size:12px">🗑 ${tr("delete")}</button>` : ""}
         </div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--subtext);margin:8px 0 12px">
           <span style="color:${st.color}">● ${st.label}</span>
-          <span style="color:${pr.color}">Priorität: ${pr.label}</span>
-          <span>Erstellt von <b>${esc(t.created_by)}</b> am ${fmtDate(t.created_at)}</span>
-          <span>Aktualisiert: ${fmtDate(t.updated_at)}</span>
-          <span>Fällig: <b>${fmtDay(t.due_date)}</b></span>
-          ${t.status === "resolved" ? `<span style="color:#3ecf8e">Gelöst von ${esc(t.resolved_by || "?")} am ${fmtDate(t.resolved_at)}</span>` : ""}
+          <span style="color:${pr.color}">${tr("tk_priority")}: ${pr.label}</span>
+          <span>${tr("tk_created_by")} <b>${esc(t.created_by)}</b> ${tr("tk_on")} ${fmtDate(t.created_at)}</span>
+          <span>${tr("tk_updated")}: ${fmtDate(t.updated_at)}</span>
+          <span>${tr("tk_due")}: <b>${fmtDay(t.due_date)}</b></span>
+          ${t.status === "resolved" ? `<span style="color:#3ecf8e">${tr("tk_resolved_by")} ${esc(t.resolved_by || "?")} ${tr("tk_on")} ${fmtDate(t.resolved_at)}</span>` : ""}
         </div>
 
         ${may("ticket_resolve") ? `
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
           ${t.status !== "in_progress" && t.status !== "resolved" && t.status !== "closed"
-            ? `<button class="taskbar-btn" data-status="in_progress" style="font-size:12px">▶ In Bearbeitung</button>` : ""}
+            ? `<button class="taskbar-btn" data-status="in_progress" style="font-size:12px">▶ ${tr("tk_s_progress")}</button>` : ""}
           ${t.status !== "resolved" && t.status !== "closed"
-            ? `<button class="btn-primary" data-status="resolved" style="margin:0;width:auto;font-size:12px">✓ Als gelöst markieren</button>` : ""}
+            ? `<button class="btn-primary" data-status="resolved" style="margin:0;width:auto;font-size:12px">✓ ${tr("tk_mark_resolved")}</button>` : ""}
           ${t.status === "resolved"
-            ? `<button class="taskbar-btn" data-status="closed" style="font-size:12px">Schließen</button>` : ""}
+            ? `<button class="taskbar-btn" data-status="closed" style="font-size:12px">${tr("close")}</button>` : ""}
           ${(t.status === "resolved" || t.status === "closed")
-            ? `<button class="taskbar-btn" data-status="open" style="font-size:12px">↩ Wieder öffnen</button>` : ""}
+            ? `<button class="taskbar-btn" data-status="open" style="font-size:12px">↩ ${tr("tk_reopen")}</button>` : ""}
         </div>` : ""}
 
-        <h3 style="margin:0 0 6px">Beschreibung</h3>
+        <h3 style="margin:0 0 6px">${tr("tk_description")}</h3>
         <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;
-             font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(t.description) || "<i style='color:var(--subtext)'>Keine Beschreibung</i>"}</div>
+             font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(t.description) || `<i style='color:var(--subtext)'>${tr("tk_no_description")}</i>`}</div>
 
-        <h3 style="margin:16px 0 6px">Zugewiesen an
-          ${may("ticket_assign") ? `<button class="taskbar-btn" id="tkd-assign" style="font-size:11px;margin-left:6px">Zuweisen…</button>` : ""}
+        <h3 style="margin:16px 0 6px">${tr("tk_assigned_to")}
+          ${may("ticket_assign") ? `<button class="taskbar-btn" id="tkd-assign" style="font-size:11px;margin-left:6px">${tr("tk_assign")}</button>` : ""}
         </h3>
         <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:12px">
           ${t.assignees.length
             ? t.assignees.map((a) => `<span style="background:var(--panel-2);border:1px solid var(--border);border-radius:20px;padding:3px 10px">${esc(subjectLabel(a))}</span>`).join("")
-            : `<span style="color:var(--subtext)">Niemand zugewiesen (nur Admins + Ersteller sehen dieses Ticket)</span>`}
+            : `<span style="color:var(--subtext)">${tr("tk_nobody")}</span>`}
         </div>
 
-        <h3 style="margin:16px 0 6px">Verknüpfte Clients</h3>
+        <h3 style="margin:16px 0 6px">${tr("tk_linked_clients")}</h3>
         <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:12px">
           ${t.clients.length
             ? t.clients.map((cid) => `<span style="background:var(--panel-2);border:1px solid var(--border);border-radius:20px;padding:3px 10px">${esc(clientLabel(cid))}</span>`).join("")
-            : `<span style="color:var(--subtext)">Keine Clients verknüpft</span>`}
+            : `<span style="color:var(--subtext)">${tr("tk_no_clients")}</span>`}
         </div>
 
-        <h3 style="margin:16px 0 6px">Anhänge / Screenshots
-          ${may("ticket_comment") ? `<button class="taskbar-btn" id="tkd-upload" style="font-size:11px;margin-left:6px">📎 Hochladen…</button>
+        <h3 style="margin:16px 0 6px">${tr("tk_attachments")}
+          ${may("ticket_comment") ? `<button class="taskbar-btn" id="tkd-upload" style="font-size:11px;margin-left:6px">📎 ${tr("tk_upload")}</button>
             <input type="file" id="tkd-file" hidden />` : ""}
         </h3>
         <div id="tkd-files" style="display:flex;gap:10px;flex-wrap:wrap"></div>
 
-        <h3 style="margin:16px 0 6px">Kommentare (${t.comments.length})
-          <button class="taskbar-btn" id="tkd-activity" style="font-size:11px;margin-left:6px">🕓 Verlauf</button>
+        <h3 style="margin:16px 0 6px">${tr("tk_comments")} (${t.comments.length})
+          <button class="taskbar-btn" id="tkd-activity" style="font-size:11px;margin-left:6px">🕓 ${tr("tk_history")}</button>
         </h3>
         <div id="tkd-activity-box" style="display:none;margin-bottom:10px"></div>
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -224,9 +238,9 @@ export function renderTickets(body, win) {
                   style="padding:0 5px;font-size:10px;border-color:var(--danger);color:var(--danger)">🗑</button>` : ""}
               </div>
               <div style="white-space:pre-wrap;word-break:break-word">${c.hidden
-                ? `<i style="color:var(--subtext)">Privater Kommentar – Inhalt nur für den Verfasser sichtbar.</i>`
+                ? `<i style="color:var(--subtext)">${tr("tk_private_comment")}</i>`
                 : esc(c.text)}</div>
-            </div>`; }).join("") || `<span style="color:var(--subtext);font-size:12px">Noch keine Kommentare</span>`}
+            </div>`; }).join("") || `<span style="color:var(--subtext);font-size:12px">${tr("tk_no_comments")}</span>`}
         </div>
         ${may("ticket_comment") ? `
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
@@ -256,7 +270,7 @@ export function renderTickets(body, win) {
       }));
     detailEl.querySelector("#tkd-edit")?.addEventListener("click", () => openEditor(t));
     detailEl.querySelector("#tkd-del")?.addEventListener("click", async () => {
-      if (!(await uiConfirm(`Ticket "${t.title}" löschen?`, { danger: true }))) return;
+      if (!(await uiConfirm(tr("tk_delete_q", { title: t.title }), { danger: true }))) return;
       try {
         await api.deleteTicket(t.id);
         currentId = null; detailEl.innerHTML = "";
@@ -307,7 +321,7 @@ export function renderTickets(body, win) {
                 <span style="flex:none"><b>${esc(e.actor_name)}</b></span>
                 <span style="flex:1;min-width:0">${esc(e.label)}${e.details ? " – " + esc(e.details) : ""}</span>
               </div>`).join("")}
-          </div>` : `<div style="color:var(--subtext);font-size:12px">Noch keine Aktivität.</div>`;
+          </div>` : `<div style="color:var(--subtext);font-size:12px">${tr("tk_no_activity")}</div>`;
       } catch (e) {
         actBox.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
       }
@@ -326,7 +340,7 @@ export function renderTickets(body, win) {
     // ---- Anhänge rendern (Bilder mit Vorschau, Rest als Download-Kachel) ----
     const filesEl = detailEl.querySelector("#tkd-files");
     if (!t.files.length) {
-      filesEl.innerHTML = `<span style="color:var(--subtext);font-size:12px">Keine Anhänge</span>`;
+      filesEl.innerHTML = `<span style="color:var(--subtext);font-size:12px">${tr("tk_no_files")}</span>`;
     } else {
       for (const f of t.files) {
         const card = document.createElement("div");
@@ -357,7 +371,7 @@ export function renderTickets(body, win) {
           } catch (e) { window.notify?.(e.message, "error"); }
         });
         card.querySelector("[data-rm]")?.addEventListener("click", async () => {
-          if (!(await uiConfirm(`Anhang "${f.filename}" löschen?`, { danger: true }))) return;
+          if (!(await uiConfirm(tr("tk_del_file_q", { name: f.filename }), { danger: true }))) return;
           try { drawDetail(await api.deleteTicketFile(t.id, f.id)); }
           catch (e) { window.notify?.(e.message, "error"); }
         });
@@ -378,24 +392,24 @@ export function renderTickets(body, win) {
     editorEl.style.display = "flex";
     editorEl.innerHTML = `
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;width:380px;max-height:90%;overflow:auto">
-        <h3 style="margin:0 0 10px">Ticket zuweisen</h3>
+        <h3 style="margin:0 0 10px">${tr("tk_assign_title")}</h3>
         <div style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:280px;overflow:auto;font-size:12px">
-          <div style="font-weight:700;margin-bottom:4px">Benutzer</div>
+          <div style="font-weight:700;margin-bottom:4px">${tr("tab_users")}</div>
           ${subjects.users.map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-stype="user" data-sid="${esc(u.id)}" ${isChecked("user", u.id) ? "checked" : ""}/> ${esc(u.label)}</label>`).join("")}
-          <div style="font-weight:700;margin:8px 0 4px">Gruppen</div>
-          ${groupRow(managedGroups) || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`}
+          <div style="font-weight:700;margin:8px 0 4px">${tr("pm_groups")}</div>
+          ${groupRow(managedGroups) || `<div style="color:var(--subtext)">${tr("set_no_groups")}</div>`}
           ${unmanagedGroups.length ? `
             <details style="margin-top:8px;border:1px dashed var(--border);border-radius:7px;padding:4px 7px"
                      ${unmanagedGroups.some((g) => isChecked("group", g.id)) ? "open" : ""}>
               <summary style="cursor:pointer;color:var(--subtext);list-style:none">
-                📂 Unverwaltete AD-Gruppen (${unmanagedGroups.length})</summary>
+                📂 ${tr("tk_unmanaged_groups")} (${unmanagedGroups.length})</summary>
               <div style="margin-top:4px">${groupRow(unmanagedGroups)}</div>
             </details>` : ""}
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-          <button class="taskbar-btn" id="tka-cancel">Abbrechen</button>
-          <button class="btn-primary" id="tka-save" style="margin:0;width:auto">Speichern</button>
+          <button class="taskbar-btn" id="tka-cancel">${tr("cancel")}</button>
+          <button class="btn-primary" id="tka-save" style="margin:0;width:auto">${tr("save")}</button>
         </div>
       </div>`;
     editorEl.querySelector("#tka-cancel").addEventListener("click", () => { editorEl.style.display = "none"; });
@@ -418,26 +432,26 @@ export function renderTickets(body, win) {
     editorEl.style.display = "flex";
     editorEl.innerHTML = `
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;width:480px;max-height:92%;overflow:auto">
-        <h3 style="margin:0 0 12px">${isEdit ? "Ticket bearbeiten" : "Neues Ticket"}</h3>
-        <div class="form-row"><label>Titel</label>
-          <input id="tke-title" value="${esc(existing?.title || "")}" placeholder="Kurze Zusammenfassung" /></div>
-        <div class="form-row"><label>Beschreibung</label>
+        <h3 style="margin:0 0 12px">${isEdit ? tr("tk_edit") : tr("tk_new")}</h3>
+        <div class="form-row"><label>${tr("tk_title_label")}</label>
+          <input id="tke-title" value="${esc(existing?.title || "")}" placeholder="${tr("tk_title_ph")}" /></div>
+        <div class="form-row"><label>${tr("tk_description")}</label>
           <textarea id="tke-desc" rows="5" style="width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px;font:inherit;font-size:13px">${esc(existing?.description || "")}</textarea></div>
-        <div class="form-row"><label>Priorität</label>
+        <div class="form-row"><label>${tr("tk_priority")}</label>
           <select id="tke-prio">
-            ${Object.entries(PRIO).map(([k, v]) =>
-              `<option value="${k}" ${(existing?.priority ?? "normal") === k ? "selected" : ""}>${v.label}</option>`).join("")}
+            ${Object.keys(PRIO_KEY).map((k) =>
+              `<option value="${k}" ${(existing?.priority ?? "normal") === k ? "selected" : ""}>${tr(PRIO_KEY[k])}</option>`).join("")}
           </select></div>
-        <div class="form-row"><label>Fällig am</label>
+        <div class="form-row"><label>${tr("tk_due_on")}</label>
           <input id="tke-due" type="date" value="${existing?.due_date ? new Date(existing.due_date).toISOString().slice(0, 10) : ""}" /></div>
-        <div class="form-row"><label>Betrifft</label></div>
+        <div class="form-row"><label>${tr("tk_concerns")}</label></div>
         <div style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:170px;overflow:auto;font-size:12px">
           <!-- Das RMM selbst als Ziel: fuer alles, was nicht an einem
                einzelnen Geraet haengt (Dashboard, Rechte, Server). -->
           <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-cid="${esc(RMM_TARGET)}" ${cliChecked(RMM_TARGET) ? "checked" : ""}/>
             🏢 ${esc(RMM_LABEL)}</label>
-          <div style="font-weight:700;margin:8px 0 4px;color:var(--subtext)">Clients</div>
+          <div style="font-weight:700;margin:8px 0 4px;color:var(--subtext)">${tr("tk_clients")}</div>
           ${state.clients.map((c) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-cid="${esc(c.id)}" ${cliChecked(c.id) ? "checked" : ""}/> 🖥️ ${esc(c.hostname)}</label>`).join("")
           || `<div style="color:var(--subtext)">Keine Clients sichtbar</div>`}
@@ -445,11 +459,11 @@ export function renderTickets(body, win) {
         ${may("ticket_assign") ? `
         <div class="form-row" style="margin-top:10px"><label>Zuweisen an</label></div>
         <div id="tke-assign" style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:150px;overflow:auto;font-size:12px">
-          <div style="font-weight:700;margin-bottom:4px">Benutzer</div>
+          <div style="font-weight:700;margin-bottom:4px">${tr("tab_users")}</div>
           ${subjects.users.map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-stype="user" data-sid="${esc(u.id)}"
               ${existing?.assignees?.some((a) => a.subject_type === "user" && a.subject_id === u.id) ? "checked" : ""}/> ${esc(u.label)}</label>`).join("")}
-          <div style="font-weight:700;margin:8px 0 4px">Gruppen</div>
+          <div style="font-weight:700;margin:8px 0 4px">${tr("pm_groups")}</div>
           ${(() => {
             // Unverwaltete (AD-)Gruppen liegen in einem eingeklappten Ordner -
             // sonst gehen die eigenen Gruppen in einer langen AD-Liste unter.
@@ -460,7 +474,7 @@ export function renderTickets(body, win) {
                 <input type="checkbox" data-stype="group" data-sid="${esc(g.id)}"
                   ${isOn(g) ? "checked" : ""}/> ${esc(g.label || g.name)}</label>`).join("");
             const { managed, unmanaged } = splitGroups(subjects.groups || []);
-            let out = rows(managed) || `<div style="color:var(--subtext)">Keine Gruppen vorhanden</div>`;
+            let out = rows(managed) || `<div style="color:var(--subtext)">${tr("set_no_groups")}</div>`;
             if (unmanaged.length) {
               out += `
                 <details style="margin-top:6px" ${unmanaged.some(isOn) ? "open" : ""}>
@@ -475,8 +489,8 @@ export function renderTickets(body, win) {
         </div>` : ""}
         <div id="tke-error" class="hidden" style="color:var(--danger);font-size:12px;margin-top:8px"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-          <button class="taskbar-btn" id="tke-cancel">Abbrechen</button>
-          <button class="btn-primary" id="tke-save" style="margin:0;width:auto">${isEdit ? tr("save") : "Erstellen"}</button>
+          <button class="taskbar-btn" id="tke-cancel">${tr("cancel")}</button>
+          <button class="btn-primary" id="tke-save" style="margin:0;width:auto">${isEdit ? tr("save") : tr("tk_create")}</button>
         </div>
       </div>`;
     const q = (sel) => editorEl.querySelector(sel);
@@ -522,8 +536,7 @@ export function renderTickets(body, win) {
       if (selectFirst && !currentId && tickets.length) selectTicket(tickets[0].id);
       if (!tickets.length) {
         detailEl.innerHTML = `<div style="padding:20px;color:var(--subtext);font-size:13px">
-          Keine Tickets sichtbar. Tickets sehen nur Admins, der Ersteller und
-          zugewiesene Benutzer/Gruppen.</div>`;
+          ${tr("tk_none_visible")}</div>`;
       }
     } catch (e) {
       listEl.innerHTML = `<div style="padding:12px;color:var(--danger);font-size:12px">${esc(e.message)}</div>`;

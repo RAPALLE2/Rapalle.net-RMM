@@ -84,11 +84,11 @@ export function renderPermissions(body, win) {
       <!-- LINKS: Subjektliste -->
       <div style="width:250px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0">
         <div style="display:flex;gap:4px;padding:8px">
-          <button class="tab-btn" id="pm-kind-user">Benutzer</button>
-          <button class="tab-btn" id="pm-kind-group">Gruppen</button>
+          <button class="tab-btn" id="pm-kind-user">${t("tab_users")}</button>
+          <button class="tab-btn" id="pm-kind-group">${t("pm_groups")}</button>
         </div>
         <div style="padding:0 8px 8px">
-          <input type="text" id="pm-subj-search" placeholder="Suchen…"
+          <input type="text" id="pm-subj-search" placeholder="${t("pm_search")}"
             style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px" />
         </div>
         <div id="pm-ad-row" style="padding:0 8px 8px;display:none"></div>
@@ -98,18 +98,18 @@ export function renderPermissions(body, win) {
       <!-- RECHTS: Rechte-Editor -->
       <div style="flex:1;display:flex;flex-direction:column;min-height:0">
         <div id="pm-head" style="padding:10px 14px;border-bottom:1px solid var(--border)">
-          <div style="color:var(--subtext);font-size:13px">Wähle links einen Benutzer oder eine Gruppe.</div>
+          <div style="color:var(--subtext);font-size:13px">${t("pm_pick_subject")}</div>
         </div>
         <div class="tab-bar" id="pm-tabs" style="padding:8px 14px 0;gap:6px;display:none">
-          <button class="tab-btn active" data-pt="general">Allgemein</button>
+          <button class="tab-btn active" data-pt="general">${t("tab_general")}</button>
           <button class="tab-btn" data-pt="clients">Clients</button>
         </div>
         <div id="pm-content" style="flex:1;overflow:auto;padding:14px"></div>
         <div id="pm-savebar" style="display:none;border-top:1px solid var(--border);padding:10px 14px;align-items:center;gap:12px">
           <span id="pm-dirty" style="font-size:12px;color:var(--subtext)"></span>
           <span style="flex:1"></span>
-          <button class="taskbar-btn" id="pm-reset">Verwerfen</button>
-          <button class="btn-primary" id="pm-save">Speichern</button>
+          <button class="taskbar-btn" id="pm-reset">${t("pm_discard")}</button>
+          <button class="btn-primary" id="pm-save">${t("save")}</button>
         </div>
       </div>
     </div>
@@ -276,7 +276,7 @@ export function renderPermissions(body, win) {
       });
     } else {
       if (!filtered.length) {
-        subjListEl.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:8px">Keine Einträge.</div>`;
+        subjListEl.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:8px">${t("pm_no_entries")}</div>`;
         return;
       }
       subjListEl.innerHTML = filtered.map(rowHtml).join("");
@@ -304,19 +304,19 @@ export function renderPermissions(body, win) {
       headExtra = `${adBadge}
         <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;font-size:12px;color:var(--subtext);cursor:pointer">
           <input type="checkbox" id="pm-unmanaged" ${g.unmanaged ? "checked" : ""} />
-          Unverwaltet (AD-Ordner)
+          ${t("pm_unmanaged")}
         </label>
-        <button class="taskbar-btn" id="pm-del-group" style="margin-left:12px;font-size:11px">Gruppe löschen</button>`;
+        <button class="taskbar-btn" id="pm-del-group" style="margin-left:12px;font-size:11px">${t("pm_del_group")}</button>`;
     }
     headEl.innerHTML = `<div style="font-weight:600">${esc(name)}${type === "group" ? headExtra : ""}</div>
-      <div style="color:var(--subtext);font-size:12px">${type === "user" ? t("tab_users") : "Gruppe"} · Rechte hier gelten zusätzlich zu Gruppen-Rechten (Verbieten gewinnt)</div>`;
+      <div style="color:var(--subtext);font-size:12px">${type === "user" ? t("tab_users") : t("pm_group")} · ${t("pm_head_hint")}</div>`;
     if (type === "group") {
       headEl.querySelector("#pm-unmanaged")?.addEventListener("change", async (e) => {
         try {
           await api.setGroupUnmanaged(id, e.target.checked);
           const g2 = (subjects.group || []).find((x) => x.id === id);
           if (g2) g2.unmanaged = e.target.checked ? 1 : 0;
-          window.notify?.(e.target.checked ? "In AD-Ordner verschoben" : "Aus AD-Ordner geholt", "success");
+          window.notify?.(e.target.checked ? t("pm_moved_ad") : t("pm_removed_ad"), "success");
           drawSubjects();
         } catch (err2) {
           window.notify?.(t("u_fehler_2") + err2.message, "error");
@@ -324,12 +324,12 @@ export function renderPermissions(body, win) {
         }
       });
       headEl.querySelector("#pm-del-group")?.addEventListener("click", async () => {
-        if (!(await uiConfirm(`Gruppe „${name}" löschen?`, { okText: t("delete"), danger: true }))) return;
+        if (!(await uiConfirm(t("pm_del_group_q").replace("%s", name), { okText: t("delete"), danger: true }))) return;
         try {
           await api.deleteGroup(id);
           subjects.group = await api.getGroups();
           selected = null;
-          headEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Wähle links einen Benutzer oder eine Gruppe.</div>`;
+          headEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${t("pm_pick_subject")}</div>`;
           contentEl.innerHTML = "";
           tabsEl.style.display = "none";
           updateSaveBar();
@@ -399,22 +399,17 @@ export function renderPermissions(body, win) {
     contentEl.innerHTML = `
       <div style="max-width:640px">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--subtext)">Vorlagen:</span>
+          <span style="font-size:12px;color:var(--subtext)">${t("pm_presets")}:</span>
           <button class="taskbar-btn" id="pm-preset-admin">👑 Admin</button>
-          <button class="taskbar-btn" id="pm-preset-view">👁️ Nur sehen</button>
+          <button class="taskbar-btn" id="pm-preset-view">👁️ ${t("pm_preset_view")}</button>
         </div>
         <p style="color:var(--subtext);font-size:13px;margin-top:0">
-          Globale Rechte. <b>Erlauben</b> = gewähren, <b>Verbieten</b> = hart entziehen
-          (schlägt jede Erlaubnis, auch aus Gruppen), <b>—</b> = keine Einstellung.
-          <br>Die Rechte <b>Admin</b> und <b>⭐ Super-Admin</b> sind Voll-Zugriff
-          (Wildcard) – <b>Super-Admin</b> entspricht dabei genau der Einstellung
-          „admin“ beim Anlegen eines Benutzers und zeigt denselben ADMIN-Tag am Namen.
+          ${t("pm_global_help")}
         </p>
         ${selected?.role === "admin" ? `
           <div style="background:rgba(245,165,36,.12);border:1px solid #f5a524;border-radius:8px;
                padding:8px 11px;font-size:12.5px;margin-bottom:10px">
-            👑 Dieser Benutzer hat bereits die <b>Rolle „admin“</b> und damit ohnehin alle
-            Rechte – Einstellungen hier wirken sich erst aus, wenn die Rolle geändert wird.
+            👑 ${t("pm_admin_note")}
           </div>` : ""}
         ${catalog.general.map((p) => permRow("global", p)).join("")}
       </div>`;
@@ -438,26 +433,22 @@ export function renderPermissions(body, win) {
     contentEl.innerHTML = `
       <div>
         <p style="color:var(--subtext);font-size:13px;margin-top:0">
-          Client-spezifische Rechte. <b>Clients sehen/zugreifen</b> steuert die
-          Sichtbarkeit — ohne dieses Recht (bzw. bei <b>Verbieten</b>) ist der
-          Client für das Subjekt versteckt und dort ist nichts möglich.
+          ${t("pm_client_help")}
         </p>
 
         <details class="panel" style="margin-bottom:12px;padding:8px 12px;border-color:var(--accent)" open>
           <summary style="cursor:pointer;font-size:13px;font-weight:700;list-style:none">
-            ⭐ Standard-Client <span style="color:var(--subtext);font-weight:400;font-size:11px">
-              — gilt für ALLE Clients</span>
+            ⭐ ${t("pm_default_client")} <span style="color:var(--subtext);font-weight:400;font-size:11px">
+              — ${t("pm_all_clients")}</span>
           </summary>
           <p style="color:var(--subtext);font-size:12px;margin:6px 0 8px">
-            Was hier auf <b>Erlauben</b> steht, gilt automatisch auf jedem Client –
-            auch auf neu hinzugefügten. Ein <b>Verbieten</b> bei einem einzelnen
-            Client weiter unten sticht diese Erlaubnis immer aus.
+            ${t("pm_default_help")}
           </p>
           <div>${defRows}</div>
         </details>
 
-        <div style="font-size:12.5px;font-weight:600;margin:0 0 6px">Einzelne Clients</div>
-        <input type="text" id="pm-client-search" placeholder="Client suchen…" value="${esc(clientSearch)}"
+        <div style="font-size:12.5px;font-weight:600;margin:0 0 6px">${t("pm_single_clients")}</div>
+        <input type="text" id="pm-client-search" placeholder="${t("pm_search_client")}" value="${esc(clientSearch)}"
           style="width:100%;max-width:360px;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px;margin-bottom:10px" />
         <div id="pm-client-list"></div>
       </div>`;

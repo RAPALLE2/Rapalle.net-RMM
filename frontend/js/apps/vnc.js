@@ -37,12 +37,12 @@ export function renderVnc(body, win) {
     <div style="position:absolute;inset:0;display:flex;flex-direction:column;background:#000">
       <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
         <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
-        <span id="vnc-status-${win.key}" style="color:var(--subtext)">Verbinde...</span>
-        <button class="taskbar-btn" id="vnc-fs-${win.key}" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
+        <span id="vnc-status-${win.key}" style="color:var(--subtext)">${t("vnc_connecting")}</span>
+        <button class="taskbar-btn" id="vnc-fs-${win.key}" title="${t("vnc_fs_title")}">${t("vnc_fullscreen")}</button>
         <span style="flex:1"></span>
         <span class="bar-opts">
         <label style="color:var(--subtext);display:flex;align-items:center;gap:4px">
-          <input type="checkbox" id="vnc-control-${win.key}" checked /> Steuerung aktiv
+          <input type="checkbox" id="vnc-control-${win.key}" checked /> ${t("vnc_control_active")}
         </label>
         <select id="vnc-monitor-${win.key}" style="display:none;padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px"
           title="${t("u_bildschirm_des_remote_pcs_auswahle")}"></select>
@@ -54,8 +54,8 @@ export function renderVnc(body, win) {
         <button class="taskbar-btn" id="vnc-key-esc-${win.key}" title="Esc senden">Esc</button>
         <button class="taskbar-btn" id="vnc-ctrlaltdel-${win.key}">Strg+Alt+Entf</button>
         <span style="width:1px;height:16px;background:var(--border)"></span>
-        <button class="taskbar-btn" id="vnc-clip-send-${win.key}" title="Lokale Zwischenablage an den Remote-PC senden">📋→</button>
-        <button class="taskbar-btn" id="vnc-clip-get-${win.key}" title="Zwischenablage des Remote-PCs holen">→📋</button>
+        <button class="taskbar-btn" id="vnc-clip-send-${win.key}" title="${t("vnc_clip_send_title")}">📋→</button>
+        <button class="taskbar-btn" id="vnc-clip-get-${win.key}" title="${t("vnc_clip_get_title")}">→📋</button>
         </span>
       </div>
       <div id="vnc-area-${win.key}" style="flex:1 1 0;min-height:0;min-width:0;overflow:hidden;position:relative">
@@ -63,16 +63,16 @@ export function renderVnc(body, win) {
              tabindex="0" />
       </div>
       <div class="bar-optrow" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
-        <span style="color:var(--subtext)">Text senden:</span>
-        <select id="vnc-layout-${win.key}" title="Tastaturlayout des Ziel-PCs"
+        <span style="color:var(--subtext)">${t("vnc_send_text")}</span>
+        <select id="vnc-layout-${win.key}" title="${t("vnc_layout_title")}"
           style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
-          <option value="raw">1:1 (empfohlen)</option>
-          <option value="us">US-Layout</option>
-          <option value="de">DE-Layout</option>
+          <option value="raw">${t("vnc_layout_raw")}</option>
+          <option value="us">${t("vnc_layout_us")}</option>
+          <option value="de">${t("vnc_layout_de")}</option>
         </select>
         <input type="text" id="vnc-text-${win.key}" placeholder="${t("guac_text_ph")}"
           style="flex:1;padding:5px 8px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text)" />
-        <button class="taskbar-btn" id="vnc-send-${win.key}">Senden</button>
+        <button class="taskbar-btn" id="vnc-send-${win.key}">${t("send")}</button>
       </div>
     </div>
   `;
@@ -129,7 +129,7 @@ export function renderVnc(body, win) {
   const fsBtnV = body.querySelector(`#vnc-fs-${win.key}`);
   if (fsBtnV) {
     const fsRoot = () => body.closest(".rmm-window") || body;
-    const fsLabel = () => { fsBtnV.textContent = document.fullscreenElement ? "✕ Vollbild beenden" : "Vollbild"; };
+    const fsLabel = () => { fsBtnV.textContent = document.fullscreenElement ? t("vnc_fullscreen_exit") : t("vnc_fullscreen"); };
     fsBtnV.addEventListener("click", () => {
       if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
       const el = fsRoot();
@@ -218,7 +218,7 @@ export function renderVnc(body, win) {
       return;
     }
     dashboardSocket.emit("screen-input", { clientId, type: "clipboard-set", text });
-    window.notify?.("Zwischenablage an Remote-PC gesendet", "success");
+    window.notify?.(t("vnc_clip_sent"), "success");
   });
   // Holen: Agent liest die Remote-Zwischenablage -> hier in die lokale schreiben.
   body.querySelector(`#vnc-clip-get-${win.key}`).addEventListener("click", () => {
@@ -226,14 +226,14 @@ export function renderVnc(body, win) {
   });
   async function onClipboard(data) {
     if (data.id !== clientId) return;
-    if (data.error) { window.notify?.("Remote-Zwischenablage: " + data.error, "error"); return; }
+    if (data.error) { window.notify?.(t("vnc_clip_remote") + ": " + data.error, "error"); return; }
     const text = data.text || "";
     try {
       await navigator.clipboard.writeText(text);
       window.notify?.(t("u_remote_zwischenablage_ubernommen") + text.length + " Zeichen)", "success");
     } catch {
       // Clipboard-API blockiert (z.B. HTTP): Text zum manuellen Kopieren zeigen.
-      uiPrompt("Remote-Zwischenablage", {
+      uiPrompt(t("vnc_clip_remote"), {
         description: t("guac_copy_manual"),
         value: text, okText: t("close") });
     }
@@ -325,23 +325,34 @@ export function renderVnc(body, win) {
         // Optionen nur bei Änderung neu aufbauen (nicht bei jedem Frame).
         // Index 0 = Gesamtfläche ALLER Bildschirme nebeneinander.
         if (monitorSel.options.length !== monitorCount + 1) {
-          monitorSel.innerHTML = `<option value="0">🖥️ Alle Bildschirme</option>` +
+          monitorSel.innerHTML = `<option value="0">🖥️ ${t("vnc_all_monitors")}</option>` +
             Array.from({ length: monitorCount }, (_, i) =>
-              `<option value="${i + 1}">🖥️ Bildschirm ${i + 1}/${monitorCount}</option>`).join("");
+              `<option value="${i + 1}">🖥️ ${t("vnc_monitor_n")} ${i + 1}/${monitorCount}</option>`).join("");
         }
         if (parseInt(monitorSel.value, 10) !== monitorIndex) monitorSel.value = String(monitorIndex);
       }
     }
     framesReceived++;
     const mode = rdpActive ? "RDP" : "Live";
-    statusEl.textContent = `Verbunden (${mode}) · ${remoteWidth}×${remoteHeight} · ${framesReceived} Frames`;
+    statusEl.textContent = `${t("vnc_connected")} (${mode}) · ${remoteWidth}×${remoteHeight} · ${framesReceived} ${t("vnc_frames")}`;
     statusEl.style.color = "var(--accent)";
+  }
+
+  // Der Agent schickt seit dem Sprachumbau nicht mehr nur fertigen Text,
+  // sondern zusätzlich `code` (Übersetzungsschlüssel) und `params`. Übersetzt
+  // wird hier, weil nur der Browser die Sprache des Benutzers kennt - mehrere
+  // Personen mit verschiedenen Spracheinstellungen können dasselbe Gerät
+  // ansehen. Fehlt `code` (älterer Agent), bleibt der mitgelieferte Text.
+  function agentText(data, fallbackKey) {
+    if (data && data.code) return t(data.code, data.params || {});
+    if (data && (data.error || data.reason)) return data.error || data.reason;
+    return fallbackKey ? t(fallbackKey) : "";
   }
 
   function onError(data) {
     if (data.id !== clientId) return;
     // Rohen Fehlertext nur in die Konsole - die Oberfläche bleibt freundlich.
-    console.warn("[screen] Fehler vom Agent:", data.error);
+    console.warn("[screen] error from agent:", data.error);
     if (data.consent_denied) {
       // Der Benutzer am Gerät hat nicht zugestimmt - das ist KEIN technischer
       // Fehler, deshalb ohne Alternativen-Angebot anzeigen.
@@ -351,13 +362,13 @@ export function renderVnc(body, win) {
     }
     statusEl.textContent = t("u_kein_bildschirm_verfugbar");
     statusEl.style.color = "var(--danger)";
-    showRdpOffer(data.error);
+    showRdpOffer(agentText(data));
   }
 
   // Agent meldet den möglichen Zugriffsmodus. mode='shell' -> direkt Shell öffnen.
   function onMode(data) {
     if (data.id !== clientId) return;
-    if (data.mode === "shell") switchToShell(data.reason);
+    if (data.mode === "shell") switchToShell(agentText(data));
     if (data.mode === "consent") {
       // Am Gerät wird gerade um Zustimmung gebeten.
       statusEl.textContent = t("u_warte_auf_bestatigung_am_gerat");
@@ -383,21 +394,19 @@ export function renderVnc(body, win) {
     overlay.innerHTML = `
       <div style="width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;
                   background:var(--panel-2);border:1px solid var(--border);font-size:32px;margin-bottom:4px">🖥️</div>
-      <div style="color:var(--text);font-size:16px;font-weight:600">Kein Bildschirm verfügbar</div>
+      <div style="color:var(--text);font-size:16px;font-weight:600">${t("vnc_no_screen_title")}</div>
       <div style="color:var(--subtext);font-size:13px;max-width:400px;line-height:1.55">
-        Auf diesem Gerät läuft gerade keine erfassbare Bildschirmsitzung
-        (typisch bei Servern und headless VMs). Kein Problem — so kommst du
-        trotzdem drauf:
+        ${t("vnc_no_screen_text")}
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;width:100%;max-width:340px">
         <button class="btn-primary" id="rdp-guac-${win.key}" style="width:100%;margin:0;display:flex;align-items:center;gap:10px;justify-content:center">
-          🕹️ Remote-Sitzung öffnen (RDP/VNC/SSH)
+          🕹️ ${t("vnc_open_remote_session")}
         </button>
         <button class="taskbar-btn" id="rdp-shell-${win.key}" style="width:100%;display:flex;align-items:center;gap:10px;justify-content:center">
-          ⌨️ Shell öffnen
+          ⌨️ ${t("vnc_open_shell")}
         </button>
         <button class="taskbar-btn" id="rdp-retry-${win.key}" style="width:100%;display:flex;align-items:center;gap:10px;justify-content:center">
-          🔄 Bildschirm erneut versuchen
+          🔄 ${t("vnc_retry_screen")}
         </button>
       </div>
     `;
@@ -414,7 +423,7 @@ export function renderVnc(body, win) {
     // Erneut unser eigenes Streaming versuchen
     overlay.querySelector(`#rdp-retry-${win.key}`).addEventListener("click", () => {
       overlay.remove();
-      statusEl.textContent = "Verbinde...";
+      statusEl.textContent = t("vnc_connecting");
       statusEl.style.color = "var(--subtext)";
       dashboardSocket.emit("screen-start", { clientId, username: state.user?.username || "unbekannt" });
       _announceSessionStart(clientId);

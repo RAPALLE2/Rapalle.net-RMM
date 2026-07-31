@@ -13,6 +13,7 @@
 //   initSubjectPicker(rootEl)  (Ordner auf-/zuklappen + Suche)
 
 import { esc } from "./utils.js";
+import { t } from "./i18n.js";
 
 // Ist eine Gruppe "unverwaltet"? Entweder ausdrücklich markiert oder eine
 // AD-Gruppe, die im RMM keinerlei Rechte besitzt.
@@ -67,7 +68,7 @@ export function subjectPickerHtml(data, selected = [], opts = {}) {
 
   const usersHtml = users.length
     ? users.map((u) => row("user", u.id, u.username, "👤", sel.has(key("user", u.id)), name)).join("")
-    : `<div style="font-size:11.5px;color:var(--subtext)">Keine weiteren Benutzer.</div>`;
+    : `<div style="font-size:11.5px;color:var(--subtext)">${t("sp_no_more_users")}</div>`;
 
   const groupsHtml = managed.length
     ? managed.map((g) => row("group", g.id, g.name, g.is_ad_group ? "🏢" : "👥",
@@ -95,9 +96,9 @@ export function subjectPickerHtml(data, selected = [], opts = {}) {
              style="font-size:12px;padding:3px 7px" />
       <div class="sp-scroll" style="max-height:170px;overflow:auto;border:1px solid var(--border);
            border-radius:7px;padding:5px 7px">
-        <div class="sp-section-title" style="font-size:11px;color:var(--subtext);margin:1px 0 2px">Benutzer</div>
+        <div class="sp-section-title" style="font-size:11px;color:var(--subtext);margin:1px 0 2px">${t("tab_users")}</div>
         ${usersHtml}
-        <div class="sp-section-title" style="font-size:11px;color:var(--subtext);margin:7px 0 2px">Gruppen</div>
+        <div class="sp-section-title" style="font-size:11px;color:var(--subtext);margin:7px 0 2px">${t("pm_groups")}</div>
         ${groupsHtml}
         ${unmanagedHtml}
       </div>

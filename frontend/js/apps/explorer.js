@@ -125,9 +125,9 @@ export function renderExplorer(body, win) {
                 <th>${t("exp_col_name")}</th>
                 <th style="width:90px">${t("exp_col_size")}</th>
                 <th style="width:150px">${t("exp_col_modified")}</th>
-                <th style="width:110px">Rechte</th>
-                <th style="width:130px">Besitzer</th>
-                <th style="width:150px">Aktionen</th>
+                <th style="width:110px">${t("exp_col_perms")}</th>
+                <th style="width:130px">${t("exp_col_owner")}</th>
+                <th style="width:150px">${t("actions_col")}</th>
               </tr>
             </thead>
             <tbody id="exp-tbody-${win.key}"></tbody>
@@ -364,17 +364,17 @@ export function renderExplorer(body, win) {
       try { await navigator.clipboard.writeText(entry.path); window.notify?.("Pfad kopiert", "success", 2000); }
       catch { window.notify?.("Kopieren blockiert (Browser)", "warn"); }
     }});
-    items.push({ icon: "🔐", label: "Eigenschaften / Berechtigungen", fn: () => showProperties(entry) });
+    items.push({ icon: "🔐", label: t("exp_properties"), fn: () => showProperties(entry) });
     return items;
   }
 
   function backgroundMenuItems() {
     return [
-      { icon: "📁", label: "Neuer Ordner", fn: doMkdir },
+      { icon: "📁", label: t("exp_new_folder"), fn: doMkdir },
       { icon: "⬆️", label: "Datei hochladen…", fn: () => body.querySelector(`#exp-file-${win.key}`)?.click() },
       "-",
-      { icon: "🔄", label: "Aktualisieren", fn: () => load(currentPath) },
-      ...(currentPath ? [{ icon: "📋", label: "Aktuellen Pfad kopieren", fn: async () => {
+      { icon: "🔄", label: t("refresh"), fn: () => load(currentPath) },
+      ...(currentPath ? [{ icon: "📋", label: t("exp_copy_current_path"), fn: async () => {
         try { await navigator.clipboard.writeText(currentPath); window.notify?.("Pfad kopiert", "success", 2000); }
         catch { window.notify?.("Kopieren blockiert (Browser)", "warn"); }
       }}] : []),
@@ -385,7 +385,7 @@ export function renderExplorer(body, win) {
     currentPath = path;
     // Offenen Ordner in den Fenster-Props merken (Wiederherstellung beim Login).
     try { win.props.path = path; scheduleSave(state); } catch {}
-    tbody.innerHTML = `<tr><td colspan="6" style="color:var(--subtext)">Lädt...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="color:var(--subtext)">${t("loading")}</td></tr>`;
     try {
       const res = await fs.list(path);
       currentEntries = res.entries || [];
@@ -400,7 +400,7 @@ export function renderExplorer(body, win) {
       renderCrumbs(res.path);
       tbody.innerHTML = "";
       if (!currentEntries.length) {
-        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--subtext)">Leerer Ordner</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--subtext)">${t("exp_empty_folder")}</td></tr>`;
       }
       for (const entry of currentEntries) {
         const tr = document.createElement("tr");
@@ -434,15 +434,15 @@ export function renderExplorer(body, win) {
           tr.firstElementChild.title = t("exp_open");
           tr.firstElementChild.addEventListener("dblclick", () => { history.push(entry.path); load(entry.path); });
         } else {
-          if (isImg) actionsTd.appendChild(mkBtn("👁", "Ansehen", () => viewImage(entry)));
-          if (isTxt) actionsTd.appendChild(mkBtn("✏️", "Bearbeiten", () => editFile(entry)));
+          if (isImg) actionsTd.appendChild(mkBtn("👁", t("exp_view"), () => viewImage(entry)));
+          if (isTxt) actionsTd.appendChild(mkBtn("✏️", t("exp_edit"), () => editFile(entry)));
           actionsTd.appendChild(mkBtn("⬇", "Download", () => downloadFile(entry)));
           tr.firstElementChild.title = isImg ? "Ansehen" : (isTxt ? "Bearbeiten" : "Download");
           tr.firstElementChild.addEventListener("dblclick", () =>
             isImg ? viewImage(entry) : (isTxt ? editFile(entry) : downloadFile(entry)));
         }
         if (currentPath) {
-          actionsTd.appendChild(mkBtn("✏", "Umbenennen", () => doRename(entry)));
+          actionsTd.appendChild(mkBtn("✏", t("exp_rename"), () => doRename(entry)));
           actionsTd.appendChild(mkBtn("🗑", t("delete"), () => doDelete(entry)));
         }
         // Rechtsklick-Menü auf dem Eintrag (wie im Windows-Explorer)
@@ -546,7 +546,7 @@ export function renderExplorer(body, win) {
         <div>
           <div style="font-size:16px;font-weight:700;margin-bottom:4px">${t("exp_relay_title", { badge })}</div>
           <div style="color:var(--subtext);font-size:13px">
-            Gibt <b>${esc(clientName || clientId)}</b> im gemeinsamen Netzlaufwerk frei.
+            ${t("exp_relay_shares").replace("%s", "<b>" + esc(clientName || clientId) + "</b>")}
           </div>
         </div>
         ${toggleBtn}
@@ -556,34 +556,31 @@ export function renderExplorer(body, win) {
       <div style="color:var(--subtext);font-size:13px">${label}</div>
       <div style="display:flex;gap:6px">
         <input type="text" readonly value="${esc(value)}" onclick="this.select()" style="flex:1;font-family:monospace" />
-        <button class="taskbar-btn" data-copy="${esc(value)}">Kopieren</button>
+        <button class="taskbar-btn" data-copy="${esc(value)}">${t("copy")}</button>
       </div>`;
 
     const address = card(`
       <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_one")}</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:10px">
-        Du verbindest EINMAL dieses Laufwerk. Darin erscheint pro freigegebenem Client ein
-        Ordner, und darin die Festplatten. Mehrere Clients gleichzeitig, ganz automatisch.
+        ${t("exp_relay_one_desc")}
       </div>
       <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center">
         ${copyField("Windows / macOS / Linux", httpRoot)}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        ${t("exp_relay_one_hint")}
-        <b>http://…:Port/dav</b>-Adresse eintragen (mit Doppelpunkt vor dem Port).
+        ${t("exp_relay_one_hint")} ${t("exp_relay_dav_addr")}
       </div>`);
 
     const login = card(`
       <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_login")}</div>
       <div style="color:var(--subtext);font-size:13px;line-height:1.7">
-        Mit deinem <b>normalen Dashboard-Login</b> anmelden:
+        ${t("exp_relay_login_desc")}
         <ul style="margin:6px 0 0;padding-left:18px">
-          <li>Benutzername: <b>${esc(username || "dein Benutzername")}</b></li>
-          <li>Passwort: dein gewohntes Dashboard-Passwort</li>
+          <li>${t("username")}: <b>${esc(username || t("exp_relay_your_user"))}</b></li>
+          <li>${t("exp_relay_pw_line")}</li>
         </ul>
         <div style="font-size:12px;margin-top:8px">
           ${t("exp_relay_login_hint")}
-          die Netzlaufwerk-Anmeldung für dein Konto scharf geschaltet.
         </div>
       </div>`);
 
@@ -596,17 +593,13 @@ export function renderExplorer(body, win) {
     const netUse = username ? card(`
       <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_drive")}</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
-        ${t("exp_relay_drive_hint")}
-        <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
-        Vorher muss der Dienst „WebClient" laufen (<code>net start webclient</code>).
+        ${t("exp_relay_drive_hint")} ${t("exp_relay_cmd_hint")}
       </div>
       ${copyField(t("exp_relay_cmd"), `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        Statt <code>Z:</code> geht jeder freie Buchstabe. <code>/persistent:yes</code> ist schon
-        dabei, damit das Laufwerk nach dem Neustart bleibt. Die Form
-        <code>\\\\${esc(host)}@${esc(port)}\\dav</code> ist die offizielle WebDAV-Schreibweise mit
-        Port - <b>nicht</b> <code>:${esc(port)}</code> mit Doppelpunkt (das versucht SMB und
-        endet in Fehler 67 bzw. 0x800704b3).
+        ${t("exp_relay_letter_hint")}
+        <code>\\\\${esc(host)}@${esc(port)}\\dav</code> ${t("exp_relay_unc_hint")}
+        <b>${t("not_upper")}</b> <code>:${esc(port)}</code> ${t("exp_relay_colon_warn")}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
         ${t("exp_relay_disconnect")}
@@ -615,29 +608,23 @@ export function renderExplorer(body, win) {
     const guide = card(`
       <div style="font-weight:700;margin-bottom:6px">${t("exp_relay_gui")}</div>
       <ol style="margin:0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.8">
-        <li>Dienst „WebClient" muss laufen: in <code>cmd</code> (als Admin)
-          <code>net start webclient</code>.</li>
-        <li>Explorer → „Dieser PC" → „Netzlaufwerk verbinden".</li>
-        <li>Laufwerksbuchstaben wählen, als Ordner die <b>http://…:Port/dav</b>-Adresse von oben
-          eintragen (mit Doppelpunkt vor dem Port).</li>
-        <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken → Fertig stellen →
-          Dashboard-Login eingeben.</li>
+        <li>${t("exp_relay_step1")}</li>
+        <li>${t("exp_relay_step2")}</li>
+        <li>${t("exp_relay_step3")}</li>
+        <li>${t("exp_relay_step4")}</li>
       </ol>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        Wichtig: <b>niemals</b> die Form <code>\\\\host:Port\\dav</code> mit Doppelpunkt verwenden –
-        damit versucht Windows SMB und meldet Fehler 67 bzw. <code>0x800704b3</code>. Im grafischen
-        Dialog die <code>http://…/dav</code>-Adresse nehmen; in <code>cmd</code> (net use) die
-        WebDAV-Form <code>\\\\host@Port\\dav</code> von oben.
+        ${t("exp_relay_warn_colon")}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
-        Der jeweilige Client muss online sein, damit sein Ordner Inhalte zeigt.
+        ${t("exp_relay_online_note")}
       </div>`);
 
     if (!enabled) {
       relayPane.innerHTML = header + card(`
         <div style="color:var(--subtext);font-size:13px;line-height:1.7">
           ${t("exp_relay_notshared")}
-          ${isAdmin ? "Gib ihn oben frei." : "Ein Administrator muss ihn freigeben."}
+          ${isAdmin ? t("exp_relay_share_above") : t("exp_relay_admin_must")}
         </div>`) + address;
       wire();
       return;

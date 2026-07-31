@@ -355,7 +355,7 @@ export function renderClientLayout(host, toolbarHost, client) {
       getDashProfiles()[name] = copy;
       setClientDashProfile(client.id, name);
       saveLayout();
-      window.notify?.(`Profil "${name}" angelegt und diesem Client zugewiesen.`, "success");
+      window.notify?.(t("dl_profile_created", { name }), "success");
       renderClientLayout(host, toolbarHost, client);
     });
     // Aktives Profil umbenennen
@@ -714,7 +714,7 @@ function renderCMetric(bodyEl, panel, client, ctx) {
     // wird stattdessen der Hinweis angezeigt.
     const inFolder = !!bodyEl.closest(".folder-active");
     if (!edit && !inFolder) { if (card) card.style.display = "none"; return; }
-    bodyEl.innerHTML = `<div class="cmetric-na">Auf ${client.device_type === "lxc" ? "LXC-Containern" : "VMs"} nicht verfügbar.</div>`;
+    bodyEl.innerHTML = `<div class="cmetric-na">${t("dl_na_on", { kind: client.device_type === "lxc" ? "LXC" : "VM" })}</div>`;
     return;
   }
   const kindsAvail = preset ? availableClientKinds(preset) : [];
@@ -834,7 +834,7 @@ function openAddPicker(host, toolbarHost, client, atCell) {
   back.className = "widget-picker-back";
   back.innerHTML = `
     <div class="widget-picker">
-      <div class="wp-head"><strong>Panel hinzufügen${atCell ? ` (Zelle ${atCell.gx + 1},${atCell.gy + 1})` : ""}</strong><button class="dash-lp-btn" data-close>✕</button></div>
+      <div class="wp-head"><strong>${t("dl_add_panel")}${atCell ? ` (${t("dl_cell")} ${atCell.gx + 1},${atCell.gy + 1})` : ""}</strong><button class="dash-lp-btn" data-close>✕</button></div>
       <div class="wp-body">
         ${ADDABLE.map(([group, items]) => `
           <div class="wp-group-title">${esc(groupLabel(group))}</div>

@@ -71,28 +71,28 @@ export function renderGuacamole(body, win) {
           <label style="align-self:center;color:var(--subtext)">Port</label>
           <input type="text" id="gf-port-${win.key}" value="${DEFAULT_PORTS[presetProtocol] || ""}"
             style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" />
-          <label style="align-self:center;color:var(--subtext)">Benutzer</label>
+          <label style="align-self:center;color:var(--subtext)">${t("username")}</label>
           <input type="text" id="gf-user-${win.key}" autocomplete="off"
             style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" />
-          <label style="align-self:center;color:var(--subtext)">Passwort</label>
+          <label style="align-self:center;color:var(--subtext)">${t("password")}</label>
           <input type="password" id="gf-pass-${win.key}" autocomplete="new-password"
             style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" />
-          <label style="align-self:center;color:var(--subtext)" id="gf-dom-label-${win.key}">Domäne</label>
+          <label style="align-self:center;color:var(--subtext)" id="gf-dom-label-${win.key}">${t("gc_domain")}</label>
           <input type="text" id="gf-domain-${win.key}" placeholder="(optional)"
             style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)" />
-          <label style="align-self:center;color:var(--subtext)" id="gf-res-label-${win.key}">Auflösung</label>
+          <label style="align-self:center;color:var(--subtext)" id="gf-res-label-${win.key}">${t("gc_resolution")}</label>
           <select id="gf-res-${win.key}" style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)">
-            <option value="1024x768">1024 × 768 (klein, stabil)</option>
-            <option value="1280x720" selected>1280 × 720 (Standard)</option>
+            <option value="1024x768">1024 × 768 (${t("gc_res_small")})</option>
+            <option value="1280x720" selected>1280 × 720 (${t("gc_res_default")})</option>
             <option value="1366x768">1366 × 768</option>
             <option value="1600x900">1600 × 900</option>
-            <option value="1920x1080">1920 × 1080 (scharf, mehr Last)</option>
+            <option value="1920x1080">1920 × 1080 (${t("gc_res_sharp")})</option>
           </select>
-          <label style="align-self:center;color:var(--subtext)" id="gf-qual-label-${win.key}">Qualität</label>
+          <label style="align-self:center;color:var(--subtext)" id="gf-qual-label-${win.key}">${t("gc_quality")}</label>
           <select id="gf-qual-${win.key}" style="padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text)">
-            <option value="low" selected>Flüssig (niedrig, empfohlen)</option>
-            <option value="balanced">Ausgewogen</option>
-            <option value="high">Scharf (hoch, mehr Last)</option>
+            <option value="low" selected>${t("gc_q_low")}</option>
+            <option value="balanced">${t("gc_q_balanced")}</option>
+            <option value="high">${t("gc_q_high")}</option>
           </select>
         </div>
         <div id="guac-form-msg-${win.key}" style="margin-top:10px;font-size:12px;color:var(--subtext)"></div>
@@ -573,13 +573,10 @@ export function renderGuacamole(body, win) {
     lastScale = 0;
     connectBtn.textContent = "🔌 Verbinden";
 
-    formMsg.textContent = "Lade Guacamole-Bibliothek…";
+    formMsg.textContent = t("gc_loading_lib");
     if (!(await ensureGuacamoleLoaded())) {
-      formMsg.innerHTML = `<span style="color:var(--danger)">guacamole-common-js konnte nicht geladen werden.<br>` +
-        `Bei Servern ohne Internet: Datei einmalig herunterladen und unter ` +
-        `<code>frontend/js/vendor/guacamole-common.min.js</code> ablegen ` +
-        `(siehe Hinweis in der Konsole).</span>`;
-      console.error("[guac] guacamole-common-js nicht ladbar. Offline-Lösung: Datei von " +
+      formMsg.innerHTML = `<span style="color:var(--danger)">${t("gc_lib_failed")}</span>`;
+      console.error("[guac] guacamole-common-js could not be loaded. Offline fix: download from " +
         "https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/esm/guacamole-common.min.js " +
         t("u_herunterladen_und_als_frontend_js_") +
         t("u_esm_wird_unterstutzt_alternativ_fu"));
@@ -865,7 +862,7 @@ export function renderGuacamole(body, win) {
       mediaRecorder.start(2000);   // alle 2 s ein Datenblock (robust bei langen Sessions)
     } catch (e) {
       mediaRecorder = null;
-      console.warn("[guac] Aufzeichnung konnte nicht starten:", e);
+      console.warn("[guac] recording could not start:", e);
     }
   }
 
@@ -931,7 +928,7 @@ export function renderGuacamole(body, win) {
 
   function renderProfileOptions(selectedId) {
     if (!profileSel) return;
-    profileSel.innerHTML = `<option value="">— Login auswählen —</option>` +
+    profileSel.innerHTML = `<option value="">${t("gc_pick_login")}</option>` +
       savedProfiles.map((pr) =>
         `<option value="${esc(pr.id)}">${esc(pr.name || "?")} · ${esc((pr.protocol || "").toUpperCase())}</option>`
       ).join("");
@@ -1022,9 +1019,7 @@ export function renderGuacamole(body, win) {
   // guacd-Verfügbarkeit prüfen und ggf. Hinweis anzeigen
   api.guacStatus().then((s) => {
     if (!s.available) {
-      formMsg.innerHTML = `<span style="color:var(--warn)">Hinweis: guacd ist derzeit nicht erreichbar. ` +
-        `Richte es unter <b>Einstellungen → Allgemein → Remote-Gateway (Guacamole)</b> ` +
-        `mit einem Klick ein (installiert Docker und startet guacd automatisch).</span>`;
+      formMsg.innerHTML = `<span style="color:var(--warn)">${t("gc_guacd_down")}</span>`;
     }
   }).catch(() => {});
 }

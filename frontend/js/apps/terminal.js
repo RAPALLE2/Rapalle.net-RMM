@@ -30,10 +30,10 @@ export function renderTerminal(body, win) {
 
   const shellBar = isWindows ? `
       <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
-        <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
-        <button class="taskbar-btn term-fs-btn" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
+        <button class="taskbar-btn bar-opts-toggle" title="${t("bar_opts_toggle")}">⚙️</button>
+        <button class="taskbar-btn term-fs-btn" title="${t("vnc_fs_title")}">${t("vnc_fullscreen")}</button>
         <span class="bar-opts">
-        <span style="font-size:11px;color:var(--subtext)">Shell:</span>
+        <span style="font-size:11px;color:var(--subtext)">${t("term_shell_label")}</span>
         <select id="term-shell-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
           <option value="cmd">CMD</option>
           <option value="powershell">PowerShell</option>
@@ -49,17 +49,17 @@ export function renderTerminal(body, win) {
         </span>
         <button class="taskbar-btn" id="term-script-run-${win.key}" title="${t("term_run_script")}">▶</button>
         <button class="taskbar-btn" id="term-agentcon-${win.key}" title="${t("term_toggle")}">${t("term_agentcon_btn")}</button>
-        <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
+        <select id="term-fmt-${win.key}" title="${t("term_export_format")}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
           <option value="json">JSON</option><option value="xml">XML</option><option value="txt">TXT</option>
         </select>
         <button class="taskbar-btn" id="term-export-${win.key}" title="${t("term_export")}">⬇ Export</button>
-        <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet cls/clear)">🧹 Clear</button>
+        <button class="taskbar-btn" id="term-clear-${win.key}" title="${t("term_clear_title")}">🧹 Clear</button>
         <button class="taskbar-btn" id="term-restart-${win.key}">🔄 Neustart</button>
         </span>
       </div>` : `
       <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
-        <button class="taskbar-btn bar-opts-toggle" title="Optionen ein-/ausklappen">⚙️</button>
-        <button class="taskbar-btn term-fs-btn" title="Browser-Vollbild an/aus (Esc beendet ebenfalls)">Vollbild</button>
+        <button class="taskbar-btn bar-opts-toggle" title="${t("bar_opts_toggle")}">⚙️</button>
+        <button class="taskbar-btn term-fs-btn" title="${t("vnc_fs_title")}">${t("vnc_fullscreen")}</button>
         <span class="bar-opts">
         <span style="font-size:11px;color:var(--subtext)">${t("term_shell_on", { host: esc(clientName || "Client") })}</span>
         <span style="flex:1"></span>
@@ -72,11 +72,11 @@ export function renderTerminal(body, win) {
         </span>
         <button class="taskbar-btn" id="term-script-run-${win.key}" title="${t("term_run_script")}">▶</button>
         <button class="taskbar-btn" id="term-agentcon-${win.key}" title="${t("term_toggle")}">${t("term_agentcon_btn")}</button>
-        <select id="term-fmt-${win.key}" title="Export-Format" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
+        <select id="term-fmt-${win.key}" title="${t("term_export_format")}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:11px">
           <option value="json">JSON</option><option value="xml">XML</option><option value="txt">TXT</option>
         </select>
         <button class="taskbar-btn" id="term-export-${win.key}" title="${t("term_export")}">⬇ Export</button>
-        <button class="taskbar-btn" id="term-clear-${win.key}" title="Bildschirm leeren (sendet clear)">🧹 Clear</button>
+        <button class="taskbar-btn" id="term-clear-${win.key}" title="${t("term_clear_title")}">🧹 Clear</button>
         <button class="taskbar-btn" id="term-restart-${win.key}">🔄 Neustart</button>
         </span>
       </div>`;
@@ -86,9 +86,9 @@ export function renderTerminal(body, win) {
       ${shellBar}
       <div id="term-host-${win.key}" style="flex:1 1 0;min-height:0;overflow:hidden;position:relative"></div>
       <div id="term-agenthost-${win.key}" style="flex:1 1 0;min-height:0;overflow:hidden;position:relative;display:none"></div>
-      <div id="term-status-${win.key}" style="flex:none;font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">Verbinde…</div>
+      <div id="term-status-${win.key}" style="flex:none;font-size:11px;color:var(--subtext);padding:2px 8px;border-top:1px solid var(--border)">${t("vnc_connecting")}</div>
       <div class="bar-optrow" style="flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--panel-2);font-size:12px;border-top:1px solid var(--border);flex-wrap:wrap">
-        <span style="color:var(--subtext)">Text senden:</span>
+        <span style="color:var(--subtext)">${t("vnc_send_text")}</span>
         <select id="term-layout-${win.key}" title="${t("term_layout_full")}"
           style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px">
           <option value="raw">1:1 (empfohlen)</option>
@@ -100,7 +100,7 @@ export function renderTerminal(body, win) {
         <label style="color:var(--subtext);display:flex;align-items:center;gap:4px" title="${t("guac_send_enter")}">
           <input type="checkbox" id="term-enter-${win.key}" /> +Enter
         </label>
-        <button class="taskbar-btn" id="term-send-${win.key}">Senden</button>
+        <button class="taskbar-btn" id="term-send-${win.key}">${t("send")}</button>
       </div>
     </div>
   `;
@@ -109,7 +109,7 @@ export function renderTerminal(body, win) {
   const fsBtnT = body.querySelector(".term-fs-btn");
   if (fsBtnT) {
     const fsRoot = () => body.closest(".rmm-window") || body;
-    const fsLabel = () => { fsBtnT.textContent = document.fullscreenElement ? "✕ Vollbild beenden" : "Vollbild"; };
+    const fsLabel = () => { fsBtnT.textContent = document.fullscreenElement ? t("vnc_fullscreen_exit") : t("vnc_fullscreen"); };
     fsBtnT.addEventListener("click", () => {
       if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
       const el = fsRoot();
@@ -142,7 +142,7 @@ export function renderTerminal(body, win) {
   function onExit(p) {
     if (p.session !== sessionId || !term) return;
     term.write("\r\n\x1b[33m[Session beendet]\x1b[0m\r\n");
-    statusEl.textContent = "Session beendet — 🔄 Neustart zum Wiederverbinden.";
+    statusEl.textContent = t("term_session_ended");
   }
   function onAck(p) {
     if (p.session !== sessionId) return;
@@ -158,9 +158,9 @@ export function renderTerminal(body, win) {
     dashboardSocket.emit("term-open", {
       clientId, session: sessionId, shell: shellMode,
       cols: term.cols, rows: term.rows,
-      username: state.user?.username || "unbekannt",
+      username: state.user?.username || "unknown",
     });
-    statusEl.textContent = `Verbunden (${isWindows ? shellMode : "shell"}). Klicke ins Terminal und tippe.`;
+    statusEl.textContent = `${t("vnc_connected")} (${isWindows ? shellMode : "shell"}). ${t("term_click_hint")}`;
     // Präzise Diagnose nach 3s, falls keine Ausgabe kam.
     setTimeout(() => {
       if (gotOutput || !term) return;
@@ -170,7 +170,7 @@ export function renderTerminal(body, win) {
       } else if (!agentOnline) {
         term.write("\x1b[31m[Client ist offline]\x1b[0m\r\n" +
           t("term_agent_off"));
-        statusEl.textContent = "Client offline.";
+        statusEl.textContent = t("term_client_offline");
       } else {
         term.write(t("term_no_shell") + t("term_no_shell2") + t("term_no_shell3")
           + t("term_no_shell4") + t("term_no_shell5"));
@@ -226,8 +226,8 @@ export function renderTerminal(body, win) {
     host.style.display = on ? "none" : "";
     agentHost.style.display = on ? "" : "none";
     if (agentBtn) {
-      agentBtn.textContent = on ? "⌨ Shell" : "🤖 Agent-Konsole";
-      agentBtn.title = on ? "Zurueck zur interaktiven Shell" : "Zwischen Shell und Agent-Konsole (Log des Agenten) umschalten";
+      agentBtn.textContent = on ? "⌨ Shell" : "🤖 " + t("term_agent_console");
+      agentBtn.title = on ? t("term_back_to_shell") : t("term_toggle_console");
     }
     if (on) {
       if (!agentTerm) {
@@ -282,7 +282,7 @@ export function renderTerminal(body, win) {
       (sc.command || "").toLowerCase().includes(q);
     const filtered = termScripts.filter(match);
     if (!filtered.length) {
-      scriptList.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:6px">Keine Skripte gefunden.</div>`;
+      scriptList.innerHTML = `<div style="color:var(--subtext);font-size:12px;padding:6px">${t("term_no_scripts")}</div>`;
       return;
     }
     // Nach Ordnern gruppieren (Ordner alphabetisch, "ohne Ordner" zuletzt)

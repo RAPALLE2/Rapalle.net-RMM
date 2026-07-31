@@ -75,9 +75,9 @@ export function renderAudit(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div class="explorer-toolbar" style="flex-wrap:wrap;gap:8px">
-        <span style="color:var(--subtext)">Aktivitätsprotokoll (letzte 200, 30 Tage)</span>
+        <span style="color:var(--subtext)">${t("ad_title")}</span>
         <select id="au-filter-user-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
-          <option value="">Alle Benutzer</option>
+          <option value="">${t("ad_all_users")}</option>
         </select>
         <select id="au-filter-kind-${win.key}" style="padding:4px;border-radius:5px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px">
           <option value="">Alle Aktionen</option>
@@ -93,7 +93,7 @@ export function renderAudit(body, win) {
             <th style="cursor:pointer" data-sort="action">${t("audit_action")} ⇅</th>
             <th>${t("audit_details")}</th>
           </tr></thead>
-          <tbody id="au-body-${win.key}"><tr><td colspan="4" style="color:var(--subtext)">Lädt...</td></tr></tbody>
+          <tbody id="au-body-${win.key}"><tr><td colspan="4" style="color:var(--subtext)">${t("loading")}</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -160,7 +160,7 @@ export function renderAudit(body, win) {
       // User-Filter-Dropdown mit den vorkommenden Benutzern füllen.
       const users = [...new Set(allEntries.map((e) => e.username).filter(Boolean))].sort();
       const cur = userSel.value;
-      userSel.innerHTML = `<option value="">Alle Benutzer</option>` +
+      userSel.innerHTML = `<option value="">${t("ad_all_users")}</option>` +
         users.map((u) => `<option value="${esc(u)}">${esc(u)}</option>`).join("");
       userSel.value = cur;
 
@@ -199,7 +199,7 @@ export function renderAudit(body, win) {
 
     tbody.innerHTML = "";
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">Keine Einträge.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("pm_no_entries")}</td></tr>`;
       return;
     }
     for (const e of rows) {
@@ -211,23 +211,23 @@ export function renderAudit(body, win) {
       if (e.action === "screen.session_started" && (e.details || "").startsWith("rec:")) {
         recId = e.details.slice(4);
         detailsHtml = (existingRecIds && !existingRecIds.has(recId))
-          ? `<span style="color:var(--danger);font-size:12px">Replay gibt's nicht mehr</span>`
+          ? `<span style="color:var(--danger);font-size:12px">${t("ad_replay_gone")}</span>`
           : `<button class="taskbar-btn" data-rec="${esc(recId)}">${t("view_recording")}</button>`;
       }
       const guacMatch = (e.details || "").match(/\/api\/recordings\/([A-Za-z0-9_-]+)/);
       if (e.action === "guac.recording" && guacMatch) {
         recId = guacMatch[1];
         detailsHtml = (existingRecIds && !existingRecIds.has(recId))
-          ? `<span style="color:var(--danger);font-size:12px">Replay gibt's nicht mehr</span>`
-          : `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button>`;
+          ? `<span style="color:var(--danger);font-size:12px">${t("ad_replay_gone")}</span>`
+          : `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ ${t("view_recording")}</button>`;
       }
       // Terminal-Sitzung (neu): kompakter Eintrag mit Replay-Verweis "rec:<id> ..."
       const termRec = e.action === "terminal.session" && (e.details || "").match(/^rec:([A-Za-z0-9_-]+)\s*(.*)$/);
       if (termRec) {
         recId = termRec[1];
         detailsHtml = ((existingRecIds && !existingRecIds.has(recId))
-          ? `<span style="color:var(--danger);font-size:12px">Replay gibt's nicht mehr</span> `
-          : `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ Replay ansehen</button> `) +
+          ? `<span style="color:var(--danger);font-size:12px">${t("ad_replay_gone")}</span> `
+          : `<button class="taskbar-btn" data-rec="${esc(recId)}">▶ ${t("view_recording")}</button> `) +
           `<span style="font-size:11px">${esc(termRec[2] || "")}</span>`;
       }
       // Terminal-Sitzung (alt): mehrzeiliger Verlauf -> aufklappbarer <pre>-Block.

@@ -30,7 +30,7 @@ export function renderGameOfLife(body, win) {
         <button class="btn-primary" id="gol-play" style="margin:0;width:auto">▶ Start</button>
         <button class="taskbar-btn" id="gol-step">⏭ Schritt</button>
         <button class="taskbar-btn" id="gol-random">🎲 Zufall</button>
-        <button class="taskbar-btn" id="gol-clear">🧹 Löschen</button>
+        <button class="taskbar-btn" id="gol-clear">🧹 ${t("delete")}</button>
         <div class="gol-speed-wrap" title="Simulationstempo">
           <span>🐢</span>
           <input type="range" class="gol-speed" id="gol-speed" min="1" max="30" value="10" />

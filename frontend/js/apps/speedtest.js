@@ -280,7 +280,7 @@ export function renderSpeedtest(body, win) {
       // haengen (dann kaeme "kein Wert").
       let opened = false;
       const openTimer = setTimeout(() => {
-        if (!opened) { try { ws.close(); } catch {}; reject(new Error(`${dir}: keine Verbindung zum M-Lab-Server (Firewall/Proxy blockt WebSockets?)`)); }
+        if (!opened) { try { ws.close(); } catch {}; reject(new Error(`${dir}: ${tr("st_no_mlab")}`)); }
       }, 8000);
 
       let finalMbps = 0;
@@ -349,7 +349,7 @@ export function renderSpeedtest(body, win) {
       };
 
       ws.onclose = () => { cleanup(); resolve(finalMbps); };
-      ws.onerror = () => { cleanup(); reject(new Error(`${dir}-Verbindung fehlgeschlagen`)); };
+      ws.onerror = () => { cleanup(); reject(new Error(tr("st_conn_failed", { dir }))); };
     });
   }
 
@@ -398,8 +398,8 @@ export function renderSpeedtest(body, win) {
   function applyModeUi() {
     const ndt = $("st-mode").value === "ndt7";
     $("st-note").textContent = ndt
-      ? "Nutzt M-Lab NDT7 – dieselbe offene Messinfrastruktur wie Googles Speedtest (speed.measurementlab.net). Läuft direkt im Browser über WebSockets gegen öffentliche M-Lab-Server und misst die Internet-Anbindung dieses Geräts. Messungen sind öffentlich einsehbar (M-Lab-Datenschutz)."
-      : `Misst die Verbindung zwischen diesem Browser und dem RMM-Server (${location.host}) über ${DL_STREAMS} parallele Streams.`;
+      ? tr("st_ndt_note")
+      : tr("st_local_note", { host: location.host, n: DL_STREAMS });
     $("st-server").textContent = "";
     $("st-r-jitter").textContent = "–";
   }

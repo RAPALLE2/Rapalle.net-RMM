@@ -115,19 +115,17 @@ export function renderNotifications(body, win) {
 
   function drawWebhooks(root) {
     root.innerHTML = `
-      <h3>Webhook hinzufügen</h3>
+      <h3>${tr("nf_add_webhook")}</h3>
       <p style="color:var(--subtext);font-size:13px">
-        Discord: Webhook-URL aus „Integrationen → Webhooks" einfügen.
-        Custom: beliebiges Ziel - optional mit eigenen Headern (z.B. API-Key)
-        und einem eigenen Body-Format.</p>
+        ${tr("nf_webhook_hint")}</p>
       <div id="wh-add">${webhookForm(null)}</div>
-      <h3 style="margin-top:22px">Konfigurierte Webhooks</h3>
+      <h3 style="margin-top:22px">${tr("nf_configured_webhooks")}</h3>
       <div id="wh-list"></div>`;
     bindWebhookForm(root.querySelector("#wh-add"), null, draw);
 
     const listEl = root.querySelector("#wh-list");
     if (!webhooks.length) {
-      listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Noch keine Webhooks konfiguriert.</div>`;
+      listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${tr("nf_no_webhooks")}</div>`;
       return;
     }
     listEl.innerHTML = webhooks.map((w) => `
@@ -141,9 +139,9 @@ export function renderNotifications(body, win) {
             <div style="font-size:11px;color:var(--subtext);font-family:monospace;margin-top:2px">${esc(String(w.url).slice(0, 56))}…</div>
           </div>
           <div style="display:flex;gap:6px">
-            <button class="taskbar-btn" data-edit="${w.id}">Bearbeiten</button>
-            <button class="taskbar-btn" data-test="${w.id}">Testen</button>
-            <button class="taskbar-btn" data-del="${w.id}">Löschen</button>
+            <button class="taskbar-btn" data-edit="${w.id}">${tr("edit")}</button>
+            <button class="taskbar-btn" data-test="${w.id}">${tr("nf_test")}</button>
+            <button class="taskbar-btn" data-del="${w.id}">${tr("delete")}</button>
           </div>
         </div>
         <div class="wh-editbox" data-editbox="${w.id}" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"></div>
@@ -178,35 +176,34 @@ export function renderNotifications(body, win) {
     try { cfg = await api.getSmtp(); }
     catch (e) { root.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; return; }
     root.innerHTML = `
-      <h3>SMTP-Server (E-Mail-Benachrichtigungen)</h3>
+      <h3>${tr("nf_smtp_title")}</h3>
       <p style="color:var(--subtext);font-size:13px">
-        Über diese Verbindung verschickt das RMM E-Mails aus den
-        Benachrichtigungs-Regeln (z.B. „Garantie läuft ab → Mail an …").</p>
+        ${tr("nf_smtp_hint")}</p>
       <div style="display:flex;gap:12px">
-        <div class="form-row" style="flex:2"><label>Server (Host)</label>
+        <div class="form-row" style="flex:2"><label>${tr("nf_server_host")}</label>
           <input id="sm-host" value="${esc(cfg.host)}" placeholder="smtp.gmail.com" /></div>
         <div class="form-row" style="flex:1"><label>Port</label>
           <input id="sm-port" type="number" value="${esc(String(cfg.port))}" /></div>
-        <div class="form-row" style="flex:1"><label>Sicherheit</label>
+        <div class="form-row" style="flex:1"><label>${tr("nf_security")}</label>
           <select id="sm-sec">
             <option value="starttls" ${cfg.security === "starttls" ? "selected" : ""}>STARTTLS (587)</option>
             <option value="ssl" ${cfg.security === "ssl" ? "selected" : ""}>SSL/TLS (465)</option>
-            <option value="none" ${cfg.security === "none" ? "selected" : ""}>Ohne</option>
+            <option value="none" ${cfg.security === "none" ? "selected" : ""}>${tr("nf_none")}</option>
           </select></div>
       </div>
       <div style="display:flex;gap:12px">
-        <div class="form-row" style="flex:1"><label>Benutzername</label>
+        <div class="form-row" style="flex:1"><label>${tr("username")}</label>
           <input id="sm-user" value="${esc(cfg.user)}" placeholder="user@gmail.com" /></div>
-        <div class="form-row" style="flex:1"><label>Passwort</label>
-          <input id="sm-pass" type="password" placeholder="${cfg.password ? "gespeichert – zum Ändern eintippen" : ""}" /></div>
+        <div class="form-row" style="flex:1"><label>${tr("password")}</label>
+          <input id="sm-pass" type="password" placeholder="${cfg.password ? tr("nf_pw_stored") : ""}" /></div>
       </div>
-      <div class="form-row"><label>Absender-Adresse (From)</label>
+      <div class="form-row"><label>${tr("nf_from_addr")}</label>
         <input id="sm-from" value="${esc(cfg.from_addr)}" placeholder="rmm@firma.de (leer = Benutzername)" /></div>
       <div id="sm-error" class="form-error hidden"></div>
       <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
-        <button class="btn-primary" id="sm-save">Speichern</button>
-        <input id="sm-testto" placeholder="Test an … (E-Mail)" style="flex:1;max-width:260px" />
-        <button class="taskbar-btn" id="sm-test">Test-Mail senden</button>
+        <button class="btn-primary" id="sm-save">${tr("save")}</button>
+        <input id="sm-testto" placeholder="${tr("nf_test_to")}" style="flex:1;max-width:260px" />
+        <button class="taskbar-btn" id="sm-test">${tr("nf_send_test")}</button>
       </div>`;
     const err = root.querySelector("#sm-error");
     root.querySelector("#sm-save").addEventListener("click", async () => {
@@ -344,27 +341,25 @@ export function renderNotifications(body, win) {
     const clientName = (id) => (state.clients.find((c) => c.id === id) || {}).hostname || id;
 
     root.innerHTML = `
-      <h3>Neue Regel</h3>
+      <h3>${tr("nf_new_rule")}</h3>
       <p style="color:var(--subtext);font-size:13px">
-        Beispiel: „Garantie läuft bald ab" auf Client X, Y und Z → E-Mail an
-        user@gmail.de. Oder: „Client geht offline" → Webhook. Jede Regel hat
-        einen eingebauten Cooldown gegen Alarm-Stürme.</p>
+        ${tr("nf_rule_hint")}</p>
       <div id="rl-add">${ruleForm(null)}
-        <button class="btn-primary" id="rl-save" style="margin-top:4px">+ Regel speichern</button></div>
-      <h3 style="margin-top:22px">Aktive Regeln (${rules.length})</h3>
+        <button class="btn-primary" id="rl-save" style="margin-top:4px">+ ${tr("nf_save_rule")}</button></div>
+      <h3 style="margin-top:22px">${tr("nf_active_rules")} (${rules.length})</h3>
       <div id="rl-list"></div>`;
 
     const addCollect = bindRuleForm(root.querySelector("#rl-add"), null);
     root.querySelector("#rl-save").addEventListener("click", async () => {
       const data = addCollect();
       if (!data) return;
-      try { await api.createNotifyRule(data); window.notify?.("Regel gespeichert", "success"); draw(); }
+      try { await api.createNotifyRule(data); window.notify?.(tr("nf_rule_saved"), "success"); draw(); }
       catch (e) { window.notify?.(e.message, "error"); }
     });
 
     const listEl = root.querySelector("#rl-list");
     if (!rules.length) {
-      listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Noch keine Regeln. Leg oben die erste an.</div>`;
+      listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${tr("nf_no_rules")}</div>`;
       return;
     }
     listEl.innerHTML = rules.map((r) => {
@@ -390,10 +385,10 @@ export function renderNotifications(body, win) {
             </div>
           </div>
           <div style="display:flex;gap:6px;flex:none">
-            <button class="taskbar-btn" data-toggle="${r.id}" data-en="${r.enabled ? 0 : 1}">${r.enabled ? "Deaktivieren" : "Aktivieren"}</button>
-            <button class="taskbar-btn" data-edit="${r.id}">Bearbeiten</button>
-            <button class="taskbar-btn" data-test="${r.id}">Testen</button>
-            <button class="taskbar-btn" data-del="${r.id}">Löschen</button>
+            <button class="taskbar-btn" data-toggle="${r.id}" data-en="${r.enabled ? 0 : 1}">${r.enabled ? tr("nf_disable") : tr("au_enable")}</button>
+            <button class="taskbar-btn" data-edit="${r.id}">${tr("edit")}</button>
+            <button class="taskbar-btn" data-test="${r.id}">${tr("nf_test")}</button>
+            <button class="taskbar-btn" data-del="${r.id}">${tr("delete")}</button>
           </div>
         </div>
         <div class="rl-editbox" data-editbox="${r.id}" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"></div>
@@ -408,7 +403,7 @@ export function renderNotifications(body, win) {
       b.textContent = "…";
       try { await api.testNotifyRule(b.dataset.test); window.notify?.(tr("u_test_uber_den_regel_kanal_gesendet"), "success"); }
       catch (e) { window.notify?.(e.message, "error"); }
-      b.textContent = "Testen";
+      b.textContent = tr("nf_test");
     }));
     listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
       if (!(await uiConfirm(tr("u_regel_loschen"), { okText: tr("delete"), danger: true }))) return;
@@ -422,8 +417,8 @@ export function renderNotifications(body, win) {
       let params = {};
       try { params = JSON.parse(r.params || "{}"); } catch {}
       box.innerHTML = ruleForm({ ...r, params }) +
-        `<button class="btn-primary rl-update" style="margin-top:4px">Änderungen speichern</button>
-         <button class="taskbar-btn rl-cancel" style="margin-left:6px">Abbrechen</button>`;
+        `<button class="btn-primary rl-update" style="margin-top:4px">${tr("nf_save_changes")}</button>
+         <button class="taskbar-btn rl-cancel" style="margin-left:6px">${tr("cancel")}</button>`;
       const collect = bindRuleForm(box, { ...r, params });
       box.querySelector(".rl-update").addEventListener("click", async () => {
         const data = collect();

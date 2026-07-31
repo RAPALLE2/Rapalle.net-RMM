@@ -88,7 +88,7 @@ export function renderCalendar(body, win) {
 
   async function load() {
     titleEl.textContent = `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
-    bodyEl.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:10px">Lädt…</div>`;
+    bodyEl.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:10px">${tr("loading")}</div>`;
     const [from, to] = range();
     try {
       const [evs, o] = await Promise.all([
@@ -247,7 +247,7 @@ export function renderCalendar(body, win) {
     back.querySelector("[data-close]").addEventListener("click", close);
     back.querySelector("[data-edit]")?.addEventListener("click", () => { close(); openEditor(ev); });
     back.querySelector("[data-del]")?.addEventListener("click", async () => {
-      if (!(await uiConfirm(`Termin „${ev.title}“ löschen?`, { okText: tr("delete"), danger: true }))) return;
+      if (!(await uiConfirm(tr("cl_del_event_q", { title: ev.title }), { okText: tr("delete"), danger: true }))) return;
       close();
       try { await api.deleteEvent(ev.id); load(); }
       catch (e) { window.notify?.(e.message, "error"); }
@@ -296,13 +296,13 @@ export function renderCalendar(body, win) {
               <input id="ce-loc" value="${esc(ev?.location || "")}" placeholder="Raum, Link…" /></div>
           </div>
           <label style="display:flex;gap:6px;align-items:center;font-size:12.5px;margin-bottom:8px">
-            <input type="checkbox" id="ce-allday" ${ev?.all_day ? "checked" : ""} /> ganztägig
+            <input type="checkbox" id="ce-allday" ${ev?.all_day ? "checked" : ""} /> ${tr("cl_allday")}
           </label>
           <div class="form-row"><label>Beschreibung</label>
             <textarea id="ce-desc" rows="2">${esc(ev?.description || "")}</textarea></div>
 
-          <div class="form-row"><label>Für wen gilt der Termin?</label>
-            <input type="text" id="ce-search" placeholder="Suchen…" style="margin-bottom:4px" />
+          <div class="form-row"><label>${tr("cl_for_whom")}</label>
+            <input type="text" id="ce-search" placeholder="${tr("pm_search")}" style="margin-bottom:4px" />
             <div style="max-height:190px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 8px">
               <div class="ce-sec" style="font-size:11px;color:var(--subtext);margin-bottom:2px">Personen</div>
               ${assignable.map((u) => chk("user", u.id, u.name,
@@ -323,13 +323,13 @@ export function renderCalendar(body, win) {
                 `<div style="font-size:11.5px;color:var(--subtext)">Keine Clients.</div>`}
             </div>
             <div style="font-size:11px;color:var(--subtext);margin-top:4px">
-              Ohne Auswahl gilt der Termin nur für dich.</div>
+              ${tr("cl_no_pick_hint")}</div>
           </div>
           <div class="form-error hidden" id="ce-err"></div>
         </div>
         <div style="padding:10px;display:flex;justify-content:flex-end;gap:6px">
-          <button class="taskbar-btn" data-close>Abbrechen</button>
-          <button class="btn-primary" data-save>${ev ? tr("save") : "Anlegen"}</button>
+          <button class="taskbar-btn" data-close>${tr("cancel")}</button>
+          <button class="btn-primary" data-save>${ev ? tr("save") : tr("ai_create")}</button>
         </div>
       </div>`;
     document.body.appendChild(back);

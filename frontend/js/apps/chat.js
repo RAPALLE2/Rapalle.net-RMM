@@ -55,7 +55,7 @@ export function renderChat(body, win) {
   function drawList() {
     if (!convs.length) {
       listEl.innerHTML = `<div style="padding:14px;color:var(--subtext);font-size:13px">
-        Noch keine Unterhaltungen.<br>Starte oben einen neuen Chat.</div>`;
+        ${t("ch_none")}</div>`;
       return;
     }
     listEl.innerHTML = convs.map((c) => {
@@ -88,7 +88,7 @@ export function renderChat(body, win) {
     const conv = convs.find((c) => c.id === currentId);
     if (!conv) {
       mainEl.innerHTML = `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--subtext);font-size:14px">
-        💬 Wähle links eine Unterhaltung oder starte eine neue.</div>`;
+        💬 ${t("ch_pick")}</div>`;
       return;
     }
     mainEl.innerHTML = `
@@ -126,7 +126,7 @@ export function renderChat(body, win) {
         if (!(await uiConfirm(`Gruppe „${conv.name}“ verlassen?`, { okText: "Verlassen" }))) return;
         await api.chatRemoveMember(conv.id, state.user.id);
       } else {
-        const what = conv.type === "group" ? `Gruppe „${conv.name}“ für ALLE löschen?` : t("u_chat_fur_beide_seiten_loschen");
+        const what = conv.type === "group" ? t("ch_del_group_q", { name: conv.name }) : t("u_chat_fur_beide_seiten_loschen");
         if (!(await uiConfirm(what, { okText: t("delete"), danger: true }))) return;
         await api.chatDelete(conv.id);
       }
@@ -162,7 +162,7 @@ export function renderChat(body, win) {
     if (!box) return;
     let lastDay = "";
     box.innerHTML = (messages.length ? "" :
-      `<div style="color:var(--subtext);font-size:13px;text-align:center;margin-top:20px">Noch keine Nachrichten – schreib die erste! 👋</div>`)
+      `<div style="color:var(--subtext);font-size:13px;text-align:center;margin-top:20px">${t("ch_no_msgs")}</div>`)
       + messages.map((m) => {
         const mine = m.sender_id === state.user?.id;
         const day = fmtDay(m.created_at);
@@ -273,7 +273,7 @@ export function renderChat(body, win) {
     if (!name || !name.trim()) return;
     let users = [];
     try { users = await api.chatUsers(); } catch {}
-    pickerDialog(`Mitglieder für „${esc(name.trim())}“`, users, true, async (ids) => {
+    pickerDialog(t("ch_members_for", { name: esc(name.trim()) }), users, true, async (ids) => {
       const conv = await api.chatCreate({ type: "group", name: name.trim(), member_ids: ids });
       currentId = conv.id;
       await loadConvs();

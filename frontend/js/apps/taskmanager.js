@@ -41,7 +41,7 @@ export function renderTaskManager(body, win) {
               <th style="width:80px"></th>
             </tr>
           </thead>
-          <tbody id="tm-body-${win.key}"><tr><td colspan="5" style="color:var(--subtext)">Lädt...</td></tr></tbody>
+          <tbody id="tm-body-${win.key}"><tr><td colspan="5" style="color:var(--subtext)">${t("loading")}</td></tr></tbody>
         </table>
       </div>
     </div>

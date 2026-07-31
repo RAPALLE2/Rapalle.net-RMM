@@ -7,6 +7,7 @@
 // Flotten-Übersicht als frei verschieb-/editier-/löschbares Widget verfügbar.
 
 import { esc } from "./utils.js";
+import { t } from "./i18n.js";
 
 export const FLEET_PALETTE = [
   "#4da6ff", "#3ecf8e", "#f5a524", "#ff4d6d", "#a78bfa",
@@ -138,7 +139,7 @@ export function buildFleetDonut(segments, opts = {}) {
   function tipHtml(s) {
     const pct = total ? Math.round((s.count / total) * 100) : 0;
     const list = (s.items || []).slice(0, 12).map((h) => `• ${esc(h)}`).join("<br>");
-    const more = (s.items || []).length > 12 ? `<br><span style="color:var(--subtext)">… und ${s.items.length - 12} weitere</span>` : "";
+    const more = (s.items || []).length > 12 ? `<br><span style="color:var(--subtext)">… ${t("app_and_more", { n: s.items.length - 12 })}</span>` : "";
     return `<b>${esc(s.label)}</b> — ${s.count} (${pct}%)<br><span style="color:var(--subtext)">${list}${more}</span>`;
   }
   function highlight(i, on) {

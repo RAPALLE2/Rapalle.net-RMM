@@ -10,6 +10,7 @@
 
 import { findClient } from "../state.js";
 import { esc } from "../utils.js";
+import { t } from "../i18n.js";
 import { registerCleanup } from "../windowmanager.js";
 import { dashboardSocket } from "../socket.js";
 import {
@@ -62,7 +63,7 @@ export function renderPanelPart(body, win) {
   function draw() {
     const client = findClient(clientId);
     if (!client) {
-      body.innerHTML = `<div style="padding:20px;color:var(--subtext)">Client nicht gefunden.</div>`;
+      body.innerHTML = `<div style="padding:20px;color:var(--subtext)">${t("client_not_found")}</div>`;
       return;
     }
 

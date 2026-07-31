@@ -14,6 +14,8 @@
 
 import { state } from "./state.js";
 import { esc } from "./utils.js";
+// t() wird fuer die Tooltips der Fensterknoepfe gebraucht ("Schliessen" usw.).
+import { t } from "./i18n.js";
 
 // Optionale Aufräum-Funktionen pro Fenster-Key (z.B. VNC: Stream stoppen,
 // Socket-Listener entfernen). Apps können hier eine Funktion hinterlegen.
@@ -343,7 +345,7 @@ function createWindowElement(win) {
 
   const closeBtn = document.createElement("button");
   closeBtn.textContent = "✕";
-  closeBtn.title = "Schließen";
+  closeBtn.title = t("close");
   closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeWindow(win.key); });
   closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 

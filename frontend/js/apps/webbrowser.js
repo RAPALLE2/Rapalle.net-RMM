@@ -190,10 +190,9 @@ export function renderWebBrowser(body, win) {
       <div style="max-width:760px;margin:0 auto">
         <div style="text-align:center;margin-bottom:18px">
           <div style="font-size:46px">🌐</div>
-          <div style="font-weight:800;font-size:17px">Interner Browser</div>
+          <div style="font-weight:800;font-size:17px">${tr("wb_title")}</div>
           <div style="color:var(--subtext);font-size:12px">
-            Adresse oben eingeben - oder eine gespeicherte Web-App öffnen.
-            Mit ⭐ wird jede Seite zur eigenen App im Startmenü.
+            ${tr("wb_hint")}
           </div>
         </div>
         <h3 style="font-size:13px;margin:0 0 8px">Meine Web-Apps</h3>
@@ -255,11 +254,10 @@ export function renderWebBrowser(body, win) {
         <div class="form-row"><label>URL</label>
           <input id="wbd-url" value="${esc(normalizeUrl(url))}" /></div>
         <p style="color:var(--subtext);font-size:11px;margin:4px 0 0">
-          Die App erscheint sofort im Startmenü und öffnet die Seite direkt
-          in einem eigenen Fenster.</p>
+          ${tr("wb_app_hint")}</p>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-          <button class="taskbar-btn" id="wbd-cancel">Abbrechen</button>
-          <button class="btn-primary" id="wbd-save" style="margin:0;width:auto">Speichern</button>
+          <button class="taskbar-btn" id="wbd-cancel">${tr("cancel")}</button>
+          <button class="btn-primary" id="wbd-save" style="margin:0;width:auto">${tr("save")}</button>
         </div>
       </div>`;
     dialog.querySelector("#wbd-cancel").addEventListener("click", () => { dialog.style.display = "none"; });
@@ -269,7 +267,7 @@ export function renderWebBrowser(body, win) {
       if (!name || !u) return;
       const app = addWebApp({ name, url: u, icon: dialog.querySelector("#wbd-icon").value });
       dialog.style.display = "none";
-      window.notify?.(`⭐ "${app.name}" ist jetzt eine App im Startmenü`, "success", 4000);
+      window.notify?.(`⭐ ${tr("wb_now_app", { name: app.name })}`, "success", 4000);
     });
   }
 

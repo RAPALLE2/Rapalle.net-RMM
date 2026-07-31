@@ -14,6 +14,7 @@
 
 import { api } from "../api.js";
 import { esc, uiConfirm, uiPrompt } from "../utils.js";
+import { t } from "../i18n.js";
 
 function fmtSize(n) {
   if (!n) return "";
@@ -41,9 +42,9 @@ export function renderRelayExplorer(body, win) {
                   border-bottom:1px solid var(--border);flex-wrap:wrap">
         <div id="rx-tabs" style="display:flex;gap:6px"></div>
         <div style="flex:1"></div>
-        <button class="taskbar-btn" id="rx-up" title="Eine Ebene höher">⬆</button>
-        <button class="taskbar-btn" id="rx-refresh" title="Neu laden">⟳</button>
-        <button class="taskbar-btn" id="rx-mkdir">＋ Ordner</button>
+        <button class="taskbar-btn" id="rx-up" title="${t("rx_up")}">⬆</button>
+        <button class="taskbar-btn" id="rx-refresh" title="${t("refresh")}">⟳</button>
+        <button class="taskbar-btn" id="rx-mkdir">＋ ${t("ec_folder")}</button>
         <button class="btn-primary" id="rx-upload" style="width:auto;margin:0">⬆ Hochladen</button>
         <input type="file" id="rx-file" multiple style="display:none" />
       </div>
@@ -121,7 +122,7 @@ export function renderRelayExplorer(body, win) {
         const pub = (section === "Deployment" && publicOn && !e.is_dir)
           ? `<a class="taskbar-btn" style="padding:2px 6px" target="_blank"
                 rel="noopener" href="/deployment/${p.split("/").map(encodeURIComponent).join("/")}"
-                title="Öffentlicher Link">🔗</a>` : "";
+                title="${t("rx_public_link")}">🔗</a>` : "";
         return `
         <div class="tree-row" data-path="${esc(p)}" data-dir="${e.is_dir ? "1" : "0"}"
              style="display:flex;gap:10px;align-items:center;padding:6px 12px;
@@ -133,9 +134,9 @@ export function renderRelayExplorer(body, win) {
           <span style="width:150px;text-align:right;font-size:11.5px;color:var(--subtext)">${esc(fmtDate(e.mtime))}</span>
           ${pub}
           ${e.is_dir ? "" : `<a class="taskbar-btn" style="padding:2px 6px"
-              href="${api.storageDownloadUrl(section, p)}" data-dl title="Herunterladen">⬇</a>`}
-          ${writable ? `<button class="taskbar-btn" style="padding:2px 6px" data-ren title="Umbenennen">✏</button>
-                        <button class="taskbar-btn" style="padding:2px 6px" data-del title="Löschen">🗑</button>` : ""}
+              href="${api.storageDownloadUrl(section, p)}" data-dl title="${t("rx_download")}">⬇</a>`}
+          ${writable ? `<button class="taskbar-btn" style="padding:2px 6px" data-ren title="${t("exp_rename")}">✏</button>
+                        <button class="taskbar-btn" style="padding:2px 6px" data-del title="${t("delete")}">🗑</button>` : ""}
         </div>`;
       }).join("");
     }
@@ -152,15 +153,15 @@ export function renderRelayExplorer(body, win) {
         e.preventDefault(); download(p);
       });
       row.querySelector("[data-del]")?.addEventListener("click", async () => {
-        const ok = await uiConfirm(`„${p.split("/").pop()}" löschen?`, {
-          description: isDir ? "Der Ordner wird mit seinem gesamten Inhalt gelöscht." : "" });
+        const ok = await uiConfirm(t("rx_delete_q", { name: p.split("/").pop() }), {
+          description: isDir ? t("rx_delete_dir_desc") : "" });
         if (!ok) return;
         try { await api.storageDelete(section, p); load(); }
         catch (err) { window.notify?.(err.message, "error", 8000); }
       });
       row.querySelector("[data-ren]")?.addEventListener("click", async () => {
         const old = p.split("/").pop();
-        const name = await uiPrompt("Neuer Name", { value: old });
+        const name = await uiPrompt(t("rx_new_name"), { value: old });
         if (!name || name === old) return;
         const dst = path ? `${path}/${name}` : name;
         try { await api.storageMove(section, p, dst); load(); }
@@ -170,10 +171,10 @@ export function renderRelayExplorer(body, win) {
 
     const pubHint = (section === "Deployment")
       ? (publicOn
-        ? " · Öffentlich erreichbar unter /deployment/ — alles hier ist ohne Anmeldung abrufbar."
-        : " · Öffentliche Seite ist AUS (Einstellungen → Allgemein → Deployment).")
+        ? " · " + t("rx_public_on")
+        : " · " + t("rx_public_off"))
       : "";
-    footEl.textContent = `${entries.length} Einträge${writable ? "" : " · nur lesen"}${pubHint}`;
+    footEl.textContent = `${t("dw_entries", { n: entries.length })}${writable ? "" : " · " + t("rx_readonly")}${pubHint}`;
   }
 
   // Download mit Auth-Header (die API akzeptiert kein Cookie).

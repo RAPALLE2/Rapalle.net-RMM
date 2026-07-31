@@ -83,12 +83,9 @@ export function renderSettings(body, win) {
 
     root.innerHTML = `
       <div class="settings-section">
-        <h3>Logos &amp; Bilder</h3>
+        <h3>${t("set_br_title")}</h3>
         <p style="color:var(--subtext);font-size:13px;max-width:640px">
-          Hier lassen sich alle Logos und der Login-Hintergrund gegen eigene
-          Dateien austauschen. Format muss zum Slot passen (PNG/JPG/ICO),
-          max. 8&nbsp;MB. Änderungen sind sofort aktiv — ggf. Seite neu laden
-          (Strg+F5), da der Browser Bilder cached.
+          ${t("set_br_hint")}
         </p>
         <div id="br-slots"></div>
         <div id="br-msg" style="margin-top:10px;font-size:13px"></div>
@@ -103,7 +100,7 @@ export function renderSettings(body, win) {
         <div style="width:96px;height:56px;display:flex;align-items:center;justify-content:center;background:var(--panel-2);border-radius:8px;overflow:hidden">
           ${s.exists
             ? `<img src="${esc(s.url)}?v=${s.mtime}" alt="" style="max-width:100%;max-height:100%;object-fit:contain" data-preview="${esc(s.name)}" />`
-            : `<span style="color:var(--subtext);font-size:11px">— fehlt —</span>`}
+            : `<span style="color:var(--subtext);font-size:11px">${t("set_br_missing")}</span>`}
         </div>
         <div style="flex:1">
           <strong style="font-size:13px">${esc(s.label)}</strong>
@@ -111,7 +108,7 @@ export function renderSettings(body, win) {
         </div>
         <input type="file" data-file="${esc(s.name)}" style="display:none"
           accept="image/*,.ico" />
-        <button class="action-btn" data-pick="${esc(s.name)}">Datei wählen &amp; ersetzen…</button>
+        <button class="action-btn" data-pick="${esc(s.name)}">${t("set_br_pick")}</button>
       </div>
     `).join("");
 
@@ -122,11 +119,11 @@ export function renderSettings(body, win) {
       fileInput.addEventListener("change", async () => {
         const file = fileInput.files[0];
         if (!file) return;
-        msgEl.innerHTML = `<span style="color:var(--subtext)">Lade "${esc(name)}" hoch…</span>`;
+        msgEl.innerHTML = `<span style="color:var(--subtext)">${t("set_br_uploading", { name: esc(name) })}</span>`;
         try {
           const res = await api.uploadBranding(name, file);
-          msgEl.innerHTML = `<span style="color:var(--accent)">✓ ${esc(name)} ersetzt (${Math.round((res.size || file.size) / 1024)} KB gespeichert).</span>`;
-          window.notify?.(`Branding: "${name}" hochgeladen und gespeichert.`, "success");
+          msgEl.innerHTML = `<span style="color:var(--accent)">✓ ${t("set_br_replaced", { name: esc(name), kb: Math.round((res.size || file.size) / 1024) })}</span>`;
+          window.notify?.(t("set_br_saved", { name }), "success");
           // ALLE Stellen sofort aktualisieren (Cache-Busting via mtime):
           const bust = `?v=${res.mtime || Date.now()}`;
           const prev = slotsEl.querySelector(`[data-preview="${name}"]`);
@@ -192,58 +189,45 @@ export function renderSettings(body, win) {
           <input type="text" id="ge-server-url" placeholder="https://rmm.meinefirma.de" value="${esc(s.server_url || "")}" />
         </div>
         <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
-          Öffentlicher Zugriff / Reverse-Proxy: Trage hier die öffentliche Adresse ein,
-          unter der Agenten das Backend erreichen. Dieser Wert wird in die
-          Agent-Installation eingebaut — sonst bekommt ein Agent die intern
-          erreichbare Adresse ${esc(window.location.origin)}, die ein externer
-          Client nicht erreichen kann.
+          ${t("set_proxy_hint", { origin: esc(window.location.origin) })}
         </p>
 
-        <h3 style="margin-top:22px">Zugriff auf diese Adressen beschränken</h3>
+        <h3 style="margin-top:22px">${t("set_hostlock_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Erlaubt Aufrufe nur noch über die oben hinterlegten Adressen. Ist nur eine
-          <b>Domain</b> eingetragen, wird ein Aufruf über die lokale IP abgewiesen.
+          ${t("set_hostlock_hint")}
         </p>
         <div style="background:#f5a52415;border:1px solid #f5a52455;border-radius:8px;
              padding:9px 12px;margin:8px 0;font-size:12px;line-height:1.5">
-          ⚠️ <b>Zwei Dinge vorher wissen:</b><br>
-          1. Der Host-Header lässt sich fälschen. Das hier hält Scanner und
-          versehentliche Zugriffe ab – ein echter Riegel ist nur eine Firewall.<br>
-          2. Agenten sind mit der Adresse verbunden, mit der sie eingerichtet wurden
-          (meist die IP). Reichweite <b>„auch Agenten"</b> trennt dann die gesamte Flotte ab,
-          bis jeder Agent neu eingerichtet ist.<br>
-          Vom Server selbst bleibt <code>http://localhost</code> immer erreichbar –
-          darüber lässt sich die Sperre notfalls zurückdrehen.
+          ⚠️ ${t("set_hostlock_warn")}
         </div>
         <div class="form-row">
-          <label>Sperre aktiv</label>
+          <label>${t("set_hostlock_active")}</label>
           <select id="ge-hostlock">
-            <option value="0" ${(s.host_lock_enabled || "0") !== "1" ? "selected" : ""}>Aus</option>
-            <option value="1" ${(s.host_lock_enabled || "0") === "1" ? "selected" : ""}>An</option>
+            <option value="0" ${(s.host_lock_enabled || "0") !== "1" ? "selected" : ""}>${t("off")}</option>
+            <option value="1" ${(s.host_lock_enabled || "0") === "1" ? "selected" : ""}>${t("on")}</option>
           </select>
         </div>
         <div class="form-row">
-          <label>Reichweite</label>
+          <label>${t("set_hostlock_scope")}</label>
           <select id="ge-hostlock-scope">
-            <option value="ui" ${(s.host_lock_scope || "ui") === "ui" ? "selected" : ""}>Nur Oberfläche &amp; API (Agenten weiter erlaubt)</option>
-            <option value="all" ${(s.host_lock_scope || "ui") === "all" ? "selected" : ""}>Auch Agenten-Verbindungen</option>
+            <option value="ui" ${(s.host_lock_scope || "ui") === "ui" ? "selected" : ""}>${t("set_hostlock_scope_ui")}</option>
+            <option value="all" ${(s.host_lock_scope || "ui") === "all" ? "selected" : ""}>${t("set_hostlock_scope_all")}</option>
           </select>
         </div>
         <div class="form-row">
-          <label>Zusätzlich erlaubt</label>
+          <label>${t("set_hostlock_extra")}</label>
           <input type="text" id="ge-hostlock-extra" placeholder="rmm.intern, 10.0.0.5"
                  value="${esc(s.host_lock_extra || "")}" />
         </div>
         <div class="form-row">
-          <label>Hinter Reverse Proxy</label>
+          <label>${t("set_behind_proxy")}</label>
           <select id="ge-hostlock-proxy">
-            <option value="0" ${(s.host_lock_trust_proxy || "0") !== "1" ? "selected" : ""}>Nein</option>
-            <option value="1" ${(s.host_lock_trust_proxy || "0") === "1" ? "selected" : ""}>Ja – X-Forwarded-Host auswerten</option>
+            <option value="0" ${(s.host_lock_trust_proxy || "0") !== "1" ? "selected" : ""}>${t("no")}</option>
+            <option value="1" ${(s.host_lock_trust_proxy || "0") === "1" ? "selected" : ""}>${t("set_proxy_yes")}</option>
           </select>
         </div>
         <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
-          „Ja" nur einschalten, wenn wirklich ein Proxy davorsteht: sonst kann jeder
-          den Header selbst mitschicken und die Sperre damit umgehen.
+          ${t("set_proxy_warn")}
         </p>
         </div>
 
@@ -265,32 +249,31 @@ export function renderSettings(body, win) {
         <div data-adminsec>
         <h3 style="margin-top:24px">Update</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Aktualisiert den RMM-Server direkt aus dem GitHub-Repo. Das Backend
-          startet nach einem Update automatisch neu.
+          ${t("set_srvupd_hint")}
         </p>
         <div id="up-panel" style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--panel-2)">
-          <div id="up-loading" style="color:var(--subtext);font-size:13px">Lade Update-Informationen von GitHub…</div>
+          <div id="up-loading" style="color:var(--subtext);font-size:13px">${t("set_srvupd_loading")}</div>
           <div id="up-content" class="hidden">
             <div style="font-size:13px;margin-bottom:10px">
-              Installierte Version: <b id="up-current"></b>
+              ${t("set_installed_version")}: <b id="up-current"></b>
             </div>
             <div class="form-row">
               <label>GitHub-Repo (backend/repo.txt)</label>
               <div style="display:flex;gap:8px">
                 <input type="text" id="up-repo" style="flex:1" />
-                <button class="taskbar-btn" id="up-repo-save">Speichern</button>
+                <button class="taskbar-btn" id="up-repo-save">${t("save")}</button>
               </div>
             </div>
             <div class="form-row">
-              <label>Update-Ziel</label>
+              <label>${t("set_update_target")}</label>
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
-                <input type="radio" name="up-target" value="commit" checked /> <span id="up-lbl-commit">Neuester Commit</span>
+                <input type="radio" name="up-target" value="commit" checked /> <span id="up-lbl-commit">${t("set_latest_commit")}</span>
               </label>
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
-                <input type="radio" name="up-target" value="full" /> <span id="up-lbl-full">Neuestes Full-Release</span>
+                <input type="radio" name="up-target" value="full" /> <span id="up-lbl-full">${t("set_latest_full")}</span>
               </label>
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
-                <input type="radio" name="up-target" value="any" /> <span id="up-lbl-any">Neuestes Release (Alpha + Full)</span>
+                <input type="radio" name="up-target" value="any" /> <span id="up-lbl-any">${t("set_latest_any")}</span>
               </label>
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:normal">
                 <input type="radio" name="up-target" value="custom" /> Custom:
@@ -298,49 +281,44 @@ export function renderSettings(body, win) {
               </label>
             </div>
             <div id="up-error" class="form-error hidden"></div>
-            <button class="btn-primary" id="up-run" style="margin-top:6px">⬇️ Update installieren</button>
+            <button class="btn-primary" id="up-run" style="margin-top:6px">⬇️ ${t("set_install_update")}</button>
 
             <h4 style="margin-top:18px">Auto-Update</h4>
             <div class="form-row">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                 <input type="checkbox" id="up-auto" ${(s.server_auto_update ?? "0") === "1" ? "checked" : ""} />
-                Server automatisch aktualisieren
+                ${t("set_auto_update_server")}
               </label>
             </div>
             <div class="form-row">
-              <label>Auto-Update-Kanal</label>
+              <label>${t("set_auto_update_channel")}</label>
               <select id="up-auto-channel">
-                <option value="commit" ${(s.server_auto_update_channel || "full") === "commit" ? "selected" : ""}>Neuester Commit</option>
-                <option value="full" ${(s.server_auto_update_channel || "full") === "full" ? "selected" : ""}>Neuestes Full-Release</option>
-                <option value="any" ${(s.server_auto_update_channel || "full") === "any" ? "selected" : ""}>Neuestes Release (Alpha + Full)</option>
+                <option value="commit" ${(s.server_auto_update_channel || "full") === "commit" ? "selected" : ""}>${t("set_latest_commit")}</option>
+                <option value="full" ${(s.server_auto_update_channel || "full") === "full" ? "selected" : ""}>${t("set_latest_full")}</option>
+                <option value="any" ${(s.server_auto_update_channel || "full") === "any" ? "selected" : ""}>${t("set_latest_any")}</option>
               </select>
             </div>
             <p style="color:var(--subtext);font-size:12px;margin:2px 0 0">
-              Auto-Update-Einstellungen werden unten mit „${esc(t("save"))}" gespeichert.
+              ${t("set_auto_update_note", { save: esc(t("save")) })}
             </p>
           </div>
         </div>
         </div>
 
         <div data-adminsec>
-        <h3 style="margin-top:24px">Datenbank</h3>
+        <h3 style="margin-top:24px">${t("set_db")}</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Speicherort der RMM-Daten: <b>Lokal</b> (SQLite-Datei im Backend) oder
-          <b>Extern</b> (MySQL/MariaDB, PostgreSQL oder SQLite-Datei z.B. auf einer
-          Netzwerkfreigabe). Beim Umschalten werden <b>alle Daten kopiert</b>
-          (lokal → extern bzw. extern → lokal) und das Backend startet neu.
-          Im externen Modus ist die externe DB der persistente Speicher und wird
-          im Betrieb laufend synchron gehalten.
+          ${t("set_db_hint")}
         </p>
-        <div id="dbx-loading" style="color:var(--subtext);font-size:13px">Lade Datenbank-Status…</div>
+        <div id="dbx-loading" style="color:var(--subtext);font-size:13px">${t("set_db_loading")}</div>
         <div id="dbx-content" class="hidden">
-          <div style="font-size:13px;margin-bottom:8px">Aktueller Modus: <b id="dbx-mode"></b></div>
+          <div style="font-size:13px;margin-bottom:8px">${t("set_db_current_mode")}: <b id="dbx-mode"></b></div>
           <div class="form-row">
-            <label>Typ der externen Datenbank</label>
+            <label>${t("set_db_type")}</label>
             <select id="dbx-type">
               <option value="mysql">MySQL / MariaDB</option>
               <option value="postgres">PostgreSQL</option>
-              <option value="sqlite">SQLite-Datei (Pfad)</option>
+              <option value="sqlite">${t("set_db_sqlite_file")}</option>
             </select>
           </div>
           <div style="display:flex;gap:12px" id="dbx-hostrow">
@@ -355,16 +333,16 @@ export function renderSettings(body, win) {
           </div>
           <div style="display:flex;gap:12px" id="dbx-userrow">
             <div class="form-row" style="flex:1">
-              <label>Benutzer</label>
+              <label>${t("username")}</label>
               <input type="text" id="dbx-user" />
             </div>
             <div class="form-row" style="flex:1">
-              <label>Passwort</label>
+              <label>${t("password")}</label>
               <input type="password" id="dbx-pass" placeholder="${t("u_unverandert_lassen_leer")}" />
             </div>
           </div>
           <div class="form-row">
-            <label id="dbx-dblabel">Datenbank-Name</label>
+            <label id="dbx-dblabel">${t("set_db_name")}</label>
             <input type="text" id="dbx-name" placeholder="rapalle_rmm" />
           </div>
           <div id="dbx-error" class="form-error hidden"></div>
@@ -382,89 +360,79 @@ export function renderSettings(body, win) {
                                         font-size:11.5px;color:var(--subtext);white-space:pre-wrap"></div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-            <button class="taskbar-btn" id="dbx-test">Verbindung testen</button>
-            <button class="btn-primary" id="dbx-to-external" style="width:auto;margin:0">→ Auf externe Datenbank umschalten</button>
-            <button class="btn-primary" id="dbx-to-local" style="width:auto;margin:0">→ Auf lokale Datenbank umschalten</button>
+            <button class="taskbar-btn" id="dbx-test">${t("set_test_conn")}</button>
+            <button class="btn-primary" id="dbx-to-external" style="width:auto;margin:0">→ ${t("set_db_to_external")}</button>
+            <button class="btn-primary" id="dbx-to-local" style="width:auto;margin:0">→ ${t("set_db_to_local")}</button>
           </div>
 
-          <h4 style="margin:18px 0 4px;font-size:13px">Sicherungen der lokalen Datenbank</h4>
+          <h4 style="margin:18px 0 4px;font-size:13px">${t("set_db_backups")}</h4>
           <p style="color:var(--subtext);font-size:12px;margin:0 0 8px">
-            Vor jedem Umschalten wird automatisch eine Sicherung angelegt. Geht
-            beim Kopieren etwas schief, wird sie sofort zurückgespielt und der
-            Modus bleibt unverändert. Es werden die letzten 5 aufbewahrt.
+            ${t("set_db_backup_hint")}
           </p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-            <button class="taskbar-btn" id="dbx-backup">Sicherung jetzt anlegen</button>
+            <button class="taskbar-btn" id="dbx-backup">${t("set_db_backup_now")}</button>
             <button class="taskbar-btn" id="dbx-backups-refresh">⟳</button>
           </div>
-          <div id="dbx-backups" style="font-size:12px;color:var(--subtext)">Lade…</div>
+          <div id="dbx-backups" style="font-size:12px;color:var(--subtext)">${t("loading")}</div>
         </div>
         </div>
 
-        <h3 style="margin-top:24px">Agent Auto-Update</h3>
+        <h3 style="margin-top:24px">${t("set_agent_autoupd")}</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Aktualisiert veraltete Agenten automatisch, sobald sie sich mit dem
-          Backend verbinden (gleicher Mechanismus wie der „Agent aktualisieren"-Button).
-          Pro Client übersteuerbar unter „Client bearbeiten" → Automatisches Agent-Update.
+          ${t("set_agent_autoupd_hint")}
         </p>
         <div class="form-row">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" id="ge-autoupdate" ${(s.agent_auto_update ?? "0") === "1" ? "checked" : ""} />
-            Automatisches Agent-Update aktiviert (global)
+            ${t("set_agent_autoupd_on")}
           </label>
         </div>
         <div class="form-row">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" id="ge-autoupdate-offline" ${(s.agent_auto_update_offline ?? "1") === "1" ? "checked" : ""} />
-            Offline-Clients aktualisieren, sobald sie wieder online sind
+            ${t("set_agent_autoupd_offline")}
           </label>
         </div>
         <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
-          Ist der Haken gesetzt, werden veraltete Agents direkt beim Wiederverbinden
-          aktualisiert. Ohne Haken werden nur Clients aktualisiert, die bereits
-          online sind, wenn eine neue Agent-Version bereitsteht.
+          ${t("set_agent_autoupd_offline_hint")}
         </p>
         <p style="color:var(--subtext);font-size:13px;margin-top:10px">
-          Alle Agenten <b>sofort</b> aktualisieren: Es wird für jeden aktuell
-          verbundenen Client (den du verwalten darfst) ein Agent-Update ausgelöst.
-          Die Agenten aktualisieren sich selbst und verbinden neu.
+          ${t("set_update_all_hint")}
         </p>
         <div class="form-row">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
             <input type="checkbox" id="ge-updateall-offline" />
-            Auch Offline-Clients vormerken (Update, sobald sie wieder online sind)
+            ${t("set_update_all_offline")}
           </label>
         </div>
         <div class="form-row">
-          <button class="taskbar-btn" id="ge-updateall">⬆️ Alle Agenten jetzt aktualisieren</button>
+          <button class="taskbar-btn" id="ge-updateall">⬆️ ${t("set_update_all_now")}</button>
           <span id="ge-updateall-msg" style="margin-left:10px;font-size:12px;color:var(--subtext)"></span>
         </div>
 
-        <h3 style="margin-top:24px">Aufnahme (Replays)</h3>
+        <h3 style="margin-top:24px">${t("set_recording")}</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Steuert, wie Remote-Sessions als Replay aufgezeichnet werden — für den
-          Screen-Agenten und für Guacamole (RDP/VNC/SSH/Telnet). Höhere Werte =
-          schärfer/flüssiger, aber größere Dateien.
+          ${t("set_recording_hint")}
         </p>
         <div class="form-row">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" id="ge-rec-enabled" ${(s.recording_enabled ?? "1") === "1" ? "checked" : ""} />
-            Aufzeichnung aktiviert
+            ${t("set_recording_on")}
           </label>
         </div>
         <div style="display:flex;gap:12px">
           <div class="form-row" style="flex:1">
-            <label>Screen-Qualität (1–100)</label>
+            <label>${t("set_screen_quality")}</label>
             <input type="number" min="1" max="100" id="ge-screen-q" value="${esc(String(s.screen_record_quality ?? 40))}" />
           </div>
           <div class="form-row" style="flex:1">
-            <label>Screen-Bilder/Sek.</label>
+            <label>${t("set_screen_fps")}</label>
             <input type="number" min="1" max="30" id="ge-screen-fps" value="${esc(String(s.screen_record_fps ?? 5))}" />
           </div>
         </div>
         <div style="display:flex;gap:12px">
           <div class="form-row" style="flex:1">
-            <label>Guacamole-Qualität (1–95)</label>
+            <label>${t("set_guac_quality")}</label>
             <input type="number" min="1" max="95" id="ge-guac-q" value="${esc(String(s.guac_record_quality ?? 50))}" />
           </div>
           <div class="form-row" style="flex:1">
@@ -482,10 +450,7 @@ export function renderSettings(body, win) {
 
         <h3 style="margin-top:24px">Spotify</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Client-ID einer eigenen Spotify-App (developer.spotify.com → Dashboard →
-          App erstellen). Benutzer können sich dann im 🎵 Audio Player mit ihrem
-          Spotify-Konto anmelden; mit Premium spielt der Player volle Titel mit
-          eigenen Controls.
+          ${t("set_spotify_hint")}
         </p>
         <div class="form-row">
           <label>Client-ID</label>
@@ -493,54 +458,40 @@ export function renderSettings(body, win) {
         </div>
         <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
                     padding:8px 10px;font-size:12px;color:var(--subtext);max-width:640px;line-height:1.55">
-          <b style="color:var(--text)">Redirect-URI (im Spotify-Dashboard eintragen):</b>
+          <b style="color:var(--text)">${t("set_spotify_redirect")}</b>
           <div style="display:flex;gap:6px;align-items:center;margin:5px 0">
             <code id="ge-spotify-uri" style="flex:1;padding:4px 7px;background:var(--panel);
                   border:1px solid var(--border);border-radius:6px;overflow-wrap:anywhere"></code>
             <button class="taskbar-btn" id="ge-spotify-copy" type="button"
-                    title="Redirect-URI kopieren" style="flex:none">📋</button>
+                    title="${t("set_spotify_copy")}" style="flex:none">📋</button>
           </div>
-          Sie wird automatisch aus der <b>Vollständigen URL</b> oben übernommen – es gibt
-          also kein separates Feld. Ist dort nichts eingetragen, wird die Adresse
-          verwendet, unter der du das Dashboard gerade geöffnet hast.<br>
-          <b style="color:var(--text)">Tipp:</b> Trage im Spotify-Dashboard sicherheitshalber
-          <b>beide</b> Schreibweisen ein – mit und ohne Schrägstrich am Ende
-          (<code id="ge-spotify-alt"></code>). Spotify vergleicht zeichengenau.<br>
+          ${t("set_spotify_uri_hint")}<br>
+          <b style="color:var(--text)">${t("tip")}:</b> ${t("set_spotify_both")}
+          (<code id="ge-spotify-alt"></code>).<br>
           <span id="ge-spotify-warn"></span>
-          Der Eintrag im Spotify-Dashboard muss <b>zeichengenau</b> übereinstimmen –
-          inklusive Port und abschließendem <code>/</code>.
+          ${t("set_spotify_exact")}
         </div>
 
         <div data-adminsec>
         <h3 style="margin-top:24px">Relay</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Das Relay stellt die Client-Dateien als Netzlaufwerk bereit. WebDAV,
-          FTP und SFTP lassen sich einzeln zuschalten — alles läuft über
-          denselben Port wie das Dashboard, weitere Freigaben in der Firewall
-          sind nicht nötig. FTP und SFTP schließen sich gegenseitig aus.
+          ${t("set_relay_hint")}
         </p>
-        <div id="ge-relay" style="font-size:13px;color:var(--subtext)">Lade…</div>
+        <div id="ge-relay" style="font-size:13px;color:var(--subtext)">${t("loading")}</div>
 
-        <h3 style="margin-top:24px">Deployment-Seite</h3>
+        <h3 style="margin-top:24px">${t("set_deploy_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Der Relay-Ordner <b>Deployment</b> lässt sich zusätzlich als kleine
-          Webseite veröffentlichen. Alles darin ist dann <b>ohne Anmeldung</b>
-          über einen Link erreichbar — praktisch, um ein Bild, ein Skript oder
-          einen Installer schnell weiterzugeben.
+          ${t("set_deploy_hint")}
         </p>
-        <div id="ge-deploy" style="font-size:13px;color:var(--subtext)">Lade…</div>
+        <div id="ge-deploy" style="font-size:13px;color:var(--subtext)">${t("loading")}</div>
         </div>
 
         <div data-adminsec id="ge-docker-box" style="display:none">
-        <h3 style="margin-top:24px">Container-Dienste</h3>
+        <h3 style="margin-top:24px">${t("set_docker_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">
-          Läuft das RMM als Container, lassen sich hier Zusatzdienste als
-          Nachbar-Container dazuschalten. Die passenden Adressen und
-          Zugangsdaten trägt das Dashboard danach automatisch in die Felder
-          weiter unten ein. Voraussetzung ist der eingehängte Docker-Socket;
-          fehlt er, steht das hier als Hinweis.
+          ${t("set_docker_hint")}
         </p>
-        <div id="ge-docker-list" style="font-size:13px;color:var(--subtext)">Lade…</div>
+        <div id="ge-docker-list" style="font-size:13px;color:var(--subtext)">${t("loading")}</div>
         </div>
 
         <h3 style="margin-top:26px" data-adminsec-h>${t("guac_title")}</h3>
@@ -560,7 +511,7 @@ export function renderSettings(body, win) {
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="taskbar-btn" id="guacd-test">${t("guac_test")}</button>
           <span style="color:var(--subtext);font-size:12px">
-            Host und Port werden unten mit „${esc(t("save"))}" gespeichert.
+            ${t("set_saved_below", { save: esc(t("save")) })}
           </span>
         </div>
         </div>
@@ -599,10 +550,7 @@ export function renderSettings(body, win) {
       const port = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
       const loopbackExample = `http://127.0.0.1:${port}/`;
       spWarn.innerHTML = (uri.startsWith("http://") && !loopback)
-        ? `<span style="color:var(--warn,#f5a524)">⚠ Spotify akzeptiert diese Adresse nicht:
-             erlaubt sind nur <b>https://…</b> oder <code>${esc(loopbackExample)}</code>.
-             Trage oben unter „Vollständige URL“ deine HTTPS-Adresse ein – oder öffne das
-             Dashboard über <code>127.0.0.1</code>.</span><br>`
+        ? `<span style="color:var(--warn,#f5a524)">⚠ ${t("set_spotify_bad_uri", { example: esc(loopbackExample) })}</span><br>`
         : "";
     }
     urlInput?.addEventListener("input", refreshRedirect);
@@ -611,7 +559,7 @@ export function renderSettings(body, win) {
       const uri = effRedirect();
       try {
         await navigator.clipboard.writeText(uri);
-        window.notify?.("Redirect-URI kopiert", "success", 2000);
+        window.notify?.(t("set_spotify_copied"), "success", 2000);
       } catch {
         window.notify?.(t("u_kopieren_nicht_moglich_bitte_manue") + uri, "info", 8000);
       }
@@ -695,11 +643,11 @@ export function renderSettings(body, win) {
       if (msg) msg.textContent = t("u_wird_ausgelost");
       try {
         const res = await api.updateAllAgents({ include_offline: includeOffline });
-        const txt = `Ausgelöst für ${res.triggered} Client(s)` +
-          (res.queued_offline ? `, ${res.queued_offline} offline vorgemerkt` : "") +
-          (res.offline && !res.queued_offline ? `, ${res.offline} offline übersprungen` : "");
-        if (msg) msg.textContent = txt + " – Benachrichtigung folgt, sobald alle wieder verbunden sind.";
-        window.notify?.(txt + ". Du wirst benachrichtigt, sobald alle Clients wieder verbunden sind.", "info", 8000);
+        const txt = t("set_upd_triggered", { n: res.triggered }) +
+          (res.queued_offline ? `, ${t("set_upd_queued", { n: res.queued_offline })}` : "") +
+          (res.offline && !res.queued_offline ? `, ${t("set_upd_skipped", { n: res.offline })}` : "");
+        if (msg) msg.textContent = txt + " – " + t("set_upd_notify_short");
+        window.notify?.(txt + ". " + t("set_upd_notify_long"), "info", 8000);
       } catch (e) {
         if (msg) msg.textContent = "";
         window.notify?.("Fehlgeschlagen: " + e.message, "error");
@@ -722,23 +670,23 @@ export function renderSettings(body, win) {
       try {
         const info = await api.getServerUpdateInfo();
         root.querySelector("#up-current").textContent =
-          info.current_version + (info.current_commit ? ` (Stand: ${String(info.current_commit).slice(0, 10)})` : "");
+          info.current_version + (info.current_commit ? ` (${t("set_as_of")}: ${String(info.current_commit).slice(0, 10)})` : "");
         root.querySelector("#up-repo").value = info.repo_url || "";
         const c = info.latest_commit || {};
         root.querySelector("#up-lbl-commit").textContent =
-          `Neuester Commit${c.sha ? ` — ${c.sha.slice(0, 10)}` : ""}${c.message ? `: ${c.message}` : ""}`;
+          `${t("set_latest_commit")}${c.sha ? ` — ${c.sha.slice(0, 10)}` : ""}${c.message ? `: ${c.message}` : ""}`;
         root.querySelector("#up-lbl-full").textContent =
-          `Neuestes Full-Release${info.latest_full_tag ? ` — ${info.latest_full_tag}` : " — keins gefunden"}`;
+          `${t("set_latest_full")}${info.latest_full_tag ? ` — ${info.latest_full_tag}` : ` — ${t("set_none_found")}`}`;
         root.querySelector("#up-lbl-any").textContent =
-          `Neuestes Release (Alpha + Full)${info.latest_any_tag ? ` — ${info.latest_any_tag}` : " — keins gefunden"}`;
+          `${t("set_latest_any")}${info.latest_any_tag ? ` — ${info.latest_any_tag}` : ` — ${t("set_none_found")}`}`;
         const sel = root.querySelector("#up-custom");
         sel.innerHTML = (info.releases || []).length
           ? info.releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}${r.alpha ? " (Alpha)" : " (Full)"}</option>`).join("")
-          : `<option value="">Keine Releases im Repo</option>`;
+          : `<option value="">${t("set_no_releases")}</option>`;
         upInfoLoaded = true;
         loading.classList.add("hidden"); content.classList.remove("hidden");
       } catch (e) {
-        loading.textContent = `Fehler: ${e.message}`;
+        loading.textContent = `${t("error")}: ${e.message}`;
       }
     }
 
@@ -750,7 +698,7 @@ export function renderSettings(body, win) {
       const err = root.querySelector("#up-error"); err.classList.add("hidden");
       try {
         await api.setServerUpdateRepo(root.querySelector("#up-repo").value.trim());
-        window.notify?.("Repo-URL gespeichert (backend/repo.txt)", "success");
+        window.notify?.(t("set_repo_saved"), "success");
         upInfoLoaded = false; loadUpdateInfo();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
@@ -760,7 +708,7 @@ export function renderSettings(body, win) {
       const target = root.querySelector('input[name="up-target"]:checked').value;
       const tag = target === "custom" ? root.querySelector("#up-custom").value : null;
       if (target === "custom" && !tag) { err.textContent = t("u_bitte_ein_release_wahlen"); err.classList.remove("hidden"); return; }
-      const ok = await uiConfirm("Server-Update installieren?",
+      const ok = await uiConfirm(t("set_srvupd_confirm"),
         t("u_das_backend_ladt_den_gewahlten_sta"));
       if (!ok) return;
       const btn = root.querySelector("#up-run");
@@ -824,16 +772,16 @@ export function renderSettings(body, win) {
         toExt.disabled = isExt;  toLoc.disabled = !isExt;
         toExt.className = isExt ? "taskbar-btn" : "btn-primary";
         toLoc.className = isExt ? "btn-primary" : "taskbar-btn";
-        toExt.textContent = isExt ? "✓ Externe Datenbank aktiv"
-                                  : "→ Auf externe Datenbank umschalten";
-        toLoc.textContent = isExt ? "→ Zurück auf lokale Datenbank"
-                                  : "✓ Lokale Datenbank aktiv";
+        toExt.textContent = isExt ? "✓ " + t("set_db_external_active")
+                                  : "→ " + t("set_db_to_external");
+        toLoc.textContent = isExt ? "→ " + t("set_db_back_to_local")
+                                  : "✓ " + t("set_db_local_active");
         for (const b of [toExt, toLoc]) {
           b.style.opacity = b.disabled ? ".6" : "";
           b.style.cursor = b.disabled ? "default" : "pointer";
         }
       } catch (e) {
-        loading.textContent = `Fehler: ${e.message}`;
+        loading.textContent = `${t("error")}: ${e.message}`;
       }
     })();
 
@@ -854,23 +802,23 @@ export function renderSettings(body, win) {
     let pgTimer = null;
 
     const PHASE_TEXT = {
-      backup: "Sicherung wird angelegt…",
-      dump: "Kopiere in die externe Datenbank…",
-      restore: "Lade aus der externen Datenbank…",
-      fertig: "Fertig",
+      backup: t("set_db_phase_backup"),
+      dump: t("set_db_phase_dump"),
+      restore: t("set_db_phase_restore"),
+      fertig: t("set_db_phase_done"),
     };
 
     function drawProgress(p) {
       pgBox.style.display = "";
       pgPhase.textContent = PHASE_TEXT[p.phase] || p.phase || "…";
       pgCount.textContent = p.total
-        ? `${p.done}/${p.total} Tabellen · ${p.rows} Zeilen`
-        : (p.rows ? `${p.rows} Zeilen` : "");
+        ? `${p.done}/${p.total} ${t("set_db_tables")} · ${p.rows} ${t("set_db_rows")}`
+        : (p.rows ? `${p.rows} ${t("set_db_rows")}` : "");
       pgBar.style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : "0%";
       const lines = [...(p.log || [])];
       // Fehler zusätzlich gesammelt ans Ende - sie sind das Wichtigste.
       if (p.errors?.length) {
-        lines.push("", `── ${p.errors.length} Fehler ──`);
+        lines.push("", `── ${p.errors.length} ${t("errors")} ──`);
         for (const e of p.errors) lines.push(`  ${e.table}: ${e.error}`);
       }
       pgLog.textContent = lines.join("\n");
@@ -887,17 +835,17 @@ export function renderSettings(body, win) {
         if (p.running) return;                 // weiter pollen
         clearInterval(pgTimer); pgTimer = null;
         if (p.ok) {
-          window.notify?.(`${p.detail} — Backend startet neu, Seite lädt gleich neu.`,
+          window.notify?.(`${p.detail} — ${t("set_backend_restarting")}`,
                           "success", 10000);
           setTimeout(() => location.reload(), 9000);
         } else {
           const err = root.querySelector("#dbx-error");
-          err.textContent = p.detail || "Der Wechsel ist fehlgeschlagen.";
+          err.textContent = p.detail || t("set_db_switch_failed");
           err.classList.remove("hidden");
           window.notify?.(
             p.restored
-              ? "Wechsel fehlgeschlagen — die lokale Datenbank wurde aus der Sicherung wiederhergestellt."
-              : "Wechsel fehlgeschlagen — der Modus wurde nicht geändert.",
+              ? t("set_db_failed_restored")
+              : t("set_db_failed_unchanged"),
             "error", 14000);
           loadBackups();
         }
@@ -907,13 +855,11 @@ export function renderSettings(body, win) {
         // Deshalb erst nach mehreren Fehlversuchen hintereinander aufgeben -
         // sonst verliert man die Anzeige mitten im laufenden Wechsel.
         pgMisses++;
-        pgLog.textContent += `\n(Abfrage fehlgeschlagen: ${e.message})`;
+        pgLog.textContent += `\n(${t("set_db_poll_failed")}: ${e.message})`;
         if (pgMisses >= 5) {
           clearInterval(pgTimer); pgTimer = null;
-          pgPhase.textContent = "Fortschritt nicht mehr abrufbar";
-          window.notify?.("Der Fortschritt lässt sich nicht mehr abfragen. "
-            + "Der Wechsel läuft im Backend weiter - die Seite in einer Minute "
-            + "neu laden.", "warn", 14000);
+          pgPhase.textContent = t("set_db_progress_lost");
+          window.notify?.(t("set_db_progress_lost_hint"), "warn", 14000);
         }
       }
     }
@@ -936,7 +882,7 @@ export function renderSettings(body, win) {
       try {
         const res = await api.databaseBackups();
         const list = res.backups || [];
-        if (!list.length) { box.textContent = "Noch keine Sicherungen."; return; }
+        if (!list.length) { box.textContent = t("set_db_no_backups"); return; }
         box.innerHTML = list.map((b) => `
           <div style="display:flex;gap:10px;align-items:center;padding:4px 0;
                       border-bottom:1px solid var(--border)">
@@ -944,23 +890,21 @@ export function renderSettings(body, win) {
             <span>${(b.size / 1048576).toFixed(1)} MB</span>
             <span>${new Date(b.at).toLocaleString()}</span>
             <button class="taskbar-btn" style="padding:2px 8px"
-                    data-restore="${esc(b.path)}">Zurückspielen</button>
+                    data-restore="${esc(b.path)}">${t("set_db_restore")}</button>
           </div>`).join("");
         box.querySelectorAll("[data-restore]").forEach((btn) =>
           btn.addEventListener("click", async () => {
-            const ok = await uiConfirm("Diese Sicherung zurückspielen?", {
-              description: "Der aktuelle lokale Stand wird dabei ersetzt. "
-                + "Das Backend startet anschließend neu." });
+            const ok = await uiConfirm(t("set_db_restore_q"), {
+              description: t("set_db_restore_desc") });
             if (!ok) return;
             try {
               await api.databaseRestoreBackup(btn.dataset.restore);
-              window.notify?.("Sicherung wird eingespielt — Backend startet neu.",
-                              "success", 10000);
+              window.notify?.(t("set_db_restoring"), "success", 10000);
               setTimeout(() => location.reload(), 9000);
             } catch (e) { window.notify?.(e.message, "error", 9000); }
           }));
       } catch (e) {
-        box.textContent = "Sicherungen nicht abrufbar: " + e.message;
+        box.textContent = t("set_db_backups_unavailable") + ": " + e.message;
       }
     }
     loadBackups();
@@ -971,7 +915,7 @@ export function renderSettings(body, win) {
       btn.disabled = true; btn.textContent = "…";
       try {
         await api.databaseBackup();
-        window.notify?.("Sicherung angelegt.", "success", 4000);
+        window.notify?.(t("set_db_backup_done"), "success", 4000);
         loadBackups();
       } catch (err) { window.notify?.(err.message, "error", 9000); }
       btn.disabled = false; btn.textContent = orig;
@@ -980,7 +924,7 @@ export function renderSettings(body, win) {
     async function dbxSwitch(mode) {
       const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
       const ok = await uiConfirm(
-        mode === "external" ? "Auf externe Datenbank umschalten?" : "Auf lokale Datenbank umschalten?",
+        mode === "external" ? t("set_db_to_external_q") : t("set_db_to_local_q"),
         mode === "external"
           ? t("u_alle_daten_werden_von_der_lokalen_")
           : t("u_der_stand_der_externen_datenbank_w"));
@@ -1032,7 +976,7 @@ export function renderSettings(body, win) {
       try {
         cfg = await api.relayFtpConfig();
       } catch {
-        box.textContent = "Dieses Backend kennt den FTP-Zugang noch nicht.";
+        box.textContent = t("set_ftp_unsupported");
         return;
       }
       const draw = () => {
@@ -1059,72 +1003,64 @@ export function renderSettings(body, win) {
                         background:${cfg.webdav ? "var(--panel-2)" : "transparent"}">
             <input type="checkbox" id="ge-webdav" style="margin-top:3px" ${cfg.webdav ? "checked" : ""} />
             <span>
-              <span style="color:var(--text)">WebDAV als Netzlaufwerk</span>
+              <span style="color:var(--text)">${t("set_webdav_label")}</span>
               <div style="font-size:11.5px;margin-top:2px">
-                <code>http://&lt;server&gt;:${cfg.port}/dav/</code> · wirkt sofort,
-                kein Neustart nötig.
+                <code>http://&lt;server&gt;:${cfg.port}/dav/</code> · ${t("set_webdav_hint")}
               </div>
             </span>
           </label>
 
-          <div style="margin:10px 0 4px;color:var(--text)">Zusätzlicher Datei-Zugang</div>
-          ${opt("off", "Nichts", "Nur das, was oben angehakt ist.")}
+          <div style="margin:10px 0 4px;color:var(--text)">${t("set_extra_file_access")}</div>
+          ${opt("off", t("set_none_word"), t("set_only_checked"))}
           ${opt("ftp", `FTP (Port ${cfg.port})`,
-                `<code>ftp://&lt;server&gt;:${cfg.port}</code> · Steuerung UND Daten laufen
-                 über diesen einen Port — es muss kein weiterer Port freigegeben werden.`)}
+                `<code>ftp://&lt;server&gt;:${cfg.port}</code> · ${t("set_ftp_oneport")}`)}
           ${opt("sftp", `SFTP (Port ${cfg.port})`,
                 cfg.sftp_available
-                  ? `<code>sftp://&lt;server&gt;:${cfg.port}</code> · verschlüsselt, nur ein Port nötig.`
+                  ? `<code>sftp://&lt;server&gt;:${cfg.port}</code> · ${t("set_sftp_oneport")}`
                   : esc(cfg.sftp_reason),
                 !cfg.sftp_available)}
           <div style="margin-top:8px;color:var(--warn,#f5a524)">⚠ ${esc(cfg.note)}</div>
           ${cfg.restart_pending ? `
             <div style="margin-top:6px;padding:8px;border:1px solid var(--warn,#f5a524);
                         border-radius:8px;color:var(--warn,#f5a524)">
-              ⚠ ${esc(cfg.mode.toUpperCase())} ist eingestellt, läuft aber gerade
-              <b>nicht</b>: Der Anschluss wird nur beim Start des Backends
-              aufgebaut. Bitte das Backend neu starten.
-              ${cfg.listener_error ? `<div style="margin-top:4px;font-size:11.5px">Letzter Fehler: ${esc(cfg.listener_error)}</div>` : ""}
+              ⚠ ${t("set_listener_pending", { mode: esc(cfg.mode.toUpperCase()) })}
+              ${cfg.listener_error ? `<div style="margin-top:4px;font-size:11.5px">${t("set_last_error")}: ${esc(cfg.listener_error)}</div>` : ""}
             </div>` : ""}
           ${(cfg.mode === "ftp" && !cfg.advertise_host) ? `
             <div style="margin-top:6px;font-size:11.5px">
-              Hinweis für FTP hinter Docker/NAT: Trage oben unter „Server“ die
-              <b>IP-Adresse</b> ein, unter der die Clients das RMM erreichen —
-              sie wird dem FTP-Programm für die Datenverbindung genannt.
+              ${t("set_ftp_nat_hint")}
             </div>` : ""}
-          <div style="margin-top:4px">Anmeldung mit den Zugangsdaten des Dashboards.</div>`;
+          <div style="margin-top:4px">${t("set_login_dashboard_creds")}</div>`;
 
         // Nach dem Speichern: Neustart gleich oder später? FTP/SFTP wirken erst
         // danach, weil dabei die Weiche vor dem Port auf-/abgebaut wird.
         const askRestart = async (res) => {
           if (!res || !res.needs_restart) {
-            window.notify?.(res?.note || "Gespeichert", "success", 4000);
+            window.notify?.(res?.note || t("saved"), "success", 4000);
             return;
           }
           if (!cfg.may_restart) {
             window.notify?.(
-              "Gespeichert. Die Änderung wirkt erst nach einem Neustart — bitte "
-              + "einen Administrator, das RMM neu zu starten.",
+              t("set_saved_needs_restart_admin"),
               "warn", 12000);
             return;
           }
           const { uiChoice } = await import("../utils.js");
-          const choice = await uiChoice("Änderung gespeichert — jetzt neu starten?", [
-            { label: "Jetzt neu starten", value: "now" },
-            { label: "Später selbst neu starten", value: "later" },
-          ], { description: "FTP und SFTP werden erst nach einem Neustart des "
-                          + "Backends aktiv. Laufende Sitzungen brechen dabei ab." });
+          const choice = await uiChoice(t("set_restart_now_q"), [
+            { label: t("set_restart_now"), value: "now" },
+            { label: t("set_restart_later"), value: "later" },
+          ], { description: t("set_restart_desc") });
           if (choice !== "now") {
-            window.notify?.("Gespeichert. Wirkt nach dem nächsten Neustart.", "info", 8000);
+            window.notify?.(t("set_saved_next_restart"), "info", 8000);
             return;
           }
           try {
             await api.restartBackend();
-            window.notify?.("Backend startet neu — die Seite lädt gleich neu.", "success", 8000);
+            window.notify?.(t("set_backend_restarting"), "success", 8000);
             setTimeout(() => location.reload(), 6000);
           } catch (err) {
-            window.notify?.("Neustart nicht möglich: " + err.message
-              + " — bitte einen Administrator, das RMM neu zu starten.", "error", 12000);
+            window.notify?.(t("set_restart_failed") + ": " + err.message
+              + " — " + t("set_ask_admin_restart"), "error", 12000);
           }
         };
 
@@ -1171,7 +1107,7 @@ export function renderSettings(body, win) {
       try {
         cfg = await api.getDeployment();
       } catch (e) {
-        box.textContent = "Nicht verfügbar: " + e.message;
+        box.textContent = t("set_unavailable") + ": " + e.message;
         return;
       }
       const origin = location.origin;
@@ -1181,23 +1117,22 @@ export function renderSettings(body, win) {
                       background:${cfg.public ? "var(--panel-2)" : "transparent"}">
           <input type="checkbox" id="dep-public" style="margin-top:3px" ${cfg.public ? "checked" : ""} />
           <span>
-            <span style="color:var(--text)">Öffentlich erreichbar</span>
+            <span style="color:var(--text)">${t("set_dep_public")}</span>
             <div style="font-size:11.5px;margin-top:2px">
-              <code>${esc(origin)}/deployment</code> · <b>ohne Anmeldung</b>.
-              Nur einschalten, wenn im Ordner nichts Vertrauliches liegt.
+              <code>${esc(origin)}/deployment</code> · ${t("set_dep_public_hint")}
             </div>
           </span>
         </label>
 
         <div class="form-row" style="margin-top:10px">
-          <label>Seitentitel</label>
+          <label>${t("set_dep_page_title")}</label>
           <input type="text" id="dep-title" value="${esc(cfg.title || "Deployment")}" />
         </div>
 
         <div style="margin-top:10px">
-          <label style="display:block;margin-bottom:4px">Eigener HTML-Code</label>
+          <label style="display:block;margin-bottom:4px">${t("set_dep_html")}</label>
           <textarea id="dep-html" spellcheck="false" rows="10"
-            placeholder="Leer lassen für die automatische Dateiliste."
+            placeholder="${t("set_dep_html_ph")}"
             style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;
                    font-size:12px;padding:8px;border-radius:8px;
                    border:1px solid var(--border);background:var(--panel-2);
@@ -1212,8 +1147,8 @@ export function renderSettings(body, win) {
 
         <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
           <button class="btn-primary" id="dep-save" style="width:auto;margin:0">${t("save")}</button>
-          <a class="taskbar-btn" href="/deployment" target="_blank" rel="noopener">Seite öffnen ↗</a>
-          <span style="font-size:11.5px">Dateien legst du im Relay-Explorer unter „Deployment" ab.</span>
+          <a class="taskbar-btn" href="/deployment" target="_blank" rel="noopener">${t("set_open_page")} ↗</a>
+          <span style="font-size:11.5px">${t("set_dep_files_hint")}</span>
         </div>`;
 
       box.querySelector("#dep-save").addEventListener("click", async (e) => {
@@ -1270,18 +1205,14 @@ export function renderSettings(body, win) {
       if (!info.socket) {
         dockerList.innerHTML = `
           <div style="border:1px solid var(--warn,#f5a524);border-radius:8px;padding:10px">
-            ⚠ Der Docker-Socket ist nicht eingehängt — ohne ihn kann das Backend
-            keine Nachbar-Container starten. In <code>docker-compose.yml</code>
-            beim Dienst <code>rmm</code> unter <code>volumes</code> die Zeile
-            <code>/var/run/docker.sock:/var/run/docker.sock</code> aktivieren und
-            <code>docker compose up -d</code> ausführen.
+            ⚠ ${t("set_docker_no_socket")}
           </div>`;
         return;
       }
 
       dockerList.innerHTML = info.services.map((sv) => {
         const on = sv.running;
-        const state = on ? "läuft" : (sv.state === "absent" ? "nicht angelegt" : sv.state);
+        const state = on ? t("set_dk_running") : (sv.state === "absent" ? t("set_dk_absent") : sv.state);
         return `
           <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
             <span style="font-size:16px">${on ? "🟢" : "⚪"}</span>
@@ -1290,7 +1221,7 @@ export function renderSettings(body, win) {
               <div style="font-size:11px">${esc(sv.purpose)} · ${esc(sv.image)} · ${esc(state)}</div>
             </div>
             <button class="taskbar-btn" data-dk="${esc(sv.key)}" data-on="${on ? "1" : "0"}">
-              ${on ? "Abschalten" : "Dazuschalten"}
+              ${on ? t("set_dk_off") : t("set_dk_on")}
             </button>
           </div>`;
       }).join("");
@@ -1301,12 +1232,12 @@ export function renderSettings(body, win) {
           const turnOff = btn.dataset.on === "1";
           const orig = btn.textContent;
           btn.disabled = true;
-          btn.textContent = turnOff ? "…" : "Starte… (Image wird ggf. geladen)";
+          btn.textContent = turnOff ? "…" : t("set_dk_starting");
           try {
             const r = turnOff ? await api.dockerDisable(key) : await api.dockerEnable(key);
             if (!turnOff) prefillFromDocker(r);
             drawDocker(r.status);
-            window.notify?.(turnOff ? "Dienst abgeschaltet" : "Dienst läuft", "success");
+            window.notify?.(turnOff ? t("set_dk_stopped") : t("set_dk_running"), "success");
           } catch (e) {
             btn.disabled = false;
             btn.textContent = orig;
@@ -1387,16 +1318,16 @@ export function renderSettings(body, win) {
           <div style="font-size:14px;font-weight:600;margin-bottom:10px">Gruppen zuweisen</div>
           <div style="flex:1;overflow:auto">
             ${managed.length ? managed.map(rowHtml).join("")
-              : '<div style="color:var(--subtext);font-size:12px">Keine verwalteten Gruppen.</div>'}
+              : `<div style="color:var(--subtext);font-size:12px">${t("set_no_managed_groups")}</div>`}
             ${unmanaged.length ? `
               <details style="margin-top:10px">
-                <summary style="cursor:pointer;font-size:12px;color:var(--subtext)">📁 AD – unverwaltet (${unmanaged.length})</summary>
+                <summary style="cursor:pointer;font-size:12px;color:var(--subtext)">📁 ${t("set_ad_unmanaged")} (${unmanaged.length})</summary>
                 <div style="margin-top:4px">${unmanaged.map(rowHtml).join("")}</div>
               </details>` : ""}
           </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
-            <button class="taskbar-btn" id="gp-cancel">Abbrechen</button>
-            <button class="btn-primary" id="gp-ok">Übernehmen</button>
+            <button class="taskbar-btn" id="gp-cancel">${t("cancel")}</button>
+            <button class="btn-primary" id="gp-ok">${t("apply")}</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
@@ -1413,41 +1344,41 @@ export function renderSettings(body, win) {
   function renderUsersTab(root) {
     root.innerHTML = `
       <div class="settings-section">
-        <h3>Benutzer anlegen</h3>
-        <div class="form-row"><label>Benutzername</label><input type="text" id="su-username" /></div>
-        <div class="form-row"><label>Anzeigename</label><input type="text" id="su-display" /></div>
+        <h3>${t("set_create_user")}</h3>
+        <div class="form-row"><label>${t("username")}</label><input type="text" id="su-username" /></div>
+        <div class="form-row"><label>${t("set_display_name")}</label><input type="text" id="su-display" /></div>
         <div class="form-row">
-          <label>Standard-Rechte</label>
+          <label>${t("set_default_role")}</label>
           <select id="su-role">
-            <option value="admin">Admin (Vollzugriff)</option>
-            <option value="support">Support (Tickets bearbeiten)</option>
-            <option value="view_only">View Only (nur ansehen)</option>
-            <option value="login_only">Login Only (nur anmelden)</option>
+            <option value="admin">${t("set_role_admin")}</option>
+            <option value="support">${t("set_role_support")}</option>
+            <option value="view_only">${t("set_role_view")}</option>
+            <option value="login_only">${t("set_role_login")}</option>
           </select>
         </div>
         <div class="form-row">
-          <label>Passwort-Modus</label>
+          <label>${t("set_pw_mode")}</label>
           <select id="su-pwmode">
-            <option value="otp">Einmalpasswort (User setzt beim ersten Login selbst)</option>
-            <option value="fixed">Passwort direkt festlegen</option>
+            <option value="otp">${t("set_pw_otp")}</option>
+            <option value="fixed">${t("set_pw_fixed")}</option>
           </select>
         </div>
-        <div class="form-row hidden" id="su-pw-row"><label>Passwort</label><input type="text" id="su-password" /></div>
+        <div class="form-row hidden" id="su-pw-row"><label>${t("password")}</label><input type="text" id="su-password" /></div>
         <div class="form-row">
-          <label>Gruppen</label>
+          <label>${t("pm_groups")}</label>
           <div style="display:flex;align-items:center;gap:10px">
-            <button class="taskbar-btn" id="su-groups-btn" type="button">➕ Gruppen hinzufügen</button>
-            <span id="su-groups-info" style="color:var(--subtext);font-size:12px">keine ausgewählt</span>
+            <button class="taskbar-btn" id="su-groups-btn" type="button">➕ ${t("set_add_groups")}</button>
+            <span id="su-groups-info" style="color:var(--subtext);font-size:12px">${t("u_keine_ausgewahlt")}</span>
           </div>
         </div>
         <div id="su-error" class="form-error hidden"></div>
-        <button class="btn-primary" id="su-create" style="margin-top:8px">Benutzer anlegen</button>
+        <button class="btn-primary" id="su-create" style="margin-top:8px">${t("set_create_user")}</button>
         <div id="su-result" style="margin-top:14px"></div>
 
-        <h3 style="margin-top:26px">Vorhandene Benutzer</h3>
+        <h3 style="margin-top:26px">${t("set_existing_users")}</h3>
         <table class="data-table">
-          <thead><tr><th>Benutzer</th><th>Name</th><th>Rolle</th><th>Gruppen</th><th></th></tr></thead>
-          <tbody id="su-list"><tr><td colspan="5" style="color:var(--subtext)">Lädt...</td></tr></tbody>
+          <thead><tr><th>${t("username")}</th><th>${t("name")}</th><th>${t("set_role")}</th><th>${t("pm_groups")}</th><th></th></tr></thead>
+          <tbody id="su-list"><tr><td colspan="5" style="color:var(--subtext)">${t("loading")}</td></tr></tbody>
         </table>
       </div>
     `;
@@ -1470,7 +1401,7 @@ export function renderSettings(body, win) {
       if (picked === null) return;
       pendingGroups = picked;
       groupsInfo.textContent = picked.length
-        ? `${picked.length} Gruppe(n) ausgewählt` : t("u_keine_ausgewahlt");
+        ? t("set_groups_picked", { n: picked.length }) : t("u_keine_ausgewahlt");
     });
 
     async function loadUsers() {
@@ -1484,10 +1415,10 @@ export function renderSettings(body, win) {
             <td>${esc(u.username)}</td>
             <td>${esc(u.display_name)}</td>
             <td>${esc(u.role)}${(u.is_admin && u.admin_via === "permission")
-                ? ' <span style="color:var(--warn);font-size:10px" title="Vollzugriff über das Recht super_admin">ADMIN*</span>' : ""}${
-                u.must_change_pw ? ' <span style="color:var(--warn)">(PW-Wechsel offen)</span>' : ""}</td>
-            <td><button class="taskbar-btn" data-groups="${u.id}">Gruppen…</button></td>
-            <td><button class="taskbar-btn" data-del="${u.id}">Löschen</button></td>`;
+                ? ` <span style="color:var(--warn);font-size:10px" title="${t("set_admin_via_perm")}">ADMIN*</span>` : ""}${
+                u.must_change_pw ? ` <span style="color:var(--warn)">(${t("set_pw_change_pending")})</span>` : ""}</td>
+            <td><button class="taskbar-btn" data-groups="${u.id}">${t("pm_groups")}…</button></td>
+            <td><button class="taskbar-btn" data-del="${u.id}">${t("delete")}</button></td>`;
           list.appendChild(tr);
         }
         list.querySelectorAll("[data-del]").forEach((btn) =>
@@ -1541,10 +1472,10 @@ export function renderSettings(body, win) {
         }
         if (res.generated_password) {
           result.innerHTML = `<div style="background:rgba(45,212,191,0.1);border:1px solid var(--accent);padding:10px;border-radius:6px">
-            Einmalpasswort für <b>${esc(res.username)}</b>: <code style="color:var(--accent)">${esc(res.generated_password)}</code><br/>
-            <span style="color:var(--subtext);font-size:12px">Jetzt notieren - wird nur einmal angezeigt.</span></div>`;
+            ${t("set_otp_for")} <b>${esc(res.username)}</b>: <code style="color:var(--accent)">${esc(res.generated_password)}</code><br/>
+            <span style="color:var(--subtext);font-size:12px">${t("set_otp_note")}</span></div>`;
         } else {
-          result.innerHTML = `<span style="color:var(--accent)">Benutzer angelegt.</span>`;
+          result.innerHTML = `<span style="color:var(--accent)">${t("set_user_created")}</span>`;
         }
         root.querySelector("#su-username").value = "";
         root.querySelector("#su-display").value = "";
@@ -1599,10 +1530,10 @@ export function renderSettings(body, win) {
       listEl.innerHTML = groups.length ? groups.map((g) => `
         <div class="panel" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
           <div><strong>${esc(g.name)}</strong>
-            <div style="font-size:11px;color:var(--subtext);margin-top:2px">${g.permissions.map((p) => esc(permLabels[p] || p)).join(", ") || "keine Rechte"}</div>
+            <div style="font-size:11px;color:var(--subtext);margin-top:2px">${g.permissions.map((p) => esc(permLabels[p] || p)).join(", ") || t("set_no_perms")}</div>
           </div>
-          <button class="taskbar-btn" data-del="${g.id}">Löschen</button>
-        </div>`).join("") : `<div style="color:var(--subtext);font-size:13px">Noch keine Gruppen.</div>`;
+          <button class="taskbar-btn" data-del="${g.id}">${t("delete")}</button>
+        </div>`).join("") : `<div style="color:var(--subtext);font-size:13px">${t("set_no_groups")}</div>`;
       listEl.querySelectorAll("[data-del]").forEach((btn) =>
         btn.addEventListener("click", async () => { await api.deleteGroup(btn.dataset.del); renderGroupsTab(root); })
       );

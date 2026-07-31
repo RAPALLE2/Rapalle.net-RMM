@@ -354,7 +354,7 @@ export function renderTowerDefense(body, win) {
       running = false;
       const bonus = 30 + wave * 5;
       money += bonus;
-      flash(`✓ Welle ${wave} überstanden! +${bonus}$`);
+      flash(`✓ ${tr("td_wave_cleared", { n: wave, bonus })}`);
       updateHud();
     }
 
@@ -484,8 +484,7 @@ export function renderTowerDefense(body, win) {
       <h2 style="color:#4da6ff;margin:0 0 4px">🛡️ RAPALLE Defense</h2>
       <p style="color:#9fb3c8;max-width:460px;font-size:13px;margin:0 0 12px">
         ${initial ? tr("u_wahle_eine_map") : tr("u_map_wechseln_setzt_das_laufende_sp")}
-        Türme rasten auf dem Gitter ein - Pfad-Zellen sind gesperrt.
-        Upgrades bis Stufe 5 (Kosten = Basispreis × 50% × Stufe), Verkauf = 70% der Investition.
+        ${tr("td_rules")}
       </p>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;max-width:560px;width:100%">
         ${MAPS.map((m) => `
@@ -518,7 +517,7 @@ export function renderTowerDefense(body, win) {
       <h2 style="color:#ff4d6d;margin:0 0 8px">💀 FATAL: DATA BREACH OCCURRED</h2>
       <p style="color:#9fb3c8;font-size:13px">
         ${map.icon} ${map.name}: Die Malware hat deinen Server kompromittiert.<br>
-        Du hast <b>${wave}</b> Wellen überstanden.
+        ${tr("td_survived", { n: `<b>${wave}</b>` })}
       </p>
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="btn-primary" id="td-restart" style="margin:0;width:auto">Neu starten</button>

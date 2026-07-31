@@ -17,7 +17,7 @@ export function reportScore(game, score) {
   if (!Number.isFinite(score) || score <= 0) return;
   api.submitGameScore(game, Math.round(score)).then((res) => {
     if (res?.improved) {
-      window.notify?.(`🏆 Neuer persönlicher Bestwert: ${res.best} Punkte!`, "success", 4000);
+      window.notify?.(`🏆 ${t("gh_new_best", { n: res.best })}`, "success", 4000);
     }
   }).catch(() => {});
 }
@@ -126,8 +126,8 @@ export function renderGamingHub(body, win) {
           : `<div style="color:var(--subtext);font-size:12px">Noch keine Einträge - sei der Erste! 🎯</div>`}
         </div>`).join("");
     } catch (e) {
-      scEl.innerHTML = `<div style="color:var(--danger)">Scoreboard nicht ladbar: ${esc(e.message)}<br>
-        <span style="color:var(--subtext);font-size:12px">Läuft das Backend mit games_routes.py?</span></div>`;
+      scEl.innerHTML = `<div style="color:var(--danger)">${t("gh_scoreboard_failed")}: ${esc(e.message)}<br>
+        <span style="color:var(--subtext);font-size:12px">${t("gh_backend_hint")}</span></div>`;
     }
   }
 

@@ -73,8 +73,7 @@ async function currentRedirectUri() {
   // Spotify meldet "No redirect URI configured". Lieber sauber melden.
   if (!/^https?:\/\/[^/\s]+(\/\S*)?$/.test(uri)) {
     throw new Error(
-      "Keine gültige Redirect-URI ermittelbar (" + uri + "). Trage unter "
-      + "Einstellungen → Allgemein die „Vollständige URL“ ein.");
+      tr("sp_bad_redirect", { uri }));
   }
   return uri;
 }

@@ -109,7 +109,7 @@ export function renderOrgChart(body, win) {
   }
 
   async function load() {
-    treeEl.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:10px">Lädt…</div>`;
+    treeEl.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:10px">${t("loading")}</div>`;
     try {
       [tree, workspaces] = await Promise.all([
         api.getOrgTree(),
@@ -140,7 +140,7 @@ export function renderOrgChart(body, win) {
     const rs = roots();
     if (!rs.length && !looseAdGroups().length) {
       treeEl.insertAdjacentHTML("beforeend",
-        `<div style="color:var(--subtext);font-size:13px;padding:10px">Keine Benutzer oder Gruppen.</div>`);
+        `<div style="color:var(--subtext);font-size:13px;padding:10px">${t("oc_empty")}</div>`);
       return;
     }
     for (const n of rs) treeEl.appendChild(nodeEl(n, 0));
@@ -214,7 +214,7 @@ export function renderOrgChart(body, win) {
     const rs = roots();
     if (!rs.length && !looseAdGroups().length) {
       treeEl.insertAdjacentHTML("beforeend",
-        `<div style="color:var(--subtext);font-size:13px;padding:10px">Keine Benutzer oder Gruppen.</div>`);
+        `<div style="color:var(--subtext);font-size:13px;padding:10px">${t("oc_empty")}</div>`);
       return;
     }
     const scroller = document.createElement("div");
@@ -393,8 +393,8 @@ export function renderOrgChart(body, win) {
             Leer lassen entfernt die Zuordnung.</div>
         </div>
         <div style="padding:10px;display:flex;justify-content:flex-end;gap:6px">
-          <button class="taskbar-btn" data-close>Abbrechen</button>
-          <button class="btn-primary" data-ok>Speichern</button>
+          <button class="taskbar-btn" data-close>${t("cancel")}</button>
+          <button class="btn-primary" data-ok>${t("save")}</button>
         </div>
       </div>`;
     document.body.appendChild(back);

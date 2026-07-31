@@ -88,6 +88,39 @@ api = FastAPI(title="RAPALLE.net RMM Backend")
 from app.hostlock import HostLockMiddleware as _HostLock
 api.add_middleware(_HostLock)
 
+# --- Fehlertexte in der Sprache des Benutzers ------------------------------
+# Das Backend wirft seine HTTPExceptions weiterhin mit deutschem Text. Dieser
+# Handler uebersetzt den Text kurz vor dem Senden - EINE Stelle statt ueber 200
+# verstreuter Aufrufe. Die Sprache kommt aus dem Profil des angemeldeten
+# Benutzers (users.language); ist niemand angemeldet, gilt die Server-Sprache.
+# Unbekannte Texte bleiben unveraendert, es kann also nichts verlorengehen.
+from fastapi import HTTPException as _HTTPExc
+from fastapi.responses import JSONResponse as _JSONResponse
+from app.i18n import translate_detail as _tr_detail, server_lang as _srv_lang
+
+
+def _lang_of_request(request) -> str:
+    """Sprache des anfragenden Benutzers, sonst Server-Sprache."""
+    try:
+        from app.auth import get_current_user
+        user = get_current_user(request.headers.get("authorization"))
+        if user and user.get("language"):
+            return str(user["language"])
+    except Exception:
+        # Kein/ungueltiges Token: Das ist normal (Login, oeffentliche Seiten).
+        pass
+    return _srv_lang()
+
+
+@api.exception_handler(_HTTPExc)
+async def _translated_http_exception(request, exc: _HTTPExc):
+    return _JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": _tr_detail(exc.detail, _lang_of_request(request))},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 api.add_middleware(
     CORSMiddleware,
     allow_origins=[CORS_ORIGIN] if CORS_ORIGIN != "*" else ["*"],

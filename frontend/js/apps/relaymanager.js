@@ -62,11 +62,10 @@ export function renderRelayManager(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
       <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
-        <div style="font-size:15px;font-weight:700">🔌 Explorer-Relay verwalten</div>
+        <div style="font-size:15px;font-weight:700">🔌 ${tr("rm_title")}</div>
         <div style="color:var(--subtext);font-size:12px;margin-top:2px">
-          Client auswählen und in die Mitte auf „Umschalten" – so wird der Relay für
-          ihn ein- bzw. ausgeschaltet.
-          ${isAdmin ? "" : '<b style="color:var(--warn,#f5a524)"> Nur Administratoren können umschalten.</b>'}
+          ${tr("rm_hint")}
+          ${isAdmin ? "" : `<b style="color:var(--warn,#f5a524)"> ${tr("rm_admin_only")}</b>`}
         </div>
 
         <details style="margin-top:8px" id="rm-guide">
@@ -133,85 +132,72 @@ export function renderRelayManager(body, win) {
     gb.dataset.done = "1";
 
     const address = guideCard(`
-      <div style="font-weight:700;margin-bottom:6px">📍 Ein Netzlaufwerk für alle freigegebenen Clients</div>
+      <div style="font-weight:700;margin-bottom:6px">📍 ${tr("rm_one_drive")}</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:10px">
-        Du verbindest EINMAL dieses Laufwerk. Darin erscheint pro freigegebenem Client ein
-        Ordner, und darin die Festplatten. Mehrere Clients gleichzeitig, ganz automatisch.
+        ${tr("exp_relay_one_desc")}
       </div>
       <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center">
         ${copyField("Windows / macOS / Linux", httpRoot)}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        In „Netzlaufwerk verbinden" bzw. „Netzwerkadresse hinzufügen" genau diese
-        <b>http://…:Port/dav</b>-Adresse eintragen (mit Doppelpunkt vor dem Port).
+        ${tr("rm_enter_addr")}
       </div>`);
 
     const netUse = username ? guideCard(`
-      <div style="font-weight:700;margin-bottom:6px">💽 Als Netzlaufwerk (mit Laufwerksbuchstaben Z:)</div>
+      <div style="font-weight:700;margin-bottom:6px">💽 ${tr("rm_as_drive")}</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
-        Zuverlässigster Weg für einen echten Laufwerksbuchstaben: in der
-        <b>Eingabeaufforderung</b> (<code>cmd</code>) ausführen und dein Passwort direkt anhängen.
-        Vorher muss der Dienst „WebClient" laufen (<code>net start webclient</code>).
+        ${tr("rm_drive_hint")} ${tr("exp_relay_cmd_hint")}
       </div>
       ${copyField(tr("exp_relay_cmd"), `net use Z: ${uncRoot} /persistent:yes /user:${username} `)}
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        Statt <code>Z:</code> geht jeder freie Buchstabe. Die Form
-        <code>${esc(uncRoot)}</code> ist die offizielle WebDAV-Schreibweise mit Port –
-        <b>nicht</b> <code>:${esc(RM_PORT)}</code> mit Doppelpunkt (das versucht SMB und
-        endet in Fehler 67 bzw. 0x800704b3).
+        ${tr("rm_letter_hint")}
+        <code>${esc(uncRoot)}</code> ${tr("exp_relay_unc_hint")}
+        <b>${tr("not_upper")}</b> <code>:${esc(RM_PORT)}</code> ${tr("exp_relay_colon_warn")}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
-        Trennen später mit: <code>net use Z: /delete</code>
+        ${tr("rm_disconnect")} <code>net use Z: /delete</code>
       </div>`) : "";
 
     const login = guideCard(`
-      <div style="font-weight:700;margin-bottom:6px">🔑 Anmeldung</div>
+      <div style="font-weight:700;margin-bottom:6px">🔑 ${tr("rm_login")}</div>
       <div style="color:var(--subtext);font-size:13px;line-height:1.7">
-        Mit deinem <b>normalen Dashboard-Login</b> anmelden:
+        ${tr("exp_relay_login_desc")}
         <ul style="margin:6px 0 0;padding-left:18px">
-          <li>Benutzername: <b>${esc(username || "dein Benutzername")}</b></li>
-          <li>Passwort: dein gewohntes Dashboard-Passwort</li>
+          <li>${tr("username")}: <b>${esc(username || tr("exp_relay_your_user"))}</b></li>
+          <li>${tr("exp_relay_pw_line")}</li>
         </ul>
       </div>`);
 
     const mac = guideCard(`
       <div style="font-weight:700;margin-bottom:6px">🍎 macOS (Finder)</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
-        <i>Gehe zu → Mit Server verbinden…</i> (Cmd+K), Adresse eintragen und mit dem
-        Dashboard-Login anmelden.
+        ${tr("rm_mac_hint")}
       </div>
-      ${copyField("Server-Adresse", httpRoot)}`);
+      ${copyField(tr("rm_server_addr"), httpRoot)}`);
 
     const linux = guideCard(`
       <div style="font-weight:700;margin-bottom:6px">🐧 Linux</div>
       <div style="color:var(--subtext);font-size:13px;margin-bottom:8px">
-        Im Dateimanager (Nautilus/Dolphin) „Mit Server verbinden" und die Adresse öffnen,
-        oder per <code>davfs2</code> mounten (Paket <code>davfs2</code> nötig).
+        ${tr("rm_linux_hint")}
       </div>
       <div style="display:grid;gap:8px">
-        ${copyField("Dateimanager-Adresse", RM_LINUX_URL)}
-        ${copyField("Mount-Befehl", `sudo mount -t davfs ${httpRoot} /mnt/rmm`)}
+        ${copyField(tr("rm_fm_addr"), RM_LINUX_URL)}
+        ${copyField(tr("rm_mount_cmd"), `sudo mount -t davfs ${httpRoot} /mnt/rmm`)}
       </div>`);
 
     const guide = guideCard(`
-      <div style="font-weight:700;margin-bottom:6px">🪟 Windows – Netzlaufwerk verbinden (grafisch)</div>
+      <div style="font-weight:700;margin-bottom:6px">🪟 ${tr("rm_win_gui")}</div>
       <ol style="margin:0;padding-left:18px;color:var(--subtext);font-size:13px;line-height:1.8">
-        <li>Dienst „WebClient" muss laufen: in <code>cmd</code> (als Admin)
-          <code>net start webclient</code>.</li>
-        <li>Explorer → „Dieser PC" → „Netzlaufwerk verbinden".</li>
-        <li>Laufwerksbuchstaben wählen, als Ordner die <b>http://…:Port/dav</b>-Adresse von oben
-          eintragen (mit Doppelpunkt vor dem Port).</li>
-        <li>„Verbindung mit anderen Anmeldeinformationen herstellen" anhaken → Fertig stellen →
-          Dashboard-Login eingeben.</li>
+        <li>${tr("exp_relay_step1")}</li>
+        <li>${tr("exp_relay_step2")}</li>
+        <li>${tr("exp_relay_step3")}</li>
+        <li>${tr("exp_relay_step4")}</li>
       </ol>
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
-        Wichtig: <b>niemals</b> die Form <code>\\\\host:Port\\dav</code> mit Doppelpunkt verwenden –
-        damit versucht Windows SMB und meldet Fehler 67 bzw. <code>0x800704b3</code>. Im grafischen
-        Dialog die <code>http://…/dav</code>-Adresse nehmen; in <code>cmd</code> (net use) die
-        WebDAV-Form <code>${esc(uncRoot)}</code> von oben.
+        ${tr("exp_relay_warn_colon")}
       </div>
       ${RM_HTTPS ? "" : `<div style="color:var(--warn,#f5a524);font-size:12px;margin-top:8px">
-        Hinweis: Ohne HTTPS verweigert Windows WebDAV-Basic-Anmeldungen teils standardmäßig – HTTPS wird empfohlen.
+        ${tr("rm_https_note")}
       </div>`}`);
 
     gb.innerHTML = address + netUse + login + guide + mac + linux;
@@ -283,12 +269,12 @@ export function renderRelayManager(body, win) {
       }));
 
     const n = selected.size;
-    selInfo.textContent = n ? `${n} ausgewählt` : tr("u_nichts_ausgewahlt");
+    selInfo.textContent = n ? tr("rm_selected", { n }) : tr("u_nichts_ausgewahlt");
     if (isAdmin) switchBtn.disabled = n === 0;
   }
 
   async function load() {
-    listOff.innerHTML = listOn.innerHTML = `<div style="color:var(--subtext);padding:10px">Lädt…</div>`;
+    listOff.innerHTML = listOn.innerHTML = `<div style="color:var(--subtext);padding:10px">${tr("loading")}</div>`;
     try {
       clients = await api.getClients();
       // Auswahl auf noch existierende Clients begrenzen
@@ -314,7 +300,7 @@ export function renderRelayManager(body, win) {
       const choice = await uiChoice(
         tr("exp_relay_close_q"),
         relayOptionsFor(enabling),
-        { description: `Wann soll der Relay für ${enabling.length === 1 ? "diesen Client" : `diese ${enabling.length} Clients`} automatisch wieder geschlossen werden?` });
+        { description: enabling.length === 1 ? tr("rm_close_q_one") : tr("rm_close_q_many", { n: enabling.length }) });
       if (choice === null) return;   // abgebrochen -> nichts umschalten
       autoCloseMin = choice;
     }

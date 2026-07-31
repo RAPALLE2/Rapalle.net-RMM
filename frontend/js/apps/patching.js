@@ -49,16 +49,18 @@ const fmtTs = (ms) => ms ? new Date(Number(ms)).toLocaleString()
   : t("patch_never").toLowerCase();
 
 // Phasen des Agenten in lesbaren Text übersetzen.
+// Uebersetzt erst beim Zugriff (PHASE_TEXT wird zur Ladezeit des Moduls
+// ausgewertet, die Sprache steht da noch nicht fest) -> deshalb Funktionen.
 const PHASE_TEXT = {
-  queued: "Auftrag angenommen…",
-  asking: "Auftrag wird an den Agenten übergeben…",
-  scanning: "Quelle wird abgefragt",
-  scanned: "Quelle fertig",
-  installing: "Installation läuft",
-  installed: "installiert",
-  done: "fertig",
-  failed: "fehlgeschlagen",
-  lost: "abgebrochen",
+  queued: () => t("patch_ph_queued"),
+  asking: () => t("patch_ph_asking"),
+  scanning: () => t("patch_ph_scanning"),
+  scanned: () => t("patch_ph_scanned"),
+  installing: () => t("patch_ph_installing"),
+  installed: () => t("patch_ph_installed"),
+  done: () => t("patch_ph_done"),
+  failed: () => t("patch_ph_failed"),
+  lost: () => t("patch_ph_lost"),
 };
 
 export function renderPatching(body, win) {
@@ -195,7 +197,7 @@ export function renderPatching(body, win) {
   // Fortschrittsanzeige eines laufenden Auftrags.
   function jobBox(job) {
     if (!job || !job.running) return "";
-    const phase = PHASE_TEXT[job.phase] || job.phase || "";
+    const phase = PHASE_TEXT[job.phase]?.() || job.phase || "";
     const detail = job.detail ? ` – ${esc(job.detail)}` : "";
     const pct = job.total ? Math.round((job.done / job.total) * 100) : null;
     return `
@@ -223,7 +225,7 @@ export function renderPatching(body, win) {
           <td style="padding:4px 0;border-bottom:1px solid var(--border)">
             ${s.ok
               ? `<span style="color:var(--subtext)">${t("patch_source_ok", { n: s.count ?? 0 })}${s.note ? ` – ${esc(s.note)}` : ""}</span>`
-              : `<span style="color:var(--danger)">${esc(s.error || "Fehler")}</span>`}
+              : `<span style="color:var(--danger)">${esc(s.error || t("error"))}</span>`}
           </td></tr>`).join("")}
       </table>`,
       t("patch_sources_note"));
@@ -265,7 +267,7 @@ export function renderPatching(body, win) {
         return;
       }
       if (job && job.running) {
-        const phase = PHASE_TEXT[job.phase] || job.phase || "";
+        const phase = PHASE_TEXT[job.phase]?.() || job.phase || "";
         setBusy(`${phase}${job.detail ? ` – ${job.detail}` : ""}`);
         const el = view.querySelector("#pt-job");
         if (el) el.outerHTML = `<div id="pt-job">${jobBox(job)}</div>`;

@@ -145,10 +145,10 @@ export function renderFleetWidgets(host, toolbar) {
   if (toolbar) {
     // Gleiche Werkzeuge/Wording wie die Client-Ansicht (dashlayout).
     toolbar.innerHTML = edit ? `<span class="dash-edit-tools">
-          <button data-add-panel>+ Panel</button>
-          <button data-reset title="${t("dl_reset")}">↺ Standard</button>
-          ${isAdmin() ? `<button data-set-default title="${t("u_aktuelle_dashboard_widgets_als_sta")}">💾 Als Standard für alle</button>` : ""}
-          <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="Bearbeiten-Modus verlassen">✓ Bearbeiten beenden</button>
+          <button data-add-panel>+ ${t("fd_panel")}</button>
+          <button data-reset title="${t("dl_reset")}">↺ ${t("fd_default")}</button>
+          ${isAdmin() ? `<button data-set-default title="${t("u_aktuelle_dashboard_widgets_als_sta")}">💾 ${t("fd_set_default")}</button>` : ""}
+          <button data-end-edit class="btn-primary" style="width:auto;margin:0" title="${t("fd_end_edit_tip")}">✓ ${t("fd_end_edit")}</button>
         </span>` : "";
     toolbar.querySelector("[data-add-panel]")?.addEventListener("click", () => openAddDialog(host, toolbar, null));
     toolbar.querySelector("[data-reset]")?.addEventListener("click", async () => {
@@ -303,9 +303,9 @@ function buildWidget(wdg, ctx) {
     scopeSel.className = "dash-w-kind";
     scopeSel.title = t("u_welche_gerate_zahlt_dieses_widget");
     scopeSel.innerHTML = `
-      <option value="all" ${(wdg.scope || "all") === "all" ? "selected" : ""}>alle Geräte</option>
-      <option value="physical" ${wdg.scope === "physical" ? "selected" : ""}>nur physische</option>
-      <option value="virtual" ${wdg.scope === "virtual" ? "selected" : ""}>nur VMs &amp; LXCs</option>`;
+      <option value="all" ${(wdg.scope || "all") === "all" ? "selected" : ""}>${t("fd_scope_all")}</option>
+      <option value="physical" ${wdg.scope === "physical" ? "selected" : ""}>${t("fd_scope_phys")}</option>
+      <option value="virtual" ${wdg.scope === "virtual" ? "selected" : ""}>${t("fd_scope_virt")}</option>`;
     scopeSel.addEventListener("change", () => { wdg.scope = scopeSel.value; save(); renderWidgetBody(body, wdg); });
     tools.appendChild(scopeSel);
   }
@@ -409,7 +409,7 @@ function openAddDialog(host, toolbar, atCell) {
   back.innerHTML = `
     <div class="widget-picker">
       <div class="wp-head">
-        <strong>Widget hinzufügen</strong>
+        <strong>${t("fd_add_widget")}</strong>
         <button class="dash-w-btn" data-close>✕</button>
       </div>
       <div class="wp-body">

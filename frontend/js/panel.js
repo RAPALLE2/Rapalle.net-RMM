@@ -153,7 +153,7 @@ function maybePromptDeviceType(client) {
       <div class="form-row">
         <label>${t("dt_parent")}</label>
         <select id="dt-host">
-          <option value="">— kein Host zuordnen —</option>
+          <option value="">${t("pn_no_host")}</option>
           ${hosts.map((h) => `<option value="${esc(h.id)}">${esc(h.hostname)}</option>`).join("")}
         </select>
       </div>
@@ -570,7 +570,7 @@ export function renderChildrenPart(target, client) {
 
   if (!kids.length) {
     target.innerHTML = `<div style="color:var(--subtext);font-size:12px">
-      Keine VMs oder LXC-Container zugeordnet.<br>
+      ${t("pn_no_kids")}<br>
       ${t("kids_hint")}</div>`;
     return;
   }
@@ -783,7 +783,7 @@ export function renderNotesPart(target, client) {
 
     const listEl = target.querySelector("#note-list");
     if (!notes.length) {
-      listEl.innerHTML = `<div style="color:var(--subtext);font-size:12px">Noch keine Notizen.</div>`;
+      listEl.innerHTML = `<div style="color:var(--subtext);font-size:12px">${t("pn_no_notes")}</div>`;
     } else {
       listEl.innerHTML = notes.map((n) => {
         if (editingId === n.id) return `<div class="note-edit" data-edit="${esc(n.id)}"></div>`;
@@ -1018,16 +1018,16 @@ export async function handleQuickAction(action, client) {
   }
   if (action === "update") {
     if (!(await uiConfirm(t("agent_update_q", { host: client.hostname }), { description: t("agent_update_desc"), okText: t("agent_update_ok") }))) return;
-    window.notify?.(`Aktualisiere Agent auf ${client.hostname}… (bis zu 60 s, bitte warten)`, "info", 60000, { tag: "agent-update:" + client.id });
+    window.notify?.(t("pn_agent_updating", { host: client.hostname }), "info", 60000, { tag: "agent-update:" + client.id });
     try {
       const res = await api.updateAgent(client.id);
       if (res && res.updated) {
-        window.notify?.(`Agent auf ${client.hostname} erfolgreich aktualisiert und wieder verbunden.`, "success", 8000, { tag: "agent-update:" + client.id });
+        window.notify?.(t("pn_agent_updated", { host: client.hostname }), "success", 8000, { tag: "agent-update:" + client.id });
       } else {
-        window.notify?.(`Agent-Update auf ${client.hostname} abgeschlossen.`, "success", 6000, { tag: "agent-update:" + client.id });
+        window.notify?.(t("pn_agent_update_done", { host: client.hostname }), "success", 6000, { tag: "agent-update:" + client.id });
       }
     } catch (e) {
-      window.notify?.("Update fehlgeschlagen: " + e.message, "error", 14000, { tag: "agent-update:" + client.id });
+      window.notify?.(t("pn_update_failed") + ": " + e.message, "error", 14000, { tag: "agent-update:" + client.id });
     }
     return;
   }
@@ -1043,7 +1043,7 @@ export async function handleQuickAction(action, client) {
         if (state.selection && state.selection.type === "client" && state.selection.id === client.id) {
           state.selection = null;
         }
-        window.notify?.(`Agent auf ${client.hostname} deinstalliert und aus dem Dashboard entfernt.`, "success", 8000, { tag: "agent-uninstall:" + client.id });
+        window.notify?.(t("pn_agent_removed", { host: client.hostname }), "success", 8000, { tag: "agent-uninstall:" + client.id });
         renderMainContent();
       } else {
         window.notify?.(`Deinstallation auf ${client.hostname} abgeschlossen.`, "success", 6000, { tag: "agent-uninstall:" + client.id });

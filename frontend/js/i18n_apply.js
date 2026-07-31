@@ -52,7 +52,10 @@ export function applyStaticTranslations() {
 
   // Benutzermenü
   const profileBtn = document.getElementById("btn-open-profile");
-  if (profileBtn) profileBtn.textContent = getLanguage() === "en" ? "Profile / change password" : t("u_profil_passwort_andern");
+  // Der Schluessel existiert in BEIDEN Sprachen - die frueher hier fest
+  // eingebaute englische Zeichenkette war doppelt gepflegt und wich vom
+  // Sprachpaket ab. t() erledigt das allein.
+  if (profileBtn) profileBtn.textContent = t("u_profil_passwort_andern");
   const settingsBtn = document.getElementById("btn-open-settings");
   if (settingsBtn) settingsBtn.textContent = t("settings");
   const logoutBtn = document.getElementById("btn-logout");

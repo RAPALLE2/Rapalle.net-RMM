@@ -66,7 +66,7 @@ export function renderManage(body, win) {
     // ---- Liste aller Tenants mit ihren Locations ----
     const listEl = body.querySelector("#mg-list");
     if (!tenants.length) {
-      listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">Noch keine Tenants angelegt.</div>`;
+      listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${tr("mn_no_tenants")}</div>`;
     } else {
       listEl.innerHTML = tenants.map((t) => {
         const locations = state.hierarchy.locations.filter((l) => l.tenant_id === t.id);
@@ -92,9 +92,9 @@ export function renderManage(body, win) {
           <div style="display:flex;gap:6px;padding:4px 0 6px 40px">
             <input type="text" placeholder="Neuer Ordner..." data-folder-input="${l.id}"
               style="flex:1;max-width:220px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:12px" />
-            <button class="action-btn" data-add-folder="${l.id}">+ Ordner</button>
+            <button class="action-btn" data-add-folder="${l.id}">+ ${tr("ec_folder")}</button>
           </div>`;
-        }).join("") || `<div style="padding:4px 0 4px 20px;color:var(--subtext);font-size:12px">— noch keine Standorte —</div>`;
+        }).join("") || `<div style="padding:4px 0 4px 20px;color:var(--subtext);font-size:12px">${tr("mn_no_locations")}</div>`;
 
         return `
           <div class="panel" style="margin-bottom:10px">
@@ -174,7 +174,7 @@ export function renderManage(body, win) {
       // ---- Ordner löschen ----
       listEl.querySelectorAll("[data-del-folder]").forEach((btn) =>
         btn.addEventListener("click", async () => {
-          if (!(await uiConfirm(`Ordner "${btn.dataset.folderName}" löschen?`, { description: tr("u_unterordner_werden_mitentfernt_cli"), okText: tr("delete"), danger: true }))) return;
+          if (!(await uiConfirm(tr("mn_del_folder_q", { name: btn.dataset.folderName }), { description: tr("u_unterordner_werden_mitentfernt_cli"), okText: tr("delete"), danger: true }))) return;
           try {
             await api.deleteFolder(btn.dataset.delFolder);
             if (onChanged) await onChanged();
@@ -187,10 +187,10 @@ export function renderManage(body, win) {
       listEl.querySelectorAll("[data-del-tenant]").forEach((btn) =>
         btn.addEventListener("click", async () => {
           const name = btn.dataset.tenantName;
-          if (!(await uiConfirm(`Tenant "${name}" wirklich löschen?`, { description: `Alle Standorte und Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`, okText: tr("delete"), danger: true }))) return;
+          if (!(await uiConfirm(tr("mn_del_tenant_q", { name }), { description: tr("mn_del_tenant_desc"), okText: tr("delete"), danger: true }))) return;
           try {
             const res = await api.deleteTenant(btn.dataset.delTenant);
-            window.notify?.(`Tenant gelöscht — ${res.moved_clients} Client(s) nach Uncategorized/Default verschoben`, "success");
+            window.notify?.(tr("mn_tenant_deleted", { n: res.moved_clients }), "success");
             if (onChanged) await onChanged();
             draw();
           } catch (e) {
@@ -203,10 +203,10 @@ export function renderManage(body, win) {
       listEl.querySelectorAll("[data-del-loc]").forEach((btn) =>
         btn.addEventListener("click", async () => {
           const name = btn.dataset.locName;
-          if (!(await uiConfirm(`Standort "${name}" wirklich löschen?`, { description: `Alle Ordner darin werden entfernt.\nAlle Clients werden nach "Uncategorized / Default" verschoben (kein Client geht verloren).`, okText: tr("delete"), danger: true }))) return;
+          if (!(await uiConfirm(tr("mn_del_loc_q", { name }), { description: tr("mn_del_loc_desc"), okText: tr("delete"), danger: true }))) return;
           try {
             const res = await api.deleteLocation(btn.dataset.delLoc);
-            window.notify?.(`Standort gelöscht — ${res.moved_clients} Client(s) nach Uncategorized/Default verschoben`, "success");
+            window.notify?.(tr("mn_loc_deleted", { n: res.moved_clients }), "success");
             if (onChanged) await onChanged();
             draw();
           } catch (e) {
