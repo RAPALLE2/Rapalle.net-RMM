@@ -40,7 +40,9 @@ let cascade = 0; // sorgt für leicht versetzte Positionierung neuer Fenster
 // -----------------------------------------------------------------
 // Mehrfach-Instanzen: Standardmäßig holt ein erneutes Öffnen das bereits
 // vorhandene Fenster nach vorne. Wer wirklich eine ZWEITE Instanz will, hält
-// beim Klick die Umschalttaste (Shift) gedrückt.
+// beim Klick die Umschalttaste (Shift) gedrückt ODER klickt mit der RECHTEN
+// Maustaste - beides bedeutet dasselbe und ist ohne Tastatur (Tablet, Maus in
+// der einen Hand) deutlich bequemer.
 //
 // Warum ein globaler Merker statt eines Parameters: Die Apps öffnen Fenster an
 // dutzenden Stellen (Startmenü, Kacheln, Kontextmenüs, Tastenkürzel). Den
@@ -48,18 +50,42 @@ let cascade = 0; // sorgt für leicht versetzte Positionierung neuer Fenster
 // zentral mitgeschnitten.
 // -----------------------------------------------------------------
 let _shiftDown = false;
+// Merker für die rechte Maustaste. Er wird beim nächsten openWindow()
+// VERBRAUCHT (siehe unten) und danach zurückgesetzt: Ein Rechtsklick erzeugt
+// kein "click"-Ereignis, das ihn sonst wieder löschen würde - er bliebe sonst
+// stehen und die übernächste normale Öffnung bekäme fälschlich ein zweites
+// Fenster.
+let _rightClick = false;
+let _rightClickAt = 0;
 try {
   window.addEventListener("keydown", (e) => { if (e.key === "Shift") _shiftDown = true; }, true);
   window.addEventListener("keyup", (e) => { if (e.key === "Shift") _shiftDown = false; }, true);
   // Maus-/Touch-Ereignisse tragen den echten Zustand - zuverlässiger als
   // keydown/keyup, wenn zwischendurch der Fokus gewechselt hat.
-  window.addEventListener("mousedown", (e) => { _shiftDown = !!e.shiftKey; }, true);
+  window.addEventListener("mousedown", (e) => {
+    _shiftDown = !!e.shiftKey;
+    // button 2 = rechte Taste. Beim mousedown mitschneiden, weil manche
+    // Stellen das contextmenu-Ereignis abfangen und nicht weiterreichen.
+    if (e.button === 2) { _rightClick = true; _rightClickAt = Date.now(); }
+  }, true);
   window.addEventListener("click", (e) => { _shiftDown = !!e.shiftKey; }, true);
-  window.addEventListener("blur", () => { _shiftDown = false; });
+  window.addEventListener("blur", () => { _shiftDown = false; _rightClick = false; });
 } catch {}
 
+/**
+ * Wurde die Öffnung durch einen Rechtsklick ausgelöst?
+ * Der Merker gilt nur kurz (1,5 s). Ohne dieses Zeitfenster würde ein
+ * Rechtsklick, der KEIN Fenster öffnet (z.B. auf ein Kontextmenü, das dann
+ * weggeklickt wird), die nächste ganz normale Öffnung verfälschen.
+ */
+function _consumeRightClick() {
+  const hit = _rightClick && (Date.now() - _rightClickAt) < 1500;
+  _rightClick = false;
+  return hit;
+}
+
 // Für Apps, die selbst entscheiden wollen (z.B. „Neues Terminal"-Knopf).
-export function wantsNewInstance() { return _shiftDown; }
+export function wantsNewInstance() { return _shiftDown || _rightClick; }
 
 const layer = () => document.getElementById("window-layer");
 
@@ -91,7 +117,11 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   // Soll wirklich eine ZWEITE Instanz entstehen?
   //   newInstance === true/false -> Aufrufer entscheidet hart
   //   newInstance === null       -> Umschalttaste entscheidet
-  const forceNew = newInstance === true || (newInstance !== false && _shiftDown);
+  // Rechtsklick zählt wie Shift. _consumeRightClick() setzt den Merker dabei
+  // zurück, damit er nicht auf die nächste Öffnung durchschlägt.
+  const rightNew = _consumeRightClick();
+  const forceNew = newInstance === true
+    || (newInstance !== false && (_shiftDown || rightNew));
   if (existing && !singleton && forceNew) {
     // Mehrfach-Instanzen: für die neue Instanz einen eindeutigen Schlüssel
     // ableiten (key--2, key--3, ...) und ein FRISCHES Fenster bauen.

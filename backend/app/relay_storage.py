@@ -6,6 +6,11 @@ Zwei Ordner, die dem SERVER gehoeren und nicht einem Client:
   Storage      Ablage fuer alles, was man einfach irgendwo hinlegen will -
                Installer, Skripte, Notizen, Backups. Nur angemeldet erreichbar.
 
+  Source       Der QUELLCODE des RMM selbst (Projekt-Wurzel). Damit laesst
+               sich der Server ueber das Netzlaufwerk bearbeiten - mit dem
+               gewohnten Editor statt ueber die Weboberflaeche. Sichtbar nur
+               mit 'see_source', schreibbar nur mit 'edit_source'.
+
   Deployment   Dasselbe, aber zusaetzlich oeffentlich abrufbar unter
                /deployment/<datei>. Damit laesst sich ein Bild, eine Datei
                oder ein Skript per Link weitergeben, ohne dafuer erst einen
@@ -43,6 +48,23 @@ ROOT = _BACKEND_DIR / "relay"
 SECTIONS = {
     "Storage": "storage",
     "Deployment": "deployment",
+    # Source liegt NICHT unter backend/relay/, sondern ist die Projekt-Wurzel
+    # selbst (siehe _SPECIAL_BASE). Der Wert hier ist deshalb nur ein Platz-
+    # halter, damit die Sektion in allen Schleifen ueber SECTIONS mitlaeuft.
+    "Source": None,
+}
+
+# Sektionen mit eigenem Basisordner ausserhalb von backend/relay/.
+# Die Projekt-Wurzel ist backend/app/relay_storage.py -> drei Ebenen hoch.
+_SPECIAL_BASE = {
+    "Source": Path(__file__).resolve().parents[2],
+}
+
+# Wer darf ueberhaupt SEHEN? Fehlt ein Eintrag, reicht 'use_relay'.
+# Der Quellcode ist nichts, was jeder Relay-Benutzer sehen soll - deshalb
+# dieselbe Berechtigung wie fuer die Source-App im Dashboard.
+READ_PERM = {
+    "Source": "see_source",
 }
 
 # Wer darf schreiben?
@@ -52,6 +74,7 @@ SECTIONS = {
 WRITE_PERM = {
     "Storage": "use_relay",
     "Deployment": "manage_settings",
+    "Source": "edit_source",
 }
 
 
@@ -69,8 +92,17 @@ def display_names() -> list[str]:
     return list(SECTIONS.keys())
 
 
+def read_perm(section: str) -> str:
+    """Berechtigung zum Lesen dieser Sektion."""
+    return READ_PERM.get(section, "use_relay")
+
+
 def base(section: str) -> Path:
     """Basisordner einer Sektion - wird bei Bedarf angelegt."""
+    special = _SPECIAL_BASE.get(section)
+    if special is not None:
+        # Projekt-Wurzel: existiert immer, wird NICHT angelegt.
+        return special
     sub = SECTIONS[section]
     p = ROOT / sub
     p.mkdir(parents=True, exist_ok=True)
@@ -182,6 +214,18 @@ def may_write(user, section: str) -> bool:
     return False
 
 
-def may_read(user) -> bool:
+def may_read(user, section: str | None = None) -> bool:
+    """
+    Darf dieser Benutzer lesen? Ohne `section` gilt die allgemeine
+    Relay-Berechtigung. MIT Sektion wird zusaetzlich die Sonderberechtigung
+    geprueft - 'Source' braucht 'see_source', sonst koennte jeder
+    Relay-Benutzer den Quellcode des Servers herunterladen.
+    """
     from app.auth import user_has_permission, is_super_admin
-    return is_super_admin(user) or user_has_permission(user, "use_relay")
+    if is_super_admin(user):
+        return True
+    if not user_has_permission(user, "use_relay"):
+        return False
+    if section is None:
+        return True
+    return user_has_permission(user, read_perm(section))

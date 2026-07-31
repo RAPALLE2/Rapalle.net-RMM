@@ -58,10 +58,12 @@ async def storage_sections(user: dict = Depends(get_current_user)):
     if not rs.may_read(user):
         raise HTTPException(403, "Fehlendes Recht: use_relay")
     return {
+        # Nur Ordner auflisten, die dieser Benutzer auch lesen darf -
+        # "Source" braucht 'see_source'.
         "sections": [
             {"name": name, "writable": rs.may_write(user, name),
              "public": name == "Deployment" and deployment_public()}
-            for name in rs.display_names()
+            for name in rs.display_names() if rs.may_read(user, name)
         ],
         "deployment_public": deployment_public(),
     }
@@ -70,9 +72,9 @@ async def storage_sections(user: dict = Depends(get_current_user)):
 @router.get("/api/storage/list")
 async def storage_list(section: str, path: str = "",
                        user: dict = Depends(get_current_user)):
-    if not rs.may_read(user):
-        raise HTTPException(403, "Fehlendes Recht: use_relay")
     sec = _section(section)
+    if not rs.may_read(user, sec):
+        raise HTTPException(403, "Fehlendes Recht: use_relay")
     try:
         return {"section": sec, "path": path, "entries": rs.listdir(sec, path),
                 "writable": rs.may_write(user, sec)}
@@ -85,9 +87,9 @@ async def storage_list(section: str, path: str = "",
 @router.get("/api/storage/download")
 async def storage_download(section: str, path: str,
                            user: dict = Depends(get_current_user)):
-    if not rs.may_read(user):
-        raise HTTPException(403, "Fehlendes Recht: use_relay")
     sec = _section(section)
+    if not rs.may_read(user, sec):
+        raise HTTPException(403, "Fehlendes Recht: use_relay")
     try:
         data = rs.read(sec, path)
     except FileNotFoundError:

@@ -13,7 +13,7 @@
 
 import { api } from "../api.js";
 import { formatBytes, esc, uiConfirm, uiPrompt, uiChoice } from "../utils.js";
-import { BACKEND_URL } from "../config.js";
+import { BACKEND_URL, publicBaseNow, loadPublicBase } from "../config.js";
 import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../state.js";
 import { scheduleSave } from "../persist.js";
 import { t } from "../i18n.js";
@@ -494,30 +494,20 @@ export function renderExplorer(body, win) {
     if (!relayPane) return;
     relayPane.innerHTML = `<div style="color:var(--subtext);padding:20px">${t("loading")}</div>`;
 
-    // --- Adresse bestimmen (die, über die das Dashboard läuft; Port aus Config) ---
-    const testBase = (BACKEND_URL || window.location.origin).replace(/\/$/, "");
-    const testIsLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(testBase);
-    let base = testBase;
-    let backendPort = window.location.port || "";
-    if (testIsLocalhost) {
-      try {
-        const res = await api.getServerAddress();
-        if (res) {
-          if (res.backend_port) backendPort = String(res.backend_port);
-          if (res.base_url) {
-            let cand = res.base_url.replace(/\/$/, "");
-            if (!/^https?:\/\//i.test(cand)) cand = `${window.location.protocol}//${cand}`;
-            base = cand;
-          }
-        }
-      } catch {}
-    }
-    if (!/^https?:\/\//i.test(base)) base = `${window.location.protocol}//${base}`;
-
-    const pm = base.match(/^(https?):\/\/([^/:]+)(?::(\d+))?/i);
-    const scheme = pm ? pm[1].toLowerCase() : "http";
-    const host = pm ? pm[2] : "";
-    const port = (pm && pm[3]) || backendPort || (scheme === "https" ? "443" : "80");
+    // --- Adresse bestimmen: IMMER die kanonische Adresse der Installation ---
+    // Frueher wurde nur bei "localhost" nachgefragt und sonst die Adresse aus
+    // dem Browser genommen. Das ging bei jedem Zugriff ueber die interne IP
+    // schief: Angezeigt wurde dann eine WebDAV-Adresse, die von aussen
+    // niemand erreicht, obwohl unter "Vollstaendige URL" die richtige stand.
+    // publicBaseNow() liefert genau den Wert, den auch die Installations-
+    // Skripte verwenden - eine einzige Quelle fuer alle Adressen.
+    const _pb = await loadPublicBase().catch(() => publicBaseNow());
+    const scheme = _pb.scheme || "http";
+    const host = _pb.host || window.location.hostname;
+    const port = String(_pb.port || (scheme === "https" ? "443" : "80"));
+    const base = `${scheme}://${_pb.netloc || host}`;
+    // Mit ausgeschriebenem Port: Windows "Netzlaufwerk verbinden" braucht ihn
+    // auch dann, wenn es der Standard-Port ist.
     const baseWithPort = `${scheme}://${host}:${port}`;
 
     // Wurzel-Mount: EIN Netzlaufwerk, darin je Client ein Ordner.

@@ -389,6 +389,20 @@ async function renameFolder(folder) {
 // -------------------------------------------------------------
 // Interaktion (Klick + Drag & Drop)
 // -------------------------------------------------------------
+// Rechtsklick auf eine App-Kachel = neue Instanz (wie Shift+Klick).
+// Der Fenstermanager schneidet den Tastenzustand global mit; hier muss nur
+// das Browser-Kontextmenue unterdrueckt und die Oeffnung ausgeloest werden.
+// Im Bearbeiten-Modus passiert bewusst nichts - dort wird sortiert, nicht
+// geoeffnet.
+function wireRightOpen(tile, openFn) {
+  tile.addEventListener("contextmenu", (e) => {
+    if (e.target.closest(".sm-remove")) return;
+    if (editMode) return;
+    e.preventDefault();
+    openFn();
+  });
+}
+
 function wireTile(tile, item, idx) {
   if (item.t === "app") {
     tile.addEventListener("click", (e) => {
@@ -396,6 +410,7 @@ function wireTile(tile, item, idx) {
       if (editMode) return;
       openApp(item.id);
     });
+    wireRightOpen(tile, () => openApp(item.id));
   } else if (item.t === "folder") {
     // Ordner lassen sich AUCH im Bearbeiten-Modus oeffnen (dann kann man die
     // Apps darin umsortieren/herausziehen). Beim Oeffnen wird jeder andere
@@ -419,6 +434,7 @@ function wireAppInFolder(tile, folder, appId) {
     if (editMode) return;
     openApp(appId);
   });
+  wireRightOpen(tile, () => openApp(appId));
   if (editMode) enableDrag(tile, { from: "folder", folderId: folder.id, appId });
 }
 

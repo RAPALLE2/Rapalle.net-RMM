@@ -166,6 +166,44 @@ def _backend_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+@router.get("/api/public-base")
+async def public_base(request: Request, user: dict = Depends(get_current_user)):
+    """
+    Die KANONISCHE Adresse dieser Installation - also die, unter der Clients
+    und Netzlaufwerke den Server erreichen sollen.
+
+    Warum das nicht im Browser bestimmt werden kann: `location.host` ist nur
+    die Adresse, ueber die der Admin GERADE zufaellig zugreift. Wer das
+    Dashboard intern per IP oeffnet, bekaeme im Relay-Manager eine WebDAV-
+    Adresse, die von aussen niemand erreicht - und in den Installations-
+    befehlen eine, die der neue Client nicht kennt. Hier gilt dieselbe
+    Reihenfolge wie fuer die Installations-Skripte (siehe _backend_url):
+    konfigurierte Server-URL, dann Domain/Host + Port, dann die Anfrage
+    selbst (inklusive X-Forwarded-*).
+
+    Absichtlich nur `get_current_user` und kein Admin-Recht: Auch normale
+    Benutzer sehen Relay-Adressen und brauchen deshalb den richtigen Wert.
+    """
+    base = _backend_url(request)
+    parts = urlsplit(base)
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return {
+        "base_url": base,
+        "scheme": parts.scheme,
+        "host": parts.hostname or "",
+        "port": port,
+        # netloc enthaelt den Port nur, wenn er nicht der Standard ist - genau
+        # das, was man fuer eine anzeigbare Adresse braucht.
+        "netloc": parts.netloc,
+        # Ist die Adresse geraten (kein server_url/server_domain gesetzt)?
+        # Das Dashboard kann darauf hinweisen, statt eine falsche Adresse
+        # kommentarlos als Wahrheit auszugeben.
+        "configured": bool((db.get_setting("server_url") or "").strip()
+                           or (db.get_setting("server_domain") or "").strip()
+                           or (db.get_setting("server_host") or "").strip()),
+    }
+
+
 @router.get("/enroll/{token}", response_class=HTMLResponse)
 async def enrollment_landing_page(token: str, request: Request):
     """

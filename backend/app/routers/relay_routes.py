@@ -477,6 +477,11 @@ def _walk_relay(segments: list[str], user) -> dict:
     from app import relay_storage as _rs
     _sec = _rs.section_of(segments[0])
     if _sec:
+        # Auch der DIREKTE Zugriff muss geprueft werden: Die Anzeige-Liste
+        # auszublenden reicht nicht, sonst kaeme man ueber einen getippten
+        # Pfad trotzdem hinein.
+        if user is not None and not user_has_permission(user, _rs.read_perm(_sec)):
+            return {"node": None}
         return {"node": "server", "consumed": [_sec], "section": _sec,
                 "rest": segments[1:]}
 
@@ -535,7 +540,12 @@ def _relay_children(walk: dict, user) -> list[str]:
     node = walk["node"]
     if node == "root":
         from app import relay_storage as _rs
-        return _rs.display_names() + list(_tenant_display(walk["clients"]).keys())
+        # Server-Ordner nur anzeigen, wenn der Benutzer sie lesen darf.
+        # "Source" enthaelt den Quellcode und braucht 'see_source' - ohne
+        # diese Pruefung waere er fuer jeden Relay-Benutzer sichtbar.
+        secs = [n for n in _rs.display_names()
+                if user_has_permission(user, _rs.read_perm(n))]
+        return secs + list(_tenant_display(walk["clients"]).keys())
     if node == "tenant":
         return list(_location_display(walk["clients"]).keys())
     if node in ("location", "folder"):
@@ -716,7 +726,7 @@ async def dav(request: Request, full_path: str = ""):
         from app import relay_storage as _rs
         section = walk["section"]
         sub = walk.get("rest", [])
-        if not _rs.may_read(user):
+        if not _rs.may_read(user, section):
             return PlainTextResponse("Kein Zugriff auf das Relay", status_code=403)
         writable = _rs.may_write(user, section)
         base_href = "/dav/" + _up.quote(section) + (

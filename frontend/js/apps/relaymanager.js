@@ -12,6 +12,7 @@ import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
+import { publicBaseNow, loadPublicBase } from "../config.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
 const RELAY_AUTOCLOSE_BASE = [
@@ -48,16 +49,32 @@ export function renderRelayManager(body, win) {
   let clients = [];
   const selected = new Set();   // ausgewählte Client-IDs
   const isAdmin = (() => { try { return userIsAdmin(); } catch { return false; } })();
+  // Kanonische Adresse im Hintergrund holen; bis dahin gilt location.
+  loadPublicBase().catch(() => {});
 
-  // Verbindungsdaten dynamisch aus der aktuellen Adresse ableiten
-  const RM_HTTPS = location.protocol === "https:";
-  const RM_HOST = location.hostname;
-  const RM_PORT = location.port || (RM_HTTPS ? "443" : "80");
-  const RM_DAV_URL = `${location.protocol}//${location.host}/dav`;
-  const RM_WIN_PATH = RM_HTTPS
-    ? `\\\\${RM_HOST}@SSL@${RM_PORT}\\dav`
-    : `\\\\${RM_HOST}@${RM_PORT}\\dav`;
-  const RM_LINUX_URL = `${RM_HTTPS ? "davs" : "dav"}://${location.host}/dav`;
+  // Verbindungsdaten aus der KANONISCHEN Adresse der Installation ableiten -
+  // nicht aus location. Wer das Dashboard intern per IP oeffnet, soll hier
+  // trotzdem die Adresse sehen, unter der das Netzlaufwerk wirklich erreichbar
+  // ist (Einstellung "Vollstaendige URL" bzw. Domain/Host + Port).
+  // Die Werte werden bei jedem Aufbau der Anleitung neu gelesen, weil
+  // loadPublicBase() erst kurz nach dem Oeffnen antwortet.
+  function conn() {
+    const b = publicBaseNow();
+    const https = b.scheme === "https";
+    const port = String(b.port || (https ? 443 : 80));
+    // Standard-Ports gehoeren nicht in eine angezeigte Adresse.
+    const netloc = b.netloc || (port === (https ? "443" : "80")
+      ? b.host : `${b.host}:${port}`);
+    return {
+      https, host: b.host, port, netloc,
+      davUrl: `${b.scheme}://${netloc}/dav`,
+      // WebDAV-Schreibweise fuer Windows: host@port, NICHT host:port
+      // (mit Doppelpunkt versucht Windows SMB -> Fehler 67).
+      winPath: https ? `\\\\${b.host}@SSL@${port}\\dav`
+                     : `\\\\${b.host}@${port}\\dav`,
+      linuxUrl: `${https ? "davs" : "dav"}://${netloc}/dav`,
+    };
+  }
 
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
@@ -113,9 +130,6 @@ export function renderRelayManager(body, win) {
   // ---- Verbindungsanleitung: exakt die Karten-/Copy-Button-Optik aus dem
   //      Client-Explorer (Adresse, net use, Anmeldung, grafische Anleitung). ----
   const username = (() => { try { return state.user?.username || ""; } catch { return ""; } })();
-  const scheme = RM_HTTPS ? "https" : "http";
-  const httpRoot = RM_DAV_URL;                    // proto://host[:port]/dav
-  const uncRoot = RM_WIN_PATH;                    // \\host@[SSL@]port\dav
 
   const guideCard = (inner) =>
     `<div class="panel" style="padding:14px;margin-bottom:12px">${inner}</div>`;
@@ -130,6 +144,13 @@ export function renderRelayManager(body, win) {
     const gb = body.querySelector("#rm-guide-body");
     if (!gb || gb.dataset.done) return;   // nur einmal aufbauen
     gb.dataset.done = "1";
+    // Erst hier aufloesen: loadPublicBase() antwortet kurz nach dem Oeffnen,
+    // die Anleitung wird aber erst beim Aufklappen gebaut - dann steht der
+    // richtige Wert bereits zur Verfuegung.
+    const C = conn();
+    const scheme = C.https ? "https" : "http";
+    const httpRoot = C.davUrl;                  // proto://host[:port]/dav
+    const uncRoot = C.winPath;                  // \\\\host@[SSL@]port\\dav
 
     const address = guideCard(`
       <div style="font-weight:700;margin-bottom:6px">📍 ${tr("rm_one_drive")}</div>
@@ -152,7 +173,7 @@ export function renderRelayManager(body, win) {
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
         ${tr("rm_letter_hint")}
         <code>${esc(uncRoot)}</code> ${tr("exp_relay_unc_hint")}
-        <b>${tr("not_upper")}</b> <code>:${esc(RM_PORT)}</code> ${tr("exp_relay_colon_warn")}
+        <b>${tr("not_upper")}</b> <code>:${esc(C.port)}</code> ${tr("exp_relay_colon_warn")}
       </div>
       <div style="color:var(--subtext);font-size:12px;margin-top:6px">
         ${tr("rm_disconnect")} <code>net use Z: /delete</code>
@@ -181,7 +202,7 @@ export function renderRelayManager(body, win) {
         ${tr("rm_linux_hint")}
       </div>
       <div style="display:grid;gap:8px">
-        ${copyField(tr("rm_fm_addr"), RM_LINUX_URL)}
+        ${copyField(tr("rm_fm_addr"), C.linuxUrl)}
         ${copyField(tr("rm_mount_cmd"), `sudo mount -t davfs ${httpRoot} /mnt/rmm`)}
       </div>`);
 
@@ -196,7 +217,7 @@ export function renderRelayManager(body, win) {
       <div style="color:var(--subtext);font-size:12px;margin-top:8px">
         ${tr("exp_relay_warn_colon")}
       </div>
-      ${RM_HTTPS ? "" : `<div style="color:var(--warn,#f5a524);font-size:12px;margin-top:8px">
+      ${C.https ? "" : `<div style="color:var(--warn,#f5a524);font-size:12px;margin-top:8px">
         ${tr("rm_https_note")}
       </div>`}`);
 
