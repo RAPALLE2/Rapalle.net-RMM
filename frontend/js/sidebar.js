@@ -134,7 +134,7 @@ export async function openPin(pin) {
     }
     if (pin.kind === "session") {
       const client = state.clients.find((c) => c.id === pin.clientId);
-      if (!client) { window.notify?.("${t("sb_client_gone")}", "warn", 4000); return; }
+      if (!client) { window.notify?.(`${t("sb_client_gone")}`, "warn", 4000); return; }
       const { handleAction } = await import("./panel.js");
       handleAction(pin.action || "terminal", client);
       return;
