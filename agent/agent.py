@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import platform
+import random
 import re
 import shutil
 import socket
@@ -548,6 +549,19 @@ asyncio.set_event_loop(_AGENT_LOOP)
 # sich zwei Verbindungs-Lebenszyklen überlappen.
 sio = socketio.AsyncClient(reconnection=False)
 
+# Wird gesetzt, sobald das Backend unsere Anmeldung BESTÄTIGT hat
+# ('register-ack'). Solange es nicht gesetzt ist, schweigt der Agent -
+# er belegt dann keine Server-Kapazität, die gerade ein anderer Agent
+# für seine Anmeldung braucht.
+_REGISTERED = asyncio.Event()
+
+# Damit nicht alle Agenten im selben Moment anklopfen (typisch nach einem
+# Server-Neustart), verzögert jeder Agent seinen ERSTEN Versuch um eine
+# feste, aus der eigenen Geräte-ID abgeleitete Spanne. Fest statt zufällig,
+# damit die Reihenfolge über Neustarts hinweg stabil bleibt und sich die
+# Agenten nicht immer wieder gegenseitig in die Quere kommen.
+CONNECT_SPREAD_S = max(0, int(os.getenv("AGENT_CONNECT_SPREAD_S", "30") or 30))
+
 
 def get_local_ip() -> str | None:
     """Ermittelt die eigene lokale IP-Adresse (siehe Erklärung in network_scan.py im Backend)."""
@@ -688,6 +702,25 @@ async def connect():
     if _JUST_UPDATED:
         _print(f"[agent] {_at('log_update_sent')}")
         _JUST_UPDATED = False  # nur einmal melden, nicht bei jedem Reconnect
+
+
+@sio.on("register-ack", namespace="/agent")
+async def on_register_ack(data=None):
+    """
+    Das Backend hat unsere Anmeldung fertig verarbeitet.
+
+    Erst ab hier schicken wir Heartbeats. Vorher wäre jeder Heartbeat nur
+    zusätzliche Last auf einem Server, der gerade reihum alle anderen
+    Agenten aufnimmt - genau die Überlast, die den Container umgebracht hat.
+    """
+    _REGISTERED.set()
+    _print("[agent] Anmeldung vom Server bestätigt - Heartbeats starten")
+
+
+@sio.event(namespace="/agent")
+async def disconnect():
+    """Verbindung weg -> Heartbeats pausieren, bis wir wieder angemeldet sind."""
+    _REGISTERED.clear()
 
 
 @sio.event(namespace="/agent")
@@ -1400,7 +1433,10 @@ async def heartbeat_loop():
     """Läuft dauerhaft im Hintergrund und schickt alle 5 Sekunden Metriken."""
     loop = asyncio.get_event_loop()
     while True:
-        if sio.connected:
+        # Nur senden, wenn die Verbindung steht UND die Anmeldung bestätigt
+        # ist. Beides zusammen verhindert, dass ein frisch verbundener Agent
+        # dem Server in die laufende Aufnahme anderer Agenten hineinfunkt.
+        if sio.connected and _REGISTERED.is_set():
             try:
                 # collect_metrics() blockiert kurz -> in einem Thread ausführen,
                 # damit der Rest des Programms (z.B. eingehende Befehle) nicht wartet
@@ -1408,7 +1444,10 @@ async def heartbeat_loop():
                 await sio.emit("heartbeat", {"id": DEVICE_ID, "metrics": metrics}, namespace="/agent")
             except Exception as e:
                 _print(f"[agent] {_at('log_metrics_failed', err=e)}")
-        await asyncio.sleep(5)
+        # Kleiner Zufalls-Anteil im Takt: Ohne ihn treffen die Heartbeats
+        # aller Agenten dauerhaft im selben Sekundentakt ein und erzeugen
+        # regelmässige Lastspitzen statt gleichmässiger Grundlast.
+        await asyncio.sleep(5 + random.uniform(0, 1.5))
 
 
 # --------------------------------------------------------------
@@ -4795,7 +4834,24 @@ async def main():
                f"public client can NOT reach that. Set the public "
                f"Adresse eintragen (z.B. https://domain) bzw. im Dashboard unter "
                f"Einstellungen -> Allgemein -> 'Server-URL' setzen.")
+    # --- Gestaffelter Erststart -------------------------------------
+    # Aus der Geräte-ID wird eine feste Wartezeit innerhalb von
+    # CONNECT_SPREAD_S abgeleitet. Damit klopfen nach einem Server-Neustart
+    # nicht alle Agenten in derselben Sekunde an, sondern verteilt über das
+    # Fenster - und der Server nimmt sie der Reihe nach auf.
+    if CONNECT_SPREAD_S > 0:
+        import hashlib as _hl
+        _fingerprint = int(_hl.sha256(str(DEVICE_ID).encode("utf-8")).hexdigest()[:8], 16)
+        offset = (_fingerprint % (CONNECT_SPREAD_S * 1000)) / 1000.0
+        _print(f"[agent] Gestaffelter Start: warte {offset:.1f}s vor dem ersten Verbindungsversuch")
+        await asyncio.sleep(offset)
+
+    backoff = 3.0            # aktuelle Wartezeit zwischen zwei Versuchen
+    BACKOFF_MAX = 120.0      # Obergrenze, damit ein Agent nie ganz aufgibt
+
     while True:
+        _REGISTERED.clear()
+        refused_busy = False
         try:
             if sio.connected:
                 try:
@@ -4804,17 +4860,35 @@ async def main():
                     pass
             _print(f"[agent] Verbinde zu {BACKEND_URL} (Namespace /agent)...")
             await sio.connect(BACKEND_URL, auth={"token": AGENT_TOKEN},
-                              namespaces=["/agent"], wait_timeout=15)
+                              namespaces=["/agent"], wait_timeout=30)
+            backoff = 3.0    # Verbindung stand -> Backoff zurücksetzen
             await sio.wait()  # blockiert, solange die Verbindung steht
             _print(f"[agent] {_at('log_disconnected')}")
         except Exception as e:
-            _print(f"[agent] {_at('log_conn_failed', url=BACKEND_URL, err=repr(e))}")
+            # Der Server weist uns ab, weil er gerade andere Agenten aufnimmt.
+            # Das ist KEIN Fehler, sondern die Warteschlange bei der Arbeit -
+            # entsprechend ruhig protokollieren und in Ruhe erneut versuchen.
+            refused_busy = "busy" in repr(e).lower()
+            if refused_busy:
+                _print("[agent] Server nimmt gerade andere Agenten auf - warte und versuche es erneut")
+            else:
+                _print(f"[agent] {_at('log_conn_failed', url=BACKEND_URL, err=repr(e))}")
+        finally:
+            _REGISTERED.clear()
+
         # Immer sauber trennen, bevor der nächste Versuch startet.
         try:
             await sio.disconnect()
         except Exception:
             pass
-        await asyncio.sleep(3)
+
+        # Wartezeit vor dem nächsten Versuch: schrittweise länger, plus ein
+        # Zufallsanteil. Ohne den Zufallsanteil laufen abgewiesene Agenten
+        # synchron und stürmen den Server im Gleichtakt erneut ("Thundering
+        # Herd") - genau das Verhalten, das den Container umgebracht hat.
+        wait_s = min(BACKOFF_MAX, backoff) + random.uniform(0, min(10.0, backoff))
+        await asyncio.sleep(wait_s)
+        backoff = min(BACKOFF_MAX, backoff * 2 if refused_busy else backoff * 1.5)
 
 
 # ==========================================================================

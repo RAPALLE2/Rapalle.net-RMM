@@ -77,6 +77,154 @@ class ConnectionState:
 state = ConnectionState()
 
 
+# ======================================================================
+# AUFNAHME-SCHLEUSE FÜR AGENTEN  ("einer nach dem anderen")
+# ----------------------------------------------------------------------
+# Problem, das hier gelöst wird: Nach einem Neustart des Containers (oder
+# einem kurzen Netzausfall) wollen ALLE Agenten gleichzeitig verbinden.
+# Jede Anmeldung zieht mehrere Datenbank-Schreibvorgänge, Notifier-Regeln
+# und zwei Broadcasts an alle Dashboards nach sich. Bei 50+ Agenten
+# gleichzeitig entstehen daraus tausende parallele Coroutinen und
+# DB-Zugriffe in derselben Sekunde - der Container wird vom OOM-Killer
+# bzw. vom blockierten Event-Loop erledigt.
+#
+# Lösung in drei Stufen:
+#   1. TÜRSTEHER (Semaphore): Nur eine begrenzte Zahl Agenten darf sich
+#      gleichzeitig im Anmelde-Vorgang befinden. Standard: 1 - also
+#      wirklich streng einer nach dem anderen.
+#   2. WARTESCHLANGE: Wer keinen Platz bekommt, wartet. Wird die Wartezeit
+#      zu lang oder ist die Schlange voll, wird die Verbindung höflich
+#      abgelehnt; der Agent versucht es mit Backoff später erneut.
+#   3. SERIALISIERUNG: Die eigentliche 'register'-Verarbeitung läuft unter
+#      einem Lock, damit sie nie überlappt - egal wie viele Sockets offen
+#      sind.
+#
+# Alle Werte sind über Umgebungsvariablen einstellbar, damit man auf
+# grösserer Hardware wieder aufdrehen kann, ohne Code zu ändern.
+# ======================================================================
+
+import os as _os
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(_os.getenv(name, "") or default))
+    except ValueError:
+        return default
+
+
+# Wie viele Agenten dürfen sich GLEICHZEITIG anmelden? 1 = strikt nacheinander.
+AGENT_ADMISSION_SLOTS = _env_int("AGENT_ADMISSION_SLOTS", 1)
+# Wie lange darf ein Agent auf seinen Platz warten, bevor er abgewiesen wird?
+AGENT_ADMISSION_WAIT_S = _env_int("AGENT_ADMISSION_WAIT_S", 25)
+# Wie viele Agenten dürfen höchstens in der Schlange stehen? Darüber hinaus
+# wird sofort abgelehnt, statt immer mehr Speicher mit Wartenden zu füllen.
+AGENT_ADMISSION_QUEUE = _env_int("AGENT_ADMISSION_QUEUE", 100)
+# Notbremse: Meldet sich ein Agent nach dem Verbinden nicht binnen dieser
+# Zeit an, wird sein Platz wieder freigegeben (sonst blockiert ein hängender
+# Client die ganze Schleuse).
+AGENT_ADMISSION_HOLD_S = _env_int("AGENT_ADMISSION_HOLD_S", 30)
+# Wie viele Heartbeats werden gleichzeitig verarbeitet? Heartbeats schreiben
+# in die DB - unbegrenzt parallel ist genau die Last, die den Container killt.
+AGENT_HEARTBEAT_SLOTS = _env_int("AGENT_HEARTBEAT_SLOTS", 4)
+
+_admission_sem: "asyncio.Semaphore | None" = None
+_register_lock: "asyncio.Lock | None" = None
+_heartbeat_sem: "asyncio.Semaphore | None" = None
+_admission_waiting = 0                 # aktuell in der Schlange
+_admission_held: dict[str, object] = {}  # sid -> Watchdog-Task (hält einen Platz)
+
+
+def _ensure_gate() -> None:
+    """Legt die Schleusen-Objekte beim ersten Gebrauch an.
+
+    Bewusst spät: asyncio-Primitive dürfen erst existieren, wenn der
+    Event-Loop läuft - beim Import des Moduls tut er das noch nicht.
+    """
+    global _admission_sem, _register_lock, _heartbeat_sem
+    if _admission_sem is None:
+        _admission_sem = asyncio.Semaphore(AGENT_ADMISSION_SLOTS)
+    if _register_lock is None:
+        _register_lock = asyncio.Lock()
+    if _heartbeat_sem is None:
+        _heartbeat_sem = asyncio.Semaphore(AGENT_HEARTBEAT_SLOTS)
+
+
+async def _admission_acquire(sid: str) -> bool:
+    """Wartet auf einen freien Platz in der Schleuse. False = abgelehnt."""
+    global _admission_waiting
+    _ensure_gate()
+    if _admission_waiting >= AGENT_ADMISSION_QUEUE:
+        return False
+    _admission_waiting += 1
+    try:
+        await asyncio.wait_for(_admission_sem.acquire(),
+                               timeout=AGENT_ADMISSION_WAIT_S)
+    except asyncio.TimeoutError:
+        return False
+    finally:
+        _admission_waiting -= 1
+
+    # Notbremse scharf machen: Platz automatisch freigeben, falls kein
+    # 'register' kommt.
+    async def _watchdog():
+        try:
+            await asyncio.sleep(AGENT_ADMISSION_HOLD_S)
+        except asyncio.CancelledError:
+            return
+        print(f"[gate] Agent {sid} hat sich nicht angemeldet - Platz freigegeben")
+        _admission_release(sid)
+
+    _admission_held[sid] = asyncio.ensure_future(_watchdog())
+    return True
+
+
+def _admission_release(sid: str) -> None:
+    """Gibt den Platz eines Agenten wieder frei (mehrfacher Aufruf ist harmlos)."""
+    task = _admission_held.pop(sid, None)
+    if task is None:
+        return
+    try:
+        task.cancel()
+    except Exception:
+        pass
+    if _admission_sem is not None:
+        try:
+            _admission_sem.release()
+        except ValueError:
+            pass
+
+
+# ----------------------------------------------------------------------
+# Gebündelte Dashboard-Broadcasts
+# ----------------------------------------------------------------------
+# 'clients:changed' hat keinen Inhalt - es sagt dem Frontend nur "lade die
+# Liste neu". 80 Agenten, die binnen zwei Sekunden verbinden, lösten bisher
+# 160 solcher Broadcasts aus (und damit 160 Neuladungen pro Dashboard).
+# Jetzt wird höchstens einer pro Sekunde verschickt.
+_clients_changed_task: "object | None" = None
+
+
+def _emit_clients_changed_soon(delay: float = 1.0) -> None:
+    """Meldet den Dashboards gesammelt, dass sich die Client-Liste geändert hat."""
+    global _clients_changed_task
+    task = _clients_changed_task
+    if task is not None and not task.done():
+        return   # es ist bereits eine Meldung unterwegs
+
+    async def _fire():
+        await asyncio.sleep(delay)
+        try:
+            await sio.emit("clients:changed", namespace="/dashboard")
+        except Exception:
+            pass
+
+    try:
+        _clients_changed_task = asyncio.ensure_future(_fire())
+    except RuntimeError:
+        _clients_changed_task = None
+
+
 def _new_request_id() -> str:
     return uuid.uuid4().hex
 
@@ -487,16 +635,58 @@ async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
 async def connect(sid, environ, auth):
     """
     Wird aufgerufen, sobald sich JEMAND mit /agent verbinden will.
-    Wir prüfen hier das AGENT_TOKEN - ohne das richtige Token wird die
-    Verbindung sofort wieder abgelehnt (ConnectionRefusedError).
+
+    Zwei Prüfungen, in dieser Reihenfolge:
+      1. AGENT_TOKEN - ohne das richtige Token wird sofort abgelehnt.
+      2. Aufnahme-Schleuse - der Agent wartet hier, bis er an der Reihe ist.
+         Das Warten passiert BEVOR die Verbindung als hergestellt gilt, also
+         bevor irgendwelche Daten fliessen. Dadurch baut immer nur eine
+         Handvoll Agenten gleichzeitig wirklich auf.
+
+    Wer nicht rechtzeitig drankommt, wird mit einem klaren Grund abgewiesen
+    ("busy") - der Agent wartet dann selbst und probiert es erneut. Das ist
+    deutlich billiger, als hunderte halboffene Verbindungen zu halten.
     """
     token = (auth or {}).get("token")
     if token != AGENT_TOKEN:
         raise socketio.exceptions.ConnectionRefusedError("Ungültiges Agent-Token")
 
+    if not await _admission_acquire(sid):
+        raise socketio.exceptions.ConnectionRefusedError(
+            "busy: Server nimmt gerade andere Agenten auf - bitte später erneut")
+
 
 @sio.on("register", namespace="/agent")
 async def on_register(sid, payload):
+    """
+    Aussenhülle der Anmeldung: sorgt dafür, dass immer nur EINE Anmeldung
+    gleichzeitig verarbeitet wird, und gibt danach den Schleusen-Platz für
+    den nächsten Agenten frei.
+
+    Warum das Lock zusätzlich zur Schleuse? Die Schleuse begrenzt, wie viele
+    Agenten sich anmelden dürfen; das Lock garantiert, dass die Verarbeitung
+    selbst nicht überlappt - auch dann nicht, wenn man die Schleuse später
+    weiter aufdreht oder ein Agent ein zweites 'register' schickt.
+
+    Zum Schluss bekommt der Agent ein 'register-ack'. Erst danach beginnt er
+    mit Heartbeats - so entsteht die gewünschte Reihenfolge:
+    verbinden -> Daten übermitteln -> Bestätigung -> der Nächste.
+    """
+    _ensure_gate()
+    try:
+        async with _register_lock:
+            await _do_register(sid, payload)
+    except Exception as e:
+        print(f"[gate] Anmeldung von {sid} fehlgeschlagen: {e!r}")
+    finally:
+        try:
+            await sio.emit("register-ack", {"ok": True}, to=sid, namespace="/agent")
+        except Exception:
+            pass
+        _admission_release(sid)
+
+
+async def _do_register(sid, payload):
     """
     Ein Agent meldet sich frisch an (direkt nach dem Verbindungsaufbau).
     payload enthält: id, hostname, platform, arch, release, ip
@@ -588,7 +778,7 @@ async def on_register(sid, payload):
     # (detected_device_type) - übernommen wird er erst nach Bestätigung durch
     # den Nutzer im Client-Panel (device_type_ack).
     if db.apply_detected_device_type(client_id, payload.get("device_type")):
-        await sio.emit("clients:changed", namespace="/dashboard")
+        _emit_clients_changed_soon()
 
     # Absturz-Meldung des Agenten (Crash-Schutz: Agent startet sich selbst neu
     # und meldet den Traceback beim nächsten Registrieren) -> Audit + dem
@@ -639,7 +829,7 @@ async def on_register(sid, payload):
 
     # Dashboard(s) informieren, dass sich die Client-Liste geändert hat
     await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
-    await sio.emit("clients:changed", namespace="/dashboard")
+    _emit_clients_changed_soon()
 
     # Benachrichtigungs-Regeln: "Client kommt online" / "Neuer Client".
     try:
@@ -667,6 +857,24 @@ async def on_heartbeat(sid, payload):
     client_id = payload.get("id")
     if not client_id:
         return
+
+    # Heartbeats sind der zweite Lastfaktor: Sie schreiben in die Datenbank
+    # und senden an alle Dashboards. Ohne Begrenzung laufen bei vielen
+    # Clients beliebig viele davon gleichzeitig. Wir lassen nur eine feste
+    # Zahl gleichzeitig durch - und wenn gerade Anmeldungen laufen, haben
+    # DIESE Vorrang: ein ausgelassener Heartbeat ist folgenlos, eine
+    # abgebrochene Anmeldung nicht.
+    _ensure_gate()
+    if _register_lock.locked() or _admission_waiting:
+        return
+    if _heartbeat_sem.locked():
+        return   # Rückstau -> diesen Messpunkt überspringen statt aufstauen
+    async with _heartbeat_sem:
+        await _handle_heartbeat(client_id, payload)
+
+
+async def _handle_heartbeat(client_id, payload):
+    """Eigentliche Heartbeat-Verarbeitung (siehe on_heartbeat)."""
     db.touch_client(client_id)
 
     # Auto-Update auch für BEREITS verbundene Clients: Wird eine neue
@@ -961,12 +1169,16 @@ async def on_agent_console_history(sid, payload):
 @sio.event(namespace="/agent")
 async def disconnect(sid):
     """Ein Agent hat die Verbindung verloren/beendet -> als offline markieren."""
+    # Zuerst den Schleusen-Platz freigeben: Bricht die Verbindung ab, BEVOR
+    # sich der Agent angemeldet hat, dürfen die Wartenden nicht bis zum
+    # Watchdog-Timeout blockiert bleiben.
+    _admission_release(sid)
     client_id = state.sid_to_client_id.pop(sid, None)
     if client_id:
         state.client_id_to_sid.pop(client_id, None)
         state.live_metrics.pop(client_id, None)
         await sio.emit("client:offline", {"id": client_id}, namespace="/dashboard")
-        await sio.emit("clients:changed", namespace="/dashboard")
+        _emit_clients_changed_soon()
         # Benachrichtigungs-Regeln: "Client geht offline".
         try:
             from app import notifier
