@@ -53,6 +53,8 @@ def vpn_info(user: dict = Depends(get_current_user)):
         "server_public_key": server_pub,
         "endpoint_host": vpn.endpoint_host(),
         "may_unlimited": user_has_permission(user, "vpn_unlimited"),
+        # Sagt, an welcher der drei moeglichen Stellen es haengt.
+        "check": vpn.endpoint_check(),
     }
 
 

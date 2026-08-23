@@ -265,6 +265,24 @@ class WireGuardServer(asyncio.DatagramProtocol):
         # Wird gesetzt, wenn eine Node ihre Erreichbarkeit prueft.
         self.on_probe = None
 
+        # ZAEHLER. Der Grund fuer sie: Wenn ein Tunnel "nicht geht", gibt es
+        # genau drei Moeglichkeiten, und ohne diese Zahlen kann man sie
+        # nicht auseinanderhalten:
+        #   1. Es kommt gar nichts an -> der UDP-Port ist nicht durchgereicht
+        #      (Reverse-Proxys wie Cloudflare oder nginx leiten KEIN UDP
+        #      weiter, und Firewalls oft auch nicht).
+        #   2. Es kommt etwas an, aber der Handschlag scheitert -> falsche
+        #      Schluessel oder eine veraltete Tunnel-Datei.
+        #   3. Der Handschlag steht, aber es fliessen keine Daten -> das
+        #      Problem liegt hinter dem Tunnel.
+        # Die Zahlen beantworten das in Sekunden statt in Stunden.
+        self.stats = {
+            "packets": 0, "handshakes": 0, "transport": 0, "probes": 0,
+            "unknown_peer": 0, "bad_mac": 0, "undecryptable": 0,
+            "junk": 0, "last_from": "", "last_at": 0.0,
+            "first_at": 0.0,
+        }
+
     # -- Verwaltung der Gegenstellen ---------------------------------
 
     def add_peer(self, public_key_b64: str, preshared_b64: str | None,
@@ -298,6 +316,17 @@ class WireGuardServer(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr):
+        st = self.stats
+        st["packets"] += 1
+        st["last_from"] = f"{addr[0]}:{addr[1]}"
+        st["last_at"] = time.time()
+        if not st["first_at"]:
+            st["first_at"] = time.time()
+            # Das allererste Paket ausdruecklich melden. Damit steht in
+            # 'docker logs' schwarz auf weiss, DASS der Port erreichbar ist -
+            # die Frage, an der die Fehlersuche sonst als Erstes haengt.
+            print(f"[wg] Erstes Paket auf dem VPN-Port empfangen, von "
+                  f"{addr[0]}:{addr[1]} - der UDP-Port ist also erreichbar.")
         try:
             self._handle(data, addr)
         except Exception as e:
@@ -314,6 +343,7 @@ class WireGuardServer(asyncio.DatagramProtocol):
         # WireGuard-Nachrichten fangen nie mit diesem Praefix an (ihr erstes
         # Byte ist 1-4), eine Verwechslung ist also ausgeschlossen.
         if data[:9] == b"RMMPROBE1":
+            self.stats["probes"] += 1
             if self.on_probe:
                 try:
                     self.on_probe(data[9:41].decode("ascii", "ignore"), addr)
@@ -324,7 +354,11 @@ class WireGuardServer(asyncio.DatagramProtocol):
         if msg_type == MSG_INITIATION and len(data) == LEN_INITIATION:
             self._handle_initiation(data, addr)
         elif msg_type == MSG_TRANSPORT and len(data) >= 32:
+            self.stats["transport"] += 1
             self._handle_transport(data, addr)
+        else:
+            # Weder WireGuard noch unsere Probe - meist ein Portscanner.
+            self.stats["junk"] += 1
         # Typ 2 (Response) und 3 (Cookie) erwarten wir als Server nicht.
 
     # -- Handshake ----------------------------------------------------
@@ -334,6 +368,14 @@ class WireGuardServer(asyncio.DatagramProtocol):
         # wenigstens unseren öffentlichen Schlüssel kennt.
         expected_mac1 = _mac(self.mac1_key, data[:116])
         if not hmac.compare_digest(expected_mac1, data[116:132]):
+            # mac1 wird aus UNSEREM oeffentlichen Schluessel gebildet. Passt
+            # er nicht, gehoert die Gegenstelle zu einem anderen Server -
+            # oder die Tunnel-Datei stammt noch von vor einem
+            # Schluesselwechsel.
+            self.stats["bad_mac"] += 1
+            print(f"[wg] Handschlag von {addr[0]} abgelehnt: falscher "
+                  f"Server-Schluessel (mac1). Stammt die Tunnel-Datei von "
+                  f"diesem Server?")
             return
 
         sender_index = struct.unpack("<I", data[4:8])[0]
@@ -356,7 +398,13 @@ class WireGuardServer(asyncio.DatagramProtocol):
 
         peer = self.peers.get(peer_static)
         if peer is None:
-            return   # unbekannter Schlüssel -> stillschweigend verwerfen
+            self.stats["unknown_peer"] += 1
+            import base64 as _b64
+            print(f"[wg] Handschlag von {addr[0]} abgelehnt: unbekannter "
+                  f"Schluessel {_b64.b64encode(peer_static).decode()[:12]}… - "
+                  f"der Tunnel wurde vermutlich geschlossen oder stammt von "
+                  f"einer frueheren Installation.")
+            return
 
         c, k = _kdf(c, _dh(self.private, peer_static), 2)
         timestamp = _aead_decrypt(k, 0, enc_timestamp, h)
@@ -407,6 +455,9 @@ class WireGuardServer(asyncio.DatagramProtocol):
         peer.last_seen = time.time()
         self.sessions[our_index] = session
 
+        self.stats["handshakes"] += 1
+        print(f"[wg] Handschlag erfolgreich mit {addr[0]}:{addr[1]} "
+              f"(Tunnel {peer.tunnel_id})")
         if self.transport:
             self.transport.sendto(msg, addr)
         if self.on_handshake:
@@ -433,6 +484,7 @@ class WireGuardServer(asyncio.DatagramProtocol):
         try:
             plain = session.decrypt(counter, data[16:])
         except Exception:
+            self.stats["undecryptable"] += 1
             return   # gefälscht oder beschädigt
 
         session.last_recv = time.monotonic()

@@ -96,6 +96,7 @@ export function renderVpn(body, win) {
           importieren lässt. Auf dem Gerät selbst wird nichts installiert.
         </div>
         <div id="vpn-server" style="font-size:12px;margin-top:8px;color:var(--subtext)"></div>
+        <div id="vpn-check" style="font-size:12.5px;margin-top:8px"></div>
       </div>
 
       <div style="flex:1;display:grid;grid-template-columns:340px 1fr;min-height:0">
@@ -387,7 +388,42 @@ das zeigt immer auf den eigenen Rechner.">Gerät selbst:
              Server-Adresse.`;
       if (!info.endpoint_host) $("#vpn-create").disabled = true;
       }
+      renderCheck(info.check);
     } catch { /* Anzeige bleibt leer, Ausstellen meldet den Fehler dann klar */ }
+  }
+
+  // Die Endpunkt-Prüfung. Sie beantwortet die Frage, die man bei einem
+  // nicht funktionierenden Tunnel als Erstes stellt - und die man ohne
+  // Zahlen nicht beantworten kann: Kommt überhaupt etwas an?
+  function renderCheck(check) {
+    const box = $("#vpn-check");
+    if (!check) { box.innerHTML = ""; return; }
+    const look = {
+      "verbunden":        ["🟢", "var(--online,#3ecf8e)"],
+      "kein-handschlag":  ["🟠", "var(--warn,#f5a524)"],
+      "nichts-empfangen": ["🔴", "var(--danger,#ff4d6d)"],
+      "endpunkt-aus":     ["⚪", "var(--subtext)"],
+    }[check.stage] || ["⚪", "var(--subtext)"];
+    const st = check.stats || {};
+    box.innerHTML = `
+      <div style="border:1px solid ${look[1]}55;background:${look[1]}12;
+           border-radius:8px;padding:9px 11px">
+        <div><span style="font-size:14px">${look[0]}</span>
+          <b>Endpunkt-Prüfung</b>
+          <button class="taskbar-btn" id="vpn-check-refresh"
+                  style="float:right;padding:1px 7px">⟳</button></div>
+        <div style="margin-top:5px;line-height:1.45">${esc(check.hint || "")}</div>
+        <div style="margin-top:6px;color:var(--subtext);font-size:11.5px">
+          Pakete: <b>${st.packets || 0}</b> ·
+          Handschläge: <b>${st.handshakes || 0}</b> ·
+          Daten: <b>${st.transport || 0}</b>
+          ${st.unknown_peer ? ` · unbekannter Schlüssel: <b>${st.unknown_peer}</b>` : ""}
+          ${st.bad_mac ? ` · falscher Server-Schlüssel: <b>${st.bad_mac}</b>` : ""}
+          ${st.junk ? ` · Datenmüll: <b>${st.junk}</b>` : ""}
+          ${st.last_from ? ` · zuletzt von ${esc(st.last_from)}` : ""}
+        </div>
+      </div>`;
+    box.querySelector("#vpn-check-refresh")?.addEventListener("click", loadInfo);
   }
 
   // --- Tunnel ausstellen -------------------------------------------

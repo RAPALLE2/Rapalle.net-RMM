@@ -523,8 +523,38 @@ def _to_agent(client_id: str, event: str, data: dict) -> None:
     try:
         from app.sockets import send_to_agent
         asyncio.ensure_future(send_to_agent(client_id, event, data))
+        if event == "vpn-open" and stream:
+            # Nachfassen, falls der Agent gar nicht antwortet.
+            #
+            # Warum das noetig ist: Ein Agent, der noch die alte Fassung
+            # ohne VPN-Handler faehrt, ignoriert 'vpn-open' schlicht. Fuer
+            # den Benutzer sieht das genauso aus wie ein Dienst, der nicht
+            # laeuft - sein Programm wartet, bis es aufgibt. Ohne diese
+            # Pruefung stuende darueber nirgends etwas.
+            asyncio.ensure_future(_watch_open(client_id, stream, data))
     except Exception as e:
-        print(f"[vpn] Konnte '{event}' nicht an {client_id} senden: {e}")
+        from app.errors import report, Codes
+        report(Codes.VPN_PACKET, e, f"'{event}' an {client_id} senden")
+
+
+async def _watch_open(client_id: str, stream: str, data: dict) -> None:
+    """Meldet, wenn der Agent auf einen Verbindungswunsch nicht reagiert."""
+    await asyncio.sleep(12.0)
+    tunnel_id = rt.stream_owner.get(stream)
+    stack = rt.stacks.get(tunnel_id or "")
+    if not stack:
+        return
+    conn = stack.streams.get(stream)
+    if conn is None or getattr(conn, "opened", False):
+        return      # erledigt oder schon geschlossen
+    from app.errors import report, Codes
+    report(Codes.SOCK_TIMEOUT, None,
+           "Der Agent hat auf einen VPN-Verbindungswunsch nicht geantwortet",
+           client=client_id, ziel=f"{data.get('host')}:{data.get('port')}",
+           moegliche_ursache="Agent zu alt (kennt 'vpn-open' nicht) oder "
+                             "haengt - Agent aktualisieren")
+    # Dem Wartenden sauber absagen, statt ihn ins Zeitlimit laufen zu lassen.
+    stack.on_agent_open_result(stream, False)
 
 
 # ----------------------------------------------------------------------
@@ -738,6 +768,67 @@ def apply_node_stats(client_id: str, stats: list) -> None:
         tid = entry.get("id")
         if tid:
             rt.node_stats[tid] = entry
+
+
+def endpoint_check() -> dict:
+    """
+    Beantwortet die eine Frage, an der jede VPN-Fehlersuche haengt:
+    Wo genau bleibt es stecken?
+
+    Ein Tunnel scheitert an genau drei Stellen, und ohne Zahlen sehen alle
+    drei gleich aus ("es geht nicht"):
+
+      1. Es kommt NICHTS an. Dann ist der UDP-Port nicht durchgereicht.
+         Haeufigste Ursache: Der Endpunkt zeigt auf einen Reverse Proxy.
+         Cloudflare, nginx, Traefik und Caddy leiten KEIN UDP weiter - die
+         Tunnel-Datei zeigt dann auf eine Adresse, an der nie jemand
+         zuhoert. Von aussen ist das nicht zu unterscheiden von einem
+         kaputten Server.
+      2. Pakete kommen an, aber kein Handschlag. Dann stimmen die
+         Schluessel nicht - meist eine Tunnel-Datei von vor einem
+         Neuaufsetzen.
+      3. Handschlag steht, aber keine Daten. Dann liegt es hinter dem
+         Tunnel (Dienst laeuft nicht, falscher Port, Betriebsart).
+    """
+    stats = dict(rt.server.stats) if rt.server else {}
+    packets = stats.get("packets", 0)
+    handshakes = stats.get("handshakes", 0)
+
+    if not rt.started:
+        stage, hint = "endpunkt-aus", (
+            "Der VPN-Endpunkt läuft nicht. Ist der UDP-Port im Container "
+            "freigegeben (docker-compose) und das VPN eingeschaltet?")
+    elif packets == 0:
+        stage, hint = "nichts-empfangen", (
+            f"Seit dem Start ist KEIN einziges Paket auf UDP {vpn_port()} "
+            f"angekommen. Der WireGuard-Client erreicht diesen Server also "
+            f"gar nicht. Prüfen: Zeigt '{endpoint_host()}' direkt auf den "
+            f"Server? Reverse-Proxys (Cloudflare, nginx, Traefik) leiten "
+            f"KEIN UDP weiter – dann muss unter 'Adresse des VPN-Endpunkts' "
+            f"eine Adresse stehen, die am Proxy vorbeigeht. Ausserdem: Ist "
+            f"{vpn_port()}/udp in der Firewall und im Router offen?")
+    elif handshakes == 0:
+        stage, hint = (
+            "kein-handschlag",
+            f"Pakete kommen an (zuletzt von {stats.get('last_from')}), aber "
+            f"kein Handschlag kam zustande. "
+            + (f"{stats.get('unknown_peer')}× unbekannter Schlüssel – die "
+               f"Tunnel-Datei gehört nicht (mehr) zu diesem Server, bitte "
+               f"neu ausstellen. " if stats.get("unknown_peer") else "")
+            + (f"{stats.get('bad_mac')}× falscher Server-Schlüssel. "
+               if stats.get("bad_mac") else "")
+            + (f"{stats.get('junk')}× Datenmüll (meist Portscanner). "
+               if stats.get("junk") and not stats.get("unknown_peer") else ""))
+    else:
+        stage, hint = "verbunden", (
+            f"{handshakes} Handschlag(e) erfolgreich. Wenn trotzdem nichts "
+            f"geht, liegt es hinter dem Tunnel: Läuft der Dienst? Richtige "
+            f"Adresse verwendet ({loopback_alias()} für Dienste auf dem "
+            f"Gerät selbst, NICHT localhost)? Passt die Betriebsart?")
+
+    return {"stage": stage, "hint": hint, "stats": stats,
+            "port": vpn_port(), "endpoint_host": endpoint_host(),
+            "running": rt.started}
 
 
 def tunnel_overview() -> list[dict]:
