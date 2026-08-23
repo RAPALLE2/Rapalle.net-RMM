@@ -196,10 +196,14 @@ export function renderVpn(body, win) {
 
   function updateModeHint() {
     const mode = body.querySelector("#vpn-mode").value;
+    const alias = info?.loopback_alias || "10.77.0.1";
     body.querySelector("#vpn-mode-hint").innerHTML = mode === "client"
       ? `<span style="color:var(--subtext)">Der Tunnel lässt ausschliesslich
          Verbindungen zu diesem Gerät zu. Die Beschränkung wird auf der
-         Gegenseite durchgesetzt, nicht in der Datei.</span>`
+         Gegenseite durchgesetzt, nicht in der Datei.<br>
+         Dienste auf dem Gerät selbst erreichst du über
+         <b style="color:var(--text)">${esc(alias)}</b> –
+         <b>nicht</b> über <code>localhost</code>.</span>`
       : `<span style="color:var(--subtext)">Der Benutzer erreicht alles, was
          auch dieses Gerät erreicht.</span>`;
   }
@@ -325,7 +329,10 @@ export function renderVpn(body, win) {
                   title="Tunnel sofort schliessen">✖</button>
         </div>
         <div style="margin-top:6px;font-size:11.5px;color:var(--subtext);display:flex;gap:14px;flex-wrap:wrap">
-          <span>Adresse: <b>${esc(tn.address || "–")}</b></span>
+          <span>Deine Adresse: <b>${esc(tn.address || "–")}</b></span>
+          <span title="Dienste auf dem Gerät selbst – 'localhost' funktioniert nicht,
+das zeigt immer auf den eigenen Rechner.">Gerät selbst:
+            <b>${esc(info?.loopback_alias || "10.77.0.1")}</b></span>
           <span>Routen: ${esc(tn.allowed_ips || "–")}</span>
           <span>Verbindungen: ${tn.streams || 0}</span>
           <span>↓ ${fmtBytes(tn.rx_bytes)} / ↑ ${fmtBytes(tn.tx_bytes)}</span>
@@ -370,8 +377,15 @@ export function renderVpn(body, win) {
         box.innerHTML = `<b style="color:var(--danger,#ff4d6d)">Der VPN-Endpunkt läuft nicht.</b>
           UDP-Port ${esc(String(info.port))} muss im Container und in der Firewall freigegeben sein.`;
       } else {
-        box.innerHTML = `Endpunkt: <b>${esc(info.endpoint_host || "– Server-Adresse in den Einstellungen setzen –")}:${esc(String(info.port))}</b>
-          <span style="opacity:.7">· Tunnel-Netz ${esc(info.subnet)}</span>`;
+        box.innerHTML = info.endpoint_host
+          ? `Endpunkt: <b>${esc(info.endpoint_host)}:${esc(String(info.port))}</b>
+             <span style="opacity:.7">· Tunnel-Netz ${esc(info.subnet)}
+             · Gerät selbst: ${esc(info.loopback_alias || "10.77.0.1")}</span>`
+          : `<b style="color:var(--danger,#ff4d6d)">Die Server-Adresse ist nicht
+             hinterlegt.</b> Ohne sie enthält die Tunnel-Datei kein Ziel und der
+             Tunnel kommt nicht zustande. Einstellungen → Allgemein →
+             Server-Adresse.`;
+      if (!info.endpoint_host) $("#vpn-create").disabled = true;
       }
     } catch { /* Anzeige bleibt leer, Ausstellen meldet den Fehler dann klar */ }
   }
@@ -428,6 +442,17 @@ export function renderVpn(body, win) {
         <div style="font-size:12px;color:var(--warn,#f5a524);margin-top:6px">
           Diese Datei wird nur EINMAL angezeigt. Der private Schlüssel wird
           nirgends gespeichert – jetzt herunterladen oder kopieren.
+        </div>
+        <div style="font-size:12.5px;margin-top:10px;padding:9px 11px;border-radius:8px;
+             background:var(--panel-2,#0e1520);border:1px solid var(--border,#2a3648)">
+          <b>So verbindest du dich:</b><br>
+          <span style="color:var(--subtext)">Dienste auf dem Gerät selbst
+          (VNC, RDP, Weboberflächen) – statt <code>localhost</code>:</span><br>
+          <code style="font-size:13px;color:var(--text)">${esc(rec.loopback_alias || "10.77.0.1")}:PORT</code>
+          <span style="color:var(--subtext)"> · z.B. VNC:
+          <code>${esc(rec.loopback_alias || "10.77.0.1")}:5900</code></span>
+          ${rec.mode === "site" ? `<br><span style="color:var(--subtext)">
+            Andere Geräte im Netz: über ihre normale Adresse.</span>` : ""}
         </div>
         <textarea readonly style="flex:1;min-height:240px;margin-top:12px;font-family:ui-monospace,monospace;
           font-size:12px;resize:vertical;background:var(--panel-2,#0e1520);color:var(--text,#e8eef7);

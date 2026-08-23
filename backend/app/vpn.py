@@ -133,6 +133,35 @@ def _allocate_ip() -> str:
     raise RuntimeError("Keine freie Tunnel-Adresse mehr im eingestellten Netz")
 
 
+def loopback_alias() -> str:
+    """
+    Die Adresse, unter der Dienste auf dem GERAET SELBST erreichbar sind.
+
+    Warum es die braucht - das war ein echter Denkfehler im ersten Entwurf:
+    Die Betriebsart "nur dieses Geraet" wurde mit "z.B. localhost:80"
+    beworben. Tippt der Benutzer aber 'localhost:5900' in sein VNC-Programm,
+    loest sein eigenes Betriebssystem das zu 127.0.0.1 auf - also zu SEINEM
+    Rechner. Das Paket betritt den Tunnel nie. WireGuard leitet nach
+    ZIEL-ADRESSE weiter, und 127.0.0.1 wird grundsaetzlich nicht in einen
+    Tunnel geroutet. Der Dienst auf der Gegenseite war also nie erreichbar,
+    egal wie richtig alles andere eingestellt war.
+
+    Die Loesung ist eine ECHTE Adresse, die durch den Tunnel geht: die
+    Gateway-Adresse des Tunnelnetzes (standardmaessig 10.77.0.1). Pakete
+    dorthin landen bei der Gegenstelle, und dort werden sie auf 127.0.0.1
+    umgeschrieben. Der Benutzer gibt also '10.77.0.1:5900' ein.
+
+    Dass fuer alle Tunnel dieselbe Adresse gilt, ist unproblematisch: Jeder
+    Tunnel hat seinen eigenen Endpunkt, die Zuordnung ist also eindeutig.
+    """
+    return server_tunnel_ip()
+
+
+def resolve_target(host: str) -> str:
+    """Uebersetzt die Ersatzadresse in das echte Ziel auf der Gegenseite."""
+    return "127.0.0.1" if host == loopback_alias() else host
+
+
 def server_tunnel_ip() -> str:
     net = ipaddress.ip_network(vpn_subnet(), strict=False)
     return str(next(net.hosts()))
@@ -200,6 +229,8 @@ def create_tunnel(client_id: str, username: str, minutes: int,
             "public_key": pub_user, "preshared_key": psk,
             "l2": l2_active, "lan_address": lan_address,
             "targets": [client.get("ip") or ""],
+            # Damit die Node dieselbe Ersatzadresse kennt wie das Backend.
+            "loopback_alias": loopback_alias(),
         })
     else:
         _activate(tunnel_id, pub_user, psk, client_id, mode)
@@ -213,6 +244,7 @@ def create_tunnel(client_id: str, username: str, minutes: int,
     record["config"] = config
     record["transport"] = transport
     record["l2_active"] = l2_active
+    record["loopback_alias"] = loopback_alias()
     # Der private Schlüssel wird BEWUSST nicht gespeichert: er existiert nur
     # in dieser einen Antwort. Wer die Datei verliert, stellt einen neuen
     # Tunnel aus - das ist sicherer, als den Schlüssel vorzuhalten.
@@ -271,7 +303,10 @@ def _allowed_ips(client: dict, routes: str, mode: str = "client") -> str:
     eigentliche Beschränkung auf 'nur dieses Gerät' setzt die Gegenstelle
     durch (node_vpn.NodeTunnel.target_allowed bzw. _target_allowed hier).
     """
-    parts = []
+    # Die Ersatzadresse fuer 'localhost' MUSS immer mit hinein - sonst
+    # schickt der WireGuard-Client Pakete dorthin gar nicht erst durch den
+    # Tunnel, und Dienste auf dem Geraet selbst bleiben unerreichbar.
+    parts = [f"{loopback_alias()}/32"]
     ip = (client.get("ip") or "").strip()
     if ip:
         parts.append(f"{ip}/32")
@@ -360,6 +395,12 @@ def build_config(private_key: str, address: str, psk: str, allowed_ips: str,
         "# RAPALLE.net RMM - VPN-Tunnel",
         "# Diese Datei in einen beliebigen WireGuard-Client importieren.",
         "# Auf dem Zielgeraet selbst ist KEINE Installation noetig.",
+        "#",
+        f"# Dienste, die auf dem Geraet SELBST laufen (localhost), sind unter",
+        f"# {loopback_alias()} erreichbar - NICHT unter 'localhost'.",
+        f"# Beispiel VNC:  {loopback_alias()}:5900",
+        "# Grund: 'localhost' zeigt immer auf den eigenen Rechner und geht",
+        "# nie durch den Tunnel.",
         "",
         "[Interface]",
         f"PrivateKey = {private_key}",
@@ -429,7 +470,7 @@ def _target_allowed(tunnel_id: str, client_id: str, host: str) -> bool:
     if rt.modes.get(tunnel_id, "client") != "client":
         return True
     client = db.get_client(client_id) or {}
-    return host in {client.get("ip") or "", "127.0.0.1"}
+    return host in {client.get("ip") or "", "127.0.0.1", loopback_alias()}
 
 
 def _to_agent_checked(client_id: str, tunnel_id: str, event: str,
@@ -443,6 +484,11 @@ def _to_agent_checked(client_id: str, tunnel_id: str, event: str,
             if stack:
                 stack.on_agent_open_result(data.get("stream", ""), False)
         return
+    # Ersatzadresse in das echte Ziel uebersetzen, BEVOR der Agent sie
+    # bekommt. Der Agent sieht also 127.0.0.1 und verbindet sich mit dem
+    # Dienst auf seinem eigenen Rechner.
+    if host:
+        data = dict(data, host=resolve_target(host))
     _to_agent(client_id, event, data)
 
 

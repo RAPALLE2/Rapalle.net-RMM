@@ -50,6 +50,10 @@ class NodeTunnel:
         self.address = spec.get("address") or ""
         self.allowed_targets = spec.get("targets") or []
         self.l2 = bool(spec.get("l2"))
+        # Adresse, die auf der Gegenseite fuer "das Geraet selbst" steht.
+        # 'localhost' kann der Benutzer nicht verwenden - das zeigt auf
+        # SEINEN Rechner und geht nie durch den Tunnel.
+        self.loopback_alias = spec.get("loopback_alias") or ""
         self.node = node
         self.peer = None
         self.stack = IPStack(self.id,
@@ -62,6 +66,10 @@ class NodeTunnel:
 
     # -- Richtlinie ----------------------------------------------------
 
+    def resolve(self, host: str) -> str:
+        """Ersatzadresse -> echtes Ziel (127.0.0.1)."""
+        return "127.0.0.1" if host and host == self.loopback_alias else host
+
     def target_allowed(self, host: str) -> bool:
         """
         Darf dieser Tunnel das angegebene Ziel ansprechen?
@@ -71,6 +79,7 @@ class NodeTunnel:
         Adressen des Backends und das Tunnel-Netz selbst, damit der Tunnel
         nicht auf sich zurueckzeigt.
         """
+        host = self.resolve(host)
         if self.mode == "client":
             return host in self.node.local_addresses
         try:
@@ -149,9 +158,11 @@ class NodeTunnel:
             self.stack.on_agent_open_result(stream, False)
             return
 
+        target = self.resolve(host)
+
         def run():
             try:
-                sock = socket.create_connection((host, port), 8.0)
+                sock = socket.create_connection((target, port), 8.0)
             except Exception:
                 self.stack.on_agent_open_result(stream, False)
                 return
@@ -203,7 +214,7 @@ class NodeTunnel:
             payload = base64.b64decode(data.get("data") or "")
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(6.0)
-            sock.sendto(payload, (host, port))
+            sock.sendto(payload, (self.resolve(host), port))
             reply, _ = sock.recvfrom(65535)
             self.stack.on_agent_udp(host, port, data.get("src", ""),
                                     int(data.get("sport") or 0), reply)
@@ -216,7 +227,7 @@ class NodeTunnel:
                 pass
 
     def _ping(self, data: dict) -> None:
-        host = data.get("host", "")
+        host = self.resolve(data.get("host", ""))
         if not self.target_allowed(host):
             return
         import subprocess

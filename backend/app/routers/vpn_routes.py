@@ -46,6 +46,10 @@ def vpn_info(user: dict = Depends(get_current_user)):
         "running": vpn.rt.started,
         "port": vpn.vpn_port(),
         "subnet": vpn.vpn_subnet(),
+        # Die Adresse, unter der Dienste auf dem Geraet selbst erreichbar
+        # sind. 'localhost' funktioniert dafuer NICHT - das zeigt auf den
+        # Rechner des Benutzers und geht nie durch den Tunnel.
+        "loopback_alias": vpn.loopback_alias(),
         "server_public_key": server_pub,
         "endpoint_host": vpn.endpoint_host(),
         "may_unlimited": user_has_permission(user, "vpn_unlimited"),
@@ -83,6 +87,21 @@ async def vpn_create(body: TunnelBody, user: dict = Depends(get_current_user)):
         raise HTTPException(
             503, "Der VPN-Endpunkt läuft nicht – ist der UDP-Port "
                  f"{vpn.vpn_port()} im Container freigegeben?")
+
+    # Ohne bekannte Server-Adresse waere die .conf UNBRAUCHBAR: In der Zeile
+    # 'Endpoint' stuende nur ein Platzhalter, und der WireGuard-Client haette
+    # gar kein Ziel zum Verbinden. Frueher wurde die Datei trotzdem
+    # ausgestellt - sie sah vollstaendig aus, es kam nur nie ein Handschlag
+    # zustande, und im Protokoll stand dazu nichts. Das ist genau die Art
+    # Fehler, an der man stundenlang sucht.
+    if not vpn.endpoint_host():
+        raise HTTPException(
+            400,
+            "Die Adresse dieses Servers ist nicht hinterlegt – ohne sie "
+            "enthält die Tunnel-Datei kein gültiges Ziel und der Tunnel "
+            "kann nicht zustande kommen. Bitte unter Einstellungen → "
+            "Allgemein die Server-Adresse setzen (oder für das VPN "
+            "abweichend unter 'Adresse des VPN-Endpunkts').")
 
     minutes = int(body.minutes or 0)
     if minutes <= 0:
