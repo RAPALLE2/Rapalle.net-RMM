@@ -26,6 +26,10 @@ from app import loghub as _loghub
 _loghub.install()  # idempotent: fängt Backend-Ausgabe ab (falls nicht via run.py)
 from app.config import CORS_ORIGIN
 from app.sockets import sio
+# Der Import selbst ist die erste Gefahrenstelle: Eine einzige Datei mit
+# einem Syntaxfehler laesst hier ALLES scheitern, noch bevor _mount()
+# ueberhaupt zum Zuge kaeme. Deshalb zuerst der gewoehnliche Sammelimport -
+# und wenn der stolpert, werden die Module einzeln nachgeholt.
 from app.routers import (
     auth_routes,
     users_routes,
@@ -61,7 +65,25 @@ from app.routers import (
     vpn_routes,
     node_routes,
     diag_routes,
-)
+)  # noqa: E501 - Sammelimport, Absicherung siehe _import_router() unten
+
+
+def _import_router(name):
+    """
+    Holt einen Router einzeln nach.
+
+    Wird nur gebraucht, wenn der Sammelimport oben scheitert - dann steht in
+    der Container-Ausgabe genau, WELCHE Datei das Problem hat, statt eines
+    Stacktraces, in dem der Name untergeht.
+    """
+    import importlib
+    try:
+        return importlib.import_module(f"app.routers.{name}")
+    except Exception as exc:
+        from app.errors import report, Codes
+        report(Codes.BOOT_ROUTER, exc, f"Router-Datei '{name}.py' ist defekt",
+               folge="Dieser Bereich fehlt, das Backend startet trotzdem")
+        return None
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
 # Vorher: Ist der externe Datenbank-Modus aktiv, den Stand von extern laden
@@ -129,29 +151,29 @@ class _RequestWatch(_BaseMW):
         except Exception as exc:
             # Eine Ausnahme darf NIE die Verbindung einfach abreissen lassen -
             # der Browser wartet sonst bis in sein eigenes Zeitlimit. Lieber
-            # eine ehrliche 500 mit Begründung.
+            # eine ehrliche 500 MIT KENNCODE: Damit kann der Benutzer die
+            # Meldung weitergeben und man findet die Stelle im Protokoll
+            # sofort wieder, ohne nach Uhrzeiten zu suchen.
             duration = _t.monotonic() - started
-            detail = _traceback.format_exc()
-            print(f"[anfrage] FEHLER in {path} nach {duration:.1f}s:\n{detail}")
-            try:
-                from app import diagnostics as _d
-                _d.write(f"FEHLER in {path} nach {duration:.1f}s:\n{detail}",
-                         level="ERROR")
-            except Exception:
-                pass
+            from app.errors import report as _report, Codes as _Codes
+            code = _report(_Codes.API_UNHANDLED, exc, path,
+                           dauer=f"{duration:.1f}s",
+                           client=getattr(request.client, "host", "?"))
             return _JSONResp(
                 status_code=500,
-                content={"detail": f"Interner Fehler in {request.url.path}. "
-                                   f"Die Einzelheiten stehen im Server-Protokoll."})
+                content={"detail": f"Interner Fehler ({code}) in "
+                                   f"{request.url.path}. Der Kenncode steht im "
+                                   f"Server-Protokoll – dort ist auch die "
+                                   f"Ursache vermerkt.",
+                         "error_code": code})
         finally:
             duration = _t.monotonic() - started
             INFLIGHT.pop(key, None)
             if duration >= SLOW_REQUEST_S:
-                msg = f"LANGSAM: {path} brauchte {duration:.1f}s"
-                print(f"[anfrage] {msg}")
                 try:
-                    from app import diagnostics as _d
-                    _d.write(msg, level="WARN")
+                    from app.errors import report as _report, Codes as _Codes
+                    _report(_Codes.API_SLOW, None, path,
+                            dauer=f"{duration:.1f}s")
                 except Exception:
                     pass
         return response
@@ -205,40 +227,61 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
-api.include_router(auth_routes.router)
-api.include_router(users_routes.router)
-api.include_router(hierarchy_routes.router)
-api.include_router(clients_routes.router)
-api.include_router(network_routes.router)
-api.include_router(files_routes.router)
-api.include_router(enrollment_routes.router)
-api.include_router(audit_routes.router)
-api.include_router(recordings_routes.router)
-api.include_router(scripts_routes.router)
-api.include_router(admin_routes.router)
-api.include_router(agent_update_routes.router)
-api.include_router(update_routes.router)
-api.include_router(database_routes.router)
-api.include_router(docker_routes.router)   # Zusatzdienste im Container-Betrieb
-api.include_router(guac_routes.router)
-api.include_router(source_routes.router)
-api.include_router(relay_routes.router)
-api.include_router(storage_routes.router)  # Storage/Deployment + /deployment
-api.include_router(speedtest_routes.router)
-api.include_router(ai_routes.router)          # AI-Chat (Verbindungen + Proxy)
-api.include_router(tickets_routes.router)     # Ticket-System
-api.include_router(games_routes.router)       # Gaming-Hub-Scoreboard
-api.include_router(chat_routes.router)        # Chat (DMs + Gruppen)
-api.include_router(notify_routes.router)      # Benachrichtigungs-Regeln + SMTP
-api.include_router(notes_routes.router)       # Client-Notizen (Sichtbarkeit + Protokoll)
-api.include_router(calendar_routes.router)    # Organigramm + Kalender
-api.include_router(media_routes.router)       # Medien-Bibliothek des Audio-Players
-api.include_router(todos_routes.router)       # Persönliche Todo-Liste (privat)
-api.include_router(privacy_routes.router)     # DSGVO: Auskunft, Löschung, Fristen
-api.include_router(patch_routes.router)       # Software-Patching
-api.include_router(vpn_routes.router)         # WireGuard-kompatibles VPN
-api.include_router(node_routes.router)        # Node-Stufe + Reverse Proxy
-api.include_router(diag_routes.router)        # Wartungsmodus / Diagnose
+def _mount(name, module) -> None:
+    """Bindet einen Router ein und ueberlebt es, wenn er kaputt ist."""
+    try:
+        api.include_router(module.router)
+    except Exception as exc:
+        from app.errors import report, Codes
+        report(Codes.BOOT_ROUTER, exc,
+               f"Router '{name}' konnte nicht eingebunden werden",
+               folge=f"Die Endpunkte von {name} fehlen, der Rest laeuft")
+
+
+# Jeder Router einzeln eingebunden.
+#
+# Frueher standen hier 34 nackte include_router()-Zeilen. Scheitert eine
+# davon - eine kaputte Datei nach einem Update, ein fehlendes Modul -, wirft
+# der Import beim Start, und das GESAMTE Backend startet nicht. Der Container
+# landet dann in der Notfall-Fehlerseite, und alle 34 Bereiche sind weg, weil
+# einer defekt war.
+#
+# _mount() bindet jeden Router einzeln ein und meldet einen Fehlschlag mit
+# Kenncode. Ein defekter Bereich fehlt dann - alle anderen laufen.
+_mount("auth_routes", auth_routes)
+_mount("users_routes", users_routes)
+_mount("hierarchy_routes", hierarchy_routes)
+_mount("clients_routes", clients_routes)
+_mount("network_routes", network_routes)
+_mount("files_routes", files_routes)
+_mount("enrollment_routes", enrollment_routes)
+_mount("audit_routes", audit_routes)
+_mount("recordings_routes", recordings_routes)
+_mount("scripts_routes", scripts_routes)
+_mount("admin_routes", admin_routes)
+_mount("agent_update_routes", agent_update_routes)
+_mount("update_routes", update_routes)
+_mount("database_routes", database_routes)
+_mount("docker_routes", docker_routes)   # Zusatzdienste im Container-Betrieb
+_mount("guac_routes", guac_routes)
+_mount("source_routes", source_routes)
+_mount("relay_routes", relay_routes)
+_mount("storage_routes", storage_routes)  # Storage/Deployment + /deployment
+_mount("speedtest_routes", speedtest_routes)
+_mount("ai_routes", ai_routes)          # AI-Chat (Verbindungen + Proxy)
+_mount("tickets_routes", tickets_routes)     # Ticket-System
+_mount("games_routes", games_routes)       # Gaming-Hub-Scoreboard
+_mount("chat_routes", chat_routes)        # Chat (DMs + Gruppen)
+_mount("notify_routes", notify_routes)      # Benachrichtigungs-Regeln + SMTP
+_mount("notes_routes", notes_routes)       # Client-Notizen (Sichtbarkeit + Protokoll)
+_mount("calendar_routes", calendar_routes)    # Organigramm + Kalender
+_mount("media_routes", media_routes)       # Medien-Bibliothek des Audio-Players
+_mount("todos_routes", todos_routes)       # Persönliche Todo-Liste (privat)
+_mount("privacy_routes", privacy_routes)     # DSGVO: Auskunft, Löschung, Fristen
+_mount("patch_routes", patch_routes)       # Software-Patching
+_mount("vpn_routes", vpn_routes)         # WireGuard-kompatibles VPN
+_mount("node_routes", node_routes)        # Node-Stufe + Reverse Proxy
+_mount("diag_routes", diag_routes)        # Wartungsmodus / Diagnose
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
@@ -391,31 +434,31 @@ from app.sockets import request_exec as _request_exec
 async def _automation_engine():
     while True:
         try:
-            for auto in db.get_due_automations():
+            for auto in await db.call(db.get_due_automations, ):
                 client_ids = [c for c in (auto["client_ids"] or "").split(",") if c]
                 run_id = _uuid.uuid4().hex   # gruppiert diesen Durchlauf
                 for cid in client_ids:
                     hostname = None
                     try:
-                        c = db.get_client(cid)
+                        c = await db.call(db.get_client, cid)
                         hostname = c["hostname"] if c else None
                     except Exception:
                         pass
                     try:
                         res = await _request_exec(cid, auto["command"], timeout_seconds=60)
-                        db.record_automation_result(
+                        await db.call(db.record_automation_result, 
                             run_id, auto["id"], cid, hostname,
                             res.get("stdout", ""), res.get("stderr", ""),
                             res.get("code"), ok=True,
                         )
                     except Exception as e:
                         print(f"[automation] '{auto['name']}' auf {cid} fehlgeschlagen: {e}")
-                        db.record_automation_result(
+                        await db.call(db.record_automation_result, 
                             run_id, auto["id"], cid, hostname,
                             "", str(e), None, ok=False,
                         )
-                db.mark_automation_run(auto["id"])
-                db.add_audit_entry("system", "automation.executed", target=auto["id"], details=auto["name"])
+                await db.call(db.mark_automation_run, auto["id"])
+                await db.call(db.add_audit_entry, "system", "automation.executed", target=auto["id"], details=auto["name"])
         except Exception as e:
             print(f"[automation] Engine-Fehler: {e}")
         await _asyncio.sleep(30)  # alle 30 Sekunden prüfen
@@ -521,7 +564,7 @@ async def _uptime_monitor_engine():
         try:
             import time as _time
             now_ms = int(_time.time() * 1000)
-            for site in db.list_monitored_websites():
+            for site in await db.call(db.list_monitored_websites):
                 interval_ms = max(10, int(site["monitor_interval_seconds"] or 300)) * 1000
                 last = site["last_checked"] or 0
                 if now_ms - last < interval_ms:
@@ -530,7 +573,8 @@ async def _uptime_monitor_engine():
                 ok, error = await _asyncio.to_thread(_check_website, site["url"])
                 new_status = "up" if ok else "down"
                 prev_status = site["last_status"]   # None = noch nie geprüft
-                db.set_website_check_result(site["id"], new_status, error)
+                await db.call(db.set_website_check_result, site["id"],
+                              new_status, error)
 
                 mode = site["monitor_notify"] or "down"
                 changed = prev_status != new_status  # inkl. allererstem Scan
@@ -581,6 +625,7 @@ async def _start_background_tasks():
     _supervise("loop-herzschlag", _diag.loop_heartbeat)
     _diag.start_watchdog()
     _supervise("diagnose-messwerte", _diag.sampler_loop)
+    _supervise("tabellen-groesse", _diag.table_size_watch)
 
     from app import notifier as _notifier
     from app import patching as _patching
@@ -635,9 +680,10 @@ def _supervise(name: str, factory) -> None:
                 return
             except _asyncio.CancelledError:
                 raise
-            except Exception:
-                import traceback as _tb
-                print(f"[aufseher] '{name}' abgestürzt:\n{_tb.format_exc()}")
+            except Exception as exc:
+                from app.errors import report as _report, Codes as _Codes
+                _report(_Codes.TASK_LOOP, exc, f"Hintergrundschleife '{name}'",
+                        lief=f"{_time.time() - started:.0f}s")
                 # Lief die Aufgabe lange, war es vermutlich ein Einzelfall -
                 # dann sofort wieder mit kurzem Abstand starten. Stirbt sie
                 # dagegen immer gleich neu, wird der Abstand grösser.
@@ -658,10 +704,20 @@ async def _relay_expiry_engine():
         try:
             import time as _time
             now_ms = int(_time.time() * 1000)
-            for c in db.list_expired_relay_clients(now_ms):
-                db.set_client_relay_enabled(c["id"], False)
-                db.add_audit_entry("system", "relay.auto_closed", target=c["id"],
-                                   details=c.get("hostname"))
+            # db.call() statt eines direkten Aufrufs: GENAU HIER stand am
+            # 23.08. das Backend. Ein commit() aus einem anderen Thread
+            # wartete wegen eines parallelen Docker-Downloads 91 Sekunden
+            # auf sein fsync und hielt dabei die Datenbanksperre. Diese
+            # Zeile lief im Hauptthread, wartete auf dieselbe Sperre - und
+            # damit stand die gesamte Ereignisschleife, bis der Waechter
+            # den Prozess beendete.
+            #
+            # Im Arbeits-Thread darf dieselbe Wartezeit auftreten, ohne dass
+            # irgendjemand sonst davon etwas merkt.
+            for c in await db.call(db.list_expired_relay_clients, now_ms):
+                await db.call(db.set_client_relay_enabled, c["id"], False)
+                await db.call(db.add_audit_entry, "system", "relay.auto_closed",
+                              target=c["id"], details=c.get("hostname"))
                 # Offene Dashboards informieren, damit die Relay-Ansichten
                 # (Explorer-Relay-App / Relay-Tab) sich aktualisieren.
                 try:
@@ -671,7 +727,8 @@ async def _relay_expiry_engine():
                 except Exception:
                     pass
         except Exception as e:
-            print(f"[relay] Auto-Close-Engine-Fehler: {e}")
+            from app.errors import report as _report, Codes as _Codes
+            _report(_Codes.TASK_LOOP, e, "Relay-Ablaufschleife")
         await _asyncio.sleep(60)
 
 

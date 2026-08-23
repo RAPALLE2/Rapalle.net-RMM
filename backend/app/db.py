@@ -115,14 +115,120 @@ def _report_slow_query(seconds: float, sql: str) -> None:
     if now - _slow_seen.get(short, 0.0) < 60:
         return
     _slow_seen[short] = now
-    message = (f"LANGSAME ABFRAGE: {seconds:.2f}s - {short}\n"
-               f"  (Solange stand die Ereignisschleife und damit der ganze Server.)")
-    print(f"[db] {message}")
+    # Der Hinweistext haengt davon ab, WO die Abfrage lief. Seit die
+    # Endpunkte in Arbeits-Threads liegen und die Hintergrundschleifen
+    # db.call() benutzen, blockiert eine langsame Abfrage die
+    # Ereignisschleife normalerweise NICHT mehr - sie belegt "nur" die
+    # Datenbank fuer alle anderen. Laeuft sie dagegen im Hauptthread, ist
+    # es der ernste Fall, und der Text muss das auch sagen.
+    on_loop = threading.current_thread() is threading.main_thread()
+    folge = ("Sie lief im HAUPTTHREAD - solange stand der ganze Server."
+             if on_loop else
+             "Sie belegte die Datenbank; andere Zugriffe mussten warten.")
+    message = f"LANGSAME ABFRAGE: {seconds:.2f}s - {short}\n  ({folge})"
     try:
-        from app import diagnostics
-        diagnostics.write(message, level="WARN")
+        from app.errors import report, Codes
+        report(Codes.DB_SLOW, None, f"{seconds:.2f}s",
+               sql=short, im_hauptthread=on_loop)
     except Exception:
-        pass
+        print(f"[db] {message}")
+
+
+# ======================================================================
+# Datenbankzugriff AUSSERHALB der Ereignisschleife
+# ======================================================================
+# Der Absturz vom 23.08. (16:23) in einer Kette:
+#
+#   1. Jemand zog im Dashboard ein Docker-Abbild (guacd). Der Download
+#      saettigte die Platte.
+#   2. Ein gleichzeitiges commit() aus einem Arbeits-Thread wartete
+#      deshalb 91 Sekunden auf sein fsync - und hielt dabei die
+#      Datenbanksperre.
+#   3. Die Relay-Ablaufschleife lief im HAUPTTHREAD und rief dort
+#      db.list_expired_relay_clients() auf. Die wartete auf dieselbe
+#      Sperre - und damit stand die gesamte Ereignisschleife.
+#   4. Nach 90 Sekunden beendete der Waechter den Prozess.
+#
+# Die HTTP-Endpunkte waren zu diesem Zeitpunkt bereits in Arbeits-Threads
+# ausgelagert. Die HINTERGRUNDSCHLEIFEN aber nicht - sie sind 'async def'
+# und rufen die Datenbank direkt auf. Genau eine solche Schleife hat hier
+# alles blockiert.
+#
+# 'call()' verlagert einen Datenbankaufruf in einen Arbeits-Thread. Damit
+# kann keine Hintergrundschleife die Ereignisschleife mehr aufhalten, egal
+# wie lange die Datenbank braucht.
+#
+#     rows = await db.call(db.list_expired_relay_clients, now_ms)
+
+async def call(fn, *args, **kwargs):
+    """Fuehrt einen Datenbankaufruf in einem Arbeits-Thread aus."""
+    import asyncio as _asyncio
+    return await _asyncio.to_thread(fn, *args, **kwargs)
+
+
+# Wie lange auf die Datenbanksperre gewartet wird, bevor aufgegeben wird.
+# Ohne Grenze wartet ein Aufrufer beliebig lange - und wenn er auf der
+# Ereignisschleife sitzt, steht solange der ganze Server. Ein Fehler nach
+# 30 Sekunden ist immer besser als ein stehendes Backend.
+try:
+    LOCK_TIMEOUT_S = float(_os_slow.getenv("RMM_DB_LOCK_TIMEOUT_S", "30") or 30)
+except (ValueError, NameError):
+    LOCK_TIMEOUT_S = 30.0
+
+
+class _LockTimeout(RuntimeError):
+    """Die Datenbanksperre war zu lange belegt."""
+
+
+class _TimedLock:
+    """
+    Wie ein RLock, aber mit Zeitlimit und Meldung.
+
+    Wird das Limit ueberschritten, ist das eine wertvolle Information: Es
+    bedeutet, dass ein anderer Vorgang die Datenbank ungewoehnlich lange
+    haelt. Frueher hat man das nur indirekt gemerkt - an einer Abfrage, die
+    angeblich 109 Sekunden brauchte, obwohl sie in Wahrheit 109 Sekunden
+    gewartet hat.
+    """
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.holder = ""
+        self.since = 0.0
+
+    def __enter__(self):
+        waited_from = _perf()
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT_S if LOCK_TIMEOUT_S > 0 else -1):
+            held = _perf() - self.since if self.since else 0.0
+            try:
+                from app.errors import report, Codes
+                report(Codes.DB_LOCKED, None,
+                       f"Sperre nach {_perf() - waited_from:.0f}s nicht bekommen",
+                       gehalten_von=self.holder or "unbekannt",
+                       gehalten_seit=f"{held:.0f}s")
+            except Exception:
+                pass
+            raise _LockTimeout(
+                f"Datenbank seit {held:.0f}s belegt von '{self.holder}' - "
+                f"Aufruf abgebrochen, damit der Server weiterlaeuft")
+        waited = _perf() - waited_from
+        self.since = _perf()
+        if waited > 5.0:
+            try:
+                from app.errors import report, Codes
+                report(Codes.DB_LOCKED, None,
+                       f"{waited:.0f}s auf die Datenbank gewartet",
+                       vorher_belegt_von=self.holder or "unbekannt")
+            except Exception:
+                pass
+        self.holder = threading.current_thread().name
+        return self
+
+    def __exit__(self, *exc):
+        self.holder = ""
+        self.since = 0.0
+        self._lock.release()
+        return False
 
 
 class _SafeConn:
@@ -130,7 +236,8 @@ class _SafeConn:
 
     def __init__(self, conn):
         object.__setattr__(self, "_conn", conn)
-        object.__setattr__(self, "_lock", threading.RLock())
+        # _TimedLock statt RLock: mit Zeitlimit und Meldung, wer sie haelt.
+        object.__setattr__(self, "_lock", _TimedLock())
 
     @property
     def lock(self):
@@ -143,14 +250,43 @@ class _SafeConn:
         # Sekunde, steht in dieser Sekunde der ganze Server - inklusive
         # Healthcheck und aller Agentenverbindungen.
         #
-        # Das ist die letzte grosse Schwachstelle im Aufbau. Sie hier
-        # auszubauen wäre ein Eingriff quer durch alle Router; deshalb wird
-        # sie zunächst MESSBAR gemacht. Taucht eine Abfrage in dieser Liste
-        # auf, weiss man genau, welche man verlagern muss - statt zu raten.
+        # Die HTTP-Endpunkte liegen inzwischen in Arbeits-Threads, die
+        # Hintergrundschleifen benutzen db.call(). Diese Messung bleibt
+        # trotzdem: Sie nennt die Abfragen, die zu lange brauchen, und
+        # unterscheidet dank _TimedLock jetzt zwischen "rechnet lange" und
+        # "wartet auf die Sperre" - frueher sah beides gleich aus.
         _t0 = _perf()
         with self.lock:
             real = object.__getattribute__(self, "_conn")
-            cur = method(real, sql, arg) if arg is not None else method(real, sql)
+            # Der Notbremsen-Rueckruf braucht diese Angaben, um zu wissen,
+            # WAS gerade laeuft und seit wann.
+            _current["sql"] = str(sql)
+            _current["started"] = _t0
+            _current["warned"] = False
+            try:
+                cur = method(real, sql, arg) if arg is not None else method(real, sql)
+            except sqlite3.OperationalError as exc:
+                _current["started"] = 0.0
+                waited = _perf() - _t0
+                text = str(exc).lower()
+                if "interrupt" in text:
+                    # Von unserer eigenen Notbremse abgebrochen.
+                    from app.errors import report, Codes
+                    report(Codes.DB_ABORT, exc,
+                           f"Abfrage nach {waited:.0f}s abgebrochen "
+                           f"(Grenze {QUERY_DEADLINE_S:.0f}s)",
+                           sql=str(sql)[:200])
+                elif "locked" in text or "busy" in text:
+                    from app.errors import report, Codes
+                    report(Codes.DB_LOCKED, exc, f"nach {waited:.1f}s",
+                           sql=str(sql)[:200])
+                else:
+                    from app.errors import report, Codes
+                    report(Codes.DB_QUERY, exc, "Abfrage fehlgeschlagen",
+                           sql=str(sql)[:200])
+                raise
+            finally:
+                _current["started"] = 0.0
             try:
                 rows = cur.fetchall()
             except Exception:
@@ -211,6 +347,73 @@ class _SafeConn:
 # check_same_thread=False, weil FastAPI/Uvicorn mehrere Threads nutzen kann;
 # die Serialisierung übernimmt _SafeConn (siehe oben).
 _raw_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
+
+
+# ----------------------------------------------------------------------
+# NOTBREMSE FUER ABFRAGEN
+# ----------------------------------------------------------------------
+# Der Vorfall vom 23.08. in einem Satz: EINE Abfrage lief 125 Sekunden
+# (der komplette Metrikverlauf eines Clients, unbegrenzt). Weil alle
+# Abfragen durch dieselbe Sperre gehen, stand damit das GESAMTE Backend -
+# Anmeldung, Einstellungen, Agenten, Healthcheck. Nach 90 Sekunden hat der
+# Waechter den Prozess beendet.
+#
+# Die betroffene Abfrage ist weiter unten korrigiert. Aber sich darauf zu
+# verlassen, dass keine zweite dieser Art existiert, waere naiv - es gibt
+# ueber 300 Abfragestellen. Deshalb hier eine Grenze, die fuer ALLE gilt:
+#
+# SQLite ruft waehrend einer laufenden Abfrage regelmaessig einen
+# Rueckruf auf. Gibt dieser etwas anderes als 0 zurueck, wird die Abfrage
+# ABGEBROCHEN. Damit kann keine einzelne Abfrage den Server mehr aufhalten,
+# egal wie sie aussieht oder wer sie schreibt.
+#
+# Der Aufrufer bekommt dann eine gewoehnliche Ausnahme und kann darauf
+# reagieren. Eine abgebrochene Abfrage ist immer besser als ein stehender
+# Server: Beim Abbruch fehlt eine Anzeige, beim Stillstand fehlt alles.
+
+import os as _os_db
+
+try:
+    QUERY_DEADLINE_S = float(_os_db.getenv("RMM_QUERY_DEADLINE_S", "20") or 20)
+except ValueError:
+    QUERY_DEADLINE_S = 20.0
+
+# Wie oft SQLite nachfragt. 20000 Anweisungen sind wenige Millisekunden -
+# oft genug fuer eine genaue Grenze, selten genug, um nicht zu bremsen.
+_PROGRESS_STEPS = 20000
+
+# Wann die laufende Abfrage begonnen hat (nur ein Wert, weil die Sperre
+# ohnehin nur eine Abfrage gleichzeitig zulaesst).
+_current = {"sql": "", "started": 0.0, "warned": False}
+
+
+def _progress_handler() -> int:
+    """Laeuft WAEHREND einer Abfrage. Bricht sie nach dem Zeitlimit ab."""
+    started = _current["started"]
+    if not started:
+        return 0
+    elapsed = _perf() - started
+    # Fruehwarnung noch WAEHREND die Abfrage laeuft. Bisher erschien die
+    # Meldung erst danach - bei 125 Sekunden also viel zu spaet, um zu
+    # verstehen, was das Backend gerade aufhaelt.
+    if not _current["warned"] and elapsed > 3.0:
+        _current["warned"] = True
+        try:
+            from app.errors import report, Codes
+            report(Codes.DB_SLOW, None,
+                   f"Abfrage laeuft seit {elapsed:.0f}s UND BLOCKIERT GERADE",
+                   sql=_current["sql"][:200])
+        except Exception:
+            pass
+    if QUERY_DEADLINE_S > 0 and elapsed > QUERY_DEADLINE_S:
+        return 1      # != 0 -> SQLite bricht ab
+    return 0
+
+
+try:
+    _raw_conn.set_progress_handler(_progress_handler, _PROGRESS_STEPS)
+except Exception as _e:
+    print(f"[db] Abfrage-Zeitlimit nicht aktivierbar: {_e}")
 
 
 # ----------------------------------------------------------------------
@@ -2982,20 +3185,65 @@ def record_metric_point(
     _conn.commit()
 
 
-def get_metrics_history(client_id: str, since_ts: int | None = None) -> list[dict]:
-    """Gibt die gespeicherten Messpunkte eines Clients aufsteigend nach Zeit zurück."""
-    if since_ts is not None:
+# Obergrenzen fuer den Metrikverlauf.
+#
+# HIER LAG DER ABSTURZ vom 23.08.: Diese Abfrage lief OHNE jede Grenze.
+# Die Einstellung 'metrics_retention_hours' steht im Auslieferungszustand
+# auf 0, was "unbegrenzt aufbewahren" bedeutet - und das Dashboard las beim
+# Laden die KOMPLETTE Historie eines Clients. Jeder Heartbeat schreibt alle
+# fuenf Sekunden eine Zeile mit einem JSON-Feld; bei sieben Geraeten sind
+# das rund 120.000 Zeilen am Tag. Nach einigen Wochen brauchte die Abfrage
+# 125 Sekunden. Weil alle Abfragen durch dieselbe Sperre gehen, stand
+# solange das gesamte Backend - bis der Waechter es beendete.
+#
+# Zwei Grenzen, beide noetig:
+#   * ein Zeitfenster, wenn der Aufrufer keines nennt
+#   * eine Obergrenze an Punkten, mit Ausduennung statt Abschneiden
+#
+# Ausduennen statt Abschneiden ist wichtig: Ein abgeschnittener Verlauf
+# zeigt nur den Anfang und sieht aus, als waere danach nichts passiert. Ein
+# ausgeduennter zeigt den ganzen Zeitraum, nur gröber - und genau das
+# braucht ein Diagramm, das ohnehin nur ein paar hundert Pixel breit ist.
+METRICS_DEFAULT_WINDOW_H = 24
+METRICS_MAX_POINTS = 3000
+
+
+def get_metrics_history(client_id: str, since_ts: int | None = None,
+                        max_points: int = METRICS_MAX_POINTS) -> list[dict]:
+    """
+    Messpunkte eines Clients, aufsteigend nach Zeit - immer begrenzt.
+
+    'since_ts' = None bedeutet NICHT mehr "alles", sondern das
+    Standardfenster (24 Stunden). Wer wirklich mehr will, gibt einen
+    Zeitpunkt an - und bekommt trotzdem hoechstens 'max_points' Punkte.
+    """
+    if since_ts is None:
+        since_ts = int(time.time() * 1000) - METRICS_DEFAULT_WINDOW_H * 3600_000
+
+    # Erst zaehlen: billig dank des Index auf (client_id, ts), und die Zahl
+    # entscheidet, ob ausgeduennt werden muss.
+    row = _conn.execute(
+        "SELECT COUNT(*) AS n FROM metrics_history WHERE client_id = ? AND ts >= ?",
+        (client_id, since_ts)).fetchone()
+    total = int(row["n"] if row else 0)
+
+    if total > max_points:
+        # Jede n-te Zeile nehmen. ROW_NUMBER() gibt es seit SQLite 3.25,
+        # das ist in jedem unterstuetzten Python enthalten.
+        step = (total // max_points) + 1
         rows = _conn.execute(
-            """SELECT ts, cpu, ram, net_in, net_out, extra FROM metrics_history
-               WHERE client_id = ? AND ts >= ? ORDER BY ts ASC""",
-            (client_id, since_ts),
-        ).fetchall()
+            """SELECT ts, cpu, ram, net_in, net_out, extra FROM (
+                   SELECT ts, cpu, ram, net_in, net_out, extra,
+                          ROW_NUMBER() OVER (ORDER BY ts ASC) AS rn
+                   FROM metrics_history WHERE client_id = ? AND ts >= ?
+               ) WHERE rn % ? = 0 ORDER BY ts ASC LIMIT ?""",
+            (client_id, since_ts, step, max_points)).fetchall()
     else:
         rows = _conn.execute(
             """SELECT ts, cpu, ram, net_in, net_out, extra FROM metrics_history
-               WHERE client_id = ? ORDER BY ts ASC""",
-            (client_id,),
-        ).fetchall()
+               WHERE client_id = ? AND ts >= ? ORDER BY ts ASC LIMIT ?""",
+            (client_id, since_ts, max_points)).fetchall()
+
     out = []
     for r in rows:
         d = dict(r)

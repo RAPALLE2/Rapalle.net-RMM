@@ -159,20 +159,36 @@ def delete_client_website(client_id: str, website_id: str,
 
 
 @router.get("/{client_id}/metrics/history")
-def get_client_metrics_history(client_id: str, user: dict = Depends(get_current_user)):
+def get_client_metrics_history(client_id: str, hours: int = 0,
+                               user: dict = Depends(get_current_user)):
     """
     Liefert die gespeicherte Metrik-Historie eines Clients. Das Frontend nutzt
     das, um die Graphen nach einem Seiten-Neuladen sofort mit Verlaufsdaten zu
     füllen, statt bei 0 anzufangen.
 
-    metrics_retention_hours = 0 (Standard) -> KOMPLETTE Historie zurückgeben.
-    Sonst nur die letzten N Stunden.
+    Zeitfenster: 'hours' aus der Anfrage, sonst die eingestellte
+    Aufbewahrungsdauer, sonst das Standardfenster der Datenbankschicht
+    (24 Stunden).
+
+    WICHTIG - hier lag der Absturz vom 23.08.: Frueher bedeutete
+    metrics_retention_hours = 0 (der Auslieferungszustand) "KOMPLETTE
+    Historie zurueckgeben". Bei einer Tabelle, die mit jedem Heartbeat
+    waechst und nie aufgeraeumt wird, brauchte diese Abfrage nach einigen
+    Wochen 125 Sekunden und legte das ganze Backend still. "Unbegrenzt
+    aufbewahren" ist eine sinnvolle Datenschutz-Einstellung - "unbegrenzt
+    AUSLESEN" war schlicht ein Fehler. Beides wird jetzt getrennt.
     """
     retention_hours = db.get_int_setting("metrics_retention_hours")
+    window = hours if hours and hours > 0 else retention_hours
     since_ts = None
-    if retention_hours > 0:
-        since_ts = int(time.time() * 1000) - retention_hours * 3600 * 1000
-    return {"points": db.get_metrics_history(client_id, since_ts)}
+    if window and window > 0:
+        since_ts = int(time.time() * 1000) - window * 3600 * 1000
+    points = db.get_metrics_history(client_id, since_ts)
+    return {"points": points, "count": len(points),
+            "window_hours": window or db.METRICS_DEFAULT_WINDOW_H,
+            # Ehrlich mitteilen, wenn ausgeduennt wurde - sonst wundert man
+            # sich ueber Luecken im Diagramm.
+            "thinned": len(points) >= db.METRICS_MAX_POINTS}
 
 
 class ExecBody(BaseModel):
@@ -474,8 +490,20 @@ async def update_client_agent(client_id: str, user: dict = Depends(get_current_u
     db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id,
                        details=(client or {}).get("hostname"))
 
-    # Auf "updated"-Bestätigung warten (max. 60 s, alle 1 s prüfen).
-    deadline = time.monotonic() + 60.0
+    # Auf "updated"-Bestätigung warten.
+    #
+    # ACHTUNG bei Änderungen: Diese Wartezeit muss KLEINER bleiben als das
+    # Zeitlimit des Browsers für diesen Pfad (frontend/js/api.js,
+    # SLOW_SUFFIXES["/update-agent"] = 90 s). Sonst bricht der Browser ab,
+    # während das Update noch läuft - und meldet einen Fehler, den es nicht
+    # gibt. Genau so entstand am 23.08. die Meldung "nach 45 s keine
+    # Antwort", obwohl der Agent sich Sekunden später erfolgreich meldete.
+    #
+    # Unabhängig davon informiert das Backend die Dashboards über das
+    # Ereignis 'client:updated', sobald der Agent zurück ist. Selbst wenn
+    # diese Anfrage ins Leere läuft, wird die Oberfläche also richtig.
+    UPDATE_WAIT_S = 55.0
+    deadline = time.monotonic() + UPDATE_WAIT_S
     while time.monotonic() < deadline:
         await asyncio.sleep(1.0)
         if client_id in state.update_confirmed:

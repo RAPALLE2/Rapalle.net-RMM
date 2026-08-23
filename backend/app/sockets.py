@@ -55,6 +55,147 @@ from app import db
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 
 
+# ======================================================================
+# ALLE Socket-Handler zentral absichern
+# ======================================================================
+# In dieser Datei haengen rund 50 Ereignis-Behandlungen. Wirft eine davon
+# eine Ausnahme, faengt python-socketio sie zwar ab - aber die Meldung
+# landet in dessen eigenem Logger, der standardmaessig stumm ist. Der
+# Agent wartet dann auf eine Antwort, die nie kommt, und im Protokoll steht
+# nichts. Das ist die unangenehmste Sorte Fehler: Es sieht aus, als haette
+# jemand nichts gemacht.
+#
+# 50 Handler einzeln mit try/except zu versehen waere fehleranfaellig und
+# beim naechsten neuen Handler schon wieder unvollstaendig. Stattdessen
+# wird HIER, an einer einzigen Stelle, der Registrierungsmechanismus
+# umhuellt: Jeder Handler, der ueber @sio.on oder @sio.event angemeldet
+# wird, bekommt die Absicherung automatisch - auch jeder kuenftige.
+#
+# Was die Huelle tut:
+#   * faengt jede Ausnahme ab und meldet sie MIT Kenncode und Ereignisnamen
+#   * schickt, wenn die Anfrage eine requestId trug, eine Fehlerantwort
+#     zurueck - sonst wartet der Aufrufer bis zu seinem Zeitlimit
+#   * misst die Dauer und meldet auffaellig langsame Behandlungen
+
+def _wrap_handler(handler, event_name: str):
+    """Legt die Absicherung um einen einzelnen Ereignis-Handler."""
+    import functools
+    import inspect
+
+    if getattr(handler, "_rmm_guarded", False):
+        return handler
+
+    async def _fail(sid, args, exc):
+        from app.errors import report, Codes
+        client_id = state.sid_to_client_id.get(sid) if isinstance(sid, str) else None
+        code = report(Codes.SOCK_HANDLER, exc, f"Ereignis '{event_name}'",
+                      sid=sid, client=client_id)
+        # Trug die Anfrage eine Kennung, MUSS eine Antwort zurueck - sonst
+        # haengt die Gegenseite bis zu ihrem Zeitlimit.
+        try:
+            payload = next((a for a in args if isinstance(a, dict)), None)
+            request_id = (payload or {}).get("requestId")
+            if request_id:
+                future = state.pending_requests.get(request_id)
+                if future and not future.done():
+                    future.set_result({"ok": False, "error_code": code,
+                                       "error": str(exc)})
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------
+    # WICHTIG: Die SIGNATUR muss erhalten bleiben.
+    #
+    # python-socketio sieht sich die Parameterliste eines Handlers an, um
+    # zu entscheiden, wie es ihn aufruft. Der 'connect'-Handler bekommt
+    # (sid, environ, auth), wenn er drei Parameter hat, und nur
+    # (sid, environ), wenn er zwei hat.
+    #
+    # Eine Huelle mit (*args, **kwargs) hat aus dieser Sicht KEINE
+    # benannten Parameter - socketio ruft dann mit zwei Argumenten auf, und
+    # der echte Handler bekommt sein 'auth' nicht. Genau das ist passiert:
+    #   TypeError: dashboard_connect() missing 1 required positional
+    #   argument: 'auth'
+    # Damit konnte sich kein Dashboard mehr anmelden.
+    #
+    # functools.wraps kopiert __name__ und __doc__, aber NICHT die
+    # Signatur. Deshalb wird sie hier ausdruecklich uebernommen: __wrapped__
+    # setzt wraps() bereits, und inspect.signature() folgt dem - solange
+    # man __signature__ nicht ueberschreibt. Sicherheitshalber wird sie
+    # explizit gesetzt, damit es nicht von Implementierungsdetails abhaengt.
+    try:
+        _sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        _sig = None
+
+    if inspect.iscoroutinefunction(handler):
+        @functools.wraps(handler)
+        async def guarded(*args, **kwargs):
+            started = time.monotonic()
+            try:
+                return await handler(*args, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await _fail(args[0] if args else None, args, exc)
+                return None
+            finally:
+                took = time.monotonic() - started
+                if took > 2.0:
+                    try:
+                        from app.errors import report, Codes
+                        report(Codes.SOCK_HANDLER, None,
+                               f"Ereignis '{event_name}' war langsam",
+                               dauer=f"{took:.1f}s")
+                    except Exception:
+                        pass
+    else:
+        @functools.wraps(handler)
+        def guarded(*args, **kwargs):
+            try:
+                return handler(*args, **kwargs)
+            except Exception as exc:
+                from app.errors import report, Codes
+                report(Codes.SOCK_HANDLER, exc, f"Ereignis '{event_name}'")
+                return None
+
+    guarded._rmm_guarded = True
+    if _sig is not None:
+        guarded.__signature__ = _sig
+    return guarded
+
+
+_orig_on = sio.on
+_orig_event = sio.event
+
+
+def _guarded_on(event, handler=None, namespace=None):
+    """Ersatz fuer sio.on - haengt die Absicherung dazwischen."""
+    if handler is not None:
+        return _orig_on(event, _wrap_handler(handler, event), namespace)
+
+    def decorator(fn):
+        _orig_on(event, _wrap_handler(fn, event), namespace)
+        return fn
+    return decorator
+
+
+def _guarded_event(*args, **kwargs):
+    """Ersatz fuer sio.event (mit und ohne Klammern verwendbar)."""
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        fn = args[0]
+        return _orig_event(_wrap_handler(fn, fn.__name__))
+
+    def decorator(fn):
+        _orig_event(_wrap_handler(fn, fn.__name__), *args, **kwargs)
+        return fn
+    return decorator
+
+
+sio.on = _guarded_on
+sio.event = _guarded_event
+
+
 class ConnectionState:
     """Hält den aktuellen Live-Zustand aller verbundenen Agenten im Speicher."""
 

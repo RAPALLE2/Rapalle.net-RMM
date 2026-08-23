@@ -113,14 +113,37 @@ const SLOW_PATHS = [
   "/api/admin/database/", "/api/admin/update", "/api/files/",
   "/api/recordings/", "/api/scripts/run", "/api/speedtest",
 ];
-// Diese Endpunkte dauern von Natur aus lange (Treiberinstallation,
-// Modul-Verteilung) - erkennbar am ENDE des Pfades.
-const SLOW_SUFFIXES = ["/l2", "/promote", "/demote"];
+// Diese Endpunkte dauern von Natur aus lange - erkennbar am ENDE des
+// Pfades.
+//
+// '/update-agent' gehoert ausdruecklich dazu: Der Endpunkt wartet bis zu
+// 60 Sekunden darauf, dass sich der Agent nach dem Neustart zurueckmeldet.
+// Das allgemeine Zeitlimit von 45 Sekunden lag DARUNTER - die Anfrage
+// wurde also abgebrochen, waehrend das Update in Wahrheit noch lief und
+// gleich darauf erfolgreich war. Im Dashboard sah das aus wie ein
+// abgestuerztes Backend ("nach 45s keine Antwort"), obwohl nichts kaputt
+// war. Das Zeitlimit muss immer GROESSER sein als die Wartezeit auf der
+// Gegenseite, sonst meldet man Fehler, die keine sind.
+// Jeweils mit der Zeit, die zur Gegenseite passt - NICHT pauschal gross.
+// Ein zu grosszuegiges Limit ist auch nicht gut: Dann dreht sich der
+// Ladebalken zehn Minuten, obwohl der Server laengst aufgegeben hat.
+const SLOW_SUFFIXES = {
+  // Der Server wartet 60s auf die Rueckmeldung des Agenten -> etwas mehr.
+  "/update-agent": 90000,
+  // Dateisystem eines Agenten: haengt an dessen Antwortzeit.
+  "/fs": 120000,
+  // Treiberinstallation und Modul-Verteilung auf einer Node.
+  "/l2": 600000,
+  "/promote": 300000,
+  "/demote": 300000,
+};
 
 function _timeoutFor(path) {
   const clean = path.split("?")[0];
   if (SLOW_PATHS.some((p) => clean.startsWith(p))) return 600000;
-  if (SLOW_SUFFIXES.some((p) => clean.endsWith(p))) return 600000;
+  for (const [suffix, ms] of Object.entries(SLOW_SUFFIXES)) {
+    if (clean.endsWith(suffix)) return ms;
+  }
   return REQUEST_TIMEOUT_MS;
 }
 

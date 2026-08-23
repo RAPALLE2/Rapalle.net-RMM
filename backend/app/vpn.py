@@ -661,12 +661,15 @@ async def _expiry_loop() -> None:
     while rt.started:
         try:
             now_ms = int(time.time() * 1000)
-            for row in db.list_expired_vpn_tunnels(now_ms):
-                db.close_vpn_tunnel(row["id"])
+            # Ueber db.call() in einen Arbeits-Thread: Diese Schleife laeuft
+            # sonst im Hauptthread und wuerde bei belegter Datenbank die
+            # gesamte Ereignisschleife anhalten.
+            for row in await db.call(db.list_expired_vpn_tunnels, now_ms):
+                await db.call(db.close_vpn_tunnel, row["id"])
                 _deactivate(row["id"], row.get("public_key"))
-                db.add_audit_entry("system", "vpn.auto_closed",
-                                   target=row.get("client_id"),
-                                   details=f"Tunnel '{row.get('name')}' abgelaufen")
+                await db.call(db.add_audit_entry, "system", "vpn.auto_closed",
+                              target=row.get("client_id"),
+                              details=f"Tunnel '{row.get('name')}' abgelaufen")
                 try:
                     from app.sockets import sio
                     await sio.emit("vpn-changed",

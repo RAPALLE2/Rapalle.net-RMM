@@ -517,6 +517,9 @@ def status() -> dict:
         "dir": str(LOG_DIR),
         "files": files,
         "counters": dict(st.counters),
+        # Fehler nach Kenncode - damit man in der Oberflaeche sofort sieht,
+        # WELCHE Art Fehler auftritt, ohne das Protokoll zu lesen.
+        "error_codes": _error_summary(),
         # Wie oft die Ereignisschleife stand und wie lange sie im
         # schlimmsten Fall blockiert war. Steht hier etwas > 0, ist das die
         # Spur, der man nachgehen muss.
@@ -525,6 +528,14 @@ def status() -> dict:
         "samples": list(st.samples)[-240:],
         "ring_size": len(st.ring),
     }
+
+
+def _error_summary() -> dict:
+    try:
+        from app import errors
+        return errors.summary()
+    except Exception:
+        return {"counters": {}, "recent": [], "total": 0}
 
 
 def tail(lines: int = 300) -> list[str]:
@@ -627,6 +638,103 @@ def sample() -> dict:
     return data
 
 
+# Abstand der Zustandszeilen in der Container-Ausgabe. Eine Minute ist oft
+# genug, um einen Verlauf zu erkennen, und selten genug, um das Protokoll
+# nicht zuzumuellen.
+BEAT_INTERVAL = float(os.getenv("RMM_BEAT_INTERVAL_S", "60") or 60)
+_last_beat = [0.0]
+
+
+def _console_beat(point: dict) -> None:
+    """Eine kompakte Zustandszeile direkt an Docker."""
+    try:
+        parts = []
+        for key, label in (("rss_mb", "Speicher"), ("cpu", "CPU%"),
+                           ("threads", "Threads"), ("fds", "Dateien"),
+                           ("tasks", "Aufgaben"), ("inflight", "Anfragen"),
+                           ("agents", "Agenten"), ("lag", "Verzoegerung"),
+                           ("lag_max", "max.Verz")):
+            if point.get(key) is not None:
+                parts.append(f"{label}={point[key]}")
+        try:
+            from app.errors import counters as _ec
+            if _ec:
+                parts.append("Fehler=" + ",".join(f"{k}:{v}" for k, v in
+                                                  sorted(_ec.items())))
+        except Exception:
+            pass
+        line = "[zustand] " + "  ".join(parts)
+        stream = st.orig_stdout or sys.__stdout__
+        stream.write(line + "\n")
+        stream.flush()
+    except Exception:
+        pass
+
+
+def _estimate_rows(table: str) -> int:
+    """
+    Schaetzt die Zeilenzahl, ohne die Datenbank zu blockieren.
+
+    COUNT(*) liest die GANZE Tabelle. Bei 600.000 Zeilen dauerte das 9
+    Sekunden - und weil alle Abfragen durch dieselbe Sperre gehen, hat
+    ausgerechnet die Ueberwachung den Server neun Sekunden angehalten. Eine
+    Pruefung, die selbst das Problem verursacht, das sie melden soll, ist
+    schlimmer als keine.
+    
+    Deshalb wird die hoechste rowid genommen: ein einziger Zugriff auf das
+    Tabellenende, unabhaengig von der Groesse. Nach vielen Loeschungen
+    ueberschaetzt das - fuer eine Warnschwelle ist das genau richtig herum.
+    """
+    try:
+        from app import db
+        row = db._conn.execute(f"SELECT MAX(rowid) AS n FROM {table}").fetchone()
+        return int(row["n"] or 0) if row else 0
+    except Exception:
+        return -1
+
+
+async def table_size_watch() -> None:
+    """
+    Warnt, BEVOR eine Tabelle zum Problem wird.
+
+    Der Absturz vom 23.08. entstand nicht durch einen Programmfehler,
+    sondern durch Wachstum: metrics_history war ueber Wochen unbegrenzt
+    gewachsen, bis eine Abfrage darauf 125 Sekunden brauchte. Nichts im
+    System hat davor gewarnt - man sah es erst, als es zu spaet war.
+    Diese Schleife sieht stuendlich nach.
+    """
+    await asyncio.sleep(120)
+    while True:
+        try:
+            from app import db
+            # Erst nachsehen, welche Tabellen es ueberhaupt gibt. Beim
+            # ersten Lauf hat die Pruefung nach 'notifications' gefragt, die
+            # es in dieser Installation nicht gibt - und dabei eine
+            # Fehlermeldung erzeugt, die wie ein echtes Problem aussah.
+            existing = {r["name"] for r in await db.call(
+                lambda: db._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'").fetchall())}
+
+            for table, limit in (("metrics_history", 500_000),
+                                 ("audit_log", 300_000),
+                                 ("notifications", 100_000)):
+                if table not in existing:
+                    continue
+                count = await db.call(_estimate_rows, table)
+                if count < 0:
+                    continue
+                if count > limit:
+                    from app.errors import report, Codes
+                    report(Codes.DB_HUGE, None,
+                           f"Tabelle '{table}' hat {count:,} Zeilen "
+                           f"(Warnschwelle {limit:,})".replace(",", "."),
+                           empfehlung="Aufbewahrungsdauer in den "
+                                      "Datenschutz-Einstellungen setzen")
+        except Exception as e:
+            write(f"Tabellenpruefung: {e}", level="WARN")
+        await asyncio.sleep(3600)
+
+
 async def sampler_loop() -> None:
     """
     Schreibt regelmässig einen Messpunkt.
@@ -643,6 +751,22 @@ async def sampler_loop() -> None:
             if st.active:
                 write("MESSWERT " + json.dumps(point, ensure_ascii=False),
                       level="DEBUG")
+            # HERZSCHLAG IN DIE CONTAINER-AUSGABE.
+            #
+            # Der Grund ist der wunde Punkt jeder Diagnose: Wenn das Backend
+            # zusammenbricht, kann es die Ursache nicht mehr aufschreiben -
+            # und die Ansicht in den Einstellungen ist dann ohnehin nicht
+            # erreichbar. Was BLEIBT, ist 'docker logs'; die Zeilen dort
+            # sind schon bei Docker, bevor etwas passiert.
+            #
+            # Deshalb geht regelmaessig eine kurze Zustandszeile dorthin.
+            # Nach einem Absturz sieht man daran, wie es dem Backend in den
+            # Minuten davor ging - Speicher, Verzoegerung, Anfragen - ohne
+            # dass irgendetwas ueberlebt haben muss.
+            now_t = time.time()
+            if now_t - _last_beat[0] >= BEAT_INTERVAL:
+                _last_beat[0] = now_t
+                _console_beat(point)
             # Frühwarnung: Diese beiden Werte sind die üblichen Verdächtigen,
             # wenn ein Prozess "einfach weg" ist.
             now = time.time()

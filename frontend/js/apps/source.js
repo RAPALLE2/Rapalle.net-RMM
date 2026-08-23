@@ -849,6 +849,7 @@ function renderDiagnostics(host) {
         <button class="taskbar-btn" id="dg-clear">🗑️ Logs leeren</button>
       </div>
 
+      <div id="dg-errors" style="border:1px solid var(--border);border-radius:9px;padding:10px"></div>
       <div id="dg-metrics" style="border:1px solid var(--border);border-radius:9px;padding:10px"></div>
 
       <div style="display:flex;align-items:center;gap:8px">
@@ -917,6 +918,37 @@ function renderDiagnostics(host) {
       </div>`;
 
     renderMetrics(st.samples || []);
+    renderErrors(st.error_codes || {});
+  }
+
+  // Fehler nach Kenncode. Das ist die Ansicht, die man zuerst braucht:
+  // Ein Blick sagt, WELCHE Art Fehler auftritt und wie oft - ohne dass
+  // man erst hunderte Protokollzeilen durchsehen muss.
+  function renderErrors(summary) {
+    const box = $("#dg-errors");
+    const counters = summary.counters || {};
+    const codes = Object.entries(counters);
+    if (!codes.length) {
+      box.innerHTML = `<span style="color:var(--online,#3ecf8e);font-size:12.5px">
+        ✓ Keine Fehler gemeldet.</span>`;
+      return;
+    }
+    const rows = codes.map(([code, n]) => {
+      const last = (summary.recent || []).filter((r) => r.code === code).pop();
+      return `<tr>
+        <td style="padding:2px 10px 2px 0;font-family:ui-monospace,monospace">
+          <b>${esc(code)}</b></td>
+        <td style="padding:2px 10px 2px 0;text-align:right">${n}×</td>
+        <td style="padding:2px 0;color:var(--subtext)">
+          ${esc(last ? (last.doing || "") + (last.error ? " – " + last.error : "") : "")}
+        </td></tr>`;
+    }).join("");
+    box.innerHTML = `
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:5px">
+        Fehler nach Kenncode (insgesamt ${summary.total || 0}) – nach dem Code
+        lässt sich im Protokoll und in <code>docker logs</code> suchen.
+      </div>
+      <table style="font-size:12px;border-collapse:collapse;width:100%">${rows}</table>`;
   }
 
   // Die Messwerte sind das eigentliche Werkzeug: Eine Kurve, die stetig
