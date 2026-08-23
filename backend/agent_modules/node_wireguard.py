@@ -290,6 +290,16 @@ class WireGuardServer(asyncio.DatagramProtocol):
             "unknown_peer": 0, "bad_mac": 0, "undecryptable": 0,
             "junk": 0, "last_from": "", "last_at": 0.0,
             "first_at": 0.0,
+            # Wie viele Handschlag-Versuche ueberhaupt eintrafen. Diese Zahl
+            # fehlte - und ohne sie war nicht zu unterscheiden, ob die
+            # Pakete vom WireGuard-Client kamen oder von den Probe-Paketen
+            # der eigenen Nodes. Genau daran ist eine Fehlersuche
+            # gescheitert: 10 Pakete, 0 Handschlaege, keine Fehler - in
+            # Wahrheit waren es zehn Probes und kein einziger Handschlag.
+            "initiations": 0,
+            "errors": 0,        # Ausnahme bei der Verarbeitung
+            "last_error": "",
+            "last_client_from": "",   # letzter echter WireGuard-Absender
         }
 
     # -- Verwaltung der Gegenstellen ---------------------------------
@@ -341,6 +351,8 @@ class WireGuardServer(asyncio.DatagramProtocol):
         except Exception as e:
             # Ein einzelnes kaputtes Paket darf den Server nie beenden.
             # Fremde Scanner schicken hier ständig Unsinn her.
+            self.stats["errors"] += 1
+            self.stats["last_error"] = f"{type(e).__name__}: {e}"
             print(f"[wg] Paket von {addr} verworfen: {e!r}")
 
     def _handle(self, data: bytes, addr) -> None:
@@ -361,9 +373,12 @@ class WireGuardServer(asyncio.DatagramProtocol):
             return
         msg_type = data[0]
         if msg_type == MSG_INITIATION and len(data) == LEN_INITIATION:
+            self.stats["initiations"] += 1
+            self.stats["last_client_from"] = f"{addr[0]}:{addr[1]}"
             self._handle_initiation(data, addr)
         elif msg_type == MSG_TRANSPORT and len(data) >= 32:
             self.stats["transport"] += 1
+            self.stats["last_client_from"] = f"{addr[0]}:{addr[1]}"
             self._handle_transport(data, addr)
         else:
             # Weder WireGuard noch unsere Probe - meist ein Portscanner.
@@ -402,7 +417,22 @@ class WireGuardServer(asyncio.DatagramProtocol):
         h = _hash(h + ephemeral)
 
         c, k = _kdf(c, _dh(self.private, ephemeral), 2)
-        peer_static = _aead_decrypt(k, 0, enc_static, h)
+        try:
+            peer_static = _aead_decrypt(k, 0, enc_static, h)
+        except Exception:
+            # Die Entschluesselung des statischen Feldes ist fehlgeschlagen,
+            # OBWOHL mac1 gestimmt hat. mac1 beweist, dass die Gegenstelle
+            # unseren richtigen oeffentlichen Schluessel kennt - der
+            # Diffie-Hellman-Austausch MUSS dann passen. Bleibt nur: Unsere
+            # Hash-Kette weicht irgendwo von der Spezifikation ab.
+            #
+            # Genau diese Abweichung findet der Selbsttest unten, indem er
+            # die naheliegenden Varianten durchprobiert. Er laeuft nur beim
+            # ERSTEN Fehlschlag - danach waere er nur noch Last.
+            self.stats["static_failed"] = self.stats.get("static_failed", 0) + 1
+            if self.stats["static_failed"] == 1:
+                self._diagnose_initiation(data, ephemeral, enc_static)
+            raise
         h = _hash(h + enc_static)
 
         peer = self.peers.get(peer_static)
@@ -416,7 +446,19 @@ class WireGuardServer(asyncio.DatagramProtocol):
             return
 
         c, k = _kdf(c, _dh(self.private, peer_static), 2)
-        timestamp = _aead_decrypt(k, 0, enc_timestamp, h)
+        try:
+            timestamp = _aead_decrypt(k, 0, enc_timestamp, h)
+        except Exception:
+            # Hier ist die Ursache fast immer eine falsche Feldlaenge: Der
+            # Zeitstempel ist TAI64N (12) + Siegel (16) = 28 Byte. Nimmt man
+            # 32, sieht alles davor richtig aus und nur dieser Schritt
+            # scheitert.
+            self.stats["timestamp_failed"] = \
+                self.stats.get("timestamp_failed", 0) + 1
+            print(f"[wg] Handschlag von {addr[0]}: statisches Feld ok, aber "
+                  f"der Zeitstempel liess sich nicht entschluesseln "
+                  f"({len(enc_timestamp)} Byte, 28 erwartet).")
+            raise
         h = _hash(h + enc_timestamp)
 
         # Wiedereinspiel-Schutz des Handshakes: der Zeitstempel muss echt
@@ -426,6 +468,52 @@ class WireGuardServer(asyncio.DatagramProtocol):
         peer.last_timestamp = timestamp
 
         self._send_response(peer, sender_index, c, h, ephemeral, addr)
+
+    def _diagnose_initiation(self, data: bytes, ephemeral: bytes,
+                            enc_static: bytes) -> None:
+        """
+        Sucht die Abweichung, wenn der Handschlag trotz korrektem mac1
+        scheitert.
+
+        Probiert die naheliegenden Varianten der Hash-Kette durch und meldet,
+        welche funktioniert haette. Das ersetzt stundenlanges Vergleichen mit
+        der Spezifikation durch eine Zeile im Protokoll.
+        """
+        import base64 as _b64
+        shared = _dh(self.private, ephemeral)
+
+        def try_variant(name: str, h_value: bytes, key_index: int = 1,
+                        chain: bytes | None = None) -> bool:
+            try:
+                keys = _kdf(chain if chain is not None else _hash(CONSTRUCTION),
+                            shared, 2)
+                _aead_decrypt(keys[key_index], 0, enc_static, h_value)
+                print(f"[wg] DIAGNOSE: Variante '{name}' haette funktioniert - "
+                      f"HIER weicht die Umsetzung von WireGuard ab.")
+                return True
+            except Exception:
+                return False
+
+        base_c = _hash(CONSTRUCTION)
+        h0 = _hash(base_c + IDENTIFIER)
+        h_with_pub = _hash(h0 + self.public_raw)
+        c1 = _kdf(base_c, ephemeral, 1)[0]
+
+        variants = [
+            ("Standard (unsere)", _hash(h_with_pub + ephemeral), 1, c1),
+            ("ohne Server-Schluessel im Hash", _hash(h0 + ephemeral), 1, c1),
+            ("Schluessel/Kette vertauscht", _hash(h_with_pub + ephemeral), 0, c1),
+            ("ohne Ephemeral im Hash", h_with_pub, 1, c1),
+            ("Kette ohne Ephemeral", _hash(h_with_pub + ephemeral), 1, base_c),
+        ]
+        found = any(try_variant(n, h, i, c) for n, h, i, c in variants)
+        if not found:
+            print(f"[wg] DIAGNOSE: Keine der geprueften Varianten passt. "
+                  f"Damit stimmt der Diffie-Hellman nicht - die Gegenstelle "
+                  f"rechnet mit einem anderen Server-Schluessel, obwohl mac1 "
+                  f"passte. Unser oeffentlicher Schluessel ist "
+                  f"{_b64.b64encode(self.public_raw).decode()}. Bitte mit dem "
+                  f"'PublicKey' in der Tunnel-Datei vergleichen.")
 
     def _send_response(self, peer: Peer, their_index: int, c: bytes, h: bytes,
                        their_ephemeral: bytes, addr) -> None:

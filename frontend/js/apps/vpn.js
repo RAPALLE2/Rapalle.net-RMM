@@ -414,9 +414,14 @@ das zeigt immer auf den eigenen Rechner.">Gerät selbst:
                   style="float:right;padding:1px 7px">⟳</button></div>
         <div style="margin-top:5px;line-height:1.45">${esc(check.hint || "")}</div>
         <div style="margin-top:6px;color:var(--subtext);font-size:11.5px">
-          Pakete: <b>${st.packets || 0}</b> ·
+          Verbindungsversuche: <b>${st.initiations || 0}</b> ·
           Handschläge: <b>${st.handshakes || 0}</b> ·
           Daten: <b>${st.transport || 0}</b>
+          ${st.probes ? ` · <span title="Prüf-Pakete der eigenen Nodes –
+keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
+            <b>${st.probes}</b></span>` : ""}
+          ${st.errors ? ` · <span style="color:var(--danger,#ff4d6d)">Fehler:
+            <b>${st.errors}</b> (${esc(st.last_error || "")})</span>` : ""}
           ${st.unknown_peer ? ` · unbekannter Schlüssel: <b>${st.unknown_peer}</b>` : ""}
           ${st.bad_mac ? ` · falscher Server-Schlüssel: <b>${st.bad_mac}</b>` : ""}
           ${st.junk ? ` · Datenmüll: <b>${st.junk}</b>` : ""}

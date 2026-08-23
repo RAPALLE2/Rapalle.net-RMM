@@ -793,25 +793,42 @@ def endpoint_check() -> dict:
     stats = dict(rt.server.stats) if rt.server else {}
     packets = stats.get("packets", 0)
     handshakes = stats.get("handshakes", 0)
+    # NUR echte Handschlag-Versuche zaehlen, nicht die Probe-Pakete der
+    # eigenen Nodes. Beides in einen Topf zu werfen war irrefuehrend: Zehn
+    # Node-Probes sahen aus wie zehn ankommende Verbindungsversuche, und die
+    # Fehlersuche lief in die falsche Richtung.
+    initiations = stats.get("initiations", 0)
+    from_client = initiations + stats.get("transport", 0)
 
     if not rt.started:
         stage, hint = "endpunkt-aus", (
             "Der VPN-Endpunkt läuft nicht. Ist der UDP-Port im Container "
             "freigegeben (docker-compose) und das VPN eingeschaltet?")
-    elif packets == 0:
-        stage, hint = "nichts-empfangen", (
-            f"Seit dem Start ist KEIN einziges Paket auf UDP {vpn_port()} "
-            f"angekommen. Der WireGuard-Client erreicht diesen Server also "
-            f"gar nicht. Prüfen: Zeigt '{endpoint_host()}' direkt auf den "
-            f"Server? Reverse-Proxys (Cloudflare, nginx, Traefik) leiten "
-            f"KEIN UDP weiter – dann muss unter 'Adresse des VPN-Endpunkts' "
-            f"eine Adresse stehen, die am Proxy vorbeigeht. Ausserdem: Ist "
-            f"{vpn_port()}/udp in der Firewall und im Router offen?")
+    elif from_client == 0:
+        extra = ""
+        if stats.get("probes"):
+            extra = (f" (Die {stats['probes']} bisher gezählten Pakete sind "
+                     f"Prüf-Pakete deiner eigenen Nodes, keine "
+                     f"Verbindungsversuche.)")
+        stage, hint = "nichts-empfangen", (extra and extra.strip() + " " or "") + (
+            f"Es ist noch KEIN Verbindungsversuch eines WireGuard-Clients "
+            f"auf UDP {vpn_port()} angekommen – die Pakete deines Clients "
+            f"erreichen diesen Server also nicht. Prüfen: Zeigt "
+            f"'{endpoint_host()}' vom Rechner des Benutzers aus wirklich auf "
+            f"diesen Server? Liegt ein Reverse Proxy dazwischen (Cloudflare, "
+            f"nginx, Traefik), leitet der KEIN UDP weiter – dann muss unter "
+            f"'Adresse des VPN-Endpunkts' eine Adresse stehen, die daran "
+            f"vorbeigeht. Ausserdem: Ist {vpn_port()}/udp in Firewall und "
+            f"Router offen, und blockiert die Firewall auf dem Rechner des "
+            f"Benutzers ausgehendes UDP?")
     elif handshakes == 0:
         stage, hint = (
             "kein-handschlag",
-            f"Pakete kommen an (zuletzt von {stats.get('last_from')}), aber "
-            f"kein Handschlag kam zustande. "
+            f"{initiations} Verbindungsversuch(e) angekommen (zuletzt von "
+            f"{stats.get('last_client_from') or stats.get('last_from')}), "
+            f"aber kein Handschlag kam zustande. "
+            + (f"{stats.get('errors')}× Verarbeitungsfehler "
+               f"({stats.get('last_error')}). " if stats.get("errors") else "")
             + (f"{stats.get('unknown_peer')}× unbekannter Schlüssel – die "
                f"Tunnel-Datei gehört nicht (mehr) zu diesem Server, bitte "
                f"neu ausstellen. " if stats.get("unknown_peer") else "")
