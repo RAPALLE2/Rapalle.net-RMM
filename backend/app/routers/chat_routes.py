@@ -122,7 +122,7 @@ async def _emit_chat_event(event: str, payload: dict) -> None:
 # ------------------------------------------------------------------
 
 @router.get("/users")
-async def chat_users(user: dict = Depends(get_current_user)):
+def chat_users(user: dict = Depends(get_current_user)):
     """Alle Benutzer als Chat-Partner-Auswahl (ohne sich selbst)."""
     _require_chat(user)
     return [{"id": u["id"], "username": u["username"]}
@@ -130,7 +130,7 @@ async def chat_users(user: dict = Depends(get_current_user)):
 
 
 @router.get("/conversations")
-async def list_conversations(user: dict = Depends(get_current_user)):
+def list_conversations(user: dict = Depends(get_current_user)):
     _require_chat(user)
     rows = _conn().execute(
         "SELECT c.* FROM chat_conversations c"
@@ -143,10 +143,12 @@ async def list_conversations(user: dict = Depends(get_current_user)):
 
 
 @router.get("/unread")
-async def unread_summary(user: dict = Depends(get_current_user)):
+def unread_summary(user: dict = Depends(get_current_user)):
     """Für die Anzeige beim Login: wie viele ungelesene Nachrichten, von wem."""
     _require_chat(user)
-    convs = await list_conversations(user)
+    # list_conversations() laeuft jetzt synchron im Arbeits-Thread
+    # (siehe tools/unblock_routes.py) - hier darf kein 'await' mehr stehen.
+    convs = list_conversations(user)
     items = [{"conversation_id": c["id"], "name": c["name"], "unread": c["unread"],
               "last_message": c["last_message"]}
              for c in convs if c["unread"] > 0]
@@ -223,7 +225,7 @@ async def create_conversation(body: CreateConversationBody,
 # ------------------------------------------------------------------
 
 @router.get("/conversations/{conv_id}/messages")
-async def get_messages(conv_id: str, before: int | None = None, limit: int = 50,
+def get_messages(conv_id: str, before: int | None = None, limit: int = 50,
                        user: dict = Depends(get_current_user)):
     _require_chat(user)
     _require_member(conv_id, user)
@@ -278,7 +280,7 @@ async def send_message(conv_id: str, body: MessageBody,
 
 
 @router.post("/conversations/{conv_id}/read")
-async def mark_read(conv_id: str, user: dict = Depends(get_current_user)):
+def mark_read(conv_id: str, user: dict = Depends(get_current_user)):
     _require_chat(user)
     _require_member(conv_id, user)
     _conn().execute(

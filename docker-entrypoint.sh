@@ -184,9 +184,50 @@ cd "$APP_DIR" || fail "Wechsel nach $APP_DIR nicht moeglich."
 
 # -u = ungepuffert. Ohne das gehen die letzten Zeilen bei einem Absturz
 # verloren - genau die, die man braucht.
-python -u run.py
-rc=$?
-err "Weg 1 (run.py) endete mit Exit-Code $rc."
+#
+# Weg 1 wird WIEDERHOLT versucht. Grund: Der Loop-Waechter im Backend
+# beendet den Prozess absichtlich mit Code 75 (EX_TEMPFAIL), wenn die
+# Ereignisschleife haengt. Das ist kein Startfehler, sondern eine
+# Selbstheilung - dafuer in die Rueckfallebenen zu fallen waere falsch.
+# Auch ein normaler Absturz bekommt hier ein paar Anlaeufe, bevor die
+# schwaecheren Wege ueberhaupt in Betracht kommen.
+RESTARTS=0
+MAX_QUICK_RESTARTS="${RMM_MAX_QUICK_RESTARTS:-20}"
+while : ; do
+    STARTED=$(date +%s)
+    python -u run.py
+    rc=$?
+    RAN=$(( $(date +%s) - STARTED ))
+
+    if [ "$rc" = "0" ]; then
+        say "Weg 1 (run.py) reguleaer beendet."
+        break
+    fi
+
+    # Lief das Backend laenger als zwei Minuten, war es ein Betriebsfehler
+    # und kein Startproblem - dann zaehlt der Versuch nicht als Fehlstart.
+    if [ "$RAN" -gt 120 ]; then
+        RESTARTS=0
+    else
+        RESTARTS=$((RESTARTS + 1))
+    fi
+
+    if [ "$rc" = "75" ]; then
+        say "Der Waechter hat ein haengendes Backend beendet (Code 75)."
+        say "Sofortiger Neustart - das ist die vorgesehene Selbstheilung."
+        sleep 2
+        continue
+    fi
+
+    err "Weg 1 (run.py) endete mit Exit-Code $rc (nach ${RAN}s, Fehlstart $RESTARTS/$MAX_QUICK_RESTARTS)."
+    if [ "$RESTARTS" -ge "$MAX_QUICK_RESTARTS" ]; then
+        err "Zu viele schnelle Fehlstarts - die anderen Wege werden probiert."
+        break
+    fi
+    WAIT=$(( RESTARTS < 5 ? 3 : 15 ))
+    say "Neuer Versuch in ${WAIT}s."
+    sleep "$WAIT"
+done
 
 # --- Weg 2: uvicorn direkt ---------------------------------------------------
 # Sinnvoll, wenn run.py selbst stolpert (z.B. beim Nachinstallieren von
@@ -200,14 +241,28 @@ python -u -m uvicorn app.main:socket_app \
 rc2=$?
 err "Weg 2 (uvicorn) endete mit Exit-Code $rc2."
 
-# --- Weg 3: Diagnose-Server --------------------------------------------------
+# --- Weg 3: Diagnose-Server (ZEITLICH BEGRENZT) ------------------------------
 # Letzte Rueckfallebene: ein winziger HTTP-Server, der auf demselben Port das
-# Startprotokoll ausliefert. Damit beantwortet der Container wenigstens den
-# Healthcheck und man sieht die Ursache direkt im Browser, statt nur
-# "Could not connect to server" zu bekommen.
+# Startprotokoll ausliefert. Damit sieht man die Ursache direkt im Browser,
+# statt nur "Could not connect to server" zu bekommen.
+#
+# WICHTIG - hier lag eine Falle, die genau das Gegenteil bewirkte:
+# Frueher lief dieser Server mit serve_forever(), also ohne Ende. Der
+# Container blieb damit dauerhaft "oben" und lieferte 503 aus. Die
+# Neustart-Regel von Docker (restart: unless-stopped) reagiert aber NUR auf
+# ein Beenden des Containers, nicht auf einen fehlgeschlagenen Healthcheck.
+# Ergebnis: Ein einmal gestrandeter Container kam NIE von allein zurueck -
+# genau das Verhalten "das Backend startet sich nicht selbst neu".
+#
+# Deshalb laeuft der Diagnose-Server jetzt nur noch eine begrenzte Zeit.
+# Danach endet er, das Skript endet, der Container endet - und Docker
+# startet ihn neu. Ein voruebergehender Fehler heilt sich damit von selbst,
+# und man hat trotzdem ein paar Minuten Zeit, die Seite anzusehen.
 echo "[start] ------------------------------------------------------------"
 say "Versuche Weg 3 von 3:  Diagnose-Server auf Port ${PORT:-4000}"
 say "Das Backend laeuft NICHT - die Seite zeigt das Startprotokoll."
+say "Dieser Server endet nach ${RMM_DIAG_SECONDS:-180}s, damit der Container"
+say "neu startet. Mit RMM_KEEP_ALIVE=1 bleibt er zum Nachsehen offen."
 echo "[start] ------------------------------------------------------------"
 
 RMM_DIAG_LOG="${RMM_LOG:-$APP_DIR/startup.log}" \
@@ -225,6 +280,7 @@ import os
 import platform
 import socket
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 LOG = os.environ.get("RMM_DIAG_LOG", "")
@@ -290,10 +346,30 @@ Der Grund steht im Protokoll unten - meist fehlende Pakete oder Dateirechte.</di
         pass          # Zugriffe nicht ins Log spammen
 
 
+# Wie lange die Fehlerseite erreichbar bleibt, bevor der Container neu
+# startet. 0 bedeutet "ohne Ende" - nur fuer die Fehlersuche gedacht.
+try:
+    LIFETIME = int(os.environ.get("RMM_DIAG_SECONDS", "180") or 180)
+except ValueError:
+    LIFETIME = 180
+
 try:
     srv = HTTPServer(("0.0.0.0", PORT), Handler)
     print(f"[diag] Diagnose-Server laeuft auf Port {PORT} - Seite im Browser oeffnen.")
+    if LIFETIME > 0:
+        # Ein Wecker-Thread beendet den Server. shutdown() muss aus einem
+        # ANDEREN Thread kommen - aus serve_forever() heraus ginge es nicht.
+        import threading
+
+        def _stop():
+            time.sleep(LIFETIME)
+            print(f"[diag] {LIFETIME}s um - Container wird beendet, damit "
+                  f"Docker ihn neu startet.")
+            srv.shutdown()
+
+        threading.Thread(target=_stop, daemon=True).start()
     srv.serve_forever()
+    print("[diag] Diagnose-Server beendet.")
 except Exception as e:
     print(f"[diag] Diagnose-Server konnte nicht starten: {e}")
     raise SystemExit(1)
@@ -304,8 +380,14 @@ err "Auch der Diagnose-Server endete (Exit-Code $rc3)."
 
 if [ "${RMM_KEEP_ALIVE:-0}" = "1" ]; then
     echo "[start] RMM_KEEP_ALIVE=1 -> Container bleibt zum Nachsehen offen."
+    echo "[start] ACHTUNG: In dieser Betriebsart startet der Container NICHT"
+    echo "[start] von allein neu. Nur zur Fehlersuche verwenden."
     while true; do sleep 3600; done
 fi
-echo "[start] Neustart in 15 Sekunden (verzoegert, damit dieses Log lesbar bleibt)."
-sleep 15
+# Beenden mit einem Fehlercode. Das ist der Punkt, an dem Docker die
+# Neustart-Regel anwendet - der Container kommt also von selbst zurueck.
+echo "[start] Container wird beendet (Exit-Code $rc)."
+echo "[start] Docker startet ihn wegen 'restart: unless-stopped' neu."
+echo "[start] Kurze Pause, damit dieses Protokoll lesbar bleibt."
+sleep 10
 exit $rc

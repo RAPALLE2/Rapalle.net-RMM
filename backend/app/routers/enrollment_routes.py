@@ -49,7 +49,7 @@ class CreateEnrollmentBody(BaseModel):
 
 
 @router.post("/api/enrollment/tokens")
-async def create_enrollment_token(body: CreateEnrollmentBody, request: Request, user: dict = Depends(get_current_user)):
+def create_enrollment_token(body: CreateEnrollmentBody, request: Request, user: dict = Depends(get_current_user)):
     """
     Erzeugt einen neuen Onboarding-Token und gibt fertige URLs dafür zurück.
 
@@ -167,7 +167,7 @@ def _backend_url(request: Request) -> str:
 
 
 @router.get("/api/public-base")
-async def public_base(request: Request, user: dict = Depends(get_current_user)):
+def public_base(request: Request, user: dict = Depends(get_current_user)):
     """
     Die KANONISCHE Adresse dieser Installation - also die, unter der Clients
     und Netzlaufwerke den Server erreichen sollen.
@@ -205,7 +205,7 @@ async def public_base(request: Request, user: dict = Depends(get_current_user)):
 
 
 @router.get("/enroll/{token}", response_class=HTMLResponse)
-async def enrollment_landing_page(token: str, request: Request):
+def enrollment_landing_page(token: str, request: Request):
     """
     Die eigentliche Download-Seite: zeigt Download-Button UND die
     Schritt-für-Schritt-Befehle für Linux/Windows direkt daneben an.
@@ -336,7 +336,7 @@ async def download_agent_zip(token: str, request: Request):
 
 
 @router.get("/enroll/{token}/install.sh", response_class=PlainTextResponse)
-async def install_script_linux(token: str, request: Request, lang: str = ""):
+def install_script_linux(token: str, request: Request, lang: str = ""):
     """Fertiger Bash-Einzeiler: installiert den Agenten inkl. systemd-Autostart (Linux)."""
     _require_valid_token(token)
     backend_url = _backend_url(request)
@@ -453,7 +453,7 @@ echo "Status prüfen mit: sudo systemctl status rapalle-agent"
 
 
 @router.get("/enroll/{token}/install.ps1", response_class=PlainTextResponse)
-async def install_script_windows(token: str, request: Request, lang: str = ""):
+def install_script_windows(token: str, request: Request, lang: str = ""):
     """Fertiges PowerShell-Skript: installiert den Agenten inkl. Autostart (Windows)."""
     _require_valid_token(token)
     backend_url = _backend_url(request)
@@ -628,7 +628,7 @@ async def agent_dist_zip(request: Request):
 
 
 @router.get("/agent-dist/update.sh", response_class=PlainTextResponse)
-async def agent_update_sh(request: Request, lang: str = ""):
+def agent_update_sh(request: Request, lang: str = ""):
     """
     Aktualisiert den Agenten (Linux) und startet den Autostart-Dienst NEU.
     Die systemd-Unit wird sicherheitshalber neu geschrieben, damit der Neustart
@@ -751,7 +751,7 @@ echo "Update fertig - Agent neu gestartet."
 
 
 @router.get("/agent-dist/update.ps1", response_class=PlainTextResponse)
-async def agent_update_ps1(request: Request, lang: str = ""):
+def agent_update_ps1(request: Request, lang: str = ""):
     """Aktualisiert den Agenten (Windows) und startet den Autostart-Task NEU
     (Task wird bei Bedarf neu registriert)."""
     backend_url = _backend_url(request)
@@ -903,7 +903,7 @@ try {{ Stop-Transcript | Out-Null }} catch {{}}
 
 
 @router.get("/agent-dist/elevate.ps1", response_class=PlainTextResponse)
-async def agent_elevate_ps1(request: Request):
+def agent_elevate_ps1(request: Request):
     """
     Richtet EINMALIG (elevated auszuführen) zwei vorautorisierte SYSTEM-Tasks ein,
     die per Windows-Event ausgelöst werden:
@@ -1015,7 +1015,7 @@ Write-Host "Pruefen mit:  schtasks /query /tn RapalleRmmUninstall"
 
 
 @router.get("/agent-dist/uninstall.sh", response_class=PlainTextResponse)
-async def agent_uninstall_sh(request: Request, lang: str = ""):
+def agent_uninstall_sh(request: Request, lang: str = ""):
     """
     Deinstalliert den Agenten (Linux) SYNCHRON: Dienst stoppen/entfernen,
     Prozesse killen, dann Programmordner löschen. Läuft in einem eigenen
@@ -1071,7 +1071,7 @@ fi
 
 
 @router.get("/agent-dist/uninstall.ps1", response_class=PlainTextResponse)
-async def agent_uninstall_ps1(request: Request, lang: str = ""):
+def agent_uninstall_ps1(request: Request, lang: str = ""):
     """
     Deinstalliert den Agenten (Windows) SYNCHRON: Task entfernen, Prozesse
     killen, dann Programmordner löschen (kein Start-Job, der beim Beenden der
@@ -1240,7 +1240,7 @@ def _installer_entries() -> list[dict]:
 
 
 @router.get("/api/enrollment/installers")
-async def list_installers(user: dict = Depends(get_current_user)):
+def list_installers(user: dict = Depends(get_current_user)):
     """
     Was liegt an fertigen Paketen bereit - und was liesse sich hier bauen?
     Wird vom "Client hinzufügen"-Fenster benutzt.
@@ -1280,7 +1280,7 @@ class BuildInstallersBody(BaseModel):
 
 
 @router.post("/api/enrollment/installers/build")
-async def build_installers(body: BuildInstallersBody, request: Request,
+def build_installers(body: BuildInstallersBody, request: Request,
                            user: dict = Depends(get_current_user)):
     """
     Startet tools/build_installers.py und wartet auf das Ergebnis.
@@ -1320,7 +1320,7 @@ async def build_installers(body: BuildInstallersBody, request: Request,
 
 
 @router.get("/enroll/{token}/installer/{name}")
-async def download_installer(token: str, name: str):
+def download_installer(token: str, name: str):
     """
     Download eines fertigen Pakets über die Onboarding-URL (kein Login nötig -
     der Token in der URL ist der Nachweis, genau wie bei agent.zip).

@@ -47,7 +47,7 @@ class ScoreBody(BaseModel):
 
 
 @router.get("/scores")
-async def get_scores(user: dict = Depends(get_current_user)):
+def get_scores(user: dict = Depends(get_current_user)):
     """Top-10 pro Spiel (bester Score je Benutzer, absteigend)."""
     _ensure_table()
     out = {}
@@ -61,7 +61,7 @@ async def get_scores(user: dict = Depends(get_current_user)):
 
 
 @router.post("/scores")
-async def submit_score(body: ScoreBody, user: dict = Depends(get_current_user)):
+def submit_score(body: ScoreBody, user: dict = Depends(get_current_user)):
     """Score melden - gespeichert wird nur, wenn er den bisherigen Bestwert
     des Benutzers übertrifft."""
     _ensure_table()

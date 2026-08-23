@@ -163,7 +163,7 @@ def _daily_reset(user_id: str, today: date) -> int:
 # ------------------------------------------------------------------
 
 @router.get("")
-async def list_todos(today: str | None = None,
+def list_todos(today: str | None = None,
                      user: dict = Depends(get_current_user)):
     """
     Kompletter Zustand der Liste. Sortierung der Todos:
@@ -198,7 +198,7 @@ class CategoryBody(BaseModel):
 
 
 @router.post("/categories")
-async def create_category(body: CategoryBody, user: dict = Depends(get_current_user)):
+def create_category(body: CategoryBody, user: dict = Depends(get_current_user)):
     require_perm(user, "use_todos")
     name = (body.name or "").strip()
     if not name:
@@ -226,7 +226,7 @@ class CategoryOrderBody(BaseModel):
 
 
 @router.put("/categories/order")
-async def reorder_categories(body: CategoryOrderBody,
+def reorder_categories(body: CategoryOrderBody,
                              user: dict = Depends(get_current_user)):
     """Reihenfolge der Wichtigkeits-Spalten setzen (Archiv bleibt hinten)."""
     require_perm(user, "use_todos")
@@ -242,7 +242,7 @@ async def reorder_categories(body: CategoryOrderBody,
 
 
 @router.put("/categories/{category_id}")
-async def update_category(category_id: str, body: CategoryBody,
+def update_category(category_id: str, body: CategoryBody,
                           user: dict = Depends(get_current_user)):
     require_perm(user, "use_todos")
     cat = _own_category(user["id"], category_id)
@@ -258,7 +258,7 @@ async def update_category(category_id: str, body: CategoryBody,
 
 
 @router.delete("/categories/{category_id}")
-async def delete_category(category_id: str, user: dict = Depends(get_current_user)):
+def delete_category(category_id: str, user: dict = Depends(get_current_user)):
     """Eigene Kategorie löschen. Enthaltene Todos wandern ins Archiv."""
     require_perm(user, "use_todos")
     cat = _own_category(user["id"], category_id)
@@ -294,7 +294,7 @@ def _clean(body: TodoBody) -> tuple[str, str]:
 
 
 @router.post("")
-async def create_todo(body: TodoBody, today: str | None = None,
+def create_todo(body: TodoBody, today: str | None = None,
                       user: dict = Depends(get_current_user)):
     require_perm(user, "use_todos")
     uid = user["id"]
@@ -323,7 +323,7 @@ async def create_todo(body: TodoBody, today: str | None = None,
 
 
 @router.put("/{todo_id}")
-async def update_todo(todo_id: str, body: TodoBody,
+def update_todo(todo_id: str, body: TodoBody,
                       user: dict = Depends(get_current_user)):
     require_perm(user, "use_todos")
     todo = _own_todo(user["id"], todo_id)
@@ -345,7 +345,7 @@ class ToggleBody(BaseModel):
 
 
 @router.post("/{todo_id}/toggle")
-async def toggle_todo(todo_id: str, body: ToggleBody,
+def toggle_todo(todo_id: str, body: ToggleBody,
                       user: dict = Depends(get_current_user)):
     """
     Abhaken bzw. wieder öffnen. Bei wiederkehrenden Todos wird die Streak
@@ -381,7 +381,7 @@ class MoveBody(BaseModel):
 
 
 @router.post("/{todo_id}/move")
-async def move_todo(todo_id: str, body: MoveBody,
+def move_todo(todo_id: str, body: MoveBody,
                     user: dict = Depends(get_current_user)):
     """Todo in eine andere Kategorie schieben (Drag & Drop)."""
     require_perm(user, "use_todos")
@@ -401,7 +401,7 @@ async def move_todo(todo_id: str, body: MoveBody,
 
 
 @router.post("/{todo_id}/archive")
-async def archive_todo(todo_id: str, user: dict = Depends(get_current_user)):
+def archive_todo(todo_id: str, user: dict = Depends(get_current_user)):
     """Ins Archiv verschieben. Die alte Kategorie wird gemerkt."""
     require_perm(user, "use_todos")
     todo = _own_todo(user["id"], todo_id)
@@ -417,7 +417,7 @@ async def archive_todo(todo_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/{todo_id}/unarchive")
-async def unarchive_todo(todo_id: str, user: dict = Depends(get_current_user)):
+def unarchive_todo(todo_id: str, user: dict = Depends(get_current_user)):
     """Aus dem Archiv zurück in die ursprüngliche Kategorie."""
     require_perm(user, "use_todos")
     todo = _own_todo(user["id"], todo_id)
@@ -435,7 +435,7 @@ async def unarchive_todo(todo_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/archive-done")
-async def archive_all_done(user: dict = Depends(get_current_user)):
+def archive_all_done(user: dict = Depends(get_current_user)):
     """Alle erledigten, NICHT wiederkehrenden Todos auf einen Rutsch archivieren."""
     require_perm(user, "use_todos")
     arch = _archive_id(user["id"])
@@ -448,7 +448,7 @@ async def archive_all_done(user: dict = Depends(get_current_user)):
 
 
 @router.delete("/{todo_id}")
-async def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
+def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "use_todos")
     _own_todo(user["id"], todo_id)
     _conn().execute("DELETE FROM todos WHERE id = ? AND user_id = ?",

@@ -25,13 +25,13 @@ router = APIRouter(prefix="/api/admin/docker", tags=["docker"])
 
 
 @router.get("/services")
-async def list_services(user: dict = Depends(get_current_user)):
+def list_services(user: dict = Depends(get_current_user)):
     require_admin(user)
     return docker_services.status()
 
 
 @router.post("/services/{key}/enable")
-async def enable_service(key: str, user: dict = Depends(get_current_user)):
+def enable_service(key: str, user: dict = Depends(get_current_user)):
     require_admin(user)
     try:
         result = docker_services.enable(key)
@@ -52,7 +52,7 @@ async def enable_service(key: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/services/{key}/disable")
-async def disable_service(key: str, user: dict = Depends(get_current_user)):
+def disable_service(key: str, user: dict = Depends(get_current_user)):
     require_admin(user)
     try:
         result = docker_services.disable(key)
@@ -66,6 +66,6 @@ async def disable_service(key: str, user: dict = Depends(get_current_user)):
 
 
 @router.get("/db-credentials")
-async def db_credentials(user: dict = Depends(get_current_user)):
+def db_credentials(user: dict = Depends(get_current_user)):
     require_admin(user)
     return docker_services.db_credentials()

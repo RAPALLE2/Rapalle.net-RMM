@@ -32,6 +32,7 @@
 import { esc, uiConfirm } from "../utils.js";
 import { state } from "../state.js";
 import { registerCleanup } from "../windowmanager.js";
+import { api } from "../api.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "../i18n.js";
@@ -88,6 +89,14 @@ export function renderWebBrowser(body, win) {
           style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:16px;
           color:var(--text);padding:6px 14px;font-size:13px;outline:none" />
         <button class="taskbar-btn" id="wb-go" title="Laden">➜</button>
+        <!-- Wegewahl: direkt aus dem Browser heraus, oder über eine Node.
+             Der Node-Weg ist der Reverse Proxy - damit lassen sich Seiten
+             öffnen, die nur im Netz der Node erreichbar sind. -->
+        <select id="wb-via" title="Über welchen Weg wird geladen?"
+          style="background:var(--panel);border:1px solid var(--border);border-radius:14px;
+          color:var(--text);padding:5px 8px;font-size:12px;max-width:190px">
+          <option value="">Direkt</option>
+        </select>
         <button class="taskbar-btn" id="wb-save" title="${tr("u_diese_seite_als_interne_app_speich")}">⭐ Als App</button>
         <button class="taskbar-btn" id="wb-ext" title="${tr("u_in_neuem_browser_tab_offnen")}">🔗</button>
       </div>
@@ -164,11 +173,73 @@ export function renderWebBrowser(body, win) {
     home.style.display = "none";
     frame.style.display = "block";
     updateNav();
+
+    const via = body.querySelector("#wb-via").value;
+    if (via) { navigateViaNode(via, url); return; }
+
     // Direkt laden. Kein Umweg, keine Umschreibung - die Seite bekommt
     // genau das, was sie in einem normalen Tab auch bekäme.
     frame.src = url;
     watchLoad(url);
   }
+
+  // ---------------- Weg über eine Node (Reverse Proxy) ----------------
+  // Die Node holt die Seite in ihrem Netz und schickt sie zurück. Der
+  // iframe bekommt den Inhalt über srcdoc statt über eine Adresse - eine
+  // Adresse gäbe es hier nicht, die Seite existiert für diesen Browser ja
+  // gar nicht. Ein eingefügtes <base> sorgt dafür, dass relative Links,
+  // Bilder und Stylesheets weiterhin auf den richtigen Host zeigen.
+  async function navigateViaNode(clientId, url) {
+    clearTimeout(loadTimer);
+    hint.style.display = "";
+    hint.textContent = "Wird über die Node geladen …";
+    frame.removeAttribute("src");
+    try {
+      const res = await api.nodeProxyFetch(clientId, url, { insecure: true });
+      const type = String(res.headers?.["Content-Type"]
+        || res.headers?.["content-type"] || "text/html");
+      const bytes = Uint8Array.from(atob(res.body || ""), (c) => c.charCodeAt(0));
+
+      if (!/^text\/html/i.test(type)) {
+        // Kein HTML (Bild, PDF, JSON …): als Datenobjekt anzeigen, statt es
+        // fälschlich als Seite zu deuten.
+        const blob = new Blob([bytes], { type: type.split(";")[0] });
+        frame.src = URL.createObjectURL(blob);
+        hint.textContent = `Über Node geladen · ${type.split(";")[0]}`;
+        return;
+      }
+
+      let html = new TextDecoder("utf-8").decode(bytes);
+      const base = `<base href="${url.replace(/"/g, "&quot;")}">`;
+      html = /<head[^>]*>/i.test(html)
+        ? html.replace(/<head([^>]*)>/i, `<head$1>${base}`)
+        : base + html;
+      frame.srcdoc = html;
+      hint.textContent = `Über Node geladen · Status ${res.status}`
+        + (res.truncated ? " · gekürzt (sehr grosse Seite)" : "");
+    } catch (e) {
+      frame.srcdoc = `<body style="font-family:system-ui;padding:26px;color:#b00">
+        <h3>Abruf über die Node fehlgeschlagen</h3><p>${String(e.message || e)
+          .replace(/</g, "&lt;")}</p></body>`;
+      hint.textContent = "Fehler beim Laden über die Node";
+    }
+  }
+
+  // Nodes in die Wegewahl eintragen. Schlägt das fehl, bleibt es bei
+  // "Direkt" - der Browser muss auch ohne Nodes funktionieren.
+  (async () => {
+    try {
+      const res = await api.listNodes();
+      const sel = body.querySelector("#wb-via");
+      for (const n of res.nodes || []) {
+        const opt = document.createElement("option");
+        opt.value = n.id;
+        opt.textContent = `über ${n.hostname || n.id}`;
+        sel.appendChild(opt);
+      }
+      if (win?.props?.viaNode) sel.value = win.props.viaNode;
+    } catch { /* keine Nodes verfügbar */ }
+  })();
 
   function updateNav() {
     body.querySelector("#wb-back").disabled = idx <= 0;
@@ -182,6 +253,7 @@ export function renderWebBrowser(body, win) {
     // längst gar nicht mehr geladen werden soll.
     clearTimeout(loadTimer);
     frame.style.display = "none";
+    frame.removeAttribute("srcdoc");
     frame.src = "about:blank";
     hint.style.display = "none";
     home.style.display = "block";

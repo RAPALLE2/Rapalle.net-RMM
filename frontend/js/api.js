@@ -78,6 +78,9 @@ const _PERM_KEY = {
   c_relay: "perm_c_relay",
   c_delete: "perm_c_delete",
   use_relay: "perm_use_relay",
+  c_vpn: "perm_c_vpn",
+  c_nodeproxy: "perm_c_nodeproxy",
+  use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",
   manage_patching: "perm_manage_patching",
@@ -89,12 +92,70 @@ function _actionFromPerm(perm) {
   return _PERM_KEY[perm] ? t(_PERM_KEY[perm]) : perm;
 }
 
+// Zeitlimit für jeden API-Aufruf.
+//
+// Warum das nötig ist: fetch() wartet von sich aus UNBEGRENZT. Ist das
+// Backend gestorben oder hängt eine Verbindung im Reverse Proxy fest, dreht
+// sich im Dashboard ein Ladebalken bis in alle Ewigkeit - und der Benutzer
+// sieht nicht, dass gar nichts mehr kommt. Genau so sah zuletzt das
+// "Tunnel ausstellen lädt unendlich lange" aus: nicht ein langsamer
+// Endpunkt, sondern ein Backend, das nicht mehr antwortete.
+//
+// Ein klarer Fehler nach 45 Sekunden ist in jedem Fall besser als ein
+// Spinner ohne Ende.
+const REQUEST_TIMEOUT_MS = 45000;
+// Endpunkte, die naturgemäss länger dauern (Dateien, Datenbank-Sicherungen,
+// Node-Aufwertung mit Treiberinstallation). Für sie gilt ein grösseres Mass.
+// Bewusst eng gefasst: Nur wirklich langsame Vorgänge bekommen mehr Zeit.
+// Ein pauschales "/api/nodes/" wäre falsch - darunter liegt auch die
+// blitzschnelle Zustandsabfrage, und die dürfte dann zehn Minuten hängen.
+const SLOW_PATHS = [
+  "/api/admin/database/", "/api/admin/update", "/api/files/",
+  "/api/recordings/", "/api/scripts/run", "/api/speedtest",
+];
+// Diese Endpunkte dauern von Natur aus lange (Treiberinstallation,
+// Modul-Verteilung) - erkennbar am ENDE des Pfades.
+const SLOW_SUFFIXES = ["/l2", "/promote", "/demote"];
+
+function _timeoutFor(path) {
+  const clean = path.split("?")[0];
+  if (SLOW_PATHS.some((p) => clean.startsWith(p))) return 600000;
+  if (SLOW_SUFFIXES.some((p) => clean.endsWith(p))) return 600000;
+  return REQUEST_TIMEOUT_MS;
+}
+
 async function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
+  // Ein eigener Abbruch-Steuerknüppel je Aufruf. Ruft die aufrufende Stelle
+  // bereits einen eigenen mit, wird deren Signal nicht überschrieben.
+  const controller = options.signal ? null : new AbortController();
+  const limit = options.timeoutMs || _timeoutFor(path);
+  const timer = controller
+    ? setTimeout(() => controller.abort(), limit)
+    : null;
+
+  let res;
+  try {
+    res = await fetch(`${BACKEND_URL}${path}`, {
+      ...options, headers,
+      signal: options.signal || controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(
+        `Keine Antwort vom Server nach ${Math.round(limit / 1000)}s `
+        + `(${path}). Das Backend ist vermutlich gerade nicht erreichbar – `
+        + `es startet sich in der Regel von selbst neu.`);
+    }
+    // Netzwerkfehler verständlich machen: "Failed to fetch" sagt niemandem
+    // etwas, "Server nicht erreichbar" schon.
+    throw new Error(`Server nicht erreichbar (${path}): ${err?.message || err}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   if (!res.ok) {
     let message = `${t("error")} ${res.status}`;
@@ -522,6 +583,63 @@ export const api = {
   // Installationsart: Docker-Container oder natives Programm
   sourceRuntime: () => request("/api/source/runtime"),
   // Relay: FTP-Zugang (teilt sich den Port mit dem Dashboard)
+  // --- Wartungsmodus / Diagnose ---
+  diagStatus: () => request("/api/diag/status"),
+  diagEnable: (minutes, reason, includeAgents = true) => request("/api/diag/enable", {
+    method: "POST",
+    body: JSON.stringify({ minutes, reason: reason || "", include_agents: !!includeAgents }),
+  }),
+  diagDisable: () => request("/api/diag/disable", { method: "POST" }),
+  // Liefert Klartext - request() gibt bei nicht-JSON automatisch Text zurueck.
+  diagTail: (lines = 300) => request(`/api/diag/tail?lines=${lines}`),
+  diagClear: () => request("/api/diag/clear", { method: "POST" }),
+  diagBundleUrl: () => `${BACKEND_URL}/api/diag/bundle`,
+
+  // --- Node-Stufe + Reverse Proxy ---
+  listNodes: () => request("/api/nodes"),
+  // Kurze Frist: Das ist nur eine Zusatzinfo für den Dialog. Antwortet der
+  // Server nicht, soll der Knopf trotzdem sofort reagieren - vorher wartete
+  // er bei totem Backend endlos und wirkte schlicht kaputt.
+  nodeState: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}`,
+    { timeoutMs: 5000 }),
+  nodePromote: (clientId) =>
+    request(`/api/nodes/${encodeURIComponent(clientId)}/promote`, { method: "POST" }),
+  nodeDemote: (clientId) =>
+    request(`/api/nodes/${encodeURIComponent(clientId)}/demote`, { method: "POST" }),
+  nodeSetupL2: (clientId, installDriver, iface) =>
+    request(`/api/nodes/${encodeURIComponent(clientId)}/l2`, {
+      method: "POST",
+      body: JSON.stringify({ install_driver: !!installDriver, interface: iface || "" }),
+    }),
+  nodeProbe: (clientId) =>
+    request(`/api/nodes/${encodeURIComponent(clientId)}/probe`, { method: "POST" }),
+  nodeProxyFetch: (clientId, url, opts = {}) =>
+    request(`/api/nodeproxy/${encodeURIComponent(clientId)}`, {
+      method: "POST",
+      body: JSON.stringify({
+        url, method: opts.method || "GET", headers: opts.headers || {},
+        body_b64: opts.bodyB64 || "", insecure: !!opts.insecure,
+      }),
+    }),
+
+  // --- VPN (WireGuard-kompatibel) ---
+  vpnInfo: () => request("/api/vpn/info"),
+  vpnTunnels: (clientId) => request("/api/vpn/tunnels"
+    + (clientId ? `?client_id=${encodeURIComponent(clientId)}` : "")),
+  vpnCreateTunnel: (clientId, minutes, name, routes, opts = {}) => request("/api/vpn/tunnels", {
+    method: "POST",
+    body: JSON.stringify({
+      client_id: clientId, minutes, name: name || "", routes: routes || "",
+      // 'client' = nur das Geraet selbst, 'site' = ganzes Netz dahinter
+      mode: opts.mode || "client",
+      prefer_direct: opts.preferDirect !== false,
+      want_l2: !!opts.wantL2,
+      lan_address: opts.lanAddress || "",
+    }),
+  }),
+  vpnRevokeTunnel: (tunnelId) =>
+    request(`/api/vpn/tunnels/${encodeURIComponent(tunnelId)}/revoke`, { method: "POST" }),
+
   relayFtpConfig: () => request("/api/relay/ftp"),
 
   // --- Server-eigene Relay-Ordner (Storage / Deployment) ---

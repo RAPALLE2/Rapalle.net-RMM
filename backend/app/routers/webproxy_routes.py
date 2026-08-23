@@ -621,7 +621,7 @@ def _pass_headers(raw: dict) -> dict:
 # ==================================================================
 
 @router.post("/session")
-async def create_session(user: dict = Depends(get_current_user)):
+def create_session(user: dict = Depends(get_current_user)):
     """
     Kurzlebige Proxy-Sitzung anlegen.
 
@@ -798,7 +798,7 @@ class TrustBody(BaseModel):
 
 
 @router.post("/trust")
-async def trust_host(body: TrustBody):
+def trust_host(body: TrustBody):
     """
     Zertifikat eines Hosts akzeptieren.
 
@@ -824,7 +824,7 @@ async def trust_host(body: TrustBody):
 
 
 @router.get("/trusted")
-async def list_trusted(user: dict = Depends(get_current_user)):
+def list_trusted(user: dict = Depends(get_current_user)):
     rows = db._conn.execute(
         "SELECT host, reason, created_at FROM webproxy_trusted_hosts"
         " WHERE username = ? ORDER BY host", (user.get("username", ""),)).fetchall()
@@ -832,7 +832,7 @@ async def list_trusted(user: dict = Depends(get_current_user)):
 
 
 @router.delete("/trusted/{host}")
-async def drop_trusted(host: str, user: dict = Depends(get_current_user)):
+def drop_trusted(host: str, user: dict = Depends(get_current_user)):
     username = user.get("username", "")
     db._conn.execute(
         "DELETE FROM webproxy_trusted_hosts WHERE username = ? AND host = ?",

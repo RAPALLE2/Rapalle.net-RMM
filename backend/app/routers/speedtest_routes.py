@@ -28,7 +28,7 @@ _MAX_MB = 64                  # Obergrenze pro Download-Request (Client loopt)
 
 
 @router.get("/api/speedtest/ping")
-async def speedtest_ping(user: dict = Depends(get_current_user)):
+def speedtest_ping(user: dict = Depends(get_current_user)):
     # Bewusst winzig: die Antwortzeit soll fast nur Netz-Latenz sein.
     return Response(content="pong", media_type="text/plain", headers=_NO_STORE)
 

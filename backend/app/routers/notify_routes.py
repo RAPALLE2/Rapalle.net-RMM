@@ -146,7 +146,7 @@ async def get_smtp(user: dict = Depends(get_current_user)):
 
 
 @router.post("/smtp")
-async def set_smtp(body: SmtpBody, user: dict = Depends(get_current_user)):
+def set_smtp(body: SmtpBody, user: dict = Depends(get_current_user)):
     _require_manage(user)
     if body.security not in ("starttls", "ssl", "none"):
         raise HTTPException(400, "Ungültige Sicherheit (starttls|ssl|none)")

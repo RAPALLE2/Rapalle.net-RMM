@@ -271,7 +271,7 @@ async def update_info(user: dict = Depends(get_current_user)):
 
 
 @router.put("/repo")
-async def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
+def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
     require_perm(user, "admin_settings")
     url = body.url.strip()
     _parse_owner_repo(url)   # validiert das Format

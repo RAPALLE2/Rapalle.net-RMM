@@ -58,6 +58,9 @@ from app.routers import (
     todos_routes,
     privacy_routes,
     patch_routes,
+    vpn_routes,
+    node_routes,
+    diag_routes,
 )
 
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
@@ -81,6 +84,80 @@ except Exception as e:
 
 # 2) FastAPI-App erstellen und alle Routen-Module einhängen
 api = FastAPI(title="RAPALLE.net RMM Backend")
+
+# ---------------------------------------------------------------------------
+# Beobachtung jeder einzelnen Anfrage
+# ---------------------------------------------------------------------------
+# Zweck: Nach einem Absturz soll im Protokoll stehen, WELCHE Anfrage zuletzt
+# lief. Genau diese Angabe fehlte bisher - im Container-Log standen nur
+# Zugriffszeilen von uvicorn, die erst NACH der Antwort geschrieben werden.
+# Stirbt der Prozess mitten in einer Anfrage, taucht sie dort also nie auf.
+#
+# Diese Middleware schreibt deshalb:
+#   * jede Anfrage, die ungewöhnlich lange dauert (mit Dauer und Pfad),
+#   * jede Ausnahme mit vollständigem Stacktrace,
+#   * und sie hält fest, welche Anfragen GERADE laufen. Der Loop-Wächter
+#     nimmt diese Liste in seinen Stack-Abzug auf.
+import time as _t
+import traceback as _traceback
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseMW
+from starlette.responses import JSONResponse as _JSONResp
+
+# Ab dieser Dauer gilt eine Anfrage als auffällig langsam.
+import os as _os_env
+
+try:
+    SLOW_REQUEST_S = float(_os_env.getenv("RMM_SLOW_REQUEST_S", "2.0") or 2.0)
+except ValueError:
+    SLOW_REQUEST_S = 2.0
+
+# Was gerade in Bearbeitung ist: Kennung -> (Pfad, Startzeit)
+INFLIGHT: dict[int, tuple[str, float]] = {}
+_inflight_seq = 0
+
+
+class _RequestWatch(_BaseMW):
+    async def dispatch(self, request, call_next):
+        global _inflight_seq
+        _inflight_seq += 1
+        key = _inflight_seq
+        path = f"{request.method} {request.url.path}"
+        started = _t.monotonic()
+        INFLIGHT[key] = (path, started)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            # Eine Ausnahme darf NIE die Verbindung einfach abreissen lassen -
+            # der Browser wartet sonst bis in sein eigenes Zeitlimit. Lieber
+            # eine ehrliche 500 mit Begründung.
+            duration = _t.monotonic() - started
+            detail = _traceback.format_exc()
+            print(f"[anfrage] FEHLER in {path} nach {duration:.1f}s:\n{detail}")
+            try:
+                from app import diagnostics as _d
+                _d.write(f"FEHLER in {path} nach {duration:.1f}s:\n{detail}",
+                         level="ERROR")
+            except Exception:
+                pass
+            return _JSONResp(
+                status_code=500,
+                content={"detail": f"Interner Fehler in {request.url.path}. "
+                                   f"Die Einzelheiten stehen im Server-Protokoll."})
+        finally:
+            duration = _t.monotonic() - started
+            INFLIGHT.pop(key, None)
+            if duration >= SLOW_REQUEST_S:
+                msg = f"LANGSAM: {path} brauchte {duration:.1f}s"
+                print(f"[anfrage] {msg}")
+                try:
+                    from app import diagnostics as _d
+                    _d.write(msg, level="WARN")
+                except Exception:
+                    pass
+        return response
+
+
+api.add_middleware(_RequestWatch)
 
 # Host-Sperre: Zugriff nur über die in den Einstellungen hinterlegten
 # Adressen. Steht ganz vorne, damit unerlaubte Hosts nicht einmal
@@ -159,6 +236,9 @@ api.include_router(media_routes.router)       # Medien-Bibliothek des Audio-Play
 api.include_router(todos_routes.router)       # Persönliche Todo-Liste (privat)
 api.include_router(privacy_routes.router)     # DSGVO: Auskunft, Löschung, Fristen
 api.include_router(patch_routes.router)       # Software-Patching
+api.include_router(vpn_routes.router)         # WireGuard-kompatibles VPN
+api.include_router(node_routes.router)        # Node-Stufe + Reverse Proxy
+api.include_router(diag_routes.router)        # Wartungsmodus / Diagnose
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
@@ -198,8 +278,20 @@ def get_agent_version() -> str:
 
 @api.get("/api/health")
 async def health_check():
-    """Einfacher Endpunkt zum Prüfen, ob das Backend läuft."""
-    return {"ok": True, "name": "RAPALLE.net RMM", "version": get_backend_version()}
+    """
+    Gesundheitsprüfung - bewusst das Billigste, was geht.
+
+    Hier wird NICHTS angefasst: keine Datenbank, keine Datei, kein
+    Netzwerk. Der Endpunkt beantwortet genau eine Frage - "läuft die
+    Ereignisschleife noch?" -, und die soll er auch dann beantworten
+    können, wenn der Server gerade unter Volllast steht.
+
+    Frühere Fassung las bei jedem Aufruf version.txt von der Platte. Das
+    ist harmlos, solange nichts los ist, und genau der Tropfen zu viel,
+    wenn Docker mitten in einem Massen-Update alle fünf Sekunden anklopft.
+    Die Version steht weiterhin unter /api/version.
+    """
+    return {"ok": True, "name": "RAPALLE.net RMM"}
 
 
 @api.get("/api/version")
@@ -292,6 +384,7 @@ async def server_address(request: _Request):
 # Hintergrund-Task im selben Prozess.
 # ------------------------------------------------------------------
 import asyncio as _asyncio
+import time as _time
 from app.sockets import request_exec as _request_exec
 
 
@@ -474,17 +567,85 @@ async def _start_background_tasks():
             db.set_setting("backend_crash_pending", "0")
     except Exception as e:
         print(f"[startup] Crash-Recovery-Audit fehlgeschlagen: {e}")
-    _asyncio.create_task(_automation_engine())
-    _asyncio.create_task(_uptime_monitor_engine())
-    # Garantie-Prüfschleife (Benachrichtigungs-Regeln warranty_expiring/expired)
+    # Diagnose einhängen und den Wartungsmodus fortsetzen, falls er vor
+    # einem Neustart aktiv war. Das steht bewusst GANZ VORN: Alles, was
+    # danach schiefgeht, soll bereits im Log landen.
+    from app import diagnostics as _diag
+    _diag.install()
+    _diag.report_previous_shutdown()
+    _diag.restore_from_settings()
+    # Der Loop-Waechter laeuft in einem EIGENEN Thread. Das ist Absicht:
+    # Steht die Ereignisschleife still, kaeme eine async-Ueberwachung selbst
+    # nicht mehr zum Zug und wuerde ausgerechnet den Fall verschweigen, den
+    # sie melden soll. Ein Thread misst von aussen.
+    _supervise("loop-herzschlag", _diag.loop_heartbeat)
+    _diag.start_watchdog()
+    _supervise("diagnose-messwerte", _diag.sampler_loop)
+
     from app import notifier as _notifier
-    _asyncio.create_task(_notifier.warranty_loop())
-    _asyncio.create_task(_server_auto_update_engine())
-    _asyncio.create_task(_db_sync_engine())
-    _asyncio.create_task(_relay_expiry_engine())
-    _asyncio.create_task(_privacy_purge_engine())
     from app import patching as _patching
-    _asyncio.create_task(_patching.engine())
+
+    _supervise("automation", _automation_engine)
+    _supervise("uptime-monitor", _uptime_monitor_engine)
+    # Garantie-Prüfschleife (Benachrichtigungs-Regeln warranty_expiring/expired)
+    _supervise("garantie", _notifier.warranty_loop)
+    _supervise("server-auto-update", _server_auto_update_engine)
+    _supervise("db-sync", _db_sync_engine)
+    _supervise("relay-ablauf", _relay_expiry_engine)
+    _supervise("privacy-purge", _privacy_purge_engine)
+    _supervise("patching", _patching.engine)
+
+    # WireGuard-Endpunkt (reines Python, siehe app/wireguard.py). Startet den
+    # UDP-Listener und laedt die noch gueltigen Tunnel wieder ein. Faellt der
+    # Port aus, laeuft alles andere trotzdem weiter.
+    try:
+        from app import vpn as _vpn
+        _asyncio.create_task(_vpn.start())
+    except Exception as _e:
+        print(f"[vpn] Start uebersprungen: {_e}")
+
+
+# ----------------------------------------------------------------------
+# Aufseher für Hintergrundaufgaben
+# ----------------------------------------------------------------------
+# Bisher wurde jede Schleife mit create_task() gestartet. Wirft so eine
+# Schleife eine Ausnahme, ist sie WEG - lautlos. Das Backend läuft dann
+# scheinbar weiter, aber Automatisierung, Uptime-Prüfung oder Patching
+# passieren nicht mehr. Genau das sieht von aussen aus wie "das Backend
+# spinnt" oder "es stürzt ab".
+#
+# Der Aufseher fängt die Ausnahme, schreibt sie ins Log und startet die
+# Schleife neu - mit wachsendem Abstand, damit eine dauerhaft kaputte
+# Schleife nicht in einer Endlosschleife die Maschine auslastet.
+
+_TASKS: dict = {}
+
+
+def _supervise(name: str, factory) -> None:
+    """Startet eine Hintergrundschleife, die sich nach einem Fehler erholt."""
+
+    async def runner():
+        delay = 2.0
+        while True:
+            started = _time.time()
+            try:
+                await factory()
+                # Normal beendet: die Schleife war endlich gemeint.
+                print(f"[aufseher] '{name}' regulär beendet")
+                return
+            except _asyncio.CancelledError:
+                raise
+            except Exception:
+                import traceback as _tb
+                print(f"[aufseher] '{name}' abgestürzt:\n{_tb.format_exc()}")
+                # Lief die Aufgabe lange, war es vermutlich ein Einzelfall -
+                # dann sofort wieder mit kurzem Abstand starten. Stirbt sie
+                # dagegen immer gleich neu, wird der Abstand grösser.
+                delay = 2.0 if _time.time() - started > 120 else min(delay * 2, 300.0)
+                print(f"[aufseher] '{name}' startet in {delay:.0f}s neu")
+                await _asyncio.sleep(delay)
+
+    _TASKS[name] = _asyncio.create_task(runner(), name=f"supervised:{name}")
 
 
 async def _relay_expiry_engine():

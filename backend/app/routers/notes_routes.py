@@ -79,7 +79,7 @@ def _serialize(rows: list[dict], user: dict, shares: dict) -> list[dict]:
 # ------------------------------------------------------------------
 
 @router.get("/{client_id}/notes")
-async def list_notes(client_id: str, user: dict = Depends(get_current_user)):
+def list_notes(client_id: str, user: dict = Depends(get_current_user)):
     client = _client_or_404(client_id)
     require_perm(user, "c_notes_view", client_id)
     _migrate_legacy_note(client, user)
@@ -91,7 +91,7 @@ async def list_notes(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.get("/{client_id}/notes/activity")
-async def notes_activity(client_id: str, user: dict = Depends(get_current_user)):
+def notes_activity(client_id: str, user: dict = Depends(get_current_user)):
     _client_or_404(client_id)
     require_perm(user, "c_notes_view", client_id)
     entries = vis.get_log(ENTITY, client_id)
@@ -101,7 +101,7 @@ async def notes_activity(client_id: str, user: dict = Depends(get_current_user))
 
 
 @router.get("/{client_id}/notes/users")
-async def notes_users(client_id: str, user: dict = Depends(get_current_user)):
+def notes_users(client_id: str, user: dict = Depends(get_current_user)):
     """Auswahlliste für 'für bestimmte': Benutzer UND Gruppen.
     Unverwaltete AD-Gruppen werden markiert, damit das Frontend sie in einen
     eigenen Ordner einsortieren kann."""
@@ -144,7 +144,7 @@ def _vis_label(v: str) -> str:
 
 
 @router.post("/{client_id}/notes")
-async def create_note(client_id: str, body: NoteBody,
+def create_note(client_id: str, body: NoteBody,
                       user: dict = Depends(get_current_user)):
     _client_or_404(client_id)
     require_perm(user, "c_notes_edit", client_id)
@@ -166,7 +166,7 @@ async def create_note(client_id: str, body: NoteBody,
 
 
 @router.put("/{client_id}/notes/{note_id}")
-async def update_note(client_id: str, note_id: str, body: NoteBody,
+def update_note(client_id: str, note_id: str, body: NoteBody,
                       user: dict = Depends(get_current_user)):
     _client_or_404(client_id)
     require_perm(user, "c_notes_edit", client_id)
@@ -195,7 +195,7 @@ async def update_note(client_id: str, note_id: str, body: NoteBody,
 
 
 @router.delete("/{client_id}/notes/{note_id}")
-async def delete_note(client_id: str, note_id: str,
+def delete_note(client_id: str, note_id: str,
                       user: dict = Depends(get_current_user)):
     _client_or_404(client_id)
     require_perm(user, "c_notes_edit", client_id)

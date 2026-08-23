@@ -87,7 +87,7 @@ def _validate_open_mode(mode: str | None) -> None:
 
 # Wichtig: Literal-Route VOR den /{client_id}/...-Routen definieren.
 @router.get("/websites/favorites")
-async def get_favorite_websites(user: dict = Depends(get_current_user)):
+def get_favorite_websites(user: dict = Depends(get_current_user)):
     """Alle als Favorit angehefteten Websites - gefiltert auf Clients,
     die der Benutzer überhaupt sehen darf."""
     favs = db.list_favorite_websites()
@@ -96,7 +96,7 @@ async def get_favorite_websites(user: dict = Depends(get_current_user)):
 
 
 @router.get("/{client_id}/websites")
-async def get_client_websites(client_id: str, user: dict = Depends(get_current_user)):
+def get_client_websites(client_id: str, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id) or not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
     _require_client_perm(user, client_id, "c_websites_view")
@@ -104,7 +104,7 @@ async def get_client_websites(client_id: str, user: dict = Depends(get_current_u
 
 
 @router.post("/{client_id}/websites")
-async def create_client_website(client_id: str, body: WebsiteBody,
+def create_client_website(client_id: str, body: WebsiteBody,
                                 user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
         raise HTTPException(404, "Client nicht gefunden")
@@ -125,7 +125,7 @@ async def create_client_website(client_id: str, body: WebsiteBody,
 
 
 @router.put("/{client_id}/websites/{website_id}")
-async def update_client_website(client_id: str, website_id: str, body: WebsiteUpdateBody,
+def update_client_website(client_id: str, website_id: str, body: WebsiteUpdateBody,
                                 user: dict = Depends(get_current_user)):
     _require_client_perm(user, client_id, "c_websites_edit")
     site = db.get_client_website(website_id)
@@ -146,7 +146,7 @@ async def update_client_website(client_id: str, website_id: str, body: WebsiteUp
 
 
 @router.delete("/{client_id}/websites/{website_id}")
-async def delete_client_website(client_id: str, website_id: str,
+def delete_client_website(client_id: str, website_id: str,
                                 user: dict = Depends(get_current_user)):
     _require_client_perm(user, client_id, "c_websites_edit")
     site = db.get_client_website(website_id)
@@ -159,7 +159,7 @@ async def delete_client_website(client_id: str, website_id: str,
 
 
 @router.get("/{client_id}/metrics/history")
-async def get_client_metrics_history(client_id: str, user: dict = Depends(get_current_user)):
+def get_client_metrics_history(client_id: str, user: dict = Depends(get_current_user)):
     """
     Liefert die gespeicherte Metrik-Historie eines Clients. Das Frontend nutzt
     das, um die Graphen nach einem Seiten-Neuladen sofort mit Verlaufsdaten zu
@@ -222,7 +222,7 @@ def _with_live_state(c: dict) -> dict:
 
 
 @router.get("")
-async def get_clients(user: dict = Depends(get_current_user)):
+def get_clients(user: dict = Depends(get_current_user)):
     clients = db.list_clients()
     visible = visible_client_ids(user, [c["id"] for c in clients])
     # Hostnamen-Map über ALLE Clients (auch unsichtbare): Eine VM/LXC, deren
@@ -242,7 +242,7 @@ async def get_clients(user: dict = Depends(get_current_user)):
 
 
 @router.get("/{client_id}")
-async def get_client(client_id: str, user: dict = Depends(get_current_user)):
+def get_client(client_id: str, user: dict = Depends(get_current_user)):
     c = db.get_client(client_id)
     if not c or not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
@@ -250,7 +250,7 @@ async def get_client(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.put("/{client_id}")
-async def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(get_current_user)):
+def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
         raise HTTPException(404, "Client nicht gefunden")
 
@@ -280,7 +280,7 @@ async def update_client(client_id: str, body: UpdateClientBody, user: dict = Dep
 
 
 @router.delete("/{client_id}")
-async def remove_client(client_id: str, user: dict = Depends(get_current_user)):
+def remove_client(client_id: str, user: dict = Depends(get_current_user)):
     _require_client_perm(user, client_id, "c_delete")
     db.delete_client(client_id)
     db.add_audit_entry(user["username"], "client.deleted", target=client_id)
@@ -520,7 +520,8 @@ async def update_all_agents(body: UpdateAllBody | None = None,
     all_clients = db.list_clients()
     visible = visible_client_ids(user, [c["id"] for c in all_clients])
 
-    triggered_ids: list[str] = []
+    # Zuerst nur SAMMELN, wer drankommt - noch nichts auslösen.
+    targets: list[str] = []
     offline, no_perm, queued = 0, 0, 0
     for c in all_clients:
         cid = c["id"]
@@ -536,31 +537,79 @@ async def update_all_agents(body: UpdateAllBody | None = None,
                 db.set_pending_agent_update(cid, True)
                 queued += 1
             continue
-        # Alte Bestätigung verwerfen, damit wir nur den NEUEN Reconnect erkennen.
-        state.update_confirmed.pop(cid, None)
-        try:
-            ok = await send_to_agent(cid, "update-agent", {})
-            if ok:
-                triggered_ids.append(cid)
-            else:
-                offline += 1
-                if include_offline:
-                    db.set_pending_agent_update(cid, True)
-                    queued += 1
-        except Exception:
-            offline += 1
+        targets.append(cid)
 
     db.add_audit_entry(user["username"], "agent.update_all_triggered",
-                       details=f"ausgelöst={len(triggered_ids)}, offline={offline}, "
+                       details=f"geplant={len(targets)}, offline={offline}, "
                                f"vorgemerkt={queued}")
 
-    # Im Hintergrund darauf warten, dass alle angestoßenen Agents wieder
-    # verbunden sind, und dann die Dashboards benachrichtigen.
-    if triggered_ids:
-        asyncio.create_task(_await_agents_reconnect(triggered_ids, user["username"]))
+    # Gestaffelt ausrollen, NICHT alle auf einmal.
+    #
+    # Warum: Ein "update-agent" löst beim Agenten weit mehr aus als ein
+    # kurzes Signal. Er lädt update.sh bzw. update.ps1 und danach die neue
+    # agent.py von genau diesem Backend, beendet sich und verbindet neu.
+    # Passiert das bei allen Geräten in derselben Sekunde, bekommt der
+    # Server gleichzeitig: N Downloads, N Verbindungsabbrüche und kurz
+    # darauf N Anmeldungen - während im Browser jemand das Dashboard neu
+    # lädt. Genau diese Kombination stand im Log: Der Server war ein paar
+    # Sekunden beschäftigt, der Healthcheck lief in sein 5-Sekunden-Limit
+    # und Cloudflare in seinen Zeitüberlauf.
+    #
+    # Die Aufnahme-Schleuse in sockets.py entschärft nur die Rückkehr. Das
+    # Losschicken muss hier gebremst werden - vorher entsteht die Welle.
+    if targets:
+        asyncio.create_task(_rollout_agent_updates(targets, user["username"]))
 
-    return {"ok": True, "triggered": len(triggered_ids), "offline": offline,
+    return {"ok": True, "triggered": len(targets), "offline": offline,
             "queued_offline": queued, "skipped_no_permission": no_perm}
+
+
+# Wie viele Agenten gleichzeitig aktualisiert werden und wie lange danach
+# gewartet wird. Über Umgebungsvariablen anpassbar, damit man auf kräftiger
+# Hardware aufdrehen kann, ohne Code zu ändern.
+def _rollout_settings() -> tuple[int, float]:
+    import os
+    try:
+        size = max(1, int(os.getenv("AGENT_UPDATE_BATCH", "2") or 2))
+    except ValueError:
+        size = 2
+    try:
+        pause = max(0.0, float(os.getenv("AGENT_UPDATE_PAUSE_S", "20") or 20))
+    except ValueError:
+        pause = 20.0
+    return size, pause
+
+
+async def _rollout_agent_updates(client_ids: list[str], username: str) -> None:
+    """
+    Schickt das Update in kleinen Wellen los und wartet dazwischen.
+
+    Der Aufruf kehrt sofort zurück; das Ausrollen läuft im Hintergrund.
+    Deshalb meldet die Oberfläche "geplant" und nicht "erledigt" - bei 50
+    Geräten dauert der Durchlauf mehrere Minuten, und das ist Absicht.
+    """
+    batch_size, pause = _rollout_settings()
+    triggered: list[str] = []
+    print(f"[update] Rollout für {len(client_ids)} Agenten "
+          f"({batch_size} gleichzeitig, {pause:.0f}s Pause)")
+
+    for start in range(0, len(client_ids), batch_size):
+        chunk = client_ids[start:start + batch_size]
+        for cid in chunk:
+            if not state.is_online(cid):
+                continue   # zwischenzeitlich weg - der Rest läuft weiter
+            # Alte Bestätigung verwerfen, damit nur der NEUE Reconnect zählt.
+            state.update_confirmed.pop(cid, None)
+            try:
+                if await send_to_agent(cid, "update-agent", {}):
+                    triggered.append(cid)
+            except Exception as e:
+                print(f"[update] {cid} nicht erreicht: {e}")
+        if start + batch_size < len(client_ids):
+            await asyncio.sleep(pause)
+
+    if triggered:
+        await _await_agents_reconnect(triggered, username)
 
 
 async def _await_agents_reconnect(client_ids: list[str], username: str,
@@ -694,7 +743,7 @@ async def uninstall_client_agent(client_id: str, user: dict = Depends(get_curren
 
 
 @router.get("/{client_id}/rdp-file")
-async def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
+def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
     """
     Erzeugt eine .rdp-Datei mit der IP-Adresse des Clients. Der Benutzer öffnet
     sie, woraufhin sich der native Windows-RDP-Client (mstsc) verbindet.

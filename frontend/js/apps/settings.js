@@ -192,6 +192,60 @@ export function renderSettings(body, win) {
           ${t("set_proxy_hint", { origin: esc(window.location.origin) })}
         </p>
 
+        <h3 style="margin-top:22px">🔐 VPN (WireGuard-kompatibel)</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Der Tunnel wird im Backend in reinem Python abgewickelt. Auf den
+          verwalteten Geräten wird nichts installiert – sie bauen die
+          Verbindung mit Bordmitteln auf.
+        </p>
+        <div style="background:#f5a52415;border:1px solid #f5a52455;border-radius:8px;
+             padding:9px 12px;margin:8px 0;font-size:12px;line-height:1.5">
+          Der Tunnel-Port ist <b>UDP</b>. Ein Reverse-Proxy (nginx, Traefik,
+          Caddy) reicht kein UDP durch – dieser Port muss also direkt auf den
+          Server bzw. Container zeigen und in der Firewall offen sein.
+        </div>
+        <div class="form-row">
+          <label>VPN aktiv</label>
+          <select id="ge-vpn-enabled">
+            <option value="1"${(s.vpn_enabled ?? "1") === "1" ? " selected" : ""}>Ja</option>
+            <option value="0"${(s.vpn_enabled ?? "1") === "0" ? " selected" : ""}>Nein</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:1">
+            <label>UDP-Port des Endpunkts</label>
+            <input type="number" min="1" max="65535" id="ge-vpn-port"
+                   placeholder="51820" value="${esc(String(s.vpn_port || ""))}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>Tunnel-Netz</label>
+            <input type="text" id="ge-vpn-subnet" placeholder="10.77.0.0/16"
+                   value="${esc(s.vpn_subnet || "")}" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Adresse des VPN-Endpunkts (optional)</label>
+          <input type="text" id="ge-vpn-endpoint" placeholder="leer = Adresse des Servers von oben"
+                 value="${esc(s.vpn_endpoint_host || "")}" />
+        </div>
+        <p style="color:var(--subtext);font-size:12px;margin-top:-4px">
+          Nur ausfüllen, wenn das VPN unter einer <b>anderen</b> Adresse
+          erreichbar ist als das Dashboard – hinter einem Reverse-Proxy ist das
+          der Regelfall. Leer bedeutet: Host aus der Server-Adresse oben.
+        </p>
+        <div style="display:flex;gap:12px">
+          <div class="form-row" style="flex:1">
+            <label>DNS im Tunnel (optional)</label>
+            <input type="text" id="ge-vpn-dns" placeholder="192.168.1.1"
+                   value="${esc(s.vpn_dns || "")}" />
+          </div>
+          <div class="form-row" style="flex:1">
+            <label>MTU</label>
+            <input type="number" min="576" max="1500" id="ge-vpn-mtu"
+                   value="${esc(String(s.vpn_mtu || 1380))}" />
+          </div>
+        </div>
+
         <h3 style="margin-top:22px">${t("set_hostlock_title")}</h3>
         <p style="color:var(--subtext);font-size:13px">
           ${t("set_hostlock_hint")}
@@ -607,6 +661,15 @@ export function renderSettings(body, win) {
         payload.host_lock_scope = val("ge-hostlock-scope");
         payload.host_lock_extra = val("ge-hostlock-extra").trim();
         payload.host_lock_trust_proxy = val("ge-hostlock-proxy");
+        // VPN: leerer Port/Netz bedeutet "Standard verwenden" - deshalb wird
+        // hier NICHT auf einen Zahlenwert erzwungen, sondern der leere Text
+        // durchgereicht.
+        payload.vpn_enabled = val("ge-vpn-enabled");
+        payload.vpn_port = (val("ge-vpn-port") || "").trim();
+        payload.vpn_subnet = (val("ge-vpn-subnet") || "").trim();
+        payload.vpn_endpoint_host = (val("ge-vpn-endpoint") || "").trim();
+        payload.vpn_dns = (val("ge-vpn-dns") || "").trim();
+        payload.vpn_mtu = (val("ge-vpn-mtu") || "1380").trim();
       }
       // Auto-Update (Sektion "Update") hat keinen eigenen Speichern-Knopf mehr -
       // der Zustand haengt jetzt am grossen Knopf hier unten.

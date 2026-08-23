@@ -46,7 +46,7 @@ def _visible_client(user: dict, client_id: str) -> dict:
 # ------------------------------------------------------------------
 
 @router.get("/overview")
-async def overview(user: dict = Depends(get_current_user)):
+def overview(user: dict = Depends(get_current_user)):
     """
     Flottenweite Übersicht: Anzahl je Schweregrad, je Quelle und je Client.
     Speist die Patch-App und die Dashboard-Widgets.
@@ -98,7 +98,7 @@ async def client_patches(client_id: str, status: str = "pending",
 
 
 @router.get("/client/{client_id}/job")
-async def client_job(client_id: str, user: dict = Depends(get_current_user)):
+def client_job(client_id: str, user: dict = Depends(get_current_user)):
     """Fortschritt des laufenden (oder letzten) Auftrags."""
     require_perm(user, "patching")
     _visible_client(user, client_id)
@@ -106,7 +106,7 @@ async def client_job(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.get("/client/{client_id}/readiness")
-async def client_readiness(client_id: str, user: dict = Depends(get_current_user)):
+def client_readiness(client_id: str, user: dict = Depends(get_current_user)):
     """Kann dieser Client patchen - und wenn nein, warum nicht?"""
     require_perm(user, "patching")
     _visible_client(user, client_id)
@@ -212,7 +212,7 @@ class ExcludeBody(BaseModel):
 
 
 @router.post("/{patch_id}/exclude")
-async def exclude_patch(patch_id: str, body: ExcludeBody,
+def exclude_patch(patch_id: str, body: ExcludeBody,
                         user: dict = Depends(get_current_user)):
     """
     Ein Update dauerhaft übergehen. Ausgeschlossene überleben den nächsten
@@ -236,7 +236,7 @@ async def exclude_patch(patch_id: str, body: ExcludeBody,
 # ------------------------------------------------------------------
 
 @router.get("/rules")
-async def get_rules(user: dict = Depends(get_current_user)):
+def get_rules(user: dict = Depends(get_current_user)):
     """Globale Regel plus alle Client-Ausnahmen."""
     require_perm(user, "patching")
     rows = [dict(r) for r in db._conn.execute(
@@ -273,7 +273,7 @@ class GlobalSwitchBody(BaseModel):
 
 
 @router.put("/rules/global/switch")
-async def set_global_switch(body: GlobalSwitchBody,
+def set_global_switch(body: GlobalSwitchBody,
                             user: dict = Depends(get_current_user)):
     """
     Hauptschalter der Automatik. Genau wie beim Agent-Auto-Update: Clients
@@ -287,7 +287,7 @@ async def set_global_switch(body: GlobalSwitchBody,
 
 
 @router.put("/rules/global")
-async def save_global_rule(body: RuleBody, user: dict = Depends(get_current_user)):
+def save_global_rule(body: RuleBody, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_patching")
     rule = patching.save_rule(None, _values(body))
     db.add_audit_entry(user.get("username"), "patch.rule_changed", details="global")
@@ -295,7 +295,7 @@ async def save_global_rule(body: RuleBody, user: dict = Depends(get_current_user
 
 
 @router.put("/rules/client/{client_id}")
-async def save_client_rule(client_id: str, body: RuleBody,
+def save_client_rule(client_id: str, body: RuleBody,
                            user: dict = Depends(get_current_user)):
     """Eigene Regel für einen Client. Sticht die globale."""
     require_perm(user, "manage_patching")
@@ -307,7 +307,7 @@ async def save_client_rule(client_id: str, body: RuleBody,
 
 
 @router.delete("/rules/client/{client_id}")
-async def drop_client_rule(client_id: str, user: dict = Depends(get_current_user)):
+def drop_client_rule(client_id: str, user: dict = Depends(get_current_user)):
     """Ausnahme entfernen - der Client folgt danach wieder der globalen Regel."""
     require_perm(user, "manage_patching")
     client = _visible_client(user, client_id)
@@ -322,7 +322,7 @@ class PolicyBody(BaseModel):
 
 
 @router.put("/policy/{client_id}")
-async def set_policy(client_id: str, body: PolicyBody,
+def set_policy(client_id: str, body: PolicyBody,
                      user: dict = Depends(get_current_user)):
     """Auto-Patch-Modus eines Clients setzen (wie beim Agent-Auto-Update)."""
     require_perm(user, "manage_patching")
@@ -342,7 +342,7 @@ async def set_policy(client_id: str, body: PolicyBody,
 # ------------------------------------------------------------------
 
 @router.get("/runs")
-async def runs(client_id: str | None = None, limit: int = 50,
+def runs(client_id: str | None = None, limit: int = 50,
                user: dict = Depends(get_current_user)):
     require_perm(user, "patching")
     if client_id:

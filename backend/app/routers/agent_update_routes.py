@@ -37,12 +37,12 @@ def _agent_version() -> str:
 
 
 @router.get("/version")
-async def agent_version():
+def agent_version():
     return {"version": _agent_version()}
 
 
 @router.get("/latest", response_class=PlainTextResponse)
-async def agent_latest():
+def agent_latest():
     """Liefert den aktuellen Agent-Quellcode als Text zurück."""
     try:
         code = _AGENT_PY.read_text(encoding="utf-8")

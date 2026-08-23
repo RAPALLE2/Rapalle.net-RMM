@@ -76,7 +76,7 @@ def _safe_path(rel: str) -> Path:
 # ------------------------------------------------------------------
 
 @router.get("/roots")
-async def get_roots(user: dict = Depends(get_current_user)):
+def get_roots(user: dict = Depends(get_current_user)):
     """Schnellzugriff-Ordner + Projekt-Wurzel."""
     require_perm(user, "see_source")
     roots = []
@@ -88,7 +88,7 @@ async def get_roots(user: dict = Depends(get_current_user)):
 
 
 @router.get("/list")
-async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
+def list_dir(path: str = "", user: dict = Depends(get_current_user)):
     """Listet den Inhalt eines Ordners (Ordner zuerst, dann Dateien, alphabetisch)."""
     require_perm(user, "see_source")
     p = _safe_path(path)
@@ -115,7 +115,7 @@ async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
 
 
 @router.get("/read")
-async def read_file(path: str, user: dict = Depends(get_current_user)):
+def read_file(path: str, user: dict = Depends(get_current_user)):
     """Liest eine Textdatei (bis 2 MB). Binärdateien werden als solche markiert."""
     require_perm(user, "see_source")
     p = _safe_path(path)
@@ -138,7 +138,7 @@ class WriteBody(BaseModel):
 
 
 @router.put("/write")
-async def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
+def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
     """Speichert Textinhalt in eine Datei (überschreibt)."""
     require_perm(user, "edit_source")
     p = _safe_path(body.path)
@@ -163,7 +163,7 @@ class RenameBody(BaseModel):
 
 
 @router.post("/mkdir")
-async def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
+def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
     """Legt einen (verschachtelten) Ordner an."""
     require_perm(user, "edit_source")
     p = _safe_path(body.path)
@@ -175,7 +175,7 @@ async def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/newfile")
-async def new_file(body: PathBody, user: dict = Depends(get_current_user)):
+def new_file(body: PathBody, user: dict = Depends(get_current_user)):
     """Legt eine leere Datei an."""
     require_perm(user, "edit_source")
     p = _safe_path(body.path)
@@ -188,7 +188,7 @@ async def new_file(body: PathBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/delete")
-async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
+def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
     """Löscht eine Datei oder einen Ordner (rekursiv). Projekt-Wurzel ist tabu."""
     require_perm(user, "delete_source")
     p = _safe_path(body.path)
@@ -205,7 +205,7 @@ async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/rename")
-async def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
+def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
     """Benennt eine Datei/einen Ordner um bzw. verschiebt sie/ihn."""
     require_perm(user, "edit_source")
     src = _safe_path(body.src)
@@ -264,7 +264,7 @@ def _has_result_set(cur, rows: list | None = None) -> bool:
 
 
 @router.get("/db/tables")
-async def db_tables(user: dict = Depends(get_current_user)):
+def db_tables(user: dict = Depends(get_current_user)):
     """Alle Tabellen mit Zeilenanzahl."""
     require_perm(user, "see_source")
     rows = db._conn.execute(
@@ -282,7 +282,7 @@ async def db_tables(user: dict = Depends(get_current_user)):
 
 
 @router.get("/db/table")
-async def db_table(name: str, limit: int = 200, offset: int = 0,
+def db_table(name: str, limit: int = 200, offset: int = 0,
                    user: dict = Depends(get_current_user)):
     """Inhalt einer Tabelle (Spalten + Zeilen, paginiert)."""
     require_perm(user, "see_source")
@@ -415,7 +415,7 @@ class SqlBody(BaseModel):
 
 
 @router.post("/db/query")
-async def db_query(body: SqlBody, user: dict = Depends(get_current_user)):
+def db_query(body: SqlBody, user: dict = Depends(get_current_user)):
     """
     Führt beliebiges SQL aus. Bei SELECT werden Spalten + Zeilen zurückgegeben,
     sonst die betroffene Zeilenanzahl. (Nur Super-Admin.)
@@ -468,7 +468,7 @@ class CellBody(BaseModel):
 
 
 @router.put("/db/cell")
-async def db_update_cell(body: CellBody, user: dict = Depends(get_current_user)):
+def db_update_cell(body: CellBody, user: dict = Depends(get_current_user)):
     """Setzt den Wert einer einzelnen Zelle (value=None -> NULL)."""
     require_perm(user, "edit_source")
     t = _valid_table(body.table)
@@ -487,7 +487,7 @@ class RowBody(BaseModel):
 
 
 @router.post("/db/delete-row")
-async def db_delete_row(body: RowBody, user: dict = Depends(get_current_user)):
+def db_delete_row(body: RowBody, user: dict = Depends(get_current_user)):
     """Löscht eine Zeile anhand ihrer rowid."""
     require_perm(user, "delete_source")
     t = _valid_table(body.table)
@@ -504,7 +504,7 @@ class InsertRowBody(BaseModel):
 
 
 @router.post("/db/insert-row")
-async def db_insert_row(body: InsertRowBody, user: dict = Depends(get_current_user)):
+def db_insert_row(body: InsertRowBody, user: dict = Depends(get_current_user)):
     """Fügt eine neue Zeile ein (nur angegebene Spalten, Rest = Default)."""
     require_perm(user, "edit_source")
     t = _valid_table(body.table)
@@ -526,7 +526,7 @@ class TableBody(BaseModel):
 
 
 @router.post("/db/drop-table")
-async def db_drop_table(body: TableBody, user: dict = Depends(get_current_user)):
+def db_drop_table(body: TableBody, user: dict = Depends(get_current_user)):
     """Löscht eine komplette Tabelle. (Die doppelte Nachfrage macht das Frontend.)"""
     require_perm(user, "delete_source")
     t = _valid_table(body.table)
@@ -542,7 +542,7 @@ class CreateTableBody(BaseModel):
 
 
 @router.post("/db/create-table")
-async def db_create_table(body: CreateTableBody, user: dict = Depends(get_current_user)):
+def db_create_table(body: CreateTableBody, user: dict = Depends(get_current_user)):
     """Legt eine neue Tabelle mit der angegebenen Spalten-Definition an."""
     require_perm(user, "edit_source")
     name = (body.name or "").strip()
@@ -561,7 +561,7 @@ async def db_create_table(body: CreateTableBody, user: dict = Depends(get_curren
 
 
 @router.post("/db/backup")
-async def db_backup(user: dict = Depends(get_current_user)):
+def db_backup(user: dict = Depends(get_current_user)):
     """Erstellt eine konsistente Kopie der Datenbank als data.sqlite.bak."""
     require_perm(user, "see_source")
     import sqlite3
@@ -584,7 +584,7 @@ async def db_backup(user: dict = Depends(get_current_user)):
 # ------------------------------------------------------------------
 
 @router.get("/runtime")
-async def get_runtime(user: dict = Depends(get_current_user)):
+def get_runtime(user: dict = Depends(get_current_user)):
     """
     Sagt der Oberfläche, WIE dieses Backend installiert ist:
 
@@ -605,7 +605,7 @@ async def get_runtime(user: dict = Depends(get_current_user)):
 # ------------------------------------------------------------------
 
 @router.post("/dist/clear")
-async def clear_dist(user: dict = Depends(get_current_user)):
+def clear_dist(user: dict = Depends(get_current_user)):
     """
     Löscht alle Dateien im Ordner dist/ - dort liegen die mit
     tools/build_installers.py gebauten Installationspakete (.exe/.msi/.bat/
@@ -654,14 +654,14 @@ async def clear_dist(user: dict = Depends(get_current_user)):
 # ==================================================================
 
 @router.get("/migrate/info")
-async def migrate_info(user: dict = Depends(get_current_user)):
+def migrate_info(user: dict = Depends(get_current_user)):
     require_admin(user)
     from app import migrate
     return migrate.preview()
 
 
 @router.get("/migrate/export")
-async def migrate_export(request: Request,
+def migrate_export(request: Request,
                          recordings: bool = True,
                          media: bool = True,
                          branding: bool = True,

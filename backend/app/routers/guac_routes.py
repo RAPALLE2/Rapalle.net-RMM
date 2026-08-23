@@ -37,7 +37,7 @@ async def guac_status(user: dict = Depends(get_current_user)):
 
 
 @router.post("/token")
-async def guac_token(body: GuacTokenBody, user: dict = Depends(get_current_user)):
+def guac_token(body: GuacTokenBody, user: dict = Depends(get_current_user)):
     """
     Erzeugt ein kurzlebiges Einmal-Token, mit dem der Browser den WebSocket-
     Tunnel öffnen kann. Die (evtl. sensiblen) Verbindungsparameter bleiben
@@ -89,7 +89,7 @@ def _guac_profile_key(client_id: str) -> str:
 
 
 @router.get("/profile/{client_id}")
-async def get_guac_profile(client_id: str, user: dict = Depends(get_current_user)):
+def get_guac_profile(client_id: str, user: dict = Depends(get_current_user)):
     """Gespeichertes Guacamole-Login eines Clients (ohne Passwort) lesen."""
     if not can_access_client(user, client_id):
         from fastapi import HTTPException
@@ -103,7 +103,7 @@ async def get_guac_profile(client_id: str, user: dict = Depends(get_current_user
 
 
 @router.put("/profile/{client_id}")
-async def save_guac_profile(client_id: str, body: GuacProfileBody, user: dict = Depends(get_current_user)):
+def save_guac_profile(client_id: str, body: GuacProfileBody, user: dict = Depends(get_current_user)):
     """Guacamole-Login eines Clients speichern. Passwort wird NIE gespeichert."""
     if not can_access_client(user, client_id):
         from fastapi import HTTPException
@@ -169,7 +169,7 @@ def _with_password(p: dict) -> dict:
 
 
 @router.get("/profiles/{client_id}")
-async def list_guac_profiles(client_id: str, user: dict = Depends(get_current_user)):
+def list_guac_profiles(client_id: str, user: dict = Depends(get_current_user)):
     """Alle gespeicherten Guacamole-Logins eines Clients (inkl. Passwort)."""
     if not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
@@ -178,7 +178,7 @@ async def list_guac_profiles(client_id: str, user: dict = Depends(get_current_us
 
 
 @router.post("/profiles/{client_id}")
-async def add_guac_profile(client_id: str, body: GuacProfileV2Body,
+def add_guac_profile(client_id: str, body: GuacProfileV2Body,
                            user: dict = Depends(get_current_user)):
     """Neues Guacamole-Login für einen Client speichern (MIT Passwort)."""
     if not can_access_client(user, client_id):
@@ -208,7 +208,7 @@ async def add_guac_profile(client_id: str, body: GuacProfileV2Body,
 
 
 @router.delete("/profiles/{client_id}/{profile_id}")
-async def delete_guac_profile(client_id: str, profile_id: str,
+def delete_guac_profile(client_id: str, profile_id: str,
                               user: dict = Depends(get_current_user)):
     """Ein gespeichertes Guacamole-Login löschen."""
     if not can_access_client(user, client_id):

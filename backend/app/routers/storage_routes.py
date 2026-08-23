@@ -53,7 +53,7 @@ def _section(name: str) -> str:
 
 
 @router.get("/api/storage/sections")
-async def storage_sections(user: dict = Depends(get_current_user)):
+def storage_sections(user: dict = Depends(get_current_user)):
     """Welche Ordner gibt es und darf ich darin schreiben?"""
     if not rs.may_read(user):
         raise HTTPException(403, "Fehlendes Recht: use_relay")
@@ -70,7 +70,7 @@ async def storage_sections(user: dict = Depends(get_current_user)):
 
 
 @router.get("/api/storage/list")
-async def storage_list(section: str, path: str = "",
+def storage_list(section: str, path: str = "",
                        user: dict = Depends(get_current_user)):
     sec = _section(section)
     if not rs.may_read(user, sec):
@@ -85,7 +85,7 @@ async def storage_list(section: str, path: str = "",
 
 
 @router.get("/api/storage/download")
-async def storage_download(section: str, path: str,
+def storage_download(section: str, path: str,
                            user: dict = Depends(get_current_user)):
     sec = _section(section)
     if not rs.may_read(user, sec):
@@ -126,7 +126,7 @@ class PathBody(BaseModel):
 
 
 @router.post("/api/storage/mkdir")
-async def storage_mkdir(body: PathBody, user: dict = Depends(get_current_user)):
+def storage_mkdir(body: PathBody, user: dict = Depends(get_current_user)):
     sec = _section(body.section)
     if not rs.may_write(user, sec):
         raise HTTPException(403, f"Schreiben in '{sec}' nicht erlaubt")
@@ -138,7 +138,7 @@ async def storage_mkdir(body: PathBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/storage/delete")
-async def storage_delete(body: PathBody, user: dict = Depends(get_current_user)):
+def storage_delete(body: PathBody, user: dict = Depends(get_current_user)):
     sec = _section(body.section)
     if not rs.may_write(user, sec):
         raise HTTPException(403, f"Schreiben in '{sec}' nicht erlaubt")
@@ -154,7 +154,7 @@ async def storage_delete(body: PathBody, user: dict = Depends(get_current_user))
 
 
 @router.post("/api/storage/move")
-async def storage_move(body: PathBody, user: dict = Depends(get_current_user)):
+def storage_move(body: PathBody, user: dict = Depends(get_current_user)):
     sec = _section(body.section)
     if not rs.may_write(user, sec):
         raise HTTPException(403, f"Schreiben in '{sec}' nicht erlaubt")
@@ -180,7 +180,7 @@ class DeploySettings(BaseModel):
 
 
 @router.get("/api/storage/deployment")
-async def get_deployment(user: dict = Depends(get_current_user)):
+def get_deployment(user: dict = Depends(get_current_user)):
     require_perm(user, "manage_settings")
     return {
         "html": db.get_setting(SETTING_HTML) or "",
@@ -190,7 +190,7 @@ async def get_deployment(user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/storage/deployment")
-async def set_deployment(body: DeploySettings,
+def set_deployment(body: DeploySettings,
                          user: dict = Depends(get_current_user)):
     require_perm(user, "manage_settings")
     if body.html is not None:
@@ -233,7 +233,7 @@ def _default_page(title: str) -> str:
 
 @router.get("/deployment", include_in_schema=False)
 @router.get("/deployment/", include_in_schema=False)
-async def deployment_index():
+def deployment_index():
     if not deployment_public():
         return _OFF
     html = (db.get_setting(SETTING_HTML) or "").strip()
@@ -244,12 +244,13 @@ async def deployment_index():
 
 
 @router.get("/deployment/{full_path:path}", include_in_schema=False)
-async def deployment_file(full_path: str, request: Request):
+def deployment_file(full_path: str, request: Request):
     if not deployment_public():
         return _OFF
     parts = [p for p in full_path.split("/") if p]
     if not parts:
-        return await deployment_index()
+        # deployment_index() ist jetzt synchron - kein 'await' mehr.
+        return deployment_index()
     try:
         entry = rs.stat_entry("Deployment", parts)
     except PermissionError:

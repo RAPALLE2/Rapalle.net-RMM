@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/privacy", tags=["privacy"])
 # ==================================================================
 
 @router.get("/me")
-async def my_data_overview(user: dict = Depends(get_current_user)):
+def my_data_overview(user: dict = Depends(get_current_user)):
     """Kurzüberblick: welche Datenarten liegen zu mir vor."""
     data = privacy.export_user_data(user["id"])
     return {
@@ -43,7 +43,7 @@ async def my_data_overview(user: dict = Depends(get_current_user)):
 
 
 @router.get("/me/export")
-async def export_my_data(user: dict = Depends(get_current_user)):
+def export_my_data(user: dict = Depends(get_current_user)):
     """Vollständige Auskunft als JSON-Download (Art. 15 / Art. 20)."""
     data = privacy.export_user_data(user["id"])
     db.add_audit_entry(user.get("username"), "privacy.self_export",
@@ -62,7 +62,7 @@ class ErasureBody(BaseModel):
 
 
 @router.post("/me/erasure-request")
-async def request_erasure(body: ErasureBody, user: dict = Depends(get_current_user)):
+def request_erasure(body: ErasureBody, user: dict = Depends(get_current_user)):
     """
     Löschung beantragen (Art. 17). Wird von einem Admin geprüft, weil
     Art. 17 Abs. 3 Ausnahmen kennt (z.B. Nachweispflichten) und die
@@ -80,7 +80,7 @@ async def request_erasure(body: ErasureBody, user: dict = Depends(get_current_us
 
 
 @router.get("/me/erasure-request")
-async def my_erasure_requests(user: dict = Depends(get_current_user)):
+def my_erasure_requests(user: dict = Depends(get_current_user)):
     return [r for r in privacy.list_erasure_requests() if r["user_id"] == user["id"]]
 
 
@@ -89,7 +89,7 @@ async def my_erasure_requests(user: dict = Depends(get_current_user)):
 # ==================================================================
 
 @router.get("/report")
-async def data_report(user: dict = Depends(get_current_user)):
+def data_report(user: dict = Depends(get_current_user)):
     """Bestandsübersicht - Grundlage fürs Verzeichnis nach Art. 30."""
     require_perm(user, "manage_privacy")
     return privacy.report()
@@ -100,7 +100,7 @@ class RetentionBody(BaseModel):
 
 
 @router.put("/retention")
-async def set_retention(body: RetentionBody, user: dict = Depends(get_current_user)):
+def set_retention(body: RetentionBody, user: dict = Depends(get_current_user)):
     """Aufbewahrungsfristen setzen. 0 = unbegrenzt (bewusste Entscheidung)."""
     require_perm(user, "manage_privacy")
     known = {r["key"] for r in privacy.RETENTION}
@@ -122,7 +122,7 @@ async def set_retention(body: RetentionBody, user: dict = Depends(get_current_us
 
 
 @router.post("/purge")
-async def run_purge(user: dict = Depends(get_current_user)):
+def run_purge(user: dict = Depends(get_current_user)):
     """Fristen sofort anwenden, statt auf den Nacht-Job zu warten."""
     require_perm(user, "manage_privacy")
     result = privacy.purge()
@@ -132,7 +132,7 @@ async def run_purge(user: dict = Depends(get_current_user)):
 
 
 @router.get("/users/{user_id}/export")
-async def export_user(user_id: str, user: dict = Depends(get_current_user)):
+def export_user(user_id: str, user: dict = Depends(get_current_user)):
     """Auskunft für eine andere Person erteilen (z.B. auf schriftliches Verlangen)."""
     require_perm(user, "manage_privacy")
     target = db.get_user_by_id(user_id)
@@ -156,7 +156,7 @@ class EraseBody(BaseModel):
 
 
 @router.post("/users/{user_id}/erase")
-async def erase_user(user_id: str, body: EraseBody,
+def erase_user(user_id: str, body: EraseBody,
                      user: dict = Depends(get_current_user)):
     """
     Löschung ausführen (Art. 17). Nicht umkehrbar, deshalb muss der
@@ -186,7 +186,7 @@ async def erase_user(user_id: str, body: EraseBody,
 
 
 @router.get("/erasure-requests")
-async def erasure_requests(status: str | None = None,
+def erasure_requests(status: str | None = None,
                            user: dict = Depends(get_current_user)):
     require_perm(user, "manage_privacy")
     return privacy.list_erasure_requests(status)
@@ -198,7 +198,7 @@ class ResolveBody(BaseModel):
 
 
 @router.post("/erasure-requests/{request_id}/resolve")
-async def resolve_request(request_id: str, body: ResolveBody,
+def resolve_request(request_id: str, body: ResolveBody,
                           user: dict = Depends(get_current_user)):
     """
     Antrag abschließen. Eine Ablehnung muss begründet werden - Art. 12

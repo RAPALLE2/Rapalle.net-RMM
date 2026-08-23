@@ -57,7 +57,7 @@ async def upload_recording(
 
 
 @router.get("/{rec_id}/video")
-async def get_recording_video(rec_id: str, user: dict = Depends(get_current_user)):
+def get_recording_video(rec_id: str, user: dict = Depends(get_current_user)):
     """Streamt die WebM-Datei einer Video-Aufzeichnung."""
     require_perm(user, "see_replay")
     rec = db.get_recording(rec_id)
@@ -76,7 +76,7 @@ async def get_recording_video(rec_id: str, user: dict = Depends(get_current_user
 
 
 @router.get("")
-async def list_recordings(user: dict = Depends(get_current_user)):
+def list_recordings(user: dict = Depends(get_current_user)):
     """Alle Aufzeichnungen als Liste (neueste zuerst)."""
     require_perm(user, "see_replay")
     # Aufräumen: Replays, deren Datei nicht mehr existiert (gelöscht wurde),
@@ -101,7 +101,7 @@ async def list_recordings(user: dict = Depends(get_current_user)):
 
 
 @router.get("/{rec_id}/frames")
-async def get_recording_frames(rec_id: str, user: dict = Depends(get_current_user)):
+def get_recording_frames(rec_id: str, user: dict = Depends(get_current_user)):
     """
     Liefert alle Frames einer Aufzeichnung zum Abspielen.
     Jeder Frame: {t: Zeit-Offset in ms, w, h, img: Base64-JPEG}.
@@ -133,7 +133,7 @@ async def get_recording_frames(rec_id: str, user: dict = Depends(get_current_use
 
 
 @router.delete("/{rec_id}")
-async def delete_recording(rec_id: str, user: dict = Depends(get_current_user)):
+def delete_recording(rec_id: str, user: dict = Depends(get_current_user)):
     """Löscht eine Aufzeichnung (Datei + Datenbank-Eintrag)."""
     require_perm(user, "delete_replay")
     rec = db.delete_recording(rec_id)

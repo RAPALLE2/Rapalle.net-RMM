@@ -80,7 +80,7 @@ def _restart_soon(delay: float = 4.0) -> None:
 
 
 @router.get("/info")
-async def database_info(user: dict = Depends(get_current_user)):
+def database_info(user: dict = Depends(get_current_user)):
     require_admin(user)
     return {"config": dbsync.public_config()}
 
@@ -184,13 +184,13 @@ async def database_switch(body: SwitchBody, user: dict = Depends(get_current_use
 
 
 @router.get("/progress")
-async def database_progress(user: dict = Depends(get_current_user)):
+def database_progress(user: dict = Depends(get_current_user)):
     require_admin(user)
     return dict(dbsync.JOB)
 
 
 @router.get("/backups")
-async def database_backups(user: dict = Depends(get_current_user)):
+def database_backups(user: dict = Depends(get_current_user)):
     require_admin(user)
     return {"backups": dbsync.list_backups()}
 

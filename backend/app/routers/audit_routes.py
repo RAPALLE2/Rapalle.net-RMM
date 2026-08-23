@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 
 @router.get("")
-async def get_audit_log(limit: int = 200, user: dict = Depends(get_current_user)):
+def get_audit_log(limit: int = 200, user: dict = Depends(get_current_user)):
     require_perm(user, "see_audit")
     return db.list_audit_log(limit)
 
@@ -35,7 +35,7 @@ _ALLOWED_CLIENT_ACTIONS = {"frontend.crash_recovered", "frontend.crash"}
 
 
 @router.post("/log-error")
-async def log_client_error(body: ClientErrorBody, user: dict = Depends(get_current_user)):
+def log_client_error(body: ClientErrorBody, user: dict = Depends(get_current_user)):
     """
     Ermöglicht dem Frontend, wichtige Fehler (die dem Benutzer als
     Benachrichtigung angezeigt werden) auch dauerhaft im Audit-Log zu erfassen.

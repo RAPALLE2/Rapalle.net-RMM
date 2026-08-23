@@ -124,7 +124,7 @@ def _list_windows_drives() -> list[dict]:
 
 
 @router.get("")
-async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
+def list_dir(path: str = "", user: dict = Depends(get_current_user)):
     require_perm(user, "see_source")
     # Kein Pfad angegeben -> "Wurzel"-Ansicht zeigen (Laufwerke bzw. / und Home)
     if not path:
@@ -161,7 +161,7 @@ async def list_dir(path: str = "", user: dict = Depends(get_current_user)):
 
 
 @router.get("/read")
-async def read_file(path: str, user: dict = Depends(get_current_user)):
+def read_file(path: str, user: dict = Depends(get_current_user)):
     """Liest eine Datei base64-kodiert (Download, Bild-Vorschau, Editor)."""
     require_perm(user, "see_source")
     try:
@@ -194,7 +194,7 @@ class RenameBody(BaseModel):
 
 
 @router.post("/write")
-async def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
+def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
     require_perm(user, "edit_source")
     try:
         content = base64.b64decode(body.data)
@@ -208,7 +208,7 @@ async def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/mkdir")
-async def mkdir(body: PathBody, user: dict = Depends(get_current_user)):
+def mkdir(body: PathBody, user: dict = Depends(get_current_user)):
     require_perm(user, "edit_source")
     try:
         os.makedirs(body.path, exist_ok=False)
@@ -219,7 +219,7 @@ async def mkdir(body: PathBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/delete")
-async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
+def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
     require_perm(user, "delete_source")
     try:
         if os.path.isdir(body.path) and not os.path.islink(body.path):
@@ -233,7 +233,7 @@ async def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/rename")
-async def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
+def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
     require_perm(user, "edit_source")
     try:
         os.rename(body.src, body.dst)

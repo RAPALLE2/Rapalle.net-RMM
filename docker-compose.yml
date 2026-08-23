@@ -55,6 +55,10 @@ services:
       # links = Port auf dem Host (im Browser), rechts = Port im Container.
       # Beide über RMM_PORT steuerbar; nach Änderung "docker compose up -d".
       - "${RMM_PORT:-4000}:${RMM_PORT:-4000}"
+      # WireGuard-Endpunkt (UDP!). Der Tunnel wird in reinem Python im
+      # Backend abgewickelt - es braucht weder das Kernel-Modul noch
+      # NET_ADMIN. Ohne diese Freigabe erreicht kein VPN-Client den Server.
+      - "${VPN_PORT:-51820}:${VPN_PORT:-51820}/udp"
 
     volumes:
       # Der komplette Projektcode liegt als Bind-Mount im Container.

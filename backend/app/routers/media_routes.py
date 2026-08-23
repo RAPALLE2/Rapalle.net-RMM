@@ -89,7 +89,7 @@ def _check_share(user: dict, shared: bool) -> int:
 # ------------------------------------------------------------------
 
 @router.get("")
-async def list_media(kind: str | None = None, favorite: bool = False,
+def list_media(kind: str | None = None, favorite: bool = False,
                      user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     sql = ("SELECT * FROM media_items WHERE (owner_id = ? OR shared = 1)")
@@ -121,7 +121,7 @@ class MediaBody(BaseModel):
 
 
 @router.post("")
-async def create_media(body: MediaBody, user: dict = Depends(get_current_user)):
+def create_media(body: MediaBody, user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     if body.kind not in ("youtube", "spotify", "radio"):
         raise HTTPException(400, "Ungültige Art (youtube|spotify|radio)")
@@ -256,7 +256,7 @@ class MediaPatch(BaseModel):
 
 
 @router.patch("/{item_id}")
-async def update_media(item_id: str, body: MediaPatch,
+def update_media(item_id: str, body: MediaPatch,
                        user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     item = _row_or_404(item_id)
@@ -276,7 +276,7 @@ async def update_media(item_id: str, body: MediaPatch,
 
 
 @router.post("/{item_id}/favorite")
-async def toggle_favorite(item_id: str, user: dict = Depends(get_current_user)):
+def toggle_favorite(item_id: str, user: dict = Depends(get_current_user)):
     """
     Stern an/aus. Anders als das Bearbeiten darf das JEDER, der den Eintrag
     sehen darf - auch bei fremden, freigegebenen Einträgen.
@@ -292,7 +292,7 @@ async def toggle_favorite(item_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/{item_id}")
-async def delete_media(item_id: str, user: dict = Depends(get_current_user)):
+def delete_media(item_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     item = _row_or_404(item_id)
     if not _may_edit(user, item):
@@ -366,7 +366,7 @@ def _set_items(pid: str, item_ids: list[str]) -> None:
 
 
 @router.get("/playlists")
-async def list_playlists(favorite: bool = False, user: dict = Depends(get_current_user)):
+def list_playlists(favorite: bool = False, user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     sql = "SELECT * FROM media_playlists WHERE (owner_id = ? OR shared = 1)"
     args: list = [user["id"]]
@@ -384,7 +384,7 @@ async def list_playlists(favorite: bool = False, user: dict = Depends(get_curren
 
 
 @router.post("/playlists")
-async def create_playlist(body: PlaylistBody, user: dict = Depends(get_current_user)):
+def create_playlist(body: PlaylistBody, user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     name = (body.name or "").strip()
     if not name:
@@ -406,7 +406,7 @@ async def create_playlist(body: PlaylistBody, user: dict = Depends(get_current_u
 
 
 @router.get("/playlists/{pid}")
-async def get_playlist(pid: str, user: dict = Depends(get_current_user)):
+def get_playlist(pid: str, user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     pl = _playlist_or_404(pid)
     if not (pl["shared"] or pl["owner_id"] == user["id"] or is_super_admin(user)):
@@ -418,7 +418,7 @@ async def get_playlist(pid: str, user: dict = Depends(get_current_user)):
 
 
 @router.patch("/playlists/{pid}")
-async def update_playlist(pid: str, body: PlaylistPatch,
+def update_playlist(pid: str, body: PlaylistPatch,
                           user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     pl = _playlist_or_404(pid)
@@ -439,11 +439,12 @@ async def update_playlist(pid: str, body: PlaylistPatch,
         _conn().execute(f"UPDATE media_playlists SET {clause} WHERE id = ?",
                         (*fields.values(), pid))
         _conn().commit()
-    return await get_playlist(pid, user)
+    # get_playlist() ist jetzt synchron - kein 'await' mehr.
+    return get_playlist(pid, user)
 
 
 @router.post("/playlists/{pid}/items")
-async def set_playlist_items(pid: str, body: PlaylistItems,
+def set_playlist_items(pid: str, body: PlaylistItems,
                              user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     pl = _playlist_or_404(pid)
@@ -456,11 +457,12 @@ async def set_playlist_items(pid: str, body: PlaylistItems,
         if row and _may_see(user, dict(row)):
             valid.append(iid)
     _set_items(pid, valid)
-    return await get_playlist(pid, user)
+    # get_playlist() ist jetzt synchron - kein 'await' mehr.
+    return get_playlist(pid, user)
 
 
 @router.delete("/playlists/{pid}")
-async def delete_playlist(pid: str, user: dict = Depends(get_current_user)):
+def delete_playlist(pid: str, user: dict = Depends(get_current_user)):
     require_perm(user, "use_media")
     pl = _playlist_or_404(pid)
     if not (pl["owner_id"] == user["id"] or is_super_admin(user)):

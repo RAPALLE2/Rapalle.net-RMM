@@ -11,7 +11,7 @@
 
 import { state, findClient } from "./state.js";
 import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
-import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt } from "./utils.js";
+import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker } from "./subjectpicker.js";
@@ -224,6 +224,8 @@ export function renderStatusPart(target, client) {
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="${t("uninstall_agent")}">🗑️ ${t("uninstall_agent")}</button>` : ""}
+      ${hasClientPerm(client.id, "c_vpn") ? `
+      <button data-quick="vpn" title="WireGuard-kompatible Tunnel-Datei auf diesen Client ausstellen">🔐 VPN</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✏️ ${t("edit")}</button>` : ""}
     </div>
     <div style="flex:1;min-width:200px;display:flex;flex-direction:column;justify-content:center">
@@ -238,7 +240,19 @@ export function renderStatusPart(target, client) {
     bindRowHover(rowEl, () => `<b>${esc(r.label)}</b><br>${esc(r.raw)}`);
   });
   box.querySelectorAll("[data-quick]").forEach((btn) =>
-    btn.addEventListener("click", () => handleQuickAction(btn.dataset.quick, client)));
+    btn.addEventListener("click", () => {
+      // Fehler MÜSSEN sichtbar werden. Vorher wurde die zurückgegebene
+      // Zusage nirgends ausgewertet: Schlug etwas fehl, landete das
+      // stillschweigend als unbehandelte Ablehnung in der Konsole - der
+      // Knopf "machte einfach nichts", ohne jeden Hinweis, warum.
+      Promise.resolve(handleQuickAction(btn.dataset.quick, client))
+        .catch((e) => {
+          console.error("[quick-action]", btn.dataset.quick, e);
+          window.notify?.(
+            `Aktion "${btn.dataset.quick}" fehlgeschlagen: ${e?.message || e}`,
+            "error", 12000);
+        });
+    }));
 }
 
 // --- AKTIONEN-Part ---
@@ -1001,6 +1015,18 @@ export const OVERVIEW_SUBS = {
 // -----------------------------------------------------------------
 
 export async function handleQuickAction(action, client) {
+  if (action === "vpn") {
+    // Die VPN-App mit vorbelegtem Client oeffnen. Eigener Fensterschluessel
+    // je Client, damit man fuer mehrere Geraete parallel Tunnel ausstellen
+    // kann, ohne dass sich die Fenster gegenseitig ueberschreiben.
+    openWindow({
+      key: `vpn-${client.id}`, appId: "vpn",
+      title: `VPN — ${client.hostname}`,
+      props: { clientId: client.id, clientName: client.hostname },
+      w: 980, h: 640,
+    });
+    return;
+  }
   if (action === "edit") {
     openWindow({ key: `edit-${client.id}`, appId: "edit-client", title: `${t("edit")} — ${client.hostname}`, props: { clientId: client.id }, w: 480, h: 520 });
     return;
@@ -1017,6 +1043,53 @@ export async function handleQuickAction(action, client) {
     return;
   }
   if (action === "update") {
+    // Der Update-Knopf bietet jetzt zwei Wege an: das gewoehnliche
+    // Agent-Update und die Aufwertung zur NODE. Beides bringt Code auf das
+    // Geraet, deshalb sitzt es an derselben Stelle und am selben Recht -
+    // aber es sind unterschiedliche Vorgaenge, also wird gefragt, welcher
+    // gemeint ist.
+    // Node-Zustand nur als Zusatzinfo holen - mit kurzer Frist und ohne den
+    // Dialog davon abhängig zu machen. Bei einem nicht erreichbaren Backend
+    // erschien der Dialog vorher gar nicht, und der Knopf wirkte tot.
+    let isNode = false;
+    try {
+      isNode = !!(await api.nodeState(client.id))?.is_node;
+    } catch (e) {
+      console.warn("[quick-action] Node-Zustand nicht abrufbar:", e?.message);
+    }
+    const choice = await uiChoice(`${client.hostname}`, [
+      { label: `⬆️ ${t("update_agent")}`, value: "agent" },
+      isNode
+        ? { label: "⬇️ Node zurückstufen (Zusatzmodule entfernen)", value: "demote" }
+        : { label: "⭐ Zu Node aufwerten (VPN-Endpunkt, Reverse Proxy)", value: "promote" },
+    ], {
+      description: isNode
+        ? "Dieses Gerät ist eine Node. Beim Zurückstufen werden die "
+          + "Zusatzmodule entfernt und offene Tunnel geschlossen."
+        : "Eine Node kann zusätzlich als Brückenkopf ins Netz dienen: "
+          + "eigener VPN-Endpunkt und Reverse Proxy. Gewöhnliche Clients "
+          + "bekommen diese Module nicht.",
+    });
+    if (!choice) return;
+
+    if (choice === "promote" || choice === "demote") {
+      const label = choice === "promote" ? "Aufwerten" : "Zurückstufen";
+      window.notify?.(`${label} läuft …`, "info", 30000, { tag: "node:" + client.id });
+      try {
+        if (choice === "promote") await api.nodePromote(client.id);
+        else await api.nodeDemote(client.id);
+        window.notify?.(
+          choice === "promote"
+            ? `${client.hostname} ist jetzt eine Node.`
+            : `${client.hostname} ist wieder ein gewöhnlicher Client.`,
+          "success", 8000, { tag: "node:" + client.id });
+      } catch (e) {
+        window.notify?.(`${label} fehlgeschlagen: ${e.message}`, "error", 12000,
+                        { tag: "node:" + client.id });
+      }
+      return;
+    }
+
     if (!(await uiConfirm(t("agent_update_q", { host: client.hostname }), { description: t("agent_update_desc"), okText: t("agent_update_ok") }))) return;
     window.notify?.(t("pn_agent_updating", { host: client.hostname }), "info", 60000, { tag: "agent-update:" + client.id });
     try {

@@ -81,7 +81,7 @@ def _public_user(user: dict) -> dict:
 
 
 @router.get("/realms")
-async def public_realms():
+def public_realms():
     """
     Öffentliche Liste der Anmelde-Realms für das Dropdown im Login-Fenster.
     Enthält nur id + name (keine Geheimnisse). "local" wird im Frontend ergänzt.
@@ -202,7 +202,7 @@ async def login(body: LoginBody, request: Request = None):
 
 
 @router.post("/change-password")
-async def change_password(body: ChangePasswordBody, user: dict = Depends(get_current_user)):
+def change_password(body: ChangePasswordBody, user: dict = Depends(get_current_user)):
     # Verzeichnis-Benutzer (AD/LDAP/SSO, erkennbar an auth_realm) haben KEIN
     # lokales Passwort - der Hash ist nur ein Platzhalter. Eine "Änderung"
     # würde ein lokales Schatten-Passwort erzeugen, das am Verzeichnis vorbei
@@ -234,12 +234,12 @@ async def change_password(body: ChangePasswordBody, user: dict = Depends(get_cur
 
 
 @router.get("/me")
-async def me(user: dict = Depends(get_current_user)):
+def me(user: dict = Depends(get_current_user)):
     return _public_user(user)
 
 
 @router.get("/effective")
-async def my_effective_permissions(user: dict = Depends(get_current_user)):
+def my_effective_permissions(user: dict = Depends(get_current_user)):
     """
     Effektive Rechte des eingeloggten Benutzers für das Frontend-Gating:
     { admin, global: {perm: bool}, clients: { client_id: {perm: bool} } }.
@@ -262,7 +262,7 @@ class UiPrefsBody(BaseModel):
 
 
 @router.get("/ui-prefs")
-async def get_ui_prefs(user: dict = Depends(get_current_user)):
+def get_ui_prefs(user: dict = Depends(get_current_user)):
     # Liest aus der Tabelle user_prefs (eine Zeile je Schluessel). Alte
     # Installationen mit dem frueheren Blob werden dabei automatisch
     # uebernommen, siehe db.get_user_prefs().
@@ -270,7 +270,7 @@ async def get_ui_prefs(user: dict = Depends(get_current_user)):
 
 
 @router.put("/ui-prefs")
-async def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)):
+def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)):
     # Altbestand-Route: ersetzt den kompletten Satz. Das Frontend nutzt PATCH.
     try:
         old = set(db.get_user_prefs(user["id"]).keys())
@@ -289,7 +289,7 @@ class UiPrefsPatchBody(BaseModel):
 
 
 @router.patch("/ui-prefs")
-async def patch_ui_prefs(body: UiPrefsPatchBody, user: dict = Depends(get_current_user)):
+def patch_ui_prefs(body: UiPrefsPatchBody, user: dict = Depends(get_current_user)):
     """
     Teil-Update: nur die uebergebenen Schluessel werden geaendert, alle anderen
     bleiben unangetastet. Das Frontend benutzt ausschliesslich diesen Weg, damit
@@ -326,7 +326,7 @@ class SilentScreenBody(BaseModel):
 
 
 @router.get("/silent-screen")
-async def get_silent_screen(user: dict = Depends(get_current_user)):
+def get_silent_screen(user: dict = Depends(get_current_user)):
     return {"enabled": bool(user.get("silent_screen")),
             "allowed": _may_use_silent_screen(user)}
 
@@ -339,7 +339,7 @@ async def get_silent_screen(user: dict = Depends(get_current_user)):
 # ------------------------------------------------------------------
 
 @router.get("/spotify-config")
-async def spotify_config(user: dict = Depends(get_current_user)):
+def spotify_config(user: dict = Depends(get_current_user)):
     # Die Redirect-URI wird NICHT separat gepflegt, sondern aus der
     # "Vollständigen URL" (Einstellungen → Allgemein → server_url) abgeleitet.
     # Damit gibt es genau EINE Stelle, an der die öffentliche Adresse steht.
@@ -360,7 +360,7 @@ async def spotify_config(user: dict = Depends(get_current_user)):
 
 
 @router.put("/silent-screen")
-async def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_current_user)):
+def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_current_user)):
     if body.enabled and not _may_use_silent_screen(user):
         raise HTTPException(403, "Keine Berechtigung für den Remote-Bildschirm ohne Anfrage")
     db.set_user_silent_screen(user["id"], body.enabled)
@@ -370,7 +370,7 @@ async def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_cur
 
 
 @router.put("/profile")
-async def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
+def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
     # Anzeigename nur ändern, wenn das Recht 'edit_profile_name' vorliegt.
     # Sprache/Theme/Akzent sind persönliche Darstellung und bleiben immer erlaubt.
     new_name = body.display_name
@@ -382,7 +382,7 @@ async def update_profile(body: ProfileBody, user: dict = Depends(get_current_use
 
 
 @router.get("/password-policy")
-async def password_policy():
+def password_policy():
     """
     Die geltende Passwort-Richtlinie - ohne Anmeldung abrufbar, weil sie schon
     beim erzwungenen ersten Passwortwechsel gebraucht wird. Sie verrät nichts
@@ -471,7 +471,7 @@ def _confirm_identity(user: dict, password: str = "", code: str = "") -> None:
 
 
 @router.get("/2fa/status")
-async def totp_status(user: dict = Depends(get_current_user)):
+def totp_status(user: dict = Depends(get_current_user)):
     backup = (user.get("totp_backup") or "")
     return {
         "enabled": bool(user.get("totp_enabled")),
@@ -483,7 +483,7 @@ async def totp_status(user: dict = Depends(get_current_user)):
 
 
 @router.post("/2fa/setup")
-async def totp_setup(user: dict = Depends(get_current_user)):
+def totp_setup(user: dict = Depends(get_current_user)):
     """
     Neues Geheimnis erzeugen und als QR-Code liefern. Noch nicht aktiv - die
     Anmeldung bleibt unveraendert, bis der naechste Schritt bestaetigt ist.
@@ -504,7 +504,7 @@ async def totp_setup(user: dict = Depends(get_current_user)):
 
 
 @router.post("/2fa/activate")
-async def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_user)):
+def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_user)):
     from app import totp as _totp
     secret = user.get("totp_secret")
     if not secret:
@@ -520,7 +520,7 @@ async def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_use
 
 
 @router.post("/2fa/disable")
-async def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_user)):
+def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_user)):
     """Abschalten nur mit eigenem Passwort ODER Code - ein offener Browser genuegt nicht."""
     _confirm_identity(user, body.password, body.code)
     db.set_user_totp(user["id"], secret="", enabled=False, backup="")
@@ -529,7 +529,7 @@ async def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_u
 
 
 @router.post("/2fa/backup-codes")
-async def totp_new_backup_codes(body: TotpDisableBody,
+def totp_new_backup_codes(body: TotpDisableBody,
                                 user: dict = Depends(get_current_user)):
     """Neue Wiederherstellungscodes erzeugen; die alten verfallen dabei."""
     if not user.get("totp_enabled"):

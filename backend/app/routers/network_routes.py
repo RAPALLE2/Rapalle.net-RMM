@@ -49,7 +49,7 @@ async def run_scan(subnet: str | None = None, user: dict = Depends(get_current_u
 # ------------------------------------------------------------------
 
 @router.get("/scan/preview")
-async def scan_preview(target: str | None = None, user: dict = Depends(get_current_user)):
+def scan_preview(target: str | None = None, user: dict = Depends(get_current_user)):
     """Prüft die Ziel-Angabe und meldet, wie groß der Scan würde."""
     require_perm(user, "network_scan")
     try:
@@ -61,7 +61,7 @@ async def scan_preview(target: str | None = None, user: dict = Depends(get_curre
 
 
 @router.post("/scan/start")
-async def scan_start(target: str | None = None, speed: str = "normal",
+def scan_start(target: str | None = None, speed: str = "normal",
                      user: dict = Depends(get_current_user)):
     """
     Startet einen Scan im Hintergrund und liefert sofort die Job-ID.
@@ -80,7 +80,7 @@ async def scan_start(target: str | None = None, speed: str = "normal",
 
 
 @router.get("/scan/job/{job_id}")
-async def scan_job_status(job_id: str, user: dict = Depends(get_current_user)):
+def scan_job_status(job_id: str, user: dict = Depends(get_current_user)):
     """Fortschritt + (bei Abschluss) gefundene Geräte."""
     require_perm(user, "network_scan")
     job = get_scan_job(job_id)
@@ -90,7 +90,7 @@ async def scan_job_status(job_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/scan/job/{job_id}/cancel")
-async def scan_job_cancel(job_id: str, user: dict = Depends(get_current_user)):
+def scan_job_cancel(job_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
     if not cancel_scan_job(job_id):
         raise HTTPException(404, "Kein laufender Scan mit dieser ID")
@@ -98,7 +98,7 @@ async def scan_job_cancel(job_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.get("/scan/last")
-async def get_last_scan(user: dict = Depends(get_current_user)):
+def get_last_scan(user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
     return _last_scan
 

@@ -25,6 +25,7 @@ export function renderSource(container) {
       <button class="tab-btn" data-src="explorer">📁 Explorer</button>
       <button class="tab-btn" data-src="db">🗄️ Datenbank</button>
       <button class="tab-btn" data-src="migrate">📦 Migration</button>
+      <button class="tab-btn" data-src="diag">🩺 Diagnose</button>
     </div>
     <div id="src-panel" style="min-height:420px"></div>
   `;
@@ -40,6 +41,7 @@ export function renderSource(container) {
     if (which === "log") cleanup = renderBackendLog(panel);
     else if (which === "explorer") renderExplorer(panel);
     else if (which === "migrate") renderMigrate(panel);
+    else if (which === "diag") cleanup = renderDiagnostics(panel);
     else renderDb(panel);
   }
   tabs.forEach((b) => b.addEventListener("click", () => show(b.dataset.src)));
@@ -805,4 +807,213 @@ async function renderMigrate(host) {
       importBtn.disabled = false;
     }
   });
+}
+
+
+// ---------------------------------------------------------------
+// Diagnose / Wartungsmodus
+//
+// Zweck: Wenn Backend oder Agenten "nach kurzer Zeit" abstürzen, steht die
+// Ursache fast nie in der Fehlermeldung. Sie steht in der Kurve davor -
+// Speicher, der stetig wächst; Dateideskriptoren, die nicht zurückkommen;
+// Hintergrundschleifen, die still sterben. Der Wartungsmodus schreibt genau
+// das mit, auf beiden Seiten und in einer gemeinsamen Zeitachse.
+//
+// Der Ringpuffer läuft IMMER mit, nur das Wegschreiben hängt am Schalter.
+// Deshalb sind beim Einschalten die letzten Minuten schon dabei.
+// ---------------------------------------------------------------
+function renderDiagnostics(host) {
+  host.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div id="dg-state" style="border:1px solid var(--border);border-radius:9px;padding:12px"></div>
+
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="font-size:12px;color:var(--subtext)">Laufzeit
+          <select id="dg-min" style="display:block;margin-top:4px">
+            <option value="60">1 Stunde</option>
+            <option value="120" selected>2 Stunden</option>
+            <option value="480">8 Stunden</option>
+            <option value="1440">24 Stunden</option>
+            <option value="0">Bis zum Abschalten</option>
+          </select>
+        </label>
+        <label style="font-size:12px;color:var(--subtext);flex:1;min-width:200px">Grund (steht im Log)
+          <input id="dg-reason" type="text" placeholder="z.B. Absturz nach ca. 10 min"
+                 style="display:block;width:100%;margin-top:4px">
+        </label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;padding-bottom:6px">
+          <input type="checkbox" id="dg-agents" checked> Agenten mitschreiben
+        </label>
+        <button class="btn-primary" id="dg-toggle" style="margin:0">Einschalten</button>
+        <button class="taskbar-btn" id="dg-bundle">⬇️ Diagnosepaket</button>
+        <button class="taskbar-btn" id="dg-clear">🗑️ Logs leeren</button>
+      </div>
+
+      <div id="dg-metrics" style="border:1px solid var(--border);border-radius:9px;padding:10px"></div>
+
+      <div style="display:flex;align-items:center;gap:8px">
+        <b style="font-size:13px">Live-Ausgabe</b>
+        <label style="font-size:12px;display:flex;align-items:center;gap:5px;margin-left:auto">
+          <input type="checkbox" id="dg-follow" checked> mitlaufen
+        </label>
+        <button class="taskbar-btn" id="dg-refresh">⟳</button>
+      </div>
+      <pre id="dg-log" style="flex:1;min-height:280px;max-height:46vh;overflow:auto;margin:0;
+        background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;
+        font-family:ui-monospace,monospace;font-size:11.5px;white-space:pre-wrap"></pre>
+    </div>`;
+
+  const $ = (id) => host.querySelector(id);
+  let active = false;
+  let timer = null;
+
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    const u = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${u[i]}`;
+  }
+
+  async function loadState() {
+    let st;
+    try { st = await api.diagStatus(); }
+    catch (e) {
+      $("#dg-state").innerHTML = `<span style="color:var(--danger,#ff4d6d)">${esc(e.message)}</span>`;
+      return;
+    }
+    active = !!st.active;
+    $("#dg-toggle").textContent = active ? "Ausschalten" : "Einschalten";
+    $("#dg-agents").checked = st.agents_included !== false;
+
+    const c = st.counters || {};
+    $("#dg-state").innerHTML = `
+      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+        <span style="font-size:15px">${active ? "🟢" : "⚪"}</span>
+        <b>${active ? "Wartungsmodus läuft" : "Wartungsmodus aus"}</b>
+        ${active && st.until ? `<span style="color:var(--subtext);font-size:12px">
+          bis ${new Date(st.until).toLocaleString()}</span>` : ""}
+        <span style="margin-left:auto;font-size:12px;color:var(--subtext)">
+          Fehler: <b>${c.errors || 0}</b> · Warnungen: <b>${c.warnings || 0}</b>
+          · Agentenfehler: <b>${c.agent_errors || 0}</b>
+        </span>
+      </div>
+      <div style="margin-top:7px;font-size:12px;padding:6px 9px;border-radius:7px;
+           background:${(st.loop_dumps || 0) > 0 ? "#ff4d6d18" : "var(--panel-2)"}">
+        Ereignisschleife: längste Blockade <b>${(st.loop_worst_s ?? 0).toFixed
+          ? st.loop_worst_s.toFixed(1) : st.loop_worst_s || 0}s</b>
+        · Stack-Abzüge: <b>${st.loop_dumps || 0}</b>
+        ${(st.loop_dumps || 0) > 0
+          ? `<span style="color:var(--danger,#ff4d6d)"> – siehe
+             backend-blockaden.log im Diagnosepaket, dort steht die
+             blockierende Zeile.</span>`
+          : `<span style="color:var(--subtext)"> – alles flüssig.</span>`}
+      </div>
+      <div style="font-size:11.5px;color:var(--subtext);margin-top:6px">
+        Verzeichnis: ${esc(st.dir || "")}
+        ${(st.files || []).length
+          ? "· " + st.files.map((f) => `${esc(f.name)} (${fmtBytes(f.size)})`).join(" · ")
+          : "· noch keine Dateien"}
+      </div>`;
+
+    renderMetrics(st.samples || []);
+  }
+
+  // Die Messwerte sind das eigentliche Werkzeug: Eine Kurve, die stetig
+  // steigt und nie zurückkommt, zeigt das Leck deutlicher als jeder
+  // Stacktrace. Deshalb hier Anfang und Ende nebeneinander.
+  function renderMetrics(samples) {
+    const box = $("#dg-metrics");
+    if (!samples.length) {
+      box.innerHTML = `<span style="color:var(--subtext);font-size:12px">
+        Noch keine Messpunkte – der erste kommt nach wenigen Sekunden.</span>`;
+      return;
+    }
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const keys = [
+      ["rss_mb", "Speicher (MB)"], ["fds", "Dateideskriptoren"],
+      ["threads", "Threads"], ["tasks", "asyncio-Aufgaben"],
+      ["conns", "Sockets"], ["agents", "Agenten"],
+      ["pending", "offene Anfragen"], ["tunnels", "VPN-Tunnel"],
+      ["inflight", "Anfragen in Arbeit"], ["lag_max", "größte Loop-Verzög. (s)"],
+    ];
+    const rows = keys.filter(([k]) => last[k] !== undefined).map(([k, label]) => {
+      const a = Number(first[k] ?? 0), b = Number(last[k] ?? 0);
+      const grow = b - a;
+      // Deutlich markieren, was wächst - das ist der Hinweis auf ein Leck.
+      const color = grow > 0 && a > 0 && b > a * 1.5
+        ? "var(--danger,#ff4d6d)" : grow > 0 ? "var(--warn,#f5a524)" : "var(--subtext)";
+      return `<tr>
+        <td style="padding:2px 10px 2px 0">${label}</td>
+        <td style="padding:2px 10px 2px 0;text-align:right">${a}</td>
+        <td style="padding:2px 10px 2px 0;text-align:right"><b>${b}</b></td>
+        <td style="padding:2px 0;text-align:right;color:${color}">
+          ${grow > 0 ? "+" : ""}${grow}</td></tr>`;
+    }).join("");
+    box.innerHTML = `
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:5px">
+        Verlauf über ${Math.round((last.t - first.t) / 60000)} Minuten
+        (${samples.length} Messpunkte) – stetig steigende Werte deuten auf ein Leck.
+      </div>
+      <table style="font-size:12px;border-collapse:collapse">
+        <tr style="color:var(--subtext)"><td></td><td style="text-align:right">Start</td>
+        <td style="text-align:right">jetzt</td><td style="text-align:right">Δ</td></tr>
+        ${rows}
+      </table>`;
+  }
+
+  async function loadLog() {
+    try {
+      const text = await api.diagTail(400);
+      const pre = $("#dg-log");
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 40;
+      pre.textContent = text || "(noch nichts)";
+      if ($("#dg-follow").checked && atBottom) pre.scrollTop = pre.scrollHeight;
+    } catch { /* Log-Abruf darf die Ansicht nicht stören */ }
+  }
+
+  $("#dg-toggle").addEventListener("click", async () => {
+    $("#dg-toggle").disabled = true;
+    try {
+      if (active) await api.diagDisable();
+      else await api.diagEnable(parseInt($("#dg-min").value, 10) || 0,
+                                $("#dg-reason").value, $("#dg-agents").checked);
+      await loadState();
+    } catch (e) {
+      window.notify?.(e.message, "error");
+    } finally { $("#dg-toggle").disabled = false; }
+  });
+
+  $("#dg-bundle").addEventListener("click", async () => {
+    // Über fetch statt Direktlink, weil der Download den Auth-Header braucht.
+    try {
+      const res = await fetch(api.diagBundleUrl(), {
+        headers: { Authorization: `Bearer ${getToken() || ""}` },
+      });
+      if (!res.ok) throw new Error(`Fehler ${res.status}`);
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `rmm-diagnose-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+    } catch (e) {
+      window.notify?.("Download fehlgeschlagen: " + e.message, "error");
+    }
+  });
+
+  $("#dg-clear").addEventListener("click", async () => {
+    if (!(await uiConfirm("Alle Diagnose-Logs löschen?",
+      { description: "Bereits heruntergeladene Pakete bleiben erhalten." }))) return;
+    try { await api.diagClear(); await loadState(); await loadLog(); }
+    catch (e) { window.notify?.(e.message, "error"); }
+  });
+
+  $("#dg-refresh").addEventListener("click", () => { loadState(); loadLog(); });
+
+  loadState();
+  loadLog();
+  timer = setInterval(() => { loadState(); loadLog(); }, 5000);
+  return () => clearInterval(timer);
 }

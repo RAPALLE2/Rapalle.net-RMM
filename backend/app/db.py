@@ -92,6 +92,39 @@ class _CursorResult:
             self._i += 1
 
 
+# Ab dieser Dauer gilt eine Abfrage als auffaellig. 0 schaltet die Messung ab.
+import os as _os_slow
+
+try:
+    SLOW_QUERY_S = float(_os_slow.getenv("RMM_SLOW_QUERY_S", "0.5") or 0.5)
+except ValueError:
+    SLOW_QUERY_S = 0.5
+
+from time import perf_counter as _perf
+
+_slow_seen: dict[str, float] = {}
+
+
+def _report_slow_query(seconds: float, sql: str) -> None:
+    """Meldet eine langsame Abfrage - hoechstens einmal pro Minute je Abfrage."""
+    if SLOW_QUERY_S <= 0 or seconds < SLOW_QUERY_S:
+        return
+    short = " ".join(str(sql).split())[:160]
+    import time as _time
+    now = _time.monotonic()
+    if now - _slow_seen.get(short, 0.0) < 60:
+        return
+    _slow_seen[short] = now
+    message = (f"LANGSAME ABFRAGE: {seconds:.2f}s - {short}\n"
+               f"  (Solange stand die Ereignisschleife und damit der ganze Server.)")
+    print(f"[db] {message}")
+    try:
+        from app import diagnostics
+        diagnostics.write(message, level="WARN")
+    except Exception:
+        pass
+
+
 class _SafeConn:
     """Dünner, thread-sicherer Wrapper um die geteilte SQLite-Verbindung."""
 
@@ -104,6 +137,17 @@ class _SafeConn:
         return object.__getattribute__(self, "_lock")
 
     def _run(self, method, sql, arg):
+        # ZEITMESSUNG: Alle Datenbankzugriffe laufen SYNCHRON in derselben
+        # Ereignisschleife, die auch die HTTP-Anfragen bedient. Solange eine
+        # Abfrage Millisekunden braucht, merkt das niemand. Braucht sie eine
+        # Sekunde, steht in dieser Sekunde der ganze Server - inklusive
+        # Healthcheck und aller Agentenverbindungen.
+        #
+        # Das ist die letzte grosse Schwachstelle im Aufbau. Sie hier
+        # auszubauen wäre ein Eingriff quer durch alle Router; deshalb wird
+        # sie zunächst MESSBAR gemacht. Taucht eine Abfrage in dieser Liste
+        # auf, weiss man genau, welche man verlagern muss - statt zu raten.
+        _t0 = _perf()
         with self.lock:
             real = object.__getattribute__(self, "_conn")
             cur = method(real, sql, arg) if arg is not None else method(real, sql)
@@ -117,7 +161,9 @@ class _SafeConn:
                 desc = cur.description
             except Exception:
                 desc = None
-            return _CursorResult(rows, cur.rowcount, cur.lastrowid, desc)
+            result = _CursorResult(rows, cur.rowcount, cur.lastrowid, desc)
+        _report_slow_query(_perf() - _t0, sql)
+        return result
 
     def execute(self, sql, params=None):
         import sqlite3 as _sq
@@ -164,7 +210,62 @@ class _SafeConn:
 # Eine einzige, geteilte Verbindung für die ganze App.
 # check_same_thread=False, weil FastAPI/Uvicorn mehrere Threads nutzen kann;
 # die Serialisierung übernimmt _SafeConn (siehe oben).
-_raw_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+_raw_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
+
+
+# ----------------------------------------------------------------------
+# SQLite für langsame Dateisysteme einstellen
+# ----------------------------------------------------------------------
+# Warum das wichtig ist: Die Datenbank liegt in backend/ und damit im
+# Bind-Mount. Auf einem NAS ist das ein Netz- bzw. Btrfs-Dateisystem, und
+# jedes commit() löst dort in der Voreinstellung ein fsync aus. Bei 81
+# commit-Stellen im Code und sieben Agenten, die alle fünf Sekunden einen
+# Heartbeat schreiben, sind das dauernd Plattensynchronisationen - und die
+# laufen im Event-Loop-Thread.
+#
+# Braucht ein einziges fsync einmal mehrere Sekunden (NAS im Spindown, ein
+# Snapshot, ein laufender Scrub), steht das GESAMTE Backend so lange still:
+# keine Antwort auf HTTP, keine Socket.IO-Pings. Der Docker-Healthcheck
+# läuft nach 5 s in sein Zeitlimit, Cloudflare meldet 524, und alle Agenten
+# verlieren gleichzeitig die Verbindung - genau das Muster aus dem Log vom
+# 22.08. um 23:38:29 (agents 7 -> 0, Prozess lebte weiter).
+#
+# Die folgenden Einstellungen ändern nichts an der Datensicherheit im
+# laufenden Betrieb, machen commit() aber um Größenordnungen billiger.
+def _tune_sqlite(conn) -> None:
+    """Setzt die PRAGMAs. Fehler hier dürfen den Start nie verhindern."""
+    settings = [
+        # WAL: Schreibvorgänge landen in einer Journaldatei statt die
+        # Hauptdatei umzuschreiben. Leser blockieren Schreiber nicht mehr.
+        ("journal_mode", "WAL"),
+        # NORMAL statt FULL: fsync nur noch beim Checkpoint, nicht bei
+        # jedem commit. Im Fehlerfall kann die allerletzte Transaktion
+        # verlorengehen - bei einem Monitoring-Werkzeug ist das gegenüber
+        # einem eingefrorenen Backend die klar bessere Wahl.
+        ("synchronous", "NORMAL"),
+        # Statt sofort "database is locked" zu werfen, bis zu 15 s warten.
+        ("busy_timeout", "15000"),
+        # Temporäre Tabellen im Arbeitsspeicher, nicht auf dem NAS.
+        ("temp_store", "MEMORY"),
+        # ~64 MB Cache: deutlich weniger Lesezugriffe auf das Dateisystem.
+        ("cache_size", "-64000"),
+        # WAL-Datei bei ~4 MB zusammenführen, damit sie nicht unbegrenzt wächst.
+        ("wal_autocheckpoint", "1000"),
+    ]
+    for key, value in settings:
+        try:
+            conn.execute(f"PRAGMA {key}={value}")
+        except sqlite3.Error as e:
+            print(f"[db] PRAGMA {key}={value} nicht gesetzt: {e}")
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        print(f"[db] SQLite bereit: journal_mode={mode}, synchronous=NORMAL, "
+              f"busy_timeout=15s")
+    except sqlite3.Error:
+        pass
+
+
+_tune_sqlite(_raw_conn)
 
 # row_factory sorgt dafür, dass wir Zeilen wie Dictionaries ansprechen können
 # (z.B. row["hostname"] statt row[3]), das ist deutlich lesbarer.
@@ -415,6 +516,32 @@ def init_db() -> None:
             value TEXT NOT NULL
         );
 
+        -- WireGuard-kompatible VPN-Tunnel. Ein Datensatz = eine ausgestellte
+        -- Tunnel-Datei fuer genau einen Benutzer auf genau einen Client.
+        -- Der PRIVATE Schluessel steht hier bewusst NICHT: er existiert nur
+        -- einmal, in der heruntergeladenen .conf-Datei.
+        CREATE TABLE IF NOT EXISTS vpn_tunnels (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            username TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL,            -- Adresse im Tunnel-Netz
+            public_key TEXT NOT NULL,         -- oeffentlicher Schluessel des Benutzers
+            preshared_key TEXT NOT NULL DEFAULT '',
+            allowed_ips TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0,   -- 0 = unbegrenzt
+            closed_at INTEGER NOT NULL DEFAULT 0,    -- 0 = noch offen
+            last_handshake INTEGER NOT NULL DEFAULT 0,
+            -- 'client' = nur das Geraet selbst erreichbar
+            -- 'site'   = ganzes Netz hinter der Node erreichbar
+            mode TEXT NOT NULL DEFAULT 'client',
+            -- 'direct' = Tunnel endet auf der Node, 'relay' = im Backend
+            transport TEXT NOT NULL DEFAULT 'relay',
+            -- 1 = echte LAN-Adresse ueber die L2-Bruecke der Node
+            l2 INTEGER NOT NULL DEFAULT 0
+        );
+
         -- Langzeit-Historie der Client-Metriken (persistiert, damit die
         -- Graphen nach einem Seiten-Neuladen nicht bei 0 anfangen).
         CREATE TABLE IF NOT EXISTS metrics_history (
@@ -525,6 +652,26 @@ def init_db() -> None:
     # das aber erst nach BESTÄTIGUNG durch den Nutzer im Client-Panel.
     _migrate_add_column("clients", "detected_device_type", "TEXT")
     _migrate_add_column("clients", "device_type_ack", "INTEGER NOT NULL DEFAULT 0")
+    # --- NODE-STUFE -------------------------------------------------
+    # Ein normaler Client meldet Metriken und fuehrt Befehle aus. Eine NODE
+    # kann zusaetzlich als Brueckenkopf ins Netz dienen: eigener
+    # VPN-Endpunkt, Reverse Proxy, optional L2-Bruecke. Die dafuer noetigen
+    # Zusatzmodule werden AUSSCHLIESSLICH auf Nodes nachgeladen - ein
+    # gewoehnlicher Client bekommt davon nichts zu sehen.
+    _migrate_add_column("clients", "is_node", "INTEGER NOT NULL DEFAULT 0")
+    # Selbstauskunft der Node: welche Module laufen, welcher UDP-Port, ob die
+    # L2-Bruecke (Treiber) verfuegbar ist. JSON, nur informativ.
+    _migrate_add_column("clients", "node_caps", "TEXT")
+    # Oeffentlich erreichbare UDP-Adresse der Node ("host:port"), vom Backend
+    # aus dem Probe-Paket der Node ermittelt. Leer = nur ueber das Backend
+    # erreichbar (Relay-Betrieb).
+    _migrate_add_column("clients", "node_endpoint", "TEXT")
+    # Zeitpunkt der letzten erfolgreichen Erreichbarkeitspruefung (ms).
+    _migrate_add_column("clients", "node_endpoint_checked", "INTEGER NOT NULL DEFAULT 0")
+    # VPN-Tunnel: Betriebsart, Transportweg und L2-Bruecke nachruesten.
+    _migrate_add_column("vpn_tunnels", "mode", "TEXT NOT NULL DEFAULT 'client'")
+    _migrate_add_column("vpn_tunnels", "transport", "TEXT NOT NULL DEFAULT 'relay'")
+    _migrate_add_column("vpn_tunnels", "l2", "INTEGER NOT NULL DEFAULT 0")
     _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optionaler Wunschname beim Onboarding
     _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # persönliche Farbpalette
     _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = lokaler User, sonst Realm-ID (AD)
@@ -1338,6 +1485,115 @@ def list_expired_relay_clients(now_ms: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ------------------------------------------------------------------
+# VPN-Tunnel (WireGuard-kompatibel)
+# ------------------------------------------------------------------
+
+def create_vpn_tunnel(rec: dict) -> None:
+    """Legt einen neuen Tunnel an. 'rec' kommt aus app/vpn.py."""
+    _conn.execute(
+        """
+        INSERT INTO vpn_tunnels
+            (id, client_id, name, username, address, public_key,
+             preshared_key, allowed_ips, created_at, expires_at,
+             mode, transport, l2)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (rec["id"], rec["client_id"], rec.get("name", ""), rec.get("username", ""),
+         rec["address"], rec["public_key"], rec.get("preshared_key", ""),
+         rec.get("allowed_ips", ""), int(rec["created_at"]),
+         int(rec.get("expires_at") or 0),
+         rec.get("mode", "client"), rec.get("transport", "relay"),
+         int(rec.get("l2") or 0)),
+    )
+    _conn.commit()
+
+
+def get_vpn_tunnel(tunnel_id: str) -> dict | None:
+    row = _conn.execute("SELECT * FROM vpn_tunnels WHERE id = ?",
+                        (tunnel_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_vpn_tunnels(active_only: bool = True,
+                     client_id: str | None = None) -> list[dict]:
+    """Tunnel-Liste. 'active_only' blendet geschlossene Tunnel aus."""
+    sql = "SELECT * FROM vpn_tunnels"
+    where, params = [], []
+    if active_only:
+        where.append("closed_at = 0")
+    if client_id:
+        where.append("client_id = ?")
+        params.append(client_id)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC"
+    return [dict(r) for r in _conn.execute(sql, tuple(params)).fetchall()]
+
+
+def list_expired_vpn_tunnels(now_ms: int) -> list[dict]:
+    """Offene Tunnel, deren Ablaufzeitpunkt erreicht ist (expires_at > 0)."""
+    rows = _conn.execute(
+        "SELECT * FROM vpn_tunnels WHERE closed_at = 0 AND expires_at > 0 "
+        "AND expires_at <= ?", (int(now_ms),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def close_vpn_tunnel(tunnel_id: str) -> None:
+    _conn.execute("UPDATE vpn_tunnels SET closed_at = ? WHERE id = ? AND closed_at = 0",
+                  (_now_ms(), tunnel_id))
+    _conn.commit()
+
+
+def touch_vpn_tunnel(tunnel_id: str, ts_ms: int) -> None:
+    """Merkt den letzten erfolgreichen Handshake (fuer die Uebersicht)."""
+    _conn.execute("UPDATE vpn_tunnels SET last_handshake = ? WHERE id = ?",
+                  (int(ts_ms), tunnel_id))
+    _conn.commit()
+
+
+# ------------------------------------------------------------------
+# Node-Stufe
+# ------------------------------------------------------------------
+
+def set_client_node(client_id: str, is_node: bool) -> None:
+    """Stuft einen Client zur Node auf bzw. wieder zurueck."""
+    _conn.execute("UPDATE clients SET is_node = ? WHERE id = ?",
+                  (1 if is_node else 0, client_id))
+    if not is_node:
+        # Beim Zurueckstufen die Node-Angaben leeren - sonst zeigt die
+        # Uebersicht spaeter Werte an, die es nicht mehr gibt.
+        _conn.execute("UPDATE clients SET node_caps = NULL, node_endpoint = NULL, "
+                      "node_endpoint_checked = 0 WHERE id = ?", (client_id,))
+    _conn.commit()
+
+
+def is_client_node(client_id: str) -> bool:
+    row = _conn.execute("SELECT is_node FROM clients WHERE id = ?",
+                        (client_id,)).fetchone()
+    return bool(row and row["is_node"])
+
+
+def list_nodes() -> list[dict]:
+    rows = _conn.execute(
+        "SELECT * FROM clients WHERE is_node = 1 ORDER BY hostname").fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_node_caps(client_id: str, caps_json: str) -> None:
+    _conn.execute("UPDATE clients SET node_caps = ? WHERE id = ?",
+                  (caps_json, client_id))
+    _conn.commit()
+
+
+def set_node_endpoint(client_id: str, endpoint: str | None) -> None:
+    """Merkt die oeffentlich sichtbare UDP-Adresse der Node (oder loescht sie)."""
+    _conn.execute(
+        "UPDATE clients SET node_endpoint = ?, node_endpoint_checked = ? WHERE id = ?",
+        (endpoint or None, _now_ms(), client_id))
+    _conn.commit()
+
+
 def create_user(username: str, password_hash: str, display_name: str, role: str, must_change_pw: bool) -> dict:
     user_id = _new_id()
     _conn.execute(
@@ -1839,6 +2095,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
         "device_type_ack", "fav_dir", "warranty_until", "patch_policy",
+        "is_node",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -2123,6 +2380,8 @@ GLOBAL_PERM_KEYS = [
     "screen_silent",
     # Ticket-System (Sichtbarkeit einzelner Tickets zusätzlich auf
     # Admins/Ersteller/Zugewiesene begrenzt, siehe tickets_routes.py).
+    # VPN: App benutzen bzw. Tunnel ohne Ablaufzeit ausstellen.
+    "use_vpn", "vpn_unlimited",
     "ticket_read", "ticket_create", "ticket_edit", "ticket_comment",
     "ticket_assign", "ticket_resolve", "ticket_delete",
 ]
@@ -2140,6 +2399,8 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_explorer_view", "c_explorer_edit",
     "c_taskmanager_view", "c_taskmanager_kill",
     "c_relay", "c_relay_unlimited",
+    "c_vpn", "c_vpn_unlimited",     # VPN-Tunnel auf diesen Client ausstellen
+    "c_nodeproxy",                  # Reverse Proxy dieser Node benutzen
     "c_notes_view", "c_notes_edit",
     "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
     "c_websites_view", "c_websites_edit",
@@ -2200,6 +2461,7 @@ _PERM_IMPLIES = {
     "c_notes_edit": ["c_notes_view"],
     "c_websites_edit": ["c_websites_view"],
     "c_relay_unlimited": ["c_relay"],
+    "c_vpn_unlimited": ["c_vpn"],
     "manage_permissions": ["see_permissions"],
     "manage_org": ["see_org"],
     "manage_calendar": ["use_calendar"],
@@ -2210,6 +2472,7 @@ _PERM_IMPLIES = {
     "edit_source": ["see_source"],
     "delete_source": ["see_source", "edit_source"],
     "relay_unlimited": ["use_relay"],
+    "vpn_unlimited": ["use_vpn"],
     "create_scripts": ["use_scripts"],
     # Einstellungen: Bearbeiten setzt Ansehen voraus, Admin-Einstellungen
     # decken auch die Standard-Einstellungen ab.
@@ -2556,6 +2819,29 @@ DEFAULT_SETTINGS = {
     "server_domain": "",            # optionale Domain (wird bevorzugt vor der IP)
     "server_backend_port": "4000",  # Port des Backends/der API
     "server_frontend_port": "4000", # Port des Dashboards (Frontend)
+    # --- Wartungsmodus / Diagnose ---
+    # Schreibt ALLES mit (Backend + Agenten) - fuer die Suche nach
+    # Abstuerzen. Kostet Platz, deshalb standardmaessig aus.
+    "maintenance_mode": "0",
+    "maintenance_until": "0",
+    "maintenance_agents": "0",
+    # --- VPN (WireGuard-kompatibel) ---
+    "vpn_enabled": "1",
+    # UDP-Port des Tunnel-Endpunkts. Leer = Umgebungsvariable VPN_PORT bzw.
+    # der WireGuard-Standard 51820.
+    "vpn_port": "",
+    # Adressbereich, aus dem die Tunnel-Endpunkte ihre Adresse bekommen.
+    "vpn_subnet": "10.77.0.0/16",
+    # NUR setzen, wenn der VPN-Endpunkt unter einer ANDEREN Adresse erreichbar
+    # ist als das Dashboard. Das ist der Regelfall hinter einem Reverse-Proxy:
+    # der Proxy reicht kein UDP durch, der Port 51820 muss also direkt auf den
+    # Server zeigen. Bleibt das Feld leer, wird der Host aus server_url bzw.
+    # server_domain/server_host abgeleitet.
+    "vpn_endpoint_host": "",
+    # Optionaler DNS-Server, der im Tunnel benutzt werden soll.
+    "vpn_dns": "",
+    # MTU des Tunnels. 1380 ist auch hinter DSL/PPPoE noch sicher.
+    "vpn_mtu": "1380",
     # In welchem Abstand ein Metrik-Punkt gespeichert wird (Sekunden).
     "metrics_interval_seconds": "10",
     # Wie lange die Metrik-Historie aufbewahrt wird (Stunden).

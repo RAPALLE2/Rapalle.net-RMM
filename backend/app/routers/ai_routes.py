@@ -126,14 +126,14 @@ def _save_shares(conn_id: str, shares: list[ShareEntry]):
 
 
 @router.get("/connections")
-async def list_connections(user: dict = Depends(get_current_user)):
+def list_connections(user: dict = Depends(get_current_user)):
     rows = [dict(r) for r in _conn().execute(
         "SELECT * FROM ai_connections ORDER BY created_at").fetchall()]
     return [_public(r, user) for r in rows if _user_may_use(user, r)]
 
 
 @router.post("/connections")
-async def create_connection(body: ConnectionBody, user: dict = Depends(get_current_user)):
+def create_connection(body: ConnectionBody, user: dict = Depends(get_current_user)):
     _validate_body(body, need_key=True)
     cid = uuid.uuid4().hex
     _conn().execute(
@@ -150,7 +150,7 @@ async def create_connection(body: ConnectionBody, user: dict = Depends(get_curre
 
 
 @router.put("/connections/{conn_id}")
-async def update_connection(conn_id: str, body: ConnectionBody,
+def update_connection(conn_id: str, body: ConnectionBody,
                             user: dict = Depends(get_current_user)):
     row = _conn().execute("SELECT * FROM ai_connections WHERE id = ?", (conn_id,)).fetchone()
     if not row:
@@ -171,7 +171,7 @@ async def update_connection(conn_id: str, body: ConnectionBody,
 
 
 @router.delete("/connections/{conn_id}")
-async def delete_connection(conn_id: str, user: dict = Depends(get_current_user)):
+def delete_connection(conn_id: str, user: dict = Depends(get_current_user)):
     row = _conn().execute("SELECT * FROM ai_connections WHERE id = ?", (conn_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Verbindung nicht gefunden")
@@ -186,7 +186,7 @@ async def delete_connection(conn_id: str, user: dict = Depends(get_current_user)
 
 # Auswahl-Listen für den Freigabe-Dialog (Name + ID reichen).
 @router.get("/share-subjects")
-async def share_subjects(user: dict = Depends(get_current_user)):
+def share_subjects(user: dict = Depends(get_current_user)):
     users = [{"id": u["id"], "label": u.get("display_name") or u["username"]}
              for u in db.list_users()]
     groups = [{"id": g["id"], "label": g["name"]} for g in db.list_groups()]

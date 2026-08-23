@@ -135,7 +135,7 @@ def _touch(ticket_id: str):
 # ------------------------------------------------------------------
 
 @router.get("")
-async def list_tickets(user: dict = Depends(get_current_user)):
+def list_tickets(user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")
     rows = [dict(r) for r in _conn().execute(
         "SELECT * FROM tickets ORDER BY created_at DESC").fetchall()]
@@ -149,7 +149,7 @@ async def list_tickets(user: dict = Depends(get_current_user)):
 
 
 @router.get("/{ticket_id}")
-async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")
     return _full(_get_visible_ticket(user, ticket_id), user)
 
@@ -198,7 +198,7 @@ def _save_clients(ticket_id: str, clients: list[str]):
 
 
 @router.post("")
-async def create_ticket(body: TicketBody, user: dict = Depends(get_current_user)):
+def create_ticket(body: TicketBody, user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_create")
     if not body.title.strip():
         raise HTTPException(400, "Titel fehlt")
@@ -231,7 +231,7 @@ async def create_ticket(body: TicketBody, user: dict = Depends(get_current_user)
 
 
 @router.put("/{ticket_id}")
-async def update_ticket(ticket_id: str, body: TicketBody,
+def update_ticket(ticket_id: str, body: TicketBody,
                         user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_edit")
     t = _get_visible_ticket(user, ticket_id)
@@ -264,7 +264,7 @@ async def update_ticket(ticket_id: str, body: TicketBody,
 
 
 @router.delete("/{ticket_id}")
-async def delete_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+def delete_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_delete")
     t = _get_visible_ticket(user, ticket_id)
     c = _conn()
@@ -293,7 +293,7 @@ class AssignBody(BaseModel):
 
 
 @router.put("/{ticket_id}/assignees")
-async def set_assignees(ticket_id: str, body: AssignBody,
+def set_assignees(ticket_id: str, body: AssignBody,
                         user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_assign")
     t = _get_visible_ticket(user, ticket_id)
@@ -311,7 +311,7 @@ class StatusBody(BaseModel):
 
 
 @router.put("/{ticket_id}/status")
-async def set_status(ticket_id: str, body: StatusBody,
+def set_status(ticket_id: str, body: StatusBody,
                      user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_resolve")
     t = _get_visible_ticket(user, ticket_id)
@@ -346,7 +346,7 @@ def _vis_label(v: str) -> str:
 
 
 @router.post("/{ticket_id}/comments")
-async def add_comment(ticket_id: str, body: CommentBody,
+def add_comment(ticket_id: str, body: CommentBody,
                       user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_comment")
     _get_visible_ticket(user, ticket_id)
@@ -369,7 +369,7 @@ async def add_comment(ticket_id: str, body: CommentBody,
 
 
 @router.delete("/{ticket_id}/comments/{comment_id}")
-async def delete_comment(ticket_id: str, comment_id: str,
+def delete_comment(ticket_id: str, comment_id: str,
                          user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_comment")
     _get_visible_ticket(user, ticket_id)
@@ -395,7 +395,7 @@ async def delete_comment(ticket_id: str, comment_id: str,
 # ------------------------------------------------------------------
 
 @router.get("/{ticket_id}/activity")
-async def ticket_activity(ticket_id: str, user: dict = Depends(get_current_user)):
+def ticket_activity(ticket_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")
     _get_visible_ticket(user, ticket_id)
     entries = vis.get_log("ticket", ticket_id)
@@ -405,7 +405,7 @@ async def ticket_activity(ticket_id: str, user: dict = Depends(get_current_user)
 
 
 @router.get("/meta/users")
-async def ticket_users(user: dict = Depends(get_current_user)):
+def ticket_users(user: dict = Depends(get_current_user)):
     """Auswahlliste für die Kommentar-Sichtbarkeit 'für bestimmte':
     Benutzer UND Gruppen (unverwaltete AD-Gruppen sind markiert)."""
     require_perm(user, "ticket_read")
@@ -452,7 +452,7 @@ async def upload_file(ticket_id: str, request: Request, filename: str = "datei",
 
 
 @router.get("/{ticket_id}/files/{file_id}")
-async def download_file(ticket_id: str, file_id: str,
+def download_file(ticket_id: str, file_id: str,
                         user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")
     _get_visible_ticket(user, ticket_id)
@@ -469,7 +469,7 @@ async def download_file(ticket_id: str, file_id: str,
 
 
 @router.delete("/{ticket_id}/files/{file_id}")
-async def delete_file(ticket_id: str, file_id: str,
+def delete_file(ticket_id: str, file_id: str,
                       user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_edit")
     _get_visible_ticket(user, ticket_id)
@@ -491,7 +491,7 @@ async def delete_file(ticket_id: str, file_id: str,
 
 # Auswahl-Listen für den Zuweisungs-Dialog.
 @router.get("/meta/support-group")
-async def support_group(user: dict = Depends(get_current_user)):
+def support_group(user: dict = Depends(get_current_user)):
     """Die Support-Standardgruppe - fuer den Dialog bei fehlenden Rechten.
     Braucht absichtlich nur einen Login: Wer ein Ticket aufmachen darf, muss
     auch wissen duerfen, wohin es geht."""
@@ -502,7 +502,7 @@ async def support_group(user: dict = Depends(get_current_user)):
 
 
 @router.get("/meta/subjects")
-async def assign_subjects(user: dict = Depends(get_current_user)):
+def assign_subjects(user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_read")
     users = [{"id": u["id"], "label": u.get("display_name") or u["username"]}
              for u in db.list_users()]

@@ -37,7 +37,7 @@ class CreateFolderBody(BaseModel):
 
 
 @router.get("/api/hierarchy")
-async def get_hierarchy(user: dict = Depends(get_current_user)):
+def get_hierarchy(user: dict = Depends(get_current_user)):
     """
     Liefert Tenants, Locations und Folders in einem einzigen Aufruf zurück.
     Das Frontend baut daraus lokal den Baum für die Sidebar zusammen -
@@ -51,7 +51,7 @@ async def get_hierarchy(user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/tenants")
-async def create_tenant(body: CreateTenantBody, user: dict = Depends(get_current_user)):
+def create_tenant(body: CreateTenantBody, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_hierarchy")
     tenant = db.create_tenant(body.name, body.color)
     db.add_audit_entry(user["username"], "tenant.created", target=tenant["id"], details=body.name)
@@ -59,7 +59,7 @@ async def create_tenant(body: CreateTenantBody, user: dict = Depends(get_current
 
 
 @router.post("/api/locations")
-async def create_location(body: CreateLocationBody, user: dict = Depends(get_current_user)):
+def create_location(body: CreateLocationBody, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_hierarchy")
     location = db.create_location(body.tenant_id, body.name)
     db.add_audit_entry(user["username"], "location.created", target=location["id"], details=body.name)
@@ -67,7 +67,7 @@ async def create_location(body: CreateLocationBody, user: dict = Depends(get_cur
 
 
 @router.post("/api/folders")
-async def create_folder(body: CreateFolderBody, user: dict = Depends(get_current_user)):
+def create_folder(body: CreateFolderBody, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_hierarchy")
     folder = db.create_folder(body.location_id, body.name, body.parent_folder_id)
     db.add_audit_entry(user["username"], "folder.created", target=folder["id"], details=body.name)
@@ -75,7 +75,7 @@ async def create_folder(body: CreateFolderBody, user: dict = Depends(get_current
 
 
 @router.delete("/api/folders/{folder_id}")
-async def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
+def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
     """
     Löscht einen Ordner samt Unterordnern. Clients darin verlieren nur ihre
     Ordner-Zuordnung, bleiben aber in ihrer Location.
@@ -88,7 +88,7 @@ async def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/api/tenants/{tenant_id}")
-async def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
+def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
     """
     Löscht einen Tenant mitsamt Locations/Ordnern. Alle betroffenen Clients
     werden automatisch nach Uncategorized/Default verschoben (nichts geht verloren).
@@ -106,7 +106,7 @@ async def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/api/locations/{location_id}")
-async def delete_location(location_id: str, user: dict = Depends(get_current_user)):
+def delete_location(location_id: str, user: dict = Depends(get_current_user)):
     """
     Löscht eine Location mitsamt Ordnern. Alle betroffenen Clients werden
     automatisch nach Uncategorized/Default verschoben (nichts geht verloren).

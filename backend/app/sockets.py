@@ -113,17 +113,27 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Wie viele Agenten dürfen sich GLEICHZEITIG anmelden? 1 = strikt nacheinander.
-AGENT_ADMISSION_SLOTS = _env_int("AGENT_ADMISSION_SLOTS", 1)
+# Wie viele Agenten dürfen sich GLEICHZEITIG anmelden?
+#
+# War 1 - das war zu streng und hat mehr kaputt gemacht als geholfen. Eine
+# Anmeldung dauert Millisekunden; das Problem waren nie zwei gleichzeitige
+# Anmeldungen, sondern hundert. Bei 4 Plätzen bleibt die Last gedeckelt,
+# aber eine Handvoll Agenten kommt nach einem Netzausfall sofort wieder
+# rein, statt sich gegenseitig in immer längere Wartezeiten zu drängen.
+AGENT_ADMISSION_SLOTS = _env_int("AGENT_ADMISSION_SLOTS", 4)
 # Wie lange darf ein Agent auf seinen Platz warten, bevor er abgewiesen wird?
-AGENT_ADMISSION_WAIT_S = _env_int("AGENT_ADMISSION_WAIT_S", 25)
+AGENT_ADMISSION_WAIT_S = _env_int("AGENT_ADMISSION_WAIT_S", 45)
 # Wie viele Agenten dürfen höchstens in der Schlange stehen? Darüber hinaus
 # wird sofort abgelehnt, statt immer mehr Speicher mit Wartenden zu füllen.
 AGENT_ADMISSION_QUEUE = _env_int("AGENT_ADMISSION_QUEUE", 100)
 # Notbremse: Meldet sich ein Agent nach dem Verbinden nicht binnen dieser
-# Zeit an, wird sein Platz wieder freigegeben (sonst blockiert ein hängender
-# Client die ganze Schleuse).
-AGENT_ADMISSION_HOLD_S = _env_int("AGENT_ADMISSION_HOLD_S", 30)
+# Zeit an, wird sein Platz wieder freigegeben.
+#
+# War 30 s. Das war viel zu lang: Eine Anmeldung folgt dem Verbinden
+# innerhalb von Millisekunden. Bricht die Verbindung genau dazwischen ab,
+# blockierte der tote Platz eine halbe Minute lang die Schleuse - bei
+# wenigen Plätzen legt das den Wiedereinstieg aller Agenten lahm.
+AGENT_ADMISSION_HOLD_S = _env_int("AGENT_ADMISSION_HOLD_S", 10)
 # Wie viele Heartbeats werden gleichzeitig verarbeitet? Heartbeats schreiben
 # in die DB - unbegrenzt parallel ist genau die Last, die den Container killt.
 AGENT_HEARTBEAT_SLOTS = _env_int("AGENT_HEARTBEAT_SLOTS", 4)
@@ -133,6 +143,7 @@ _register_lock: "asyncio.Lock | None" = None
 _heartbeat_sem: "asyncio.Semaphore | None" = None
 _admission_waiting = 0                 # aktuell in der Schlange
 _admission_held: dict[str, object] = {}  # sid -> Watchdog-Task (hält einen Platz)
+_admission_stats = {"granted": 0, "refused": 0, "healed": 0}
 
 
 def _ensure_gate() -> None:
@@ -161,6 +172,9 @@ async def _admission_acquire(sid: str) -> bool:
         await asyncio.wait_for(_admission_sem.acquire(),
                                timeout=AGENT_ADMISSION_WAIT_S)
     except asyncio.TimeoutError:
+        _admission_stats["refused"] += 1
+        print(f"[gate] Agent {sid} abgewiesen - alle {AGENT_ADMISSION_SLOTS} "
+              f"Plätze belegt, {_admission_waiting - 1} weitere warten")
         return False
     finally:
         _admission_waiting -= 1
@@ -176,6 +190,7 @@ async def _admission_acquire(sid: str) -> bool:
         _admission_release(sid)
 
     _admission_held[sid] = asyncio.ensure_future(_watchdog())
+    _admission_stats["granted"] += 1
     return True
 
 
@@ -827,6 +842,27 @@ async def _do_register(sid, payload):
             if enrollment_token:
                 db.mark_enrollment_token_used(enrollment_token)
 
+    # Wartungsmodus: Der Agent erfährt bei JEDER Anmeldung, ob er
+    # mitschreiben soll. Sonst wüsste ein Agent, der gerade neu gestartet
+    # ist, nichts davon - und ausgerechnet seine Startphase fehlte im Log.
+    try:
+        if db.get_setting("maintenance_agents", "0") == "1":
+            await sio.emit("diag-mode", {"enabled": True, "minutes": 0},
+                           to=sid, namespace="/agent")
+    except Exception as e:
+        print(f"[diag] Modus für {client_id} nicht übermittelt: {e!r}")
+
+    # Ist dieses Gerät eine Node? Dann bekommt es jetzt seine Betriebsdaten:
+    # Modulliste, Schlüssel, UDP-Port und die Probe-Adresse. Das geschieht
+    # bei JEDER Anmeldung, damit eine Node nach einem Neustart oder einem
+    # Modul-Update von selbst wieder den richtigen Stand hat.
+    try:
+        if db.is_client_node(client_id):
+            from app import node_manager
+            await node_manager.push_config(client_id)
+    except Exception as e:
+        print(f"[node] Konfiguration für {client_id} fehlgeschlagen: {e!r}")
+
     # Dashboard(s) informieren, dass sich die Client-Liste geändert hat
     await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
     _emit_clients_changed_soon()
@@ -874,8 +910,21 @@ async def on_heartbeat(sid, payload):
 
 
 async def _handle_heartbeat(client_id, payload):
-    """Eigentliche Heartbeat-Verarbeitung (siehe on_heartbeat)."""
-    db.touch_client(client_id)
+    """
+    Eigentliche Heartbeat-Verarbeitung (siehe on_heartbeat).
+
+    Die Datenbankzugriffe laufen in einem Thread, NICHT im Event-Loop.
+    Grund: Die Datenbank liegt im Bind-Mount, auf einem NAS also auf einem
+    langsamen Dateisystem. Ein einzelnes hängendes Schreiben blockierte
+    bisher das gesamte Backend - keine HTTP-Antwort, keine Socket.IO-Pings,
+    alle Agenten fliegen gleichzeitig raus. Genau dieses Muster steht im
+    Log vom 22.08. um 23:38:29.
+
+    Der Heartbeat ist der mit Abstand häufigste Schreibpfad (jeder Agent
+    alle fünf Sekunden), deshalb wird er zuerst ausgelagert.
+    """
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, db.touch_client, client_id)
 
     # Auto-Update auch für BEREITS verbundene Clients: Wird eine neue
     # Agent-Version ausgerollt, während der Client online ist, greift der
@@ -937,6 +986,165 @@ async def _handle_heartbeat(client_id, payload):
                 await notifier.check_metric_thresholds(_c, metrics)
         except Exception as e:
             print(f"[notify] Schwellwert-Prüfung fehlgeschlagen: {e}")
+
+
+# ------------------------------------------------------------------
+# VPN (WireGuard-kompatibel): Rückweg vom Agenten
+# ------------------------------------------------------------------
+# Der Agent hält für den Tunnel ganz normale Sockets offen und meldet hier,
+# was darüber hereinkommt. Die Übersetzung zurück in IP-Pakete macht
+# app/vpn_stack.py; diese Handler sind bewusst nur eine dünne Weiterleitung,
+# damit im Socket-Modul keine Protokoll-Logik liegt.
+
+def _vpn_dispatch(fn_name: str, payload: dict) -> None:
+    try:
+        from app import vpn as _vpn
+        getattr(_vpn, fn_name)(payload or {})
+    except Exception as e:
+        print(f"[vpn] {fn_name} fehlgeschlagen: {e!r}")
+
+
+@sio.on("vpn-open-result", namespace="/agent")
+async def on_vpn_open_result(sid, payload):
+    """Der Agent meldet, ob die Verbindung zum Ziel zustande kam."""
+    _vpn_dispatch("on_agent_open_result", payload)
+
+
+@sio.on("vpn-data", namespace="/agent")
+async def on_vpn_data(sid, payload):
+    """Daten, die der Zielrechner an den Agenten geschickt hat."""
+    _vpn_dispatch("on_agent_data", payload)
+
+
+@sio.on("vpn-close", namespace="/agent")
+async def on_vpn_close(sid, payload):
+    """Die Gegenstelle im Netz des Clients hat die Verbindung beendet."""
+    _vpn_dispatch("on_agent_close", payload)
+
+
+@sio.on("vpn-udp", namespace="/agent")
+async def on_vpn_udp(sid, payload):
+    """Antwort-Datagramm einer UDP-Zuordnung."""
+    _vpn_dispatch("on_agent_udp", payload)
+
+
+@sio.on("vpn-ping-result", namespace="/agent")
+async def on_vpn_ping_result(sid, payload):
+    """Ergebnis einer Erreichbarkeitsprüfung (ICMP-Echo durch den Tunnel)."""
+    _vpn_dispatch("on_agent_ping", payload)
+
+
+# ------------------------------------------------------------------
+# NODE-STUFE: Anfragen ans Gerät und Berichte zurück
+# ------------------------------------------------------------------
+# Eine Node ist ein aufgewerteter Client: eigener VPN-Endpunkt, Reverse
+# Proxy, optional L2-Brücke. Die Anfragen hier folgen demselben
+# Frage/Antwort-Muster wie request_exec() weiter oben.
+
+async def request_node_proxy(client_id: str, spec: dict,
+                             timeout_seconds: float = 40.0) -> dict:
+    """Lässt eine Node eine Webseite aus ihrem Netz holen."""
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Node ist offline")
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+    try:
+        await sio.emit("node-proxy", {"requestId": request_id, **spec},
+                       to=sid, namespace="/agent")
+        return await asyncio.wait_for(future, timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        raise RuntimeError("Die Node hat nicht rechtzeitig geantwortet")
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+
+async def request_node_l2(client_id: str, install_driver: bool,
+                          interface: str = "",
+                          timeout_seconds: float = 360.0) -> dict:
+    """
+    Richtet die L2-Brücke ein. Das Zeitlimit ist grosszügig, weil unter
+    Windows dabei ein Treiber installiert wird - das dauert.
+    """
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Node ist offline")
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+    try:
+        await sio.emit("node-l2-setup", {
+            "requestId": request_id, "install_driver": bool(install_driver),
+            "interface": interface,
+        }, to=sid, namespace="/agent")
+        return await asyncio.wait_for(future, timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        raise RuntimeError("Die Node hat die Einrichtung nicht abgeschlossen")
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+
+@sio.on("node-proxy-result", namespace="/agent")
+async def on_node_proxy_result(sid, payload):
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("node-l2-result", namespace="/agent")
+async def on_node_l2_result(sid, payload):
+    future = state.pending_requests.get(payload.get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
+@sio.on("node-report", namespace="/agent")
+async def on_node_report(sid, payload):
+    """
+    Selbstauskunft einer Node: welche Module laufen, ob die L2-Brücke steht,
+    und die Zahlen der direkt endenden Tunnel.
+
+    Letztere kann nur die Node liefern - bei einem direkten Tunnel laufen
+    die Daten am Backend vorbei. Genau das ist gewollt.
+    """
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id:
+        return
+    try:
+        from app import node_manager, vpn
+        node_manager.update_caps(client_id, payload or {})
+        vpn.apply_node_stats(client_id, (payload or {}).get("tunnels") or [])
+        await sio.emit("node-changed", {"client_id": client_id},
+                       namespace="/dashboard")
+    except Exception as e:
+        print(f"[node] Bericht von {client_id} nicht verarbeitet: {e!r}")
+
+
+# ------------------------------------------------------------------
+# WARTUNGSMODUS: Logzeilen der Agenten einsammeln
+# ------------------------------------------------------------------
+
+@sio.on("diag-log", namespace="/agent")
+async def on_diag_log(sid, payload):
+    """
+    Ein Agent liefert seine gesammelten Logzeilen ab.
+
+    Sie landen in derselben Zeitachse wie die Backend-Ausgabe. Genau
+    darum geht es: Bei einem Absturz kurz nach dem Verbindungsaufbau ist
+    die entscheidende Frage, was auf BEIDEN Seiten in derselben Sekunde
+    passiert ist.
+    """
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id:
+        return
+    try:
+        from app import diagnostics
+        client = db.get_client(client_id) or {}
+        diagnostics.agent_log(client_id, client.get("hostname") or "",
+                              (payload or {}).get("lines") or [])
+    except Exception as e:
+        print(f"[diag] Agenten-Log von {client_id} verworfen: {e!r}")
 
 
 @sio.on("exec-result", namespace="/agent")

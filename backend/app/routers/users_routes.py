@@ -42,7 +42,7 @@ def _generate_one_time_password(length: int = 12) -> str:
 
 
 @router.get("")
-async def get_users(user: dict = Depends(get_current_user)):
+def get_users(user: dict = Depends(get_current_user)):
     require_perm(user, "see_permissions")
     users = db.list_users()
     out = []
@@ -59,7 +59,7 @@ async def get_users(user: dict = Depends(get_current_user)):
 
 
 @router.post("")
-async def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
+def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
     require_perm(user, "create_users")
 
     if db.get_user_by_username(body.username):
@@ -100,7 +100,7 @@ async def create_user(body: CreateUserBody, user: dict = Depends(get_current_use
 
 
 @router.delete("/{user_id}")
-async def remove_user(user_id: str, user: dict = Depends(get_current_user)):
+def remove_user(user_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "create_users")
     if user_id == user["id"]:
         raise HTTPException(400, "Du kannst dich nicht selbst löschen")

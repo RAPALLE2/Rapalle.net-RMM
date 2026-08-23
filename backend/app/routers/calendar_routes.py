@@ -43,7 +43,7 @@ def _conn():
 # ==================================================================
 
 @router.get("/org/tree")
-async def org_tree(user: dict = Depends(get_current_user)):
+def org_tree(user: dict = Depends(get_current_user)):
     require_perm(user, "see_org")
     tree = org.build_tree()
     tree["me"] = {"type": "user", "id": user["id"]}
@@ -59,7 +59,7 @@ class OrgParentBody(BaseModel):
 
 
 @router.put("/org/parent")
-async def org_set_parent(body: OrgParentBody, user: dict = Depends(get_current_user)):
+def org_set_parent(body: OrgParentBody, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_org")
     try:
         org.set_parent(body.child_type, body.child_id, body.parent_type, body.parent_id)
@@ -76,7 +76,7 @@ class WorkspaceBody(BaseModel):
 
 
 @router.put("/org/users/{user_id}/workspace")
-async def set_workspace(user_id: str, body: WorkspaceBody,
+def set_workspace(user_id: str, body: WorkspaceBody,
                         user: dict = Depends(get_current_user)):
     """Arbeitsbereich/Abteilung eines Benutzers setzen."""
     require_perm(user, "manage_org")
@@ -89,7 +89,7 @@ async def set_workspace(user_id: str, body: WorkspaceBody,
 
 
 @router.get("/org/workspaces")
-async def list_workspaces(user: dict = Depends(get_current_user)):
+def list_workspaces(user: dict = Depends(get_current_user)):
     """Bereits vergebene Arbeitsbereiche - als Vorschlagsliste."""
     require_perm(user, "see_org")
     rows = _conn().execute(
@@ -191,7 +191,7 @@ def _serialize(ev: dict, targets: list[dict]) -> dict:
 
 
 @router.get("/calendar/events")
-async def list_events(start: int | None = None, end: int | None = None,
+def list_events(start: int | None = None, end: int | None = None,
                       user: dict = Depends(get_current_user)):
     """Termine in einem Zeitraum (Unix-ms). Ohne Angabe: laufender Monat ±1."""
     require_perm(user, "use_calendar")
@@ -216,7 +216,7 @@ async def list_events(start: int | None = None, end: int | None = None,
 
 
 @router.get("/calendar/targets")
-async def target_options(user: dict = Depends(get_current_user)):
+def target_options(user: dict = Depends(get_current_user)):
     """Auswahl-Listen für den Termin-Dialog: Benutzer, Gruppen, Clients.
     'assignable' sagt, für wen der Benutzer Termine eintragen darf."""
     require_perm(user, "use_calendar")
@@ -292,7 +292,7 @@ def _clean(body: EventBody) -> tuple[str, int, int, str, list]:
 
 
 @router.post("/calendar/events")
-async def create_event(body: EventBody, user: dict = Depends(get_current_user)):
+def create_event(body: EventBody, user: dict = Depends(get_current_user)):
     require_perm(user, "use_calendar")
     title, start, end, imp, targets = _clean(body)
     if not targets:                       # ohne Ziel = eigener Termin
@@ -321,7 +321,7 @@ async def create_event(body: EventBody, user: dict = Depends(get_current_user)):
 
 
 @router.put("/calendar/events/{event_id}")
-async def update_event(event_id: str, body: EventBody,
+def update_event(event_id: str, body: EventBody,
                        user: dict = Depends(get_current_user)):
     require_perm(user, "use_calendar")
     row = _conn().execute("SELECT * FROM calendar_events WHERE id = ?", (event_id,)).fetchone()
@@ -354,7 +354,7 @@ async def update_event(event_id: str, body: EventBody,
 
 
 @router.delete("/calendar/events/{event_id}")
-async def delete_event(event_id: str, user: dict = Depends(get_current_user)):
+def delete_event(event_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "use_calendar")
     row = _conn().execute("SELECT * FROM calendar_events WHERE id = ?", (event_id,)).fetchone()
     if not row:

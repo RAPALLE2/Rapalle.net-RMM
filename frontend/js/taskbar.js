@@ -43,6 +43,7 @@ export const APP_ICON = {
   speedtest: "🚀",
   portscan: "🎯",
   "relay-manager": "🔌",
+  vpn: "🔐",
   webbrowser: "🌐",
   webapp: "🌐",
   // Kommunikation & Medien

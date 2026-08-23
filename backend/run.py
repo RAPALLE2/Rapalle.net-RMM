@@ -128,9 +128,18 @@ if __name__ == "__main__":
     # auslösen. Genau das passierte zuletzt: eine fehlende Bibliothek ließ den
     # Start immer wieder scheitern, das Log lief mit demselben Traceback voll
     # und die Rückfallebenen des Start-Skripts wurden nie erreicht.
-    _MAX_RESTARTS = 5
+    # Das Backend gibt NIEMALS auf. Frueher lag hier eine Obergrenze von 5
+    # Fehlversuchen - danach beendete sich der Prozess. Genau das ist bei
+    # einem RMM falsch herum gedacht: Ist der Server weg, ist auch der Weg
+    # weg, ihn aus der Ferne wieder hochzuholen. Statt einer Obergrenze gibt
+    # es jetzt eine wachsende Wartezeit. Ein dauerhaft kaputter Start laeuft
+    # damit im ruhigen 5-Minuten-Takt und muellt weder Log noch CPU zu, ein
+    # voruebergehender Fehler ist nach Sekunden wieder weg.
     _tries = 0
+    _RESTART_WAIT_MAX = 300.0
     while True:
+        import time as _time
+        _started_at = _time.time()
         try:
             # --- FTP-Zugang am Relay: teilt sich den Port mit dem Dashboard ---
             # Ist er eingeschaltet, lauscht das Dashboard INTERN auf PORT+1 und
@@ -215,14 +224,14 @@ if __name__ == "__main__":
         except Exception as _exc:
             _report_backend_crash(_exc)
             _tries += 1
-            if _tries >= _MAX_RESTARTS:
-                print(f"[run] {_tries} Fehlversuche in Folge - der Fehler geht "
-                      f"von allein nicht weg.")
-                print("[run] Gebe auf, damit der Aufrufer einen anderen Weg "
-                      "versuchen kann (im Container: Weg 2/3 des Start-Skripts).")
-                raise SystemExit(1)
             import time as _time
-            _time.sleep(2)
-            print(f"[run] Starte Backend nach Absturz neu… "
-                  f"(Versuch {_tries} von {_MAX_RESTARTS})")
+            # Lief der Server vorher laenger als zwei Minuten, war es
+            # vermutlich ein Einzelfall - dann sofort wieder hoch. Stirbt er
+            # dagegen immer gleich neu, waechst die Wartezeit bis 5 Minuten.
+            if (_time.time() - _started_at) > 120:
+                _tries = 1
+            _wait = min(2.0 * (2 ** min(_tries - 1, 8)), _RESTART_WAIT_MAX)
+            print(f"[run] Starte Backend nach Absturz neu in {_wait:.0f}s "
+                  f"(Fehlversuch {_tries} in Folge - es wird NICHT aufgegeben)")
+            _time.sleep(_wait)
             # Schleife startet uvicorn erneut.

@@ -105,8 +105,22 @@ EXPOSE 4000
 
 # Healthcheck: fragt die Login-Seite ab. Container gilt als "unhealthy",
 # wenn das Backend nicht mehr antwortet.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT}/" >/dev/null || exit 1
+# Gesundheitspruefung.
+#
+# Zwei Aenderungen gegenueber frueher, beide aus einem echten Vorfall:
+#   1. Geprueft wird /api/health statt "/". "/" liefert die komplette
+#      Dashboard-Seite aus - also Dateizugriffe, die unter Last laenger
+#      dauern koennen. Der Endpunkt /api/health fasst weder Datenbank noch
+#      Dateien an und antwortet auch dann, wenn der Server gerade viel zu
+#      tun hat.
+#   2. Zeitlimit 5s -> 15s und 3 -> 5 Versuche. Fuenf Sekunden sind zu
+#      knapp: Beim Massen-Update aller Agenten war der Server kurz
+#      beschaeftigt, der Healthcheck schlug an, und der Container galt als
+#      krank - obwohl das Backend voellig in Ordnung war. Eine
+#      Gesundheitspruefung, die bei Last Fehlalarm gibt, richtet mehr
+#      Schaden an als gar keine.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null || exit 1
 
 # Absturzberichte von Python (auch bei harten Fehlern) ins Log.
 ENV PYTHONFAULTHANDLER=1

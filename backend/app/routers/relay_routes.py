@@ -83,7 +83,7 @@ def webdav_enabled() -> bool:
 
 
 @router.get("/relay-health")
-async def relay_health():
+def relay_health():
     """Health-Check OHNE Login (zum Prüfen, ob das Modul geladen ist)."""
     return {"relay": "ok", "version": RELAY_VERSION}
 
@@ -97,7 +97,7 @@ from fastapi import Depends, HTTPException  # noqa: E402
 
 
 @router.get("/api/relay/status")
-async def relay_status(client_id: str, user: dict = Depends(get_current_user)):
+def relay_status(client_id: str, user: dict = Depends(get_current_user)):
     """Ist der Relay für DIESEN Client freigegeben?"""
     if not can_access_client(user, client_id):
         raise HTTPException(403, "Kein Zugriff auf diesen Client")
@@ -106,7 +106,7 @@ async def relay_status(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/relay/toggle")
-async def relay_toggle(client_id: str, auto_close_minutes: int = 0,
+def relay_toggle(client_id: str, auto_close_minutes: int = 0,
                        user: dict = Depends(get_current_user)):
     """Relay-Freigabe für diesen Client an/aus.
 
@@ -638,7 +638,7 @@ def _multistatus(responses: list[str]) -> Response:
 # Server (GET "/" liefert weiterhin ganz normal das Dashboard aus).
 # ------------------------------------------------------------------
 @router.api_route("/", methods=["OPTIONS", "PROPFIND"], include_in_schema=False)
-async def dav_root_probe(request: Request):
+def dav_root_probe(request: Request):
     if request.method.upper() == "OPTIONS":
         return Response(status_code=200, headers={
             "DAV": "1, 2",
@@ -1065,7 +1065,7 @@ async def dav(request: Request, full_path: str = ""):
 # ==================================================================
 
 @router.get("/api/relay/ftp")
-async def relay_ftp_config(user: dict = Depends(get_current_user)):
+def relay_ftp_config(user: dict = Depends(get_current_user)):
     require_admin(user)
     from app import ftp_relay, sftp_relay
     from app.config import PORT
@@ -1114,7 +1114,7 @@ class FtpModeBody(BaseModel):
 
 
 @router.post("/api/relay/ftp")
-async def relay_ftp_toggle(body: FtpModeBody, user: dict = Depends(get_current_user)):
+def relay_ftp_toggle(body: FtpModeBody, user: dict = Depends(get_current_user)):
     """
     Datei-Zugang umschalten. Genau EIN Wert - dadurch kann der Fall
     "FTP und SFTP gleichzeitig" gar nicht erst entstehen.

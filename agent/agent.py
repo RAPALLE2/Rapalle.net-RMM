@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import functools
+import hashlib
 import io
 import json
 import logging
@@ -1675,6 +1676,920 @@ async def on_exec(data):
         {"requestId": request_id, "stdout": stdout, "stderr": stderr, "code": exit_code},
         namespace="/agent",
     )
+
+
+# ======================================================================
+# VPN-GEGENSTELLE  (WireGuard-kompatibler Tunnel, Client-Seite)
+# ----------------------------------------------------------------------
+# Wichtig zum Verständnis: Auf DIESEM Gerät läuft kein WireGuard. Nichts
+# wird installiert, kein Treiber, kein TUN-Gerät, keine Administratorrechte.
+#
+# Der eigentliche WireGuard-Tunnel endet im Backend (dort in reinem Python,
+# siehe backend/app/wireguard.py). Was hier ankommt, ist bereits ausgepackt:
+# schlichte Anweisungen der Art "öffne eine TCP-Verbindung nach 192.168.1.5:445
+# und schiebe diese Bytes hin und her". Das erledigt der Agent mit dem
+# Standard-Modul 'socket' - mehr braucht es nicht.
+#
+# Aus Sicht des Zielrechners im Netz kommt die Verbindung damit von diesem
+# Gerät. Genau das ist gewollt: Der Client ist der Brückenkopf ins Netz.
+#
+# Ereignisse vom Backend:
+#   vpn-open   {tunnel, stream, host, port}  -> Verbindung aufbauen
+#   vpn-data   {stream, data(base64)}        -> Bytes zum Ziel schicken
+#   vpn-close  {stream}                      -> Verbindung schliessen
+#   vpn-udp    {tunnel, host, port, sport, src, data}
+#   vpn-ping   {tunnel, host, src, ident, seq}
+#
+# Antworten zurück: vpn-open-result, vpn-data, vpn-close, vpn-udp,
+# vpn-ping-result.
+# ======================================================================
+
+# Wie viele Verbindungen darf ein Tunnel gleichzeitig offen halten? Die
+# Grenze schützt das Gerät davor, dass ein Portscan durch den Tunnel
+# tausende Sockets aufreisst.
+VPN_MAX_STREAMS = int(os.getenv("AGENT_VPN_MAX_STREAMS", "128") or 128)
+# Zeitlimit für den Verbindungsaufbau zum Ziel.
+VPN_CONNECT_TIMEOUT = 8.0
+# Nach so langer Untätigkeit wird eine UDP-Zuordnung wieder abgeräumt.
+VPN_UDP_IDLE = 60.0
+
+_vpn_streams: dict[str, dict] = {}          # stream-ID -> {sock, thread, tunnel}
+_vpn_streams_lock = threading.Lock()
+_vpn_udp: dict[tuple, dict] = {}            # (tunnel, host, port, sport) -> Zuordnung
+_vpn_udp_lock = threading.Lock()
+
+
+def _vpn_emit(event: str, payload: dict) -> None:
+    """Ereignis ans Backend schicken - auch aus einem Hintergrund-Thread."""
+    try:
+        asyncio.run_coroutine_threadsafe(
+            sio.emit(event, payload, namespace="/agent"), _AGENT_LOOP)
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------
+# TCP
+# ----------------------------------------------------------------------
+
+def _vpn_reader(stream_id: str, sock: socket.socket, tunnel: str) -> None:
+    """
+    Liest alles, was vom Ziel zurückkommt, und schickt es ans Backend.
+
+    Läuft in einem eigenen Thread. Das ist hier der ehrlichere Weg als
+    asyncio: die Sockets sind gewöhnliche, blockierende Sockets, und ein
+    Thread pro Verbindung ist bei den überschaubaren Stückzahlen eines
+    Tunnels unproblematisch - anders als hunderte Dauerverbindungen.
+    """
+    try:
+        while True:
+            try:
+                chunk = sock.recv(32768)
+            except (OSError, socket.timeout):
+                break
+            if not chunk:
+                break
+            _vpn_emit("vpn-data", {
+                "tunnel": tunnel, "stream": stream_id,
+                "data": base64.b64encode(chunk).decode(),
+            })
+    finally:
+        _vpn_drop_stream(stream_id, notify=True)
+
+
+def _vpn_drop_stream(stream_id: str, notify: bool) -> None:
+    with _vpn_streams_lock:
+        entry = _vpn_streams.pop(stream_id, None)
+    if not entry:
+        return
+    try:
+        entry["sock"].close()
+    except Exception:
+        pass
+    if notify:
+        _vpn_emit("vpn-close", {"tunnel": entry.get("tunnel", ""),
+                                "stream": stream_id})
+
+
+@sio.on("vpn-open", namespace="/agent")
+async def on_vpn_open(payload):
+    """Neue Verbindung durch den Tunnel aufbauen."""
+    stream_id = payload.get("stream") or ""
+    tunnel = payload.get("tunnel") or ""
+    host = payload.get("host") or ""
+    port = int(payload.get("port") or 0)
+    if not stream_id or not host or not port:
+        return
+
+    with _vpn_streams_lock:
+        too_many = len(_vpn_streams) >= VPN_MAX_STREAMS
+    if too_many:
+        _print(f"[vpn] Grenze von {VPN_MAX_STREAMS} Verbindungen erreicht - "
+               f"{host}:{port} abgelehnt")
+        await sio.emit("vpn-open-result",
+                       {"tunnel": tunnel, "stream": stream_id, "ok": False,
+                        "error": "zu viele offene Verbindungen"},
+                       namespace="/agent")
+        return
+
+    def _connect():
+        try:
+            sock = socket.create_connection((host, port), VPN_CONNECT_TIMEOUT)
+        except Exception as e:
+            _vpn_emit("vpn-open-result", {"tunnel": tunnel, "stream": stream_id,
+                                          "ok": False, "error": str(e)})
+            return
+        sock.settimeout(None)
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
+        reader = threading.Thread(target=_vpn_reader,
+                                  args=(stream_id, sock, tunnel), daemon=True)
+        with _vpn_streams_lock:
+            _vpn_streams[stream_id] = {"sock": sock, "thread": reader,
+                                       "tunnel": tunnel}
+        _vpn_emit("vpn-open-result", {"tunnel": tunnel, "stream": stream_id,
+                                      "ok": True})
+        reader.start()
+
+    # Der Verbindungsaufbau blockiert bis zu VPN_CONNECT_TIMEOUT Sekunden -
+    # das gehört in einen Thread, sonst steht der ganze Agent still.
+    threading.Thread(target=_connect, daemon=True).start()
+
+
+@sio.on("vpn-data", namespace="/agent")
+async def on_vpn_data(payload):
+    """Bytes aus dem Tunnel an das Ziel weiterreichen."""
+    stream_id = payload.get("stream") or ""
+    with _vpn_streams_lock:
+        entry = _vpn_streams.get(stream_id)
+    if not entry:
+        return
+    try:
+        data = base64.b64decode(payload.get("data") or "")
+    except Exception:
+        return
+    try:
+        entry["sock"].sendall(data)
+    except Exception:
+        _vpn_drop_stream(stream_id, notify=True)
+
+
+@sio.on("vpn-close", namespace="/agent")
+async def on_vpn_close(payload):
+    """Verbindung schliessen (Gegenstelle im Tunnel ist fertig)."""
+    _vpn_drop_stream(payload.get("stream") or "", notify=False)
+
+
+# ----------------------------------------------------------------------
+# UDP
+# ----------------------------------------------------------------------
+
+def _vpn_udp_reader(key: tuple, sock: socket.socket, tunnel: str,
+                    src: str, sport: int, host: str, port: int) -> None:
+    """Wartet auf Antwort-Datagramme und schickt sie durch den Tunnel zurück."""
+    try:
+        while True:
+            sock.settimeout(VPN_UDP_IDLE)
+            try:
+                data, _addr = sock.recvfrom(65535)
+            except (OSError, socket.timeout):
+                break
+            if not data:
+                break
+            _vpn_emit("vpn-udp", {
+                "tunnel": tunnel,
+                # 'host/port' ist hier der Absender im Netz des Clients,
+                # 'dst/dport' der Benutzer im Tunnel.
+                "host": host, "port": port,
+                "dst": src, "dport": sport,
+                "data": base64.b64encode(data).decode(),
+            })
+    finally:
+        with _vpn_udp_lock:
+            entry = _vpn_udp.pop(key, None)
+        if entry:
+            try:
+                entry["sock"].close()
+            except Exception:
+                pass
+
+
+@sio.on("vpn-udp", namespace="/agent")
+async def on_vpn_udp(payload):
+    """Ein UDP-Datagramm aus dem Tunnel verschicken (z.B. DNS)."""
+    tunnel = payload.get("tunnel") or ""
+    host = payload.get("host") or ""
+    port = int(payload.get("port") or 0)
+    src = payload.get("src") or ""
+    sport = int(payload.get("sport") or 0)
+    if not host or not port:
+        return
+    try:
+        data = base64.b64decode(payload.get("data") or "")
+    except Exception:
+        return
+
+    key = (tunnel, host, port, sport)
+    with _vpn_udp_lock:
+        entry = _vpn_udp.get(key)
+        if entry is None:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except Exception as e:
+                _print(f"[vpn] UDP-Socket fehlgeschlagen: {e}")
+                return
+            entry = {"sock": sock}
+            _vpn_udp[key] = entry
+            threading.Thread(target=_vpn_udp_reader,
+                             args=(key, sock, tunnel, src, sport, host, port),
+                             daemon=True).start()
+    try:
+        entry["sock"].sendto(data, (host, port))
+    except Exception as e:
+        _print(f"[vpn] UDP an {host}:{port} fehlgeschlagen: {e}")
+
+
+# ----------------------------------------------------------------------
+# ICMP (ping)
+# ----------------------------------------------------------------------
+
+@sio.on("vpn-ping", namespace="/agent")
+async def on_vpn_ping(payload):
+    """
+    Erreichbarkeitsprüfung durch den Tunnel.
+
+    Echte ICMP-Pakete zu bauen setzt einen Raw-Socket und damit Root- bzw.
+    Administratorrechte voraus - die hat der Agent bewusst nicht überall.
+    Deshalb wird das System-Werkzeug 'ping' benutzt; das Ergebnis (erreichbar
+    ja/nein) reicht für die Antwort, die das Backend im Tunnel erzeugt.
+    """
+    tunnel = payload.get("tunnel") or ""
+    host = payload.get("host") or ""
+    if not host:
+        return
+
+    def _run():
+        try:
+            if IS_WINDOWS:
+                cmd = ["ping", "-n", "1", "-w", "1500", host]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "2", host]
+            res = subprocess.run(cmd, capture_output=True, timeout=6,
+                                 **_no_window_kwargs())
+            ok = res.returncode == 0
+        except Exception:
+            ok = False
+        _vpn_emit("vpn-ping-result", {
+            "tunnel": tunnel, "host": host, "src": payload.get("src") or "",
+            "ident": payload.get("ident") or 0, "seq": payload.get("seq") or 0,
+            "payload_len": payload.get("payload_len") or 32, "ok": ok,
+        })
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+# ======================================================================
+# NODE-STUFE  (Zusatzmodule, die NUR auf Nodes laufen)
+# ----------------------------------------------------------------------
+# Ein gewoehnlicher Client bleibt schlank: Metriken melden, Befehle
+# ausfuehren. Eine NODE ist ein aufgewerteter Client, der zusaetzlich als
+# Brueckenkopf ins Netz dient - eigener VPN-Endpunkt, Reverse Proxy und
+# optional eine L2-Bruecke.
+#
+# Diese Faehigkeiten kommen NICHT mit dem Agenten mit. Sie werden erst
+# nachgeladen, wenn das Backend dieses Geraet ausdruecklich zur Node
+# erklaert hat ('node-enable'). Vorher liegt hier keine einzige Zeile
+# davon auf der Platte. Wird die Node zurueckgestuft ('node-disable'),
+# werden die Dateien wieder entfernt.
+#
+# Warum nachladen statt alles in agent.py?
+#   * Ein Client, der nie Node wird, soll den Code gar nicht erst haben.
+#   * Module lassen sich einzeln aktualisieren, ohne den ganzen Agenten
+#     auszutauschen - die Pruefsumme entscheidet, nicht eine Versionsnummer.
+# ======================================================================
+
+NODE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "node_modules")
+
+# Zustand der Node zur Laufzeit. 'active' bleibt False, solange das Backend
+# dieses Geraet nicht aufgewertet hat.
+_node = {
+    "active": False,
+    "vpn": None,          # node_vpn.NodeVpn
+    "l2": None,           # node_l2.L2Bridge
+    "proxy": None,        # Modul node_proxy
+    "modules": {},        # Name -> Pruefsumme
+    "probe": None,        # {host, port, token}
+}
+
+
+def _node_pkg():
+    """
+    Legt den Modulordner an und macht ihn zu einem importierbaren Paket.
+
+    Die Node-Module importieren einander relativ ('from . import ...'),
+    deshalb braucht es eine __init__.py und einen Eintrag im Suchpfad.
+    """
+    os.makedirs(NODE_DIR, exist_ok=True)
+    init = os.path.join(NODE_DIR, "__init__.py")
+    if not os.path.isfile(init):
+        with open(init, "w", encoding="utf-8") as f:
+            f.write("# Von RAPALLE.net RMM angelegt - Node-Zusatzmodule.\n")
+    parent = os.path.dirname(NODE_DIR)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+
+
+def _node_module_hash(name: str) -> str:
+    path = os.path.join(NODE_DIR, name)
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _node_download(url: str) -> bytes:
+    """Laedt eine Datei vom Backend - mit Agent-Token, ohne Fremdpakete."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={"X-Agent-Token": AGENT_TOKEN})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read()
+
+
+def _node_sync_modules(manifest: list) -> bool:
+    """
+    Holt fehlende oder veraltete Module. Gibt True zurueck, wenn danach
+    ALLE Module vorhanden sind.
+
+    Verglichen wird die Pruefsumme, nicht ein Datum: Nur so faellt auch
+    eine Aenderung auf, bei der jemand vergessen hat, eine Nummer
+    hochzuzaehlen.
+    """
+    _node_pkg()
+    ok = True
+    for entry in manifest or []:
+        name = entry.get("name") or ""
+        want = entry.get("hash") or ""
+        if not name.endswith(".py") or "/" in name or "\\" in name:
+            continue   # nur einfache Dateinamen - nie ein Pfad aus dem Netz
+        if _node_module_hash(name) == want and want:
+            continue
+        url = f"{BACKEND_URL.rstrip('/')}/api/nodes/modules/{name}"
+        try:
+            data = _node_download(url)
+            with open(os.path.join(NODE_DIR, name), "wb") as f:
+                f.write(data)
+            _print(f"[node] Modul {name} geladen")
+        except Exception as e:
+            _print(f"[node] Modul {name} konnte nicht geladen werden: {e}")
+            ok = False
+            continue
+        _node["modules"][name] = _node_module_hash(name)
+    return ok
+
+
+@sio.on("node-enable", namespace="/agent")
+async def on_node_enable(payload):
+    """
+    Dieses Geraet wurde zur Node aufgewertet (oder meldet sich als Node neu an).
+
+    Ablauf: Module holen -> VPN-Endpunkt starten -> Erreichbarkeit pruefen
+    -> Bericht ans Backend. Die L2-Bruecke wird hier BEWUSST NICHT
+    angefasst; sie fasst den Netzwerkadapter an und wird nur auf
+    ausdrueckliche Anweisung aus dem Dashboard eingerichtet.
+    """
+    payload = payload or {}
+    if not _node_sync_modules(payload.get("modules")):
+        _print("[node] Nicht alle Module verfuegbar - Node bleibt inaktiv")
+        await _node_report(error="Module unvollstaendig")
+        return
+
+    try:
+        import importlib
+        pkg = os.path.basename(NODE_DIR)
+        node_vpn = importlib.import_module(f"{pkg}.node_vpn")
+        node_proxy = importlib.import_module(f"{pkg}.node_proxy")
+        importlib.reload(node_vpn)
+        importlib.reload(node_proxy)
+    except Exception as e:
+        _print(f"[node] Module nicht ladbar: {e}")
+        await _node_report(error=f"Module nicht ladbar: {e}")
+        return
+
+    _node["proxy"] = node_proxy
+    _node["probe"] = payload.get("probe") or {}
+
+    # Laeuft schon ein Endpunkt? Dann sauber beenden, bevor ein neuer
+    # denselben Port belegen will.
+    if _node["vpn"]:
+        try:
+            _node["vpn"].shutdown()
+        except Exception:
+            pass
+
+    vpn = node_vpn.NodeVpn(payload.get("private_key") or "",
+                           int(payload.get("vpn_port") or 51821), log=_print)
+    started = await vpn.start([get_local_ip() or ""], payload.get("blocked") or [])
+    _node["vpn"] = vpn if started else None
+    _node["active"] = True
+
+    if started:
+        # Bereits vorhandene L2-Bruecke wieder anhaengen (z.B. nach einem
+        # Neustart des Agenten, wenn der Treiber noch installiert ist).
+        if _node["l2"]:
+            vpn.attach_bridge(_node["l2"])
+        _node_send_probe()
+
+    await _node_report()
+    _print(f"[node] Node-Betrieb {'aktiv' if started else 'ohne VPN-Endpunkt'}")
+
+
+@sio.on("node-disable", namespace="/agent")
+async def on_node_disable(payload=None):
+    """Zurueckgestuft: alles beenden und die Zusatzmodule entfernen."""
+    if _node["vpn"]:
+        try:
+            _node["vpn"].shutdown()
+        except Exception:
+            pass
+    if _node["l2"]:
+        try:
+            _node["l2"].stop()
+        except Exception:
+            pass
+    _node.update({"active": False, "vpn": None, "l2": None, "proxy": None,
+                  "modules": {}, "probe": None})
+    try:
+        shutil.rmtree(NODE_DIR, ignore_errors=True)
+        _print("[node] Zusatzmodule entfernt - wieder ein gewoehnlicher Client")
+    except Exception as e:
+        _print(f"[node] Aufraeumen fehlgeschlagen: {e}")
+
+
+def _node_send_probe() -> None:
+    """
+    Prueft, ob diese Node von aussen direkt erreichbar ist.
+
+    Das Paket geht aus DEMSELBEN UDP-Socket, den spaeter auch der Tunnel
+    benutzt. Nur so beobachtet das Backend die Adresse, die das NAT dieser
+    Node wirklich fuer den Tunnel vergeben hat.
+    """
+    probe = _node.get("probe") or {}
+    vpn = _node.get("vpn")
+    if not vpn or not probe.get("host"):
+        return
+    try:
+        vpn.send_probe(probe["host"], int(probe.get("port") or 51820),
+                       probe.get("token") or "")
+    except Exception as e:
+        _print(f"[node] Probe fehlgeschlagen: {e}")
+
+
+@sio.on("node-tunnel-add", namespace="/agent")
+async def on_node_tunnel_add(payload):
+    """Das Backend uebergibt einen Tunnel, der HIER enden soll."""
+    vpn = _node.get("vpn")
+    if not vpn:
+        _print("[node] Tunnel abgelehnt - kein VPN-Endpunkt aktiv")
+        return
+    try:
+        vpn.add_tunnel(payload or {})
+    except Exception as e:
+        _print(f"[node] Tunnel nicht aufgenommen: {e}")
+    await _node_report()
+
+
+@sio.on("node-tunnel-remove", namespace="/agent")
+async def on_node_tunnel_remove(payload):
+    vpn = _node.get("vpn")
+    if vpn:
+        vpn.remove_tunnel((payload or {}).get("id") or "")
+    await _node_report()
+
+
+@sio.on("node-proxy", namespace="/agent")
+async def on_node_proxy(payload):
+    """Reverse Proxy: eine Seite aus dem Netz dieser Node holen."""
+    request_id = (payload or {}).get("requestId")
+    proxy = _node.get("proxy")
+    if not proxy:
+        await sio.emit("node-proxy-result",
+                       {"requestId": request_id, "ok": False,
+                        "error": "Reverse Proxy ist auf dieser Node nicht aktiv"},
+                       namespace="/agent")
+        return
+
+    def done(result):
+        result["requestId"] = request_id
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("node-proxy-result", result, namespace="/agent"),
+            _AGENT_LOOP)
+
+    proxy.fetch_async(payload, done, log=_print)
+
+
+@sio.on("node-l2-setup", namespace="/agent")
+async def on_node_l2_setup(payload):
+    """
+    Richtet die L2-Bruecke ein - der einzige Weg, auf dem ein Treiber
+    installiert wird. Ohne diesen Aufruf passiert das nie.
+    """
+    payload = payload or {}
+    request_id = payload.get("requestId")
+
+    def reply(result: dict):
+        result["requestId"] = request_id
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("node-l2-result", result, namespace="/agent"), _AGENT_LOOP)
+
+    def run():
+        try:
+            import importlib
+            node_l2 = importlib.import_module(
+                f"{os.path.basename(NODE_DIR)}.node_l2")
+        except Exception as e:
+            reply({"ok": False, "reason": f"L2-Modul nicht ladbar: {e}"})
+            return
+
+        state = node_l2.probe()
+        if not state.ok and state.needs_driver:
+            if not payload.get("install_driver"):
+                reply({"ok": False, "reason": state.reason,
+                       "needs_driver": True})
+                return
+            _print("[node] Treiberinstallation wurde im Dashboard bestaetigt")
+            installed = node_l2.install_driver(_node_driver_download, log=_print)
+            if not installed.ok:
+                # Ausdruecklich KEIN harter Fehler: Ohne Bruecke laufen die
+                # Tunnel im NAT-Betrieb weiter.
+                reply({"ok": False, "reason": installed.reason,
+                       "needs_driver": installed.needs_driver,
+                       "fallback": "NAT"})
+                return
+
+        # Eine bereits laufende Bruecke zuerst sauber beenden - sonst
+        # haengen zwei am selben Adapter und antworten beide auf ARP.
+        if _node.get("l2"):
+            try:
+                _node["l2"].stop()
+            except Exception:
+                pass
+
+        bridge = node_l2.L2Bridge(payload.get("interface") or "", log=_print)
+        result = bridge.start()
+        if result.ok:
+            _node["l2"] = bridge
+            # attach_bridge() statt einfach 'vpn.l2 = bridge': Nur so
+            # bekommt die Bruecke den Rueckweg in den Tunnel. Ohne diesen
+            # Draht faengt sie Rahmen ein, die nirgends ankommen.
+            if _node.get("vpn"):
+                _node["vpn"].attach_bridge(bridge)
+        reply({"ok": result.ok, "reason": result.reason,
+               "fallback": None if result.ok else "NAT",
+               "interface": getattr(bridge, "interface", ""),
+               "mac": bridge.stats().get("mac") if result.ok else ""})
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _node_driver_download(url: str) -> str:
+    """Laedt eine Installationsdatei herunter und gibt den lokalen Pfad zurueck."""
+    import urllib.request
+    target = os.path.join(tempfile.gettempdir(), os.path.basename(url))
+    with urllib.request.urlopen(url, timeout=300) as resp, \
+            open(target, "wb") as f:
+        shutil.copyfileobj(resp, f)
+    return target
+
+
+async def _node_report(error: str = "") -> None:
+    """
+    Meldet dem Backend, wie es dieser Node geht.
+
+    Enthaelt auch die Zahlen der direkt endenden Tunnel - die kann NUR die
+    Node liefern, weil deren Daten am Backend vorbeilaufen.
+    """
+    vpn = _node.get("vpn")
+    l2 = _node.get("l2")
+    try:
+        await sio.emit("node-report", {
+            "id": DEVICE_ID,
+            "modules": _node.get("modules") or {},
+            "vpn_running": bool(vpn),
+            "proxy": bool(_node.get("proxy")),
+            "l2": bool(l2 and getattr(l2, "available", False)),
+            "l2_reason": getattr(l2, "reason", "") if l2 else "nicht eingerichtet",
+            "l2_stats": l2.stats() if l2 else {},
+            "local_ips": [get_local_ip() or ""],
+            "tunnels": vpn.stats() if vpn else [],
+            "error": error,
+        }, namespace="/agent")
+    except Exception as e:
+        _print(f"[node] Bericht fehlgeschlagen: {e}")
+
+
+async def node_keepalive_loop():
+    """
+    Haelt die NAT-Zuordnung offen und meldet regelmaessig den Zustand.
+
+    Ohne die wiederholte Probe schliesst das NAT der Node ihren UDP-Port
+    nach ein bis zwei Minuten wieder - und der Endpunkt in der .conf eines
+    Benutzers zeigt ins Leere.
+    """
+    while True:
+        await asyncio.sleep(45)
+        if not _node.get("active") or not sio.connected:
+            continue
+        try:
+            _node_send_probe()
+            await _node_report()
+        except Exception as e:
+            _print(f"[node] Keepalive: {e}")
+
+
+# ======================================================================
+# WARTUNGSMODUS / DIAGNOSE (Agent-Seite)
+# ----------------------------------------------------------------------
+# Wenn das Backend den Wartungsmodus einschaltet, schreibt der Agent alles
+# mit und liefert es regelmaessig ab. Damit liegen Backend- und
+# Agent-Ausgabe in EINER Zeitachse - bei einem Absturz kurz nach dem
+# Verbindungsaufbau ist genau das die entscheidende Frage: was ist auf
+# beiden Seiten in derselben Sekunde passiert?
+#
+# Mitgeschrieben wird alles, was sonst still verschwindet:
+#   * jede Zeile ueber log/_print (haengt bereits am Root-Logger)
+#   * Ausnahmen in Threads (threading.excepthook)
+#   * Ausnahmen in asyncio-Aufgaben (Loop-Exception-Handler)
+#   * regelmaessige Messwerte (Speicher, Threads, Dateideskriptoren)
+#
+# Der Puffer laeuft IMMER mit, auch ohne Wartungsmodus. Nur das Hochladen
+# haengt am Schalter. So sind beim Einschalten die letzten Minuten sofort
+# dabei, statt erst ab dem Moment der Aktivierung.
+# ======================================================================
+
+_DIAG = {
+    "enabled": False,
+    "queue": _collections.deque(maxlen=4000),   # noch nicht abgeliefert
+    "lock": threading.Lock(),
+}
+
+
+def _diag_add(line: str, level: str = "INFO") -> None:
+    """Eine Zeile in die Abliefer-Warteschlange. Darf nie werfen."""
+    try:
+        stamp = time.strftime("%H:%M:%S")
+        with _DIAG["lock"]:
+            _DIAG["queue"].append(f"{stamp} [{level}] {line}")
+    except Exception:
+        pass
+
+
+class _DiagHandler(logging.Handler):
+    """Haengt am Root-Logger und faengt damit alles ab, was _print schreibt."""
+
+    def emit(self, record):
+        try:
+            _diag_add(record.getMessage(), record.levelname)
+            if record.exc_info:
+                import traceback as _tb
+                _diag_add("".join(_tb.format_exception(*record.exc_info)), "ERROR")
+        except Exception:
+            pass
+
+
+def _diag_thread_hook(args):
+    import traceback as _tb
+    text = "".join(_tb.format_exception(args.exc_type, args.exc_value,
+                                        args.exc_traceback))
+    name = args.thread.name if args.thread else "?"
+    _print(f"[diag] Unbehandelte Ausnahme im Thread {name}:\n{text}")
+
+
+def _diag_loop_handler(loop, context):
+    """
+    Ausnahmen aus asyncio-Aufgaben.
+
+    Ohne diesen Haken meldet Python nur irgendwann spaeter "Task exception
+    was never retrieved" - zu einem Zeitpunkt, der mit der Ursache nichts
+    mehr zu tun hat.
+    """
+    exc = context.get("exception")
+    msg = context.get("message") or "asyncio-Fehler"
+    if exc:
+        import traceback as _tb
+        detail = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+    else:
+        detail = str(context)
+    _print(f"[diag] {msg}\n{detail}")
+
+
+def _diag_install() -> None:
+    """Einmalig beim Start. Laeuft unabhaengig vom Schalter."""
+    try:
+        logging.getLogger().addHandler(_DiagHandler())
+        threading.excepthook = _diag_thread_hook
+        _AGENT_LOOP.set_exception_handler(_diag_loop_handler)
+    except Exception as e:
+        print(f"[diag] Einhaengen fehlgeschlagen: {e}")
+    _start_loop_watchdog()
+
+
+# ----------------------------------------------------------------------
+# Waechter fuer die Ereignisschleife des Agenten
+# ----------------------------------------------------------------------
+# Dasselbe Prinzip wie im Backend, aus demselben Grund: Ein Agent, dessen
+# Schleife haengt, ist nicht abgestuerzt - er lebt, meldet aber nichts mehr
+# und reagiert auf keinen Befehl. Im Dashboard steht er als "online" und
+# tut trotzdem nichts. Das ist die aergerlichste aller Stoerungen, weil sie
+# nach einem Fehler des Servers aussieht.
+#
+# Ein Thread misst von aussen. Steht die Schleife zu lange, beendet sich der
+# Agent - der Dienst bzw. die Neustart-Logik in main() faengt ihn auf, und
+# nach Sekunden ist er zurueck.
+
+_AGENT_BEAT = {"t": 0.0, "worst": 0.0}
+# Ab hier gilt der Agent als haengend und startet neu.
+AGENT_LOOP_KILL_S = float(os.getenv("AGENT_LOOP_KILL_S", "120") or 120)
+
+
+async def loop_heartbeat_agent():
+    """Setzt zweimal pro Sekunde einen Zeitstempel."""
+    while True:
+        _AGENT_BEAT["t"] = time.monotonic()
+        await asyncio.sleep(0.5)
+
+
+def _agent_watchdog_thread() -> None:
+    warned = 0.0
+    while True:
+        time.sleep(1.0)
+        last = _AGENT_BEAT["t"]
+        if not last:
+            continue
+        lag = time.monotonic() - last
+        if lag > _AGENT_BEAT["worst"]:
+            _AGENT_BEAT["worst"] = lag
+        if lag < 5.0:
+            continue
+        if time.monotonic() - warned > 30:
+            warned = time.monotonic()
+            _print(f"[diag] Ereignisschleife blockiert seit {lag:.0f}s")
+            try:
+                import traceback as _tb
+                for tid, frame in sys._current_frames().items():
+                    _print(f"[diag] Thread {tid}:\n"
+                           + "".join(_tb.format_stack(frame))[:2000])
+            except Exception:
+                pass
+        if AGENT_LOOP_KILL_S > 0 and lag >= AGENT_LOOP_KILL_S:
+            _print(f"[diag] NOTBREMSE: Schleife steht seit {lag:.0f}s - "
+                   f"der Agent startet sich neu.")
+            try:
+                path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "last_crash.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(time.strftime("%Y-%m-%d %H:%M:%S")
+                            + f"\nNotbremse: Ereignisschleife stand {lag:.0f}s\n")
+            except OSError:
+                pass
+            # Neu starten statt nur beenden: Ein beendeter Agent kaeme ohne
+            # Dienstverwaltung nicht von allein zurueck.
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception:
+                os._exit(75)
+
+
+def _start_loop_watchdog() -> None:
+    threading.Thread(target=_agent_watchdog_thread, name="loop-watchdog",
+                     daemon=True).start()
+
+
+def _diag_sample() -> str:
+    """Ein Messpunkt - billig genug fuer alle 30 Sekunden."""
+    parts = []
+    try:
+        p = psutil.Process()
+        with p.oneshot():
+            parts.append(f"rss={p.memory_info().rss // 1048576}MB")
+            parts.append(f"threads={p.num_threads()}")
+            try:
+                parts.append(f"fds={p.num_fds()}")
+            except Exception:
+                parts.append(f"handles={getattr(p, 'num_handles', lambda: 0)()}")
+            parts.append(f"conns={len(p.net_connections(kind='inet'))}")
+    except Exception:
+        pass
+    try:
+        parts.append(f"tasks={len(asyncio.all_tasks(_AGENT_LOOP))}")
+    except Exception:
+        pass
+    parts.append(f"connected={sio.connected}")
+    parts.append(f"registered={_REGISTERED.is_set()}")
+    return "MESSWERT " + " ".join(parts)
+
+
+@sio.on("diag-mode", namespace="/agent")
+async def on_diag_mode(payload):
+    """Das Backend schaltet den Wartungsmodus ein oder aus."""
+    enabled = bool((payload or {}).get("enabled"))
+    was = _DIAG["enabled"]
+    _DIAG["enabled"] = enabled
+    if enabled and not was:
+        _print(f"[diag] Wartungsmodus EIN - Agent {AGENT_VERSION}, "
+               f"PID {os.getpid()}, Python {sys.version.split()[0]}, "
+               f"{platform.platform()}")
+        _diag_report_last_crash()
+    elif not enabled and was:
+        _print("[diag] Wartungsmodus AUS")
+
+
+def _diag_report_last_crash() -> None:
+    """
+    Meldet einen frueheren Absturz nach.
+
+    Der Agent schreibt bei einem Absturz last_crash.txt und startet sich
+    neu. Diese Datei ist oft das einzige, was von einem Absturz uebrig
+    bleibt - sie gehoert ins Diagnosepaket.
+    """
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "last_crash.txt")
+        if not os.path.isfile(path):
+            return
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            _print("[diag] Letzter Absturz dieses Agenten:\n" + f.read()[:8000])
+    except Exception as e:
+        _print(f"[diag] last_crash.txt nicht lesbar: {e}")
+
+
+async def diag_upload_loop():
+    """
+    Liefert die gesammelten Zeilen ab.
+
+    In Haeppchen und mit Abstand: Ein Agent, der im Sekundentakt Logs
+    schickt, waere selbst eine Last - und der Wartungsmodus soll das
+    Problem finden, nicht vergroessern.
+    """
+    while True:
+        await asyncio.sleep(20)
+        try:
+            if not _DIAG["enabled"] or not sio.connected or not _REGISTERED.is_set():
+                # Nicht verbunden: Zeilen bleiben in der Warteschlange und
+                # gehen beim naechsten Mal mit. Genau die Zeilen aus einer
+                # Verbindungsstoerung sind die interessanten.
+                continue
+            _diag_add(_diag_sample(), "DEBUG")
+            with _DIAG["lock"]:
+                lines = list(_DIAG["queue"])
+                _DIAG["queue"].clear()
+            if not lines:
+                continue
+            # In Blöcken senden, damit keine übergrosse Nachricht entsteht.
+            for i in range(0, len(lines), 200):
+                await sio.emit("diag-log", {"id": DEVICE_ID,
+                                            "lines": lines[i:i + 200]},
+                               namespace="/agent")
+        except Exception as e:
+            print(f"[diag] Hochladen fehlgeschlagen: {e}")
+
+
+# ======================================================================
+# SELBSTHEILUNG: Hintergrundschleifen, die sich nie verabschieden
+# ----------------------------------------------------------------------
+# Eine mit create_task() gestartete Schleife ist nach einer Ausnahme WEG -
+# lautlos. Der Agent laeuft dann scheinbar weiter, meldet aber keine
+# Metriken mehr oder reagiert nicht auf Befehle. Von aussen sieht das aus
+# wie "der Agent ist abgestuerzt", obwohl der Prozess noch lebt.
+#
+# Diese Huelle faengt die Ausnahme, schreibt sie ins Log und startet die
+# Schleife neu - mit wachsendem Abstand, damit eine dauerhaft kaputte
+# Schleife nicht die CPU auslastet.
+# ======================================================================
+
+def _agent_supervise(name: str, factory):
+    async def runner():
+        delay = 2.0
+        while True:
+            started = time.monotonic()
+            try:
+                await factory()
+                _print(f"[aufseher] '{name}' regulaer beendet")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                import traceback as _tb
+                _print(f"[aufseher] '{name}' abgestuerzt:\n{_tb.format_exc()}")
+                # Lief die Schleife lange, war es vermutlich ein Einzelfall.
+                # Stirbt sie sofort wieder, wird der Abstand groesser.
+                delay = 2.0 if time.monotonic() - started > 120 else min(delay * 2, 300.0)
+                _print(f"[aufseher] '{name}' startet in {delay:.0f}s neu")
+                await asyncio.sleep(delay)
+
+    return asyncio.create_task(runner(), name=f"supervised:{name}")
 
 
 # ==============================================================
@@ -4824,7 +5739,16 @@ async def main():
                       else _at("log_helper_unused")))
 
     # Heartbeat läuft als eigene Hintergrund-Aufgabe, unabhängig von der Verbindung
-    asyncio.create_task(heartbeat_loop())
+    # Diagnose einhaengen, BEVOR irgendetwas anderes startet - alles was
+    # danach schiefgeht, soll bereits im Puffer landen.
+    _diag_install()
+
+    # Alle Dauerschleifen laufen unter dem Aufseher. Stirbt eine an einer
+    # Ausnahme, wird sie neu gestartet statt lautlos zu verschwinden.
+    _agent_supervise("loop-herzschlag", loop_heartbeat_agent)
+    _agent_supervise("heartbeat", heartbeat_loop)
+    _agent_supervise("node-keepalive", node_keepalive_loop)
+    _agent_supervise("diag-upload", diag_upload_loop)
 
     # Verbindungsschleife: WIR steuern das Wiederverbinden selbst. Vor jedem
     # Versuch sauber trennen, damit die interne Client-Zustand nicht auf
@@ -4847,7 +5771,14 @@ async def main():
         await asyncio.sleep(offset)
 
     backoff = 3.0            # aktuelle Wartezeit zwischen zwei Versuchen
-    BACKOFF_MAX = 120.0      # Obergrenze, damit ein Agent nie ganz aufgibt
+    attempts = 0             # Fehlversuche in Folge
+    # Obergrenze der Wartezeit. Nach einigen Fehlversuchen geht der Agent in
+    # einen ruhigen 10-Minuten-Takt ueber. Er gibt dabei NIE auf: Ist das
+    # Backend tagelang weg, klopft er weiterhin alle zehn Minuten an und ist
+    # binnen zehn Minuten wieder da, sobald es zurueckkommt. Ein Agent, der
+    # aufgibt, muesste von Hand angefasst werden - genau das soll ein RMM
+    # ersparen.
+    BACKOFF_MAX = 600.0
 
     while True:
         _REGISTERED.clear()
@@ -4862,6 +5793,7 @@ async def main():
             await sio.connect(BACKEND_URL, auth={"token": AGENT_TOKEN},
                               namespaces=["/agent"], wait_timeout=30)
             backoff = 3.0    # Verbindung stand -> Backoff zurücksetzen
+            attempts = 0
             await sio.wait()  # blockiert, solange die Verbindung steht
             _print(f"[agent] {_at('log_disconnected')}")
         except Exception as e:
@@ -4886,7 +5818,13 @@ async def main():
         # Zufallsanteil. Ohne den Zufallsanteil laufen abgewiesene Agenten
         # synchron und stürmen den Server im Gleichtakt erneut ("Thundering
         # Herd") - genau das Verhalten, das den Container umgebracht hat.
-        wait_s = min(BACKOFF_MAX, backoff) + random.uniform(0, min(10.0, backoff))
+        attempts += 1
+        wait_s = min(BACKOFF_MAX, backoff) + random.uniform(0, min(30.0, backoff))
+        if attempts in (5, 20) or attempts % 50 == 0:
+            # Nicht jede Runde protokollieren - sonst laeuft bei einem
+            # laengeren Ausfall das Log voll und verdeckt das Wesentliche.
+            _print(f"[agent] {attempts} Verbindungsversuche erfolglos, "
+                   f"naechster in {wait_s / 60:.1f} min - der Agent gibt nicht auf")
         await asyncio.sleep(wait_s)
         backoff = min(BACKOFF_MAX, backoff * 2 if refused_busy else backoff * 1.5)
 
@@ -5704,9 +6642,32 @@ if __name__ == "__main__":
                 f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + tb)
         except OSError:
             pass
-        _print("[agent] ABSTURZ - Neustart in 5 Sekunden:\n" + tb)
+        # NEUSTART-SCHUTZ: Stuerzt der Agent immer wieder SOFORT ab, wuerde
+        # ein 5-Sekunden-Takt die Maschine dauerhaft belasten und das Log
+        # zumuellen. Deshalb wird mitgezaehlt, wie oft kurz hintereinander
+        # neu gestartet wurde, und die Wartezeit waechst bis auf 10 Minuten.
+        # Aufgegeben wird trotzdem NIE - der Agent kommt immer wieder.
+        _restart_state = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "restart_count.txt")
+        _count, _last = 0, 0.0
         try:
-            time.sleep(5)
+            with open(_restart_state, "r", encoding="utf-8") as f:
+                _parts = f.read().split(",")
+                _count, _last = int(_parts[0]), float(_parts[1])
+        except (OSError, ValueError, IndexError):
+            pass
+        # Laeuft der Agent laenger als 10 Minuten stabil, zaehlt der naechste
+        # Absturz wieder als Einzelfall.
+        _count = _count + 1 if (time.time() - _last) < 600 else 1
+        try:
+            with open(_restart_state, "w", encoding="utf-8") as f:
+                f.write(f"{_count},{time.time()}")
+        except OSError:
+            pass
+        _wait = min(5 * (2 ** min(_count - 1, 7)), 600)
+        _print(f"[agent] ABSTURZ Nr. {_count} - Neustart in {_wait} Sekunden:\n" + tb)
+        try:
+            time.sleep(_wait)
         except Exception:
             pass
         os.execv(sys.executable, [sys.executable] + sys.argv)
