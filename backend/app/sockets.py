@@ -78,11 +78,22 @@ sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 #   * misst die Dauer und meldet auffaellig langsame Behandlungen
 
 def _wrap_handler(handler, event_name: str):
-    """Legt die Absicherung um einen einzelnen Ereignis-Handler."""
+    """
+    Legt die Absicherung um einen einzelnen Ereignis-Handler.
+
+    GRUNDREGEL: Diese Huelle darf einen Handler niemals unbrauchbar machen.
+    Sie ist eine Verbesserung, kein Kernbestandteil - schlaegt hier
+    irgendetwas fehl, wird der ORIGINAL-Handler registriert. Ein
+    ungesicherter Handler ist immer noch besser als ein kaputter.
+    Genau das ist schon einmal schiefgegangen: Die Huelle verlor die
+    Signatur, und dadurch konnte sich kein Dashboard mehr anmelden.
+    """
     import functools
     import inspect
 
     if getattr(handler, "_rmm_guarded", False):
+        return handler
+    if not callable(handler):
         return handler
 
     async def _fail(sid, args, exc):
@@ -169,13 +180,31 @@ _orig_on = sio.on
 _orig_event = sio.event
 
 
+def _safe_wrap(fn, event):
+    """Umhuellt - und faellt bei Problemen auf das Original zurueck."""
+    try:
+        wrapped = _wrap_handler(fn, event)
+        # Gegenprobe: Die Signatur MUSS erhalten bleiben, sonst ruft
+        # python-socketio den Handler mit der falschen Zahl Argumente auf.
+        import inspect
+        if inspect.signature(wrapped) != inspect.signature(fn):
+            print(f"[sockets] Absicherung fuer '{event}' uebersprungen - "
+                  f"Signatur haette sich geaendert.")
+            return fn
+        return wrapped
+    except Exception as e:
+        print(f"[sockets] Absicherung fuer '{event}' nicht moeglich ({e}) - "
+              f"Handler laeuft ungesichert weiter.")
+        return fn
+
+
 def _guarded_on(event, handler=None, namespace=None):
     """Ersatz fuer sio.on - haengt die Absicherung dazwischen."""
     if handler is not None:
-        return _orig_on(event, _wrap_handler(handler, event), namespace)
+        return _orig_on(event, _safe_wrap(handler, event), namespace)
 
     def decorator(fn):
-        _orig_on(event, _wrap_handler(fn, event), namespace)
+        _orig_on(event, _safe_wrap(fn, event), namespace)
         return fn
     return decorator
 
@@ -184,16 +213,65 @@ def _guarded_event(*args, **kwargs):
     """Ersatz fuer sio.event (mit und ohne Klammern verwendbar)."""
     if len(args) == 1 and callable(args[0]) and not kwargs:
         fn = args[0]
-        return _orig_event(_wrap_handler(fn, fn.__name__))
+        return _orig_event(_safe_wrap(fn, fn.__name__))
 
     def decorator(fn):
-        _orig_event(_wrap_handler(fn, fn.__name__), *args, **kwargs)
+        _orig_event(_safe_wrap(fn, fn.__name__), *args, **kwargs)
         return fn
     return decorator
 
 
 sio.on = _guarded_on
 sio.event = _guarded_event
+
+
+def verify_handlers() -> dict:
+    """
+    Prueft beim Start, dass jeder Ereignis-Handler noch die Signatur hat,
+    die python-socketio erwartet.
+
+    Warum: Ein Handler mit falscher Signatur faellt NICHT beim Start auf.
+    Er scheitert erst, wenn jemand das Ereignis ausloest - also wenn ein
+    Dashboard sich anmeldet, eine Shell geoeffnet wird oder ein Agent sich
+    meldet. Und dann steht im Protokoll nur ein TypeError irgendwo in einer
+    Bibliothek. Diese Pruefung zieht den Fehler an den Start vor, wo er
+    hingehoert.
+    """
+    import inspect
+    problems = []
+    checked = 0
+    handlers = getattr(sio, "handlers", {})
+    for namespace, events in handlers.items():
+        if not isinstance(events, dict):
+            continue
+        for event, fn in events.items():
+            if not callable(fn):
+                continue
+            checked += 1
+            try:
+                params = list(inspect.signature(fn).parameters)
+            except (TypeError, ValueError):
+                problems.append(f"{namespace}:{event} (Signatur nicht lesbar)")
+                continue
+            # 'connect' bekommt (sid, environ) oder (sid, environ, auth),
+            # 'disconnect' (sid) oder (sid, reason), alles andere (sid, data).
+            expected = {"connect": (2, 3), "disconnect": (1, 2)}.get(event)
+            if expected and len(params) not in expected:
+                problems.append(
+                    f"{namespace or '/'}:{event} hat {len(params)} Parameter "
+                    f"({', '.join(params)}), erwartet {' oder '.join(map(str, expected))}")
+    if problems:
+        for p in problems:
+            print(f"[sockets] SIGNATUR-PROBLEM: {p}")
+        try:
+            from app.errors import report, Codes
+            report(Codes.BOOT, None, "Socket-Handler mit falscher Signatur",
+                   anzahl=len(problems), betroffen="; ".join(problems[:5]))
+        except Exception:
+            pass
+    else:
+        print(f"[sockets] {checked} Ereignis-Handler geprueft - Signaturen in Ordnung.")
+    return {"checked": checked, "problems": problems}
 
 
 class ConnectionState:

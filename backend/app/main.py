@@ -617,6 +617,12 @@ async def _start_background_tasks():
     from app import diagnostics as _diag
     _diag.install()
     _diag.report_previous_shutdown()
+    # Signaturen der Socket-Handler pruefen, bevor irgendjemand verbindet.
+    try:
+        from app import sockets as _sockets
+        _sockets.verify_handlers()
+    except Exception as _e:
+        print(f"[sockets] Signaturpruefung uebersprungen: {_e}")
     _diag.restore_from_settings()
     # Der Loop-Waechter laeuft in einem EIGENEN Thread. Das ist Absicht:
     # Steht die Ereignisschleife still, kaeme eine async-Ueberwachung selbst

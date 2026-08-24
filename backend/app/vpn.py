@@ -620,7 +620,28 @@ async def start() -> None:
     """Startet den UDP-Endpunkt und lädt die noch gültigen Tunnel."""
     if rt.started or not vpn_enabled():
         return
-    priv, _pub = server_keys()
+    priv, stored_pub = server_keys()
+
+    # SCHLUESSELPRUEFUNG. Der oeffentliche Schluessel, der in jeder
+    # Tunnel-Datei landet, kommt aus den Einstellungen. Der Server rechnet
+    # dagegen mit dem privaten Schluessel. Passen die beiden nicht
+    # zusammen - etwa weil einer nachtraeglich neu erzeugt oder eine
+    # Sicherung eingespielt wurde -, dann ist JEDE ausgestellte Datei
+    # unbrauchbar, und im Protokoll steht nur ein nichtssagender
+    # Entschluesselungsfehler. Diese eine Zeile schliesst das aus.
+    real_pub = wireguard.public_from_private(priv)
+    if real_pub != stored_pub:
+        from app.errors import report, Codes
+        report(Codes.VPN_ENDPOINT, None,
+               "Server-Schluesselpaar passt nicht zusammen",
+               gespeichert=stored_pub, tatsaechlich=real_pub,
+               folge="Alle bisher ausgestellten Tunnel-Dateien sind "
+                     "unbrauchbar und muessen neu ausgestellt werden")
+        # Den tatsaechlichen Schluessel eintragen, damit wenigstens NEUE
+        # Dateien stimmen.
+        db.set_setting("vpn_server_public", real_pub)
+        print(f"[vpn] Oeffentlichen Schluessel korrigiert: {real_pub}")
+
     server = wireguard.WireGuardServer(priv)
     port = vpn_port()
     loop = asyncio.get_event_loop()
@@ -645,6 +666,14 @@ async def start() -> None:
                   row["client_id"], row.get("mode") or "client")
     print(f"[vpn] WireGuard-Endpunkt lauscht auf UDP {port} "
           f"({len(rt.stacks)} aktive Tunnel geladen)")
+    # Den oeffentlichen Schluessel ins Protokoll. Damit laesst sich in fuenf
+    # Sekunden pruefen, ob eine Tunnel-Datei zu diesem Server gehoert -
+    # einfach mit der Zeile 'PublicKey' in der .conf vergleichen.
+    print(f"[vpn] Oeffentlicher Server-Schluessel: {real_pub}")
+    for row in db.list_vpn_tunnels(active_only=True):
+        if (row.get("transport") or "relay") != "direct":
+            print(f"[vpn]   Tunnel '{row.get('name')}' erwartet Client-Schluessel "
+                  f"{row.get('public_key')}")
 
     # Beide Schleifen unter Aufsicht: Stirbt eine an einer Ausnahme, läuft
     # das VPN sonst still weiter, ohne Wiederholungen und ohne Ablauf - und
