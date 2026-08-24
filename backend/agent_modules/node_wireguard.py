@@ -709,6 +709,31 @@ class WireGuardServer(asyncio.DatagramProtocol):
                 except Exception:
                     results.append((f"Ephemeral ab Byte {eph_at}", False))
 
+        # ERSCHOEPFENDE SUCHE.
+        #
+        # Alle gezielten Vermutungen sind gescheitert, und die Messwerte
+        # widersprechen sich: mac1 passt (die Gegenstelle kennt unseren
+        # Schluessel), der Diffie-Hellman rechnet - und trotzdem geht das
+        # Feld nicht auf. Genau eine dieser Beobachtungen muss falsch sein.
+        #
+        # Statt weiter zu raten wird hier JEDE moegliche Lesart des Pakets
+        # durchprobiert: jedes 32-Byte-Fenster als Ephemeral, jedes
+        # 48-Byte-Fenster als statisches Feld. Das sind ein paar tausend
+        # Versuche und dauert Sekundenbruchteile.
+        #
+        # Findet sich eine Lesart, ist der Fehler damit exakt lokalisiert.
+        # Findet sich KEINE, ist bewiesen, dass das Paket nicht mit unserem
+        # privaten Schluessel erzeugt wurde - dann kann mac1 nicht von
+        # unserem Schluessel stammen, und die Ursache liegt darin, dass zwei
+        # verschiedene Server-Schluessel im Umlauf sind.
+        if packet and len(packet) >= 116:
+            found = self._exhaustive(packet, h0, base_c)
+            results.append((f"Erschoepfende Suche ueber alle Lesarten"
+                            + (f": Ephemeral ab {found[0]}, statisches Feld "
+                               f"ab {found[1]}" if found else
+                               " - KEINE Lesart passt"),
+                            bool(found)))
+
         # Und: Passt das Paket vielleicht zu einer ANDEREN Gegenstelle,
         # also zu einem Schluessel, den wir gar nicht als Server benutzen?
         for pub in list(self.peers)[:5]:
@@ -716,6 +741,37 @@ class WireGuardServer(asyncio.DatagramProtocol):
                     _hash(_hash(h0 + pub) + ephemeral),
                     _kdf(base_c, ephemeral, 1)[0])
         return results
+
+    def _exhaustive(self, packet: bytes, h0: bytes, base_c: bytes):
+        """
+        Probiert jede Lesart des Pakets durch. Rueckgabe: (eph, static) oder None.
+
+        Der Diffie-Hellman ist der teure Teil und haengt nur vom
+        Ephemeral-Fenster ab - er wird deshalb je Fenster nur EINMAL
+        gerechnet und dann gegen alle Feld-Positionen geprueft.
+        """
+        limit = len(packet) - 32
+        for eph_at in range(0, min(limit, 90) + 1):
+            eph = packet[eph_at:eph_at + 32]
+            try:
+                dh = _dh(self.private, eph)
+            except Exception:
+                continue
+            h = _hash(_hash(h0 + self.public_raw) + eph)
+            chain = _kdf(base_c, eph, 1)[0]
+            try:
+                key = _kdf(chain, dh, 2)[1]
+            except Exception:
+                continue
+            aead = ChaCha20Poly1305(key)
+            nonce = b"\x00" * 12
+            for st_at in range(0, len(packet) - 48 + 1):
+                try:
+                    aead.decrypt(nonce, packet[st_at:st_at + 48], h)
+                    return (eph_at, st_at)
+                except Exception:
+                    continue
+        return None
 
     def selftest(self) -> dict:
         """

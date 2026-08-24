@@ -523,6 +523,20 @@ keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
             eines echten Clients <span style="font-weight:400;color:var(--subtext)">
             (von ${esc(p.von || "?")})</span></div>
           <table style="margin-top:6px;border-collapse:collapse">${rows(p.schritte)}</table>
+          ${(p.schritte || []).some((s) => s.schritt.startsWith("Erschoepfende")
+              && !s.ok)
+            ? `<div style="margin-top:12px;padding:9px 11px;border-radius:8px;
+                 background:#f5a52418;border:1px solid #f5a52455;font-size:12.5px">
+               <b>Schlussfolgerung:</b> Keine Lesart des Pakets lässt sich mit
+               dem privaten Schlüssel dieses Servers entschlüsseln. Das Paket
+               wurde also für einen <b>anderen</b> Server verschlüsselt –
+               obwohl mac1 zu diesem Server passt. Beides zusammen bedeutet:
+               Es sind zwei verschiedene Server-Schlüssel im Umlauf. Meist
+               stammt die Tunnel-Datei noch von vor einem Zurücksetzen der
+               Datenbank. <b>Tunnel neu ausstellen und die alte .conf im
+               WireGuard-Client löschen</b> (nicht nur deaktivieren – eine
+               alte Verbindung sendet sonst weiter).</div>`
+            : ""}
           <div style="margin-top:10px;color:var(--subtext);font-size:11.5px">
             Rohdaten des Pakets – enthält keine Geheimnisse, alles darin ist
             öffentlich oder verschlüsselt:</div>
