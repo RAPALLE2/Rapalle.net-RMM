@@ -137,6 +137,11 @@ def _aead_decrypt(key: bytes, counter: int, cipher: bytes, ad: bytes) -> bytes:
     return ChaCha20Poly1305(key).decrypt(nonce, cipher, ad)
 
 
+def _b64_pub(raw: bytes) -> str:
+    import base64 as _b
+    return _b.b64encode(raw).decode()
+
+
 def _tai64n(ts: float | None = None) -> bytes:
     """Zeitstempel im TAI64N-Format (12 Byte) - das erwartet WireGuard."""
     ts = time.time() if ts is None else ts
@@ -399,6 +404,10 @@ class WireGuardServer(asyncio.DatagramProtocol):
             # oder die Tunnel-Datei stammt noch von vor einem
             # Schluesselwechsel.
             self.stats["bad_mac"] += 1
+            self._capture(data, addr, "mac1",
+                          "Die Gegenstelle rechnet mit einem anderen "
+                          "Server-Schluessel - die Tunnel-Datei stammt nicht "
+                          "von diesem Server.")
             print(f"[wg] Handschlag von {addr[0]} abgelehnt: falscher "
                   f"Server-Schluessel (mac1). Stammt die Tunnel-Datei von "
                   f"diesem Server?")
@@ -438,10 +447,9 @@ class WireGuardServer(asyncio.DatagramProtocol):
                 # (Ephemeral-Schluessel) oder verschluesselt. Damit laesst
                 # sich der Fall spaeter Schritt fuer Schritt nachvollziehen,
                 # ohne dass jemand danebenstehen und mitlesen muss.
-                self.captured = {
-                    "hex": data.hex(), "from": f"{addr[0]}:{addr[1]}",
-                    "at": time.time(), "step": "static",
-                }
+                self._capture(data, addr, "static",
+                              "Das statische Feld liess sich nicht "
+                              "entschluesseln.")
                 self._diagnose_initiation(data, ephemeral, enc_static)
             raise
         h = _hash(h + enc_static)
@@ -449,6 +457,10 @@ class WireGuardServer(asyncio.DatagramProtocol):
         peer = self.peers.get(peer_static)
         if peer is None:
             self.stats["unknown_peer"] += 1
+            self._capture(data, addr, "peer",
+                          "Der Schluessel des Clients ist hier nicht (mehr) "
+                          "eingetragen - der Tunnel ist abgelaufen oder wurde "
+                          "geschlossen.")
             import base64 as _b64
             print(f"[wg] Handschlag von {addr[0]} abgelehnt: unbekannter "
                   f"Schluessel {_b64.b64encode(peer_static).decode()[:12]}… - "
@@ -466,9 +478,8 @@ class WireGuardServer(asyncio.DatagramProtocol):
             # scheitert.
             self.stats["timestamp_failed"] = \
                 self.stats.get("timestamp_failed", 0) + 1
-            if not self.captured:
-                self.captured = {"hex": data.hex(), "from": f"{addr[0]}:{addr[1]}",
-                                 "at": time.time(), "step": "timestamp"}
+            self._capture(data, addr, "timestamp",
+                          "Der Zeitstempel liess sich nicht entschluesseln.")
             print(f"[wg] Handschlag von {addr[0]}: statisches Feld ok, aber "
                   f"der Zeitstempel liess sich nicht entschluesseln "
                   f"({len(enc_timestamp)} Byte, 28 erwartet).")
@@ -566,6 +577,8 @@ class WireGuardServer(asyncio.DatagramProtocol):
         ephemeral = data[8:40]
         enc_static = data[40:88]
         enc_timestamp = data[88:116]
+        # Fuer die Versatz-Pruefung in der tiefen Analyse.
+        self._replay_packet = data
         add("Server-Schluessel", True,
             _b64.b64encode(self.public_raw).decode())
 
@@ -591,6 +604,20 @@ class WireGuardServer(asyncio.DatagramProtocol):
             add("Bekannte Gegenstellen", bool(self.peers),
                 ", ".join(_b64.b64encode(p).decode()[:16] + "…"
                           for p in self.peers) or "keine")
+            # TIEFE ANALYSE.
+            #
+            # An dieser Stelle steht ein Widerspruch: mac1 hat gestimmt, also
+            # kennt die Gegenstelle unseren oeffentlichen Schluessel. Dann
+            # MUSS der Diffie-Hellman passen und das Feld entschluesselbar
+            # sein. Beides zugleich ist rechnerisch unmoeglich - eine unserer
+            # Annahmen ist also falsch.
+            #
+            # Statt weiter zu vermuten, wird hier durchprobiert: Welche
+            # Abwandlung der Hash-Kette bzw. welcher Schluessel HAETTE
+            # funktioniert? Die Antwort benennt den Fehler unmittelbar.
+            for name, ok in self._deep_analysis(ephemeral, enc_static):
+                add(f"Variante: {name}", ok,
+                    "DIESE haette funktioniert" if ok else "")
             return steps
 
         known = peer_static in self.peers
@@ -608,6 +635,87 @@ class WireGuardServer(asyncio.DatagramProtocol):
         except Exception as e:
             add("Zeitstempel entschluesselt", False, f"{type(e).__name__}")
         return steps
+
+    def _deep_analysis(self, ephemeral: bytes, enc_static: bytes) -> list:
+        """
+        Probiert alle plausiblen Abweichungen durch.
+
+        Schlaegt eine an, ist der Fehler damit exakt benannt - ohne weiteres
+        Vergleichen mit der Spezifikation und ohne eine weitere Runde.
+        """
+        results = []
+        base_c = _hash(CONSTRUCTION)
+
+        def attempt(name, h, chain, index=1, shared=None):
+            try:
+                dh = shared if shared is not None else _dh(self.private, ephemeral)
+                keys = _kdf(chain, dh, 2)
+                _aead_decrypt(keys[index], 0, enc_static, h)
+                results.append((name, True))
+            except Exception:
+                results.append((name, False))
+
+        h0 = _hash(base_c + IDENTIFIER)
+        h_pub = _hash(h0 + self.public_raw)
+        c1 = _kdf(base_c, ephemeral, 1)[0]
+
+        attempt("Standard (unsere Umsetzung)", _hash(h_pub + ephemeral), c1)
+        attempt("ohne Server-Schluessel im Hash", _hash(h0 + ephemeral), c1)
+        attempt("Schluessel und Kette vertauscht", _hash(h_pub + ephemeral), c1, 0)
+        attempt("ohne Ephemeral im Hash", h_pub, c1)
+        attempt("Kette ohne Ephemeral", _hash(h_pub + ephemeral), base_c)
+        attempt("CONSTRUCTION/IDENTIFIER vertauscht",
+                _hash(_hash(_hash(IDENTIFIER) + CONSTRUCTION) + self.public_raw
+                      + ephemeral), c1)
+
+        # Der wichtigste Test: Stimmt der GESPEICHERTE oeffentliche
+        # Schluessel - der, der in jede Tunnel-Datei geschrieben wird -
+        # ueberhaupt mit unserem privaten ueberein? Wenn nicht, passt mac1
+        # trotzdem (beide Seiten benutzen denselben falschen Wert), aber der
+        # Diffie-Hellman kann nicht stimmen. Das waere genau dieses
+        # Fehlerbild.
+        try:
+            from app import db as _db
+            stored = _db.get_setting("vpn_server_public", "") or ""
+            real = _b64_pub(self.public_raw)
+            results.append((f"gespeicherter Schluessel == echter "
+                            f"({'ja' if stored == real else 'NEIN: ' + stored})",
+                            stored == real))
+        except Exception:
+            pass
+
+        # FELDVERSATZ. Das ist die einzige Hypothese, die alles erklaeren
+        # wuerde: mac1 wird ueber data[:116] als GANZES gerechnet - es
+        # bestaetigt die Bytes, aber NICHT, dass wir sie richtig aufteilen.
+        # Waere unser Versatz um ein paar Byte verschoben, stimmte mac1
+        # trotzdem, waehrend Diffie-Hellman und Entschluesselung scheitern.
+        # Genau dieses Bild sehen wir. Deshalb hier die Nachbarversaetze.
+        packet = getattr(self, "_replay_packet", None)
+        if packet:
+            for eph_at in (4, 8, 12, 16):
+                st_at = eph_at + 32
+                if st_at + 48 > 116:
+                    continue
+                try:
+                    eph = packet[eph_at:eph_at + 32]
+                    stat = packet[st_at:st_at + 48]
+                    dh = _dh(self.private, eph)
+                    hh = _hash(_hash(h0 + self.public_raw) + eph)
+                    cc = _kdf(base_c, eph, 1)[0]
+                    keys = _kdf(cc, dh, 2)
+                    _aead_decrypt(keys[1], 0, stat, hh)
+                    results.append((f"Ephemeral ab Byte {eph_at} "
+                                    f"(unsere Annahme: 8)", True))
+                except Exception:
+                    results.append((f"Ephemeral ab Byte {eph_at}", False))
+
+        # Und: Passt das Paket vielleicht zu einer ANDEREN Gegenstelle,
+        # also zu einem Schluessel, den wir gar nicht als Server benutzen?
+        for pub in list(self.peers)[:5]:
+            attempt(f"Server waere {_b64_pub(pub)[:14]}…",
+                    _hash(_hash(h0 + pub) + ephemeral),
+                    _kdf(base_c, ephemeral, 1)[0])
+        return results
 
     def selftest(self) -> dict:
         """
@@ -704,6 +812,10 @@ class WireGuardServer(asyncio.DatagramProtocol):
         self.sessions[our_index] = session
 
         self.stats["handshakes"] += 1
+        self.stats["last_success_at"] = time.time()
+        # Nach einem erfolgreichen Handschlag ist ein alter Fehlversuch
+        # nicht mehr interessant - er wuerde nur verwirren.
+        self.captured = None
         print(f"[wg] Handschlag erfolgreich mit {addr[0]}:{addr[1]} "
               f"(Tunnel {peer.tunnel_id})")
         if self.transport:
@@ -713,6 +825,27 @@ class WireGuardServer(asyncio.DatagramProtocol):
                 self.on_handshake(peer)
             except Exception as e:
                 print(f"[wg] Handshake-Rückruf fehlgeschlagen: {e!r}")
+
+    def _capture(self, data: bytes, addr, step: str, reason: str) -> None:
+        """
+        Haelt das ERSTE gescheiterte Handschlag-Paket fest.
+
+        Warum alle Fehlerarten und nicht nur die Entschluesselung: Genau
+        das hat eine Fehlersuche in die Irre gefuehrt. Der Selbsttest
+        meldete "kein gescheiterter Handschlag vorhanden", obwohl reihenweise
+        welche scheiterten - sie scheiterten nur an einer Stelle, die gar
+        nicht aufgezeichnet wurde. Ein abgelaufener Tunnel sah damit aus wie
+        "es kommt gar nichts an".
+
+        Das Paket enthaelt keine Geheimnisse: Alles darin ist entweder
+        oeffentlich oder verschluesselt.
+        """
+        if self.captured:
+            return
+        self.captured = {
+            "hex": data.hex(), "from": f"{addr[0]}:{addr[1]}",
+            "at": time.time(), "step": step, "reason": reason,
+        }
 
     def _new_index(self) -> int:
         while True:
