@@ -723,6 +723,19 @@ def init_db() -> None:
         -- Tunnel-Datei fuer genau einen Benutzer auf genau einen Client.
         -- Der PRIVATE Schluessel steht hier bewusst NICHT: er existiert nur
         -- einmal, in der heruntergeladenen .conf-Datei.
+        -- Mitglieder des virtuellen Netzes. Ein Mitglied ist entweder ein
+        -- CLIENT (bekommt eine feste Adresse, merkt selbst nichts davon)
+        -- oder ein BENUTZER-Tunnel. Die Adresse bleibt gleich, damit man
+        -- sie sich merken und aufschreiben kann.
+        CREATE TABLE IF NOT EXISTS vpn_members (
+            kind TEXT NOT NULL,          -- 'client' oder 'user'
+            ref TEXT NOT NULL,           -- client_id bzw. tunnel_id
+            address TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (kind, ref)
+        );
+
         CREATE TABLE IF NOT EXISTS vpn_tunnels (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
@@ -861,6 +874,10 @@ def init_db() -> None:
     # VPN-Endpunkt, Reverse Proxy, optional L2-Bruecke. Die dafuer noetigen
     # Zusatzmodule werden AUSSCHLIESSLICH auf Nodes nachgeladen - ein
     # gewoehnlicher Client bekommt davon nichts zu sehen.
+    # Die IPv4-Netze, in denen der Client haengt (JSON-Liste, vom Agenten
+    # gemeldet). Grundlage fuer Site-to-Site-Routen - vorher wurde pauschal
+    # /24 angenommen, was bei /16 oder /22 falsche Routen ergab.
+    _migrate_add_column("clients", "lan_subnets", "TEXT")
     _migrate_add_column("clients", "is_node", "INTEGER NOT NULL DEFAULT 0")
     # Selbstauskunft der Node: welche Module laufen, welcher UDP-Port, ob die
     # L2-Bruecke (Treiber) verfuegbar ist. JSON, nur informativ.
@@ -1692,6 +1709,47 @@ def list_expired_relay_clients(now_ms: int) -> list[dict]:
 # VPN-Tunnel (WireGuard-kompatibel)
 # ------------------------------------------------------------------
 
+# ------------------------------------------------------------------
+# Virtuelles Netz: Mitglieder
+# ------------------------------------------------------------------
+
+def set_vpn_member(kind: str, ref: str, address: str, label: str = "") -> None:
+    _conn.execute(
+        "INSERT OR REPLACE INTO vpn_members (kind, ref, address, label, created_at) "
+        "VALUES (?, ?, ?, ?, ?)", (kind, ref, address, label, _now_ms()))
+    _conn.commit()
+
+
+def get_vpn_member_address(kind: str, ref: str) -> str:
+    row = _conn.execute(
+        "SELECT address FROM vpn_members WHERE kind = ? AND ref = ?",
+        (kind, ref)).fetchone()
+    return row["address"] if row else ""
+
+
+def get_vpn_member_ref(kind: str, address: str) -> str | None:
+    row = _conn.execute(
+        "SELECT ref FROM vpn_members WHERE kind = ? AND address = ?",
+        (kind, address)).fetchone()
+    return row["ref"] if row else None
+
+
+def list_vpn_members() -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM vpn_members ORDER BY address").fetchall()]
+
+
+def list_vpn_member_addresses() -> list[str]:
+    return [r["address"] for r in _conn.execute(
+        "SELECT address FROM vpn_members").fetchall()]
+
+
+def remove_vpn_member(kind: str, ref: str) -> None:
+    _conn.execute("DELETE FROM vpn_members WHERE kind = ? AND ref = ?",
+                  (kind, ref))
+    _conn.commit()
+
+
 def create_vpn_tunnel(rec: dict) -> None:
     """Legt einen neuen Tunnel an. 'rec' kommt aus app/vpn.py."""
     _conn.execute(
@@ -1758,6 +1816,27 @@ def touch_vpn_tunnel(tunnel_id: str, ts_ms: int) -> None:
 # ------------------------------------------------------------------
 # Node-Stufe
 # ------------------------------------------------------------------
+
+def set_client_subnets(client_id: str, subnets) -> None:
+    """Merkt die Netze, die der Agent gemeldet hat."""
+    import json as _json
+    value = _json.dumps([str(x) for x in (subnets or [])][:8])
+    _conn.execute("UPDATE clients SET lan_subnets = ? WHERE id = ?",
+                  (value, client_id))
+    _conn.commit()
+
+
+def get_client_subnets(client_id: str) -> list:
+    row = _conn.execute("SELECT lan_subnets FROM clients WHERE id = ?",
+                        (client_id,)).fetchone()
+    if not row or not row["lan_subnets"]:
+        return []
+    import json as _json
+    try:
+        return list(_json.loads(row["lan_subnets"]) or [])
+    except (ValueError, TypeError):
+        return []
+
 
 def set_client_node(client_id: str, is_node: bool) -> None:
     """Stuft einen Client zur Node auf bzw. wieder zurueck."""
@@ -3045,6 +3124,11 @@ DEFAULT_SETTINGS = {
     "vpn_dns": "",
     # MTU des Tunnels. 1380 ist auch hinter DSL/PPPoE noch sicher.
     "vpn_mtu": "1380",
+    # Namenszone des virtuellen Netzes: <hostname>.rmm
+    "vpn_zone": "rmm",
+    # DNS im Tunnel auf das Backend zeigen lassen (Namensaufloesung im
+    # virtuellen Netz). 0 = der Client behaelt seinen eigenen DNS.
+    "vpn_use_internal_dns": "1",
     # In welchem Abstand ein Metrik-Punkt gespeichert wird (Sekunden).
     "metrics_interval_seconds": "10",
     # Wie lange die Metrik-Historie aufbewahrt wird (Stunden).

@@ -196,8 +196,16 @@ def create_tunnel(client_id: str, username: str, minutes: int,
 
     priv_user, pub_user = wireguard.generate_keypair()
     psk = wireguard.generate_preshared_key()
-    address = _allocate_ip()
     tunnel_id = uuid.uuid4().hex
+
+    from app import vpn_net
+    # Der Client bekommt (falls noch nicht geschehen) seine FESTE Adresse im
+    # virtuellen Netz. Sie bleibt ihm erhalten - man kann sie aufschreiben.
+    try:
+        vpn_net.client_address(client_id)
+    except Exception as e:
+        print(f"[vpn] Virtuelle Adresse fuer {client_id} nicht vergeben: {e}")
+    address = vpn_net.user_address(tunnel_id, username)
     now_ms = int(time.time() * 1000)
     expires = now_ms + int(minutes) * 60_000 if minutes and minutes > 0 else 0
 
@@ -239,6 +247,9 @@ def create_tunnel(client_id: str, username: str, minutes: int,
         private_key=priv_user, address=address, psk=psk,
         allowed_ips=allowed, host_override=host_override or ep_host,
         peer_public_key=node_pub, port_override=ep_port,
+        created_at=now_ms, expires_at=expires, mode=mode,
+        dns_in_tunnel=_setting("vpn_use_internal_dns", "1") == "1"
+                      and loopback_alias() or "",
     )
     record = db.get_vpn_tunnel(tunnel_id)
     record["config"] = config
@@ -306,18 +317,42 @@ def _allowed_ips(client: dict, routes: str, mode: str = "client") -> str:
     # Die Ersatzadresse fuer 'localhost' MUSS immer mit hinein - sonst
     # schickt der WireGuard-Client Pakete dorthin gar nicht erst durch den
     # Tunnel, und Dienste auf dem Geraet selbst bleiben unerreichbar.
-    parts = [f"{loopback_alias()}/32"]
+    # Das GESAMTE virtuelle Netz gehoert in die Routen - sonst erreicht der
+    # Benutzer die anderen Geraete nicht, obwohl sie eine Adresse haben.
+    # Darin enthalten ist auch der Router (10.77.0.1), also Ersatzadresse
+    # fuer 'localhost' und DNS in einem.
+    parts = [vpn_subnet()]
     ip = (client.get("ip") or "").strip()
     if ip:
         parts.append(f"{ip}/32")
     if mode == "site":
-        # Ganzes Netz: aus der Adresse des Geräts das umgebende /24 ableiten.
-        # Das trifft die übliche Heimat-/Büro-Aufteilung; abweichende Netze
-        # trägt man über 'routes' nach.
+        # SITE-TO-SITE: die ECHTEN Netze des Geräts, wie der Agent sie
+        # gemeldet hat. Vorher wurde pauschal /24 angenommen - bei einem /16
+        # oder /22 fehlten dadurch Teile des Netzes in den Routen, und der
+        # Benutzer erreichte einen Teil der Geräte nicht, ohne dass
+        # irgendwo ersichtlich war warum.
+        reported = []
         try:
-            parts.append(str(ipaddress.ip_network(f"{ip}/24", strict=False)))
-        except ValueError:
-            pass
+            reported = db.get_client_subnets(client.get("id") or "")
+        except Exception:
+            reported = []
+        for net in reported:
+            try:
+                parsed = ipaddress.ip_network(net, strict=False)
+            except ValueError:
+                continue
+            # Das Tunnel-Netz selbst gehört nicht in die Routen - das wäre
+            # eine Route auf sich selbst.
+            if parsed.overlaps(ipaddress.ip_network(vpn_subnet(), strict=False)):
+                continue
+            parts.append(str(parsed))
+        if not reported and ip:
+            # Rückfall, solange der Agent noch die alte Fassung fährt und
+            # keine Netze meldet. Ehrlich benannt statt still angenommen.
+            try:
+                parts.append(str(ipaddress.ip_network(f"{ip}/24", strict=False)))
+            except ValueError:
+                pass
     for r in (routes or "").replace(";", ",").split(","):
         r = r.strip()
         if not r:
@@ -376,7 +411,9 @@ def endpoint_host() -> str:
 
 def build_config(private_key: str, address: str, psk: str, allowed_ips: str,
                  host_override: str = "", peer_public_key: str = "",
-                 port_override: int = 0) -> str:
+                 port_override: int = 0, created_at: int = 0,
+                 expires_at: int = 0, mode: str = "client",
+                 dns_in_tunnel: str = "") -> str:
     """
     Erzeugt den Inhalt der .conf-Datei für den WireGuard-Client.
 
@@ -391,8 +428,21 @@ def build_config(private_key: str, address: str, psk: str, allowed_ips: str,
     dns = _setting("vpn_dns", DEFAULT_DNS)
     mtu = _setting("vpn_mtu", str(DEFAULT_MTU))
 
+    # Zeiten in den Kopf der Datei. Eine .conf sagt sonst nichts darueber,
+    # wann sie ausgestellt wurde und wie lange sie noch gilt - man
+    # importiert sie, es geht nicht, und die Ursache (abgelaufen) sieht man
+    # nirgends.
+    def _stamp(ms: int) -> str:
+        return time.strftime("%d.%m.%Y %H:%M", time.localtime(ms / 1000))
+
+    art = ("Site-to-Site (ganzes Netz hinter dem Geraet)" if mode == "site"
+           else "Peer-to-Peer (nur das Geraet selbst)")
+
     lines = [
         "# RAPALLE.net RMM - VPN-Tunnel",
+        f"# Art:          {art}",
+        f"# Ausgestellt:  {_stamp(created_at) if created_at else 'unbekannt'}",
+        f"# Gueltig bis:  {_stamp(expires_at) if expires_at else 'unbegrenzt'}",
         "# Diese Datei in einen beliebigen WireGuard-Client importieren.",
         "# Auf dem Zielgeraet selbst ist KEINE Installation noetig.",
         "#",
@@ -407,8 +457,12 @@ def build_config(private_key: str, address: str, psk: str, allowed_ips: str,
         f"Address = {address}/32",
         f"MTU = {mtu}",
     ]
+    # DNS zeigt auf das Backend. Damit funktioniert '<hostname>.rmm' im
+    # Tunnel, ohne dass jemand Adressen nachschlagen muss.
     if dns:
         lines.append(f"DNS = {dns}")
+    elif dns_in_tunnel:
+        lines.append(f"DNS = {dns_in_tunnel}")
     lines += [
         "",
         "[Peer]",
@@ -427,6 +481,13 @@ def revoke_tunnel(tunnel_id: str) -> bool:
     if not row:
         return False
     db.close_vpn_tunnel(tunnel_id)
+    # Die Benutzer-Adresse wieder freigeben. Ohne das waere der
+    # Benutzerbereich nach 253 Tunneln erschoepft, obwohl laengst keiner
+    # mehr offen ist.
+    try:
+        db.remove_vpn_member("user", tunnel_id)
+    except Exception:
+        pass
     if (row.get("transport") or "relay") == "direct":
         # Beim Direktbetrieb liegt der Schlüssel auf der Node - nur sie kann
         # den Tunnel wirklich schliessen.
@@ -475,7 +536,40 @@ def _target_allowed(tunnel_id: str, client_id: str, host: str) -> bool:
 
 def _to_agent_checked(client_id: str, tunnel_id: str, event: str,
                       data: dict) -> None:
+    """
+    Entscheidet, WOHIN ein Paket aus dem Tunnel geht.
+
+    Das ist die Weiche des virtuellen Netzes - hier wird aus einem
+    Einbahn-Tunnel ein Netz:
+
+      1. DNS an den Router -> das Backend antwortet selbst.
+      2. Ziel ist die virtuelle Adresse EINES ANDEREN Clients -> das Paket
+         wird an dessen Agenten weitergeleitet, nicht an den eigenen. Damit
+         erreicht ein Benutzer mit EINEM Tunnel alle Geraete.
+      3. Alles andere -> wie bisher an den Client dieses Tunnels.
+
+    Bei 2. werden die Rechte erneut geprueft. Eine virtuelle Adresse ist
+    kein Freifahrtschein: Wer einen Client nicht sehen darf, erreicht ihn
+    auch im Netz nicht.
+    """
     host = data.get("host")
+
+    # --- 1. DNS ---
+    if host and _handle_dns_request(tunnel_id, event, data):
+        return
+
+    # --- 2. Anderer Client im virtuellen Netz ---
+    if host:
+        target = _route_to_member(tunnel_id, event, data, host, client_id)
+        if target is None:
+            return          # abgewiesen oder bereits zugestellt
+        client_id = target
+        # WICHTIG: 'host' nachziehen. _route_to_member() schreibt die
+        # virtuelle Adresse auf das echte Ziel um - ohne diese Zeile wuerde
+        # die Umschreibung weiter unten wieder ueberschrieben, und der Agent
+        # bekaeme eine Adresse, die es in seinem Netz gar nicht gibt.
+        host = data.get("host") or host
+
     if host and not _target_allowed(tunnel_id, client_id, host):
         # Das Zurückweisen muss der Stack erfahren, sonst wartet der Browser
         # des Benutzers bis zum Zeitlimit auf eine Antwort, die nie kommt.
@@ -535,6 +629,80 @@ def _to_agent(client_id: str, event: str, data: dict) -> None:
     except Exception as e:
         from app.errors import report, Codes
         report(Codes.VPN_PACKET, e, f"'{event}' an {client_id} senden")
+
+
+def _handle_dns_request(tunnel_id: str, event: str, data: dict) -> bool:
+    """Beantwortet DNS im virtuellen Netz selbst. True = erledigt."""
+    if event != "vpn-udp" or int(data.get("port") or 0) != 53:
+        return False
+    from app import vpn_net
+    if data.get("host") != vpn_net.router_address():
+        return False
+    stack = rt.stacks.get(tunnel_id)
+    if not stack:
+        return True
+    try:
+        query = base64.b64decode(data.get("data") or "")
+        reply = vpn_net.handle_dns(query)
+        if reply:
+            stack.on_agent_udp(data["host"], 53, data.get("src", ""),
+                               int(data.get("sport") or 0), reply)
+    except Exception as e:
+        from app.errors import report, Codes
+        report(Codes.VPN_PACKET, e, "DNS-Anfrage im virtuellen Netz")
+    return True
+
+
+def _route_to_member(tunnel_id: str, event: str, data: dict, host: str,
+                     own_client: str) -> str | None:
+    """
+    Prueft, ob das Ziel ein anderes Mitglied des virtuellen Netzes ist.
+
+    Rueckgabe: client_id des Ziels, oder 'own_client' wenn es kein Mitglied
+    ist, oder None wenn das Paket abgewiesen wurde.
+    """
+    from app import vpn_net
+    target_client = vpn_net.client_for_address(host)
+    if not target_client:
+        return own_client
+    if target_client == own_client:
+        # Der eigene Client, aber ueber seine virtuelle Adresse angesprochen.
+        # Auch hier gilt: Die virtuelle Adresse ist nur die Anschrift, das
+        # Ziel auf dem Geraet ist sein eigener Rechner.
+        data["host"] = "127.0.0.1"
+        return own_client
+
+    # Rechte des Tunnel-Inhabers pruefen.
+    row = db.get_vpn_tunnel(tunnel_id) or {}
+    username = row.get("username") or ""
+    if not _may_reach(username, target_client):
+        from app.errors import report, Codes
+        report(Codes.VPN_PACKET, None,
+               "Zugriff im virtuellen Netz abgewiesen",
+               benutzer=username, ziel=target_client)
+        stack = rt.stacks.get(tunnel_id)
+        if stack and event == "vpn-open":
+            stack.on_agent_open_result(data.get("stream", ""), False)
+        return None
+
+    # Die virtuelle Adresse ist nur die Anschrift - das Ziel auf dem Geraet
+    # selbst ist sein eigener Rechner.
+    data["host"] = "127.0.0.1"
+    return target_client
+
+
+def _may_reach(username: str, client_id: str) -> bool:
+    """Darf dieser Benutzer diesen Client sehen?"""
+    if not username:
+        return False
+    try:
+        from app.auth import can_access_client
+        user = db.get_user_by_username(username)
+        return bool(user and can_access_client(user, client_id))
+    except Exception:
+        # Im Zweifel NEIN. Ein Netz, das bei einem Fehler grosszuegig wird,
+        # ist genau die falsche Sorte Fehlertoleranz.
+        return False
 
 
 async def _watch_open(client_id: str, stream: str, data: dict) -> None:

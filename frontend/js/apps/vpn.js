@@ -82,6 +82,7 @@ function copyToClipboard(text) {
 export function renderVpn(body, win) {
   const preselected = win?.props?.clientId || null;
   let info = null;
+  let nodeState = null;
   let tunnels = [];
   let now = Date.now();
   let selected = preselected;
@@ -115,8 +116,8 @@ export function renderVpn(body, win) {
 
           <label style="font-size:12px;color:var(--subtext)">Betriebsart
             <select id="vpn-mode" style="width:100%;margin-top:4px">
-              <option value="client">Nur dieses Gerät (z.B. localhost:80)</option>
-              <option value="site">Ganzes Netz dahinter (Site-to-Site)</option>
+              <option value="client">Peer-to-Peer – nur dieses Gerät</option>
+              <option value="site">Site-to-Site – ganzes Netz dahinter</option>
             </select>
             <div id="vpn-mode-hint" style="font-size:11px;margin-top:3px"></div>
           </label>
@@ -152,6 +153,7 @@ export function renderVpn(body, win) {
             </div>
             <button id="vpn-refresh" class="taskbar-btn" style="margin-left:auto">⟳</button>
           </div>
+          <div id="vpn-net" style="padding:8px 12px;border-bottom:1px solid var(--border)"></div>
           <div id="vpn-list" style="flex:1;overflow:auto;padding:8px"></div>
         </div>
       </div>
@@ -198,15 +200,23 @@ export function renderVpn(body, win) {
   function updateModeHint() {
     const mode = body.querySelector("#vpn-mode").value;
     const alias = info?.loopback_alias || "10.77.0.1";
+    const nets = (nodeState?.subnets || []);
     body.querySelector("#vpn-mode-hint").innerHTML = mode === "client"
-      ? `<span style="color:var(--subtext)">Der Tunnel lässt ausschliesslich
-         Verbindungen zu diesem Gerät zu. Die Beschränkung wird auf der
+      ? `<span style="color:var(--subtext)">Eine Punkt-zu-Punkt-Verbindung
+         genau zu diesem Gerät – sonst nichts. Die Beschränkung wird auf der
          Gegenseite durchgesetzt, nicht in der Datei.<br>
          Dienste auf dem Gerät selbst erreichst du über
          <b style="color:var(--text)">${esc(alias)}</b> –
          <b>nicht</b> über <code>localhost</code>.</span>`
       : `<span style="color:var(--subtext)">Der Benutzer erreicht alles, was
-         auch dieses Gerät erreicht.</span>`;
+         auch dieses Gerät erreicht.
+         ${nets.length
+           ? `Geroutet werden die tatsächlich gemeldeten Netze:
+              <b style="color:var(--text)">${esc(nets.join(", "))}</b>.`
+           : `<span style="color:var(--warn,#f5a524)">Dieses Gerät hat noch
+              keine Netze gemeldet – dann wird ein /24 um seine Adresse
+              angenommen. Nach einem Agent-Update stimmt es genau.</span>`}
+         </span>`;
   }
 
   // Zustand der Node: davon hängt ab, ob der Tunnel direkt enden kann und
@@ -216,6 +226,8 @@ export function renderVpn(body, win) {
     if (!selected) { box.style.display = "none"; return; }
     let st = null;
     try { st = await api.nodeState(selected); } catch { }
+    nodeState = st;
+    updateModeHint();
     if (!st || !st.is_node) {
       box.style.display = "";
       box.innerHTML = `<b>Kein Node-Gerät.</b> Der Tunnel endet im Backend
@@ -322,7 +334,7 @@ export function renderVpn(body, win) {
             ${tn.transport === "direct" ? "direkt" : "über Backend"}</span>
           <span style="font-size:11px;padding:1px 6px;border-radius:6px;
                 border:1px solid var(--border)">
-            ${tn.mode === "site" ? "ganzes Netz" : "nur Gerät"}${tn.l2 ? " · L2" : ""}</span>
+            ${tn.mode === "site" ? "Site-to-Site" : "Peer-to-Peer"}${tn.l2 ? " · L2" : ""}</span>
           <span style="margin-left:auto;font-size:11.5px;color:var(--subtext)">
             ${esc(fmtRemaining(tn.expires_at, now))}
           </span>
@@ -368,6 +380,41 @@ das zeigt immer auf den eigenen Rechner.">Gerät selbst:
     }
   }
 
+  // Übersicht des virtuellen Netzes. Sie beantwortet die Frage, die man
+  // nach dem Verbinden als Erstes hat: Welche Geräte gibt es, und wie
+  // erreiche ich sie?
+  async function loadNetwork() {
+    const box = $("#vpn-net");
+    if (!box) return;
+    try {
+      const n = await api.vpnNetwork();
+      const rows = (n.members || []).map((m) => `
+        <tr>
+          <td style="padding:1px 8px 1px 0">${m.kind === "client"
+            ? (m.online ? "🟢" : "⚪") : "👤"}</td>
+          <td style="padding:1px 10px 1px 0;font-family:ui-monospace,monospace">
+            ${esc(m.address)}</td>
+          <td style="padding:1px 10px 1px 0">${esc(m.hostname || m.label || "")}</td>
+          <td style="padding:1px 0;color:var(--subtext)">${esc(m.fqdn || "")}</td>
+        </tr>`).join("");
+      box.innerHTML = `
+        <details ${(n.members || []).length <= 8 ? "open" : ""}>
+          <summary style="cursor:pointer;font-size:13px">
+            <b>🌐 Virtuelles Netz</b>
+            <span style="color:var(--subtext);font-weight:400">
+              ${esc(n.subnet)} · Router ${esc(n.router)} · Zone .${esc(n.zone)}
+              · ${n.clients} Geräte, ${n.users} Benutzer</span>
+          </summary>
+          <div style="color:var(--subtext);font-size:11.5px;margin:6px 0">
+            Jedes Gerät hat eine feste Adresse. Mit einem Tunnel erreichst du
+            alle – über die Adresse oder den Namen.
+          </div>
+          <table style="font-size:12px;border-collapse:collapse">${rows
+            || `<tr><td style="color:var(--subtext)">Noch keine Mitglieder.</td></tr>`}</table>
+        </details>`;
+    } catch { box.innerHTML = ""; }
+  }
+
   async function loadInfo() {
     try {
       info = await api.vpnInfo();
@@ -411,7 +458,11 @@ das zeigt immer auf den eigenen Rechner.">Gerät selbst:
         <div><span style="font-size:14px">${look[0]}</span>
           <b>Endpunkt-Prüfung</b>
           <button class="taskbar-btn" id="vpn-check-refresh"
-                  style="float:right;padding:1px 7px">⟳</button></div>
+                  style="float:right;padding:1px 7px">⟳</button>
+          <button class="taskbar-btn" id="vpn-selftest"
+                  style="float:right;padding:1px 8px;margin-right:5px"
+                  title="Prüft die WireGuard-Umsetzung gegen sich selbst und
+wertet das letzte gescheiterte Handschlag-Paket aus.">🔬 Selbsttest</button></div>
         <div style="margin-top:5px;line-height:1.45">${esc(check.hint || "")}</div>
         <div style="margin-top:6px;color:var(--subtext);font-size:11.5px">
           Verbindungsversuche: <b>${st.initiations || 0}</b> ·
@@ -429,6 +480,62 @@ keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
         </div>
       </div>`;
     box.querySelector("#vpn-check-refresh")?.addEventListener("click", loadInfo);
+    box.querySelector("#vpn-selftest")?.addEventListener("click", runSelftest);
+  }
+
+  // Selbsttest: baut einen vollständigen Handschlag gegen die eigene
+  // Umsetzung und spielt das letzte gescheiterte Paket eines echten
+  // Clients Schritt für Schritt nach. Damit steht in einem Fenster, ob
+  // das Problem im Server oder beim Client liegt.
+  async function runSelftest() {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:fixed;inset:0;z-index:9600;
+      background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center`;
+    overlay.innerHTML = `<div style="background:var(--panel,#131c2b);color:var(--text);
+      border:1px solid var(--border);border-radius:12px;width:min(760px,94vw);
+      max-height:86vh;overflow:auto;padding:18px">
+      <div style="font-size:15px;font-weight:700">🔬 VPN-Selbsttest</div>
+      <div id="st-body" style="margin-top:12px;font-size:13px">läuft …</div>
+      <div style="text-align:right;margin-top:14px">
+        <button class="taskbar-btn" id="st-close">Schliessen</button></div></div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#st-close").addEventListener("click", () => overlay.remove());
+
+    const rows = (steps) => (steps || []).map((s) => `
+      <tr><td style="padding:2px 8px 2px 0">${s.ok ? "✅" : "❌"}</td>
+      <td style="padding:2px 12px 2px 0">${esc(s.schritt)}</td>
+      <td style="padding:2px 0;color:var(--subtext);font-family:ui-monospace,monospace;
+          font-size:11.5px">${esc(s.detail || "")}</td></tr>`).join("");
+
+    try {
+      const r = await api.vpnSelftest();
+      const p = r.gescheitertes_paket;
+      overlay.querySelector("#st-body").innerHTML = `
+        <div style="padding:9px 11px;border-radius:8px;
+             background:${r.ok ? "#3ecf8e18" : "#ff4d6d18"};
+             border:1px solid ${r.ok ? "#3ecf8e55" : "#ff4d6d55"}">
+          <b>${r.ok ? "✅ Eigene Umsetzung in Ordnung" : "❌ Eigene Umsetzung fehlerhaft"}</b><br>
+          <span style="color:var(--subtext)">${esc(r.meldung || "")}</span>
+        </div>
+        <table style="margin-top:10px;border-collapse:collapse">${rows(r.schritte)}</table>
+        ${p ? `
+          <div style="margin-top:16px;font-weight:600">Letztes gescheitertes Paket
+            eines echten Clients <span style="font-weight:400;color:var(--subtext)">
+            (von ${esc(p.von || "?")})</span></div>
+          <table style="margin-top:6px;border-collapse:collapse">${rows(p.schritte)}</table>
+          <div style="margin-top:10px;color:var(--subtext);font-size:11.5px">
+            Rohdaten des Pakets – enthält keine Geheimnisse, alles darin ist
+            öffentlich oder verschlüsselt:</div>
+          <textarea readonly style="width:100%;height:70px;margin-top:4px;font-size:10.5px;
+            font-family:ui-monospace,monospace;background:var(--panel-2);color:var(--text);
+            border:1px solid var(--border);border-radius:6px">${esc(p.hex || "")}</textarea>`
+        : `<div style="margin-top:14px;color:var(--subtext)">
+            Bisher ist kein Handschlag eines echten Clients gescheitert –
+            es gibt also nichts nachzuspielen.</div>`}`;
+    } catch (e) {
+      overlay.querySelector("#st-body").innerHTML =
+        `<span style="color:var(--danger,#ff4d6d)">${esc(e.message)}</span>`;
+    }
   }
 
   // --- Tunnel ausstellen -------------------------------------------
@@ -514,7 +621,7 @@ keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
     overlay.querySelector(".vpn-close").addEventListener("click", () => overlay.remove());
   }
 
-  $("#vpn-refresh").addEventListener("click", refresh);
+  $("#vpn-refresh").addEventListener("click", () => { refresh(); loadNetwork(); });
 
   // Live-Aktualisierung: Das Backend meldet Änderungen über den
   // Dashboard-Kanal - auch das automatische Schliessen abgelaufener Tunnel.
@@ -528,6 +635,7 @@ keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
   });
 
   fillClients();
+  loadNetwork();
   updateModeHint();
   loadNodeState();
   loadInfo();

@@ -647,6 +647,8 @@ export const api = {
 
   // --- VPN (WireGuard-kompatibel) ---
   vpnInfo: () => request("/api/vpn/info"),
+  vpnNetwork: () => request("/api/vpn/network"),
+  vpnSelftest: () => request("/api/vpn/selftest", { timeoutMs: 30000 }),
   vpnTunnels: (clientId) => request("/api/vpn/tunnels"
     + (clientId ? `?client_id=${encodeURIComponent(clientId)}` : "")),
   vpnCreateTunnel: (clientId, minutes, name, routes, opts = {}) => request("/api/vpn/tunnels", {

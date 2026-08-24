@@ -1061,6 +1061,14 @@ async def _do_register(sid, payload):
             if enrollment_token:
                 db.mark_enrollment_token_used(enrollment_token)
 
+    # Netze des Clients merken - Grundlage fuer Site-to-Site-Routen.
+    try:
+        subnets = payload.get("subnets")
+        if subnets:
+            db.set_client_subnets(client_id, subnets)
+    except Exception as e:
+        print(f"[register] Netze von {client_id} nicht gespeichert: {e}")
+
     # Wartungsmodus: Der Agent erfährt bei JEDER Anmeldung, ob er
     # mitschreiben soll. Sonst wüsste ein Agent, der gerade neu gestartet
     # ist, nichts davon - und ausgerechnet seine Startphase fehlte im Log.

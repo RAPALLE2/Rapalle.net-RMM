@@ -221,6 +221,9 @@ def node_info(client_id: str) -> dict:
         # richtigen Warntext zu zeigen: Unter Windows wird ein Treiber
         # installiert, unter Linux nicht.
         "platform": client.get("platform") or "",
+        # Die vom Agenten gemeldeten Netze - die Oberflaeche zeigt damit
+        # bei Site-to-Site an, was tatsaechlich geroutet wird.
+        "subnets": db.get_client_subnets(client_id),
         "endpoint": endpoint,
         "endpoint_checked": client.get("node_endpoint_checked") or 0,
         "direct_possible": bool(endpoint),

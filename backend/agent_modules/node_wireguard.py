@@ -273,6 +273,8 @@ class WireGuardServer(asyncio.DatagramProtocol):
         self.on_handshake = None
         # Wird gesetzt, wenn eine Node ihre Erreichbarkeit prueft.
         self.on_probe = None
+        # Erstes gescheitertes Handschlag-Paket (fuer die Fehlersuche).
+        self.captured: dict | None = None
 
         # ZAEHLER. Der Grund fuer sie: Wenn ein Tunnel "nicht geht", gibt es
         # genau drei Moeglichkeiten, und ohne diese Zahlen kann man sie
@@ -431,6 +433,15 @@ class WireGuardServer(asyncio.DatagramProtocol):
             # ERSTEN Fehlschlag - danach waere er nur noch Last.
             self.stats["static_failed"] = self.stats.get("static_failed", 0) + 1
             if self.stats["static_failed"] == 1:
+                # Das gescheiterte Paket aufheben. Es enthaelt KEINE
+                # Geheimnisse - alles darin ist entweder oeffentlich
+                # (Ephemeral-Schluessel) oder verschluesselt. Damit laesst
+                # sich der Fall spaeter Schritt fuer Schritt nachvollziehen,
+                # ohne dass jemand danebenstehen und mitlesen muss.
+                self.captured = {
+                    "hex": data.hex(), "from": f"{addr[0]}:{addr[1]}",
+                    "at": time.time(), "step": "static",
+                }
                 self._diagnose_initiation(data, ephemeral, enc_static)
             raise
         h = _hash(h + enc_static)
@@ -455,6 +466,9 @@ class WireGuardServer(asyncio.DatagramProtocol):
             # scheitert.
             self.stats["timestamp_failed"] = \
                 self.stats.get("timestamp_failed", 0) + 1
+            if not self.captured:
+                self.captured = {"hex": data.hex(), "from": f"{addr[0]}:{addr[1]}",
+                                 "at": time.time(), "step": "timestamp"}
             print(f"[wg] Handschlag von {addr[0]}: statisches Feld ok, aber "
                   f"der Zeitstempel liess sich nicht entschluesseln "
                   f"({len(enc_timestamp)} Byte, 28 erwartet).")
@@ -514,6 +528,143 @@ class WireGuardServer(asyncio.DatagramProtocol):
                   f"passte. Unser oeffentlicher Schluessel ist "
                   f"{_b64.b64encode(self.public_raw).decode()}. Bitte mit dem "
                   f"'PublicKey' in der Tunnel-Datei vergleichen.")
+
+    def replay(self, packet_hex: str) -> list[dict]:
+        """
+        Spielt ein Handschlag-Paket Schritt fuer Schritt durch und meldet
+        nach JEDEM Schritt, ob er geklappt hat.
+
+        Das ist die Antwort auf einen Widerspruch, der sich durch Nachlesen
+        nicht aufloesen liess: mac1 besteht - die Gegenstelle kennt also
+        unseren richtigen oeffentlichen Schluessel - und trotzdem scheitert
+        die Entschluesselung. Beides zugleich ist rechnerisch unmoeglich.
+        Also stimmt eine der beiden Beobachtungen nicht, und dieser
+        Nachvollzug zeigt welche.
+        """
+        import base64 as _b64
+        steps: list[dict] = []
+
+        def add(name, ok, detail=""):
+            steps.append({"schritt": name, "ok": bool(ok), "detail": detail})
+
+        try:
+            data = bytes.fromhex(packet_hex)
+        except ValueError:
+            add("Paket lesbar", False, "kein gueltiges Hex")
+            return steps
+
+        add("Laenge 148 Byte", len(data) == LEN_INITIATION, f"{len(data)} Byte")
+        add("Typ 1 (Handschlag)", data[0] == MSG_INITIATION, f"Typ {data[0]}")
+        if len(data) != LEN_INITIATION or data[0] != MSG_INITIATION:
+            return steps
+
+        expected = _mac(self.mac1_key, data[:116])
+        got = data[116:132]
+        add("mac1 stimmt", hmac.compare_digest(expected, got),
+            f"erwartet {expected.hex()[:16]}…, erhalten {got.hex()[:16]}…")
+
+        ephemeral = data[8:40]
+        enc_static = data[40:88]
+        enc_timestamp = data[88:116]
+        add("Server-Schluessel", True,
+            _b64.b64encode(self.public_raw).decode())
+
+        try:
+            shared = _dh(self.private, ephemeral)
+            add("Diffie-Hellman", True, f"Ergebnis {shared.hex()[:16]}…")
+        except Exception as e:
+            add("Diffie-Hellman", False, str(e))
+            return steps
+
+        c = _hash(CONSTRUCTION)
+        h = _hash(c + IDENTIFIER)
+        h = _hash(h + self.public_raw)
+        c = _kdf(c, ephemeral, 1)[0]
+        h = _hash(h + ephemeral)
+        c2, k = _kdf(c, shared, 2)
+        try:
+            peer_static = _aead_decrypt(k, 0, enc_static, h)
+            add("Statisches Feld entschluesselt", True,
+                _b64.b64encode(peer_static).decode())
+        except Exception as e:
+            add("Statisches Feld entschluesselt", False, f"{type(e).__name__}")
+            add("Bekannte Gegenstellen", bool(self.peers),
+                ", ".join(_b64.b64encode(p).decode()[:16] + "…"
+                          for p in self.peers) or "keine")
+            return steps
+
+        known = peer_static in self.peers
+        add("Gegenstelle bekannt", known,
+            "" if known else "Dieser Schluessel ist hier nicht eingetragen - "
+                             "Tunnel abgelaufen oder von einem anderen Server")
+        if not known:
+            return steps
+
+        h2 = _hash(h + enc_static)
+        c3, k2 = _kdf(c2, _dh(self.private, peer_static), 2)
+        try:
+            _aead_decrypt(k2, 0, enc_timestamp, h2)
+            add("Zeitstempel entschluesselt", True)
+        except Exception as e:
+            add("Zeitstempel entschluesselt", False, f"{type(e).__name__}")
+        return steps
+
+    def selftest(self) -> dict:
+        """
+        Baut einen vollstaendigen Handschlag gegen sich selbst.
+
+        Klappt der, arbeiten Krypto-Bibliothek und Protokoll-Umsetzung in
+        DIESER Umgebung korrekt zusammen - dann liegt ein Problem woanders.
+        Klappt er nicht, ist die Ursache gefunden, ohne dass ueberhaupt ein
+        Client noetig waere.
+        """
+        import base64 as _b64
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        try:
+            cp, cb = generate_keypair()
+            probe_server = WireGuardServer(_b64.b64encode(_priv_raw(self.private)).decode())
+            probe_server.peers = {}
+            probe_server.add_peer(cb, None, "selftest")
+            sent = []
+
+            class _T:
+                def sendto(self, d, a):
+                    sent.append(d)
+
+            probe_server.transport = _T()
+
+            S = X25519PrivateKey.from_private_bytes(_b64.b64decode(cp))
+            Sp, Rp = _pub_raw(S), self.public_raw
+            e = X25519PrivateKey.generate()
+            Ep = _pub_raw(e)
+            c = _hash(CONSTRUCTION)
+            h = _hash(c + IDENTIFIER)
+            h = _hash(h + Rp)
+            c = _kdf(c, Ep, 1)[0]
+            h = _hash(h + Ep)
+            c, k = _kdf(c, _dh(e, Rp), 2)
+            es = _aead_encrypt(k, 0, Sp, h)
+            h = _hash(h + es)
+            c, k = _kdf(c, _dh(S, Rp), 2)
+            et = _aead_encrypt(k, 0, _tai64n(), h)
+            msg = bytes([1, 0, 0, 0]) + struct.pack("<I", 7) + Ep + es + et
+            msg = msg + _mac(_hash(LABEL_MAC1 + Rp), msg) + b"\x00" * 16
+
+            probe_server.datagram_received(msg, ("127.0.0.1", 1))
+            ok = bool(sent) and sent[0][0] == MSG_RESPONSE
+            return {
+                "ok": ok,
+                "meldung": ("Handschlag gegen die eigene Umsetzung erfolgreich - "
+                            "Krypto und Protokoll arbeiten in dieser Umgebung "
+                            "korrekt." if ok else
+                            "Der Handschlag scheitert schon gegen die eigene "
+                            "Umsetzung. Damit ist die Ursache hier im Server, "
+                            "nicht beim Client."),
+                "schritte": probe_server.replay(msg.hex()),
+            }
+        except Exception as e:
+            return {"ok": False, "meldung": f"Selbsttest abgebrochen: {e}",
+                    "schritte": []}
 
     def _send_response(self, peer: Peer, their_index: int, c: bytes, h: bytes,
                        their_ephemeral: bytes, addr) -> None:

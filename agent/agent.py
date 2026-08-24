@@ -681,6 +681,12 @@ async def connect():
             "arch": platform.machine(),           # z.B. "AMD64", "x86_64"
             "release": OS_RELEASE,                # z.B. "Ubuntu 22.04" / "Windows 11"
             "ip": get_local_ip(),
+            # Die Netze, in denen dieses Geraet haengt - fuer Site-to-Site.
+            # Ohne diese Angabe muesste das Backend das Netz raten (bisher:
+            # pauschal /24). Bei einem /16 oder /22 fehlten dann Teile des
+            # Netzes in den Routen, und der Benutzer erreichte einen Teil
+            # der Geraete nicht - ohne erkennbaren Grund.
+            "subnets": get_local_subnets(),
             "enrollment_token": ENROLLMENT_TOKEN,  # nur beim ersten Mal relevant
             "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
             "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
@@ -1329,6 +1335,44 @@ def collect_extended_metrics() -> dict:
         ext["ping"] = pings
 
     return ext
+
+
+def get_local_subnets() -> list:
+    """
+    Ermittelt die IPv4-Netze, in denen dieses Geraet haengt.
+
+    Beispiel: Adresse 192.168.178.79 mit Maske 255.255.255.0 ergibt
+    "192.168.178.0/24".
+
+    Ausgelassen werden Loopback (127.x), automatische Adressen (169.254.x)
+    und die Tunnel-Netze selbst - Letztere wuerden eine Route auf sich
+    selbst erzeugen.
+    """
+    out = []
+    try:
+        import ipaddress as _ip
+        for name, addrs in psutil.net_if_addrs().items():
+            for a in addrs:
+                if getattr(a, "family", None) != socket.AF_INET:
+                    continue
+                ip, mask = a.address, getattr(a, "netmask", None)
+                if not ip or not mask:
+                    continue
+                if ip.startswith("127.") or ip.startswith("169.254."):
+                    continue
+                try:
+                    net = _ip.ip_network(f"{ip}/{mask}", strict=False)
+                except ValueError:
+                    continue
+                # Ein /32 ist kein Netz, sondern eine einzelne Adresse.
+                if net.prefixlen >= 31:
+                    continue
+                text = str(net)
+                if text not in out:
+                    out.append(text)
+    except Exception as e:
+        _print(f"[agent] Netze nicht ermittelbar: {e}")
+    return out[:8]
 
 
 def collect_metrics() -> dict:

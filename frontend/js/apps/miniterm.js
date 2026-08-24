@@ -34,6 +34,11 @@ export class MiniTerm {
     this._parseState = "text";
     this._csi = "";
     this._scrollTop = 0;
+    // Scrollverhalten: Solange der Benutzer unten steht, wandert die
+    // Ansicht mit. Scrollt er hoch, bleibt sie stehen - sonst waere ein
+    // Blick in die Historie unmöglich, weil jede neue Zeile zurückreisst.
+    this._stick = true;
+    this._pending = null;
     this._build();
     this._measure();
     this._render();
@@ -49,6 +54,32 @@ export class MiniTerm {
       "font-size:13px;line-height:1.2;color:#c0caf5;white-space:pre;outline:none;" +
       "height:100%;box-sizing:border-box;overflow-y:auto;cursor:text;user-select:text;";
     this.host.appendChild(this.screen);
+
+    // Merken, ob der Benutzer gerade unten steht. Nur dann wird beim
+    // nächsten Schreiben nachgescrollt.
+    this.screen.addEventListener("scroll", () => {
+      const rest = this.screen.scrollHeight - this.screen.scrollTop
+                   - this.screen.clientHeight;
+      this._stick = rest < 24;
+      if (this._jump) this._jump.style.display = this._stick ? "none" : "block";
+    });
+
+    // Knopf "ans Ende springen". Beim Zurückblättern verliert man sonst
+    // leicht den Anschluss an das, was gerade passiert.
+    this._jump = document.createElement("button");
+    this._jump.textContent = "↓ Ende";
+    this._jump.title = "Zum Ende der Ausgabe springen";
+    this._jump.style.cssText =
+      "position:absolute;right:14px;bottom:10px;display:none;z-index:3;" +
+      "background:#1a2233;color:#c0caf5;border:1px solid #2a3648;border-radius:14px;" +
+      "padding:3px 10px;font-size:11.5px;cursor:pointer;opacity:.9";
+    this._jump.addEventListener("click", () => {
+      this._stick = true;
+      this.screen.scrollTop = this.screen.scrollHeight;
+      this._jump.style.display = "none";
+      this.input.focus();
+    });
+    this.host.appendChild(this._jump);
 
     // Verstecktes Eingabefeld für Tastatur/IME/Paste. Off-screen, damit es die
     // Textauswahl im Screen nicht stört; wird bei Klick OHNE Selektion fokussiert.
@@ -191,8 +222,10 @@ export class MiniTerm {
   _newline() {
     this.cy++;
     if (this.cy >= this.buffer.length) this.buffer.push(this._blankLine());
-    // Sichtfenster nach unten scrollen: nur die letzten "rows" Zeilen behalten.
-    const maxLines = 5000;
+    // Historie begrenzen. 10.000 Zeilen sind bei ~80 Zeichen rund 1 MB -
+    // vertretbar, und man kann weit genug zurückblättern, um die Ausgabe
+    // eines längeren Befehls vollständig zu sehen.
+    const maxLines = 10000;
     if (this.buffer.length > maxLines) this.buffer = this.buffer.slice(-maxLines);
   }
 
@@ -259,8 +292,18 @@ export class MiniTerm {
   }
 
   // ---- Darstellung ----
+  // Wie viele Zeilen Historie tatsächlich gezeichnet werden. Der Puffer
+  // hält mehr; alles auf einmal zu zeichnen wäre bei jedem Tastendruck zu
+  // teuer. 3000 Zeilen sind reichlich und bleiben flüssig.
+  static get RENDER_LINES() { return 3000; }
+
   _render() {
-    const top = this._viewTop();
+    // VORHER wurde nur das Sichtfenster der letzten `rows` Zeilen gezeichnet
+    // und danach hart ans Ende gescrollt. Der 5000-Zeilen-Puffer existierte
+    // also, war aber nie zu sehen - Zurückblättern war unmöglich. Jetzt wird
+    // die Historie mitgezeichnet, und das Nachscrollen passiert nur, wenn
+    // der Benutzer ohnehin unten steht.
+    const top = Math.max(0, this.buffer.length - MiniTerm.RENDER_LINES);
     const frag = [];
     for (let y = top; y < this.buffer.length; y++) {
       const line = this.buffer[y];
@@ -283,7 +326,12 @@ export class MiniTerm {
       frag.push(html);
     }
     this.screen.innerHTML = frag.join("\n");
-    this.screen.scrollTop = this.screen.scrollHeight;
+    if (this._stick) {
+      this.screen.scrollTop = this.screen.scrollHeight;
+      if (this._jump) this._jump.style.display = "none";
+    } else if (this._jump) {
+      this._jump.style.display = "block";
+    }
   }
 
   _escHtml(ch) {
@@ -296,6 +344,28 @@ export class MiniTerm {
   // ---- Tastatur -> Terminalsequenzen ----
   _onKey(e) {
     const k = e.key;
+
+    // --- Blättern in der Historie ---
+    // Shift+Bild-auf/ab ist die übliche Belegung im Terminal. Ohne Shift
+    // gehören die Tasten der Anwendung (z.B. less oder ein Editor), deshalb
+    // wird nur die Kombination mit Shift abgefangen.
+    if (e.shiftKey && (k === "PageUp" || k === "PageDown")) {
+      e.preventDefault();
+      const step = this.screen.clientHeight * 0.9;
+      this.screen.scrollTop += (k === "PageUp" ? -step : step);
+      return;
+    }
+    // Strg+Shift+Pos1/Ende: an den Anfang bzw. ans Ende der Historie.
+    if (e.ctrlKey && e.shiftKey && (k === "Home" || k === "End")) {
+      e.preventDefault();
+      if (k === "Home") {
+        this.screen.scrollTop = 0;
+      } else {
+        this._stick = true;
+        this.screen.scrollTop = this.screen.scrollHeight;
+      }
+      return;
+    }
 
     // --- Copy/Paste zuerst behandeln ---
     const sel = window.getSelection?.().toString() || "";
