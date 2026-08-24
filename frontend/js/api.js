@@ -647,6 +647,20 @@ export const api = {
 
   // --- VPN (WireGuard-kompatibel) ---
   vpnInfo: () => request("/api/vpn/info"),
+  // --- Port-Weiterleitung (ohne VPN) ---
+  listForwards: () => request("/api/portforward"),
+  createForward: (clientId, targetPort, opts = {}) => request("/api/portforward", {
+    method: "POST",
+    body: JSON.stringify({
+      client_id: clientId, target_port: targetPort,
+      target_host: opts.targetHost || "127.0.0.1",
+      minutes: opts.minutes ?? 240, label: opts.label || "",
+      allow_from: opts.allowFrom || "",
+    }),
+  }),
+  deleteForward: (id) => request(`/api/portforward/${encodeURIComponent(id)}`,
+    { method: "DELETE" }),
+
   vpnNetwork: () => request("/api/vpn/network"),
   vpnSelftest: () => request("/api/vpn/selftest", { timeoutMs: 30000 }),
   vpnTunnels: (clientId) => request("/api/vpn/tunnels"

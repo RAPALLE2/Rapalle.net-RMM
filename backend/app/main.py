@@ -65,6 +65,7 @@ from app.routers import (
     vpn_routes,
     node_routes,
     diag_routes,
+    portforward_routes,
 )  # noqa: E501 - Sammelimport, Absicherung siehe _import_router() unten
 
 
@@ -281,7 +282,8 @@ _mount("privacy_routes", privacy_routes)     # DSGVO: Auskunft, Löschung, Frist
 _mount("patch_routes", patch_routes)       # Software-Patching
 _mount("vpn_routes", vpn_routes)         # WireGuard-kompatibles VPN
 _mount("node_routes", node_routes)        # Node-Stufe + Reverse Proxy
-_mount("diag_routes", diag_routes)        # Wartungsmodus / Diagnose
+_mount("diag_routes", diag_routes)
+_mount("portforward_routes", portforward_routes)  # Port-Weiterleitung ohne VPN
 
 # Guacamole-WebSocket-Tunnel (Browser <-> guacd). Muss VOR dem statischen
 # Frontend-Mount registriert werden, damit die Route greift.
@@ -649,6 +651,15 @@ async def _start_background_tasks():
     # WireGuard-Endpunkt (reines Python, siehe app/wireguard.py). Startet den
     # UDP-Listener und laedt die noch gueltigen Tunnel wieder ein. Faellt der
     # Port aus, laeuft alles andere trotzdem weiter.
+    # Port-Weiterleitungen wieder oeffnen und die Ablaufschleife starten.
+    # Sie brauchen weder VPN noch Treiber - nur die Agenten-Verbindung.
+    try:
+        from app import portforward as _pf
+        _asyncio.create_task(_pf.restore())
+        _supervise("weiterleitung-ablauf", _pf.expiry_loop)
+    except Exception as _e:
+        print(f"[weiterleitung] Start uebersprungen: {_e}")
+
     try:
         from app import vpn as _vpn
         _asyncio.create_task(_vpn.start())

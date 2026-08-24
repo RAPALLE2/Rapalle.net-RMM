@@ -58,6 +58,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libffi-dev \
         libssl-dev \
+        wireguard-tools \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- WireGuard im Userspace --------------------------------------------------
+# wireguard-go ist die Referenzumsetzung der WireGuard-Entwickler. Sie laeuft
+# vollstaendig im Userspace und braucht KEIN Kernelmodul - entscheidend auf
+# NAS-Systemen, denn WireGuard kam erst mit Linux 5.6 in den Kernel, und viele
+# NAS laufen noch auf 4.x.
+#
+# Bewusst in einem EIGENEN Schritt und mit '|| true': Das Paket ist nicht in
+# jeder Debian-Fassung vorhanden. Fehlt es, soll der Build trotzdem
+# durchlaufen - das Backend faellt dann auf seine eigene Umsetzung zurueck und
+# sagt das im Protokoll auch. Ein Abbruch des ganzen Images wegen eines
+# optionalen Pakets waere die falsche Abwaegung.
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends wireguard-go \
+        || echo "[build] wireguard-go nicht verfuegbar - das VPN benutzt die eingebaute Umsetzung") \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

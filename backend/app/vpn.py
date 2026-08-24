@@ -31,6 +31,7 @@ import time
 import uuid
 
 from app import db, wireguard
+from app.errors import Codes, report
 from app.vpn_stack import IPStack
 
 # ----------------------------------------------------------------------
@@ -82,8 +83,16 @@ class _Runtime:
         self.transport = None
         self.stacks: dict[str, IPStack] = {}      # tunnel_id -> Stack
         self.modes: dict[str, str] = {}           # tunnel_id -> 'client'|'site'
+        # Adresse des Benutzers -> Tunnel. Bei wireguard-go ist das die
+        # einzige Zuordnung, die wir haben: Die Krypto liegt ausserhalb,
+        # das Paket traegt aber die Absenderadresse.
+        self.address_to_tunnel: dict[str, str] = {}
         self.stream_owner: dict[str, str] = {}    # stream_id -> tunnel_id
         self.started = False
+        # wireguard-go, falls verfuegbar. Ist es gesetzt, macht es die
+        # gesamte Krypto - unsere eigene Umsetzung bleibt dann ungenutzt.
+        self.wg = None
+        self.engine = "python"    # 'wireguard-go' oder 'python'
         # Zahlen zu direkt endenden Tunneln, gemeldet von den Nodes.
         self.node_stats: dict[str, dict] = {}
 
@@ -242,6 +251,8 @@ def create_tunnel(client_id: str, username: str, minutes: int,
         })
     else:
         _activate(tunnel_id, pub_user, psk, client_id, mode)
+        if rt.wg:
+            _userspace_routes()
 
     config = build_config(
         private_key=priv_user, address=address, psk=psk,
@@ -508,9 +519,25 @@ def revoke_tunnel(tunnel_id: str) -> bool:
 
 def _activate(tunnel_id: str, public_key: str, psk: str, client_id: str,
               mode: str = "client") -> None:
-    if not rt.server:
+    row = db.get_vpn_tunnel(tunnel_id) or {}
+    address = row.get("address") or ""
+    if address:
+        rt.address_to_tunnel[address] = tunnel_id
+
+    if rt.wg:
+        # wireguard-go verwaltet die Gegenstelle. 'allowed-ips' ist hier
+        # eine EINGANGSpruefung: wireguard-go nimmt von dieser Gegenstelle
+        # nur Pakete mit dieser Absenderadresse an. Genau richtig - damit
+        # kann kein Tunnel die Adresse eines anderen vortaeuschen.
+        try:
+            rt.wg.add_peer(public_key, psk, f"{address}/32")
+        except Exception as e:
+            report(Codes.VPN_TUNNEL, e, "Gegenstelle bei wireguard-go anlegen",
+                   tunnel=tunnel_id)
+    elif rt.server:
+        rt.server.add_peer(public_key, psk, tunnel_id)
+    else:
         return
-    rt.server.add_peer(public_key, psk, tunnel_id)
     rt.modes[tunnel_id] = mode
     rt.stacks[tunnel_id] = IPStack(
         tunnel_id,
@@ -588,6 +615,14 @@ def _to_agent_checked(client_id: str, tunnel_id: str, event: str,
 
 def _deactivate(tunnel_id: str, public_key: str | None) -> None:
     rt.modes.pop(tunnel_id, None)
+    for addr, tid in list(rt.address_to_tunnel.items()):
+        if tid == tunnel_id:
+            rt.address_to_tunnel.pop(addr, None)
+    if rt.wg and public_key:
+        try:
+            rt.wg.remove_peer(public_key)
+        except Exception:
+            pass
     stack = rt.stacks.pop(tunnel_id, None)
     if stack:
         try:
@@ -602,6 +637,12 @@ def _deactivate(tunnel_id: str, public_key: str | None) -> None:
 
 
 def _send_into_tunnel(tunnel_id: str, packet: bytes) -> None:
+    # Bei wireguard-go schreiben wir das Paket einfach auf unser TUN-Geraet;
+    # den Rest - Routing und Verschluesselung - macht der Kernel bzw.
+    # wireguard-go.
+    if rt.wg:
+        rt.wg.send(packet)
+        return
     if not rt.server:
         return
     peer = rt.server.peer_for_tunnel(tunnel_id)
@@ -734,7 +775,28 @@ def _stack_for(payload: dict) -> IPStack | None:
     return rt.stacks.get(tid or "")
 
 
+def _portforward_first(payload: dict, handler: str) -> bool:
+    """
+    Gehoert dieser Datenstrom zu einer Port-Weiterleitung?
+
+    Agent und Backend benutzen fuer beides dieselben Ereignisse
+    (vpn-open/-data/-close) - der Agent musste dafuer nicht angefasst
+    werden. Anhand der Strom-Kennung wird hier unterschieden.
+    """
+    try:
+        from app import portforward
+        if portforward.owns_stream(payload.get("stream", "")):
+            getattr(portforward, handler)(payload)
+            return True
+    except Exception as e:
+        from app.errors import report, Codes
+        report(Codes.VPN_PACKET, e, f"Weiterleitung: {handler}")
+    return False
+
+
 def on_agent_open_result(payload: dict) -> None:
+    if _portforward_first(payload, "on_open_result"):
+        return
     stack = _stack_for(payload)
     if stack:
         stack.on_agent_open_result(payload.get("stream", ""),
@@ -742,6 +804,8 @@ def on_agent_open_result(payload: dict) -> None:
 
 
 def on_agent_data(payload: dict) -> None:
+    if _portforward_first(payload, "on_data"):
+        return
     stack = _stack_for(payload)
     if not stack:
         return
@@ -753,6 +817,8 @@ def on_agent_data(payload: dict) -> None:
 
 
 def on_agent_close(payload: dict) -> None:
+    if _portforward_first(payload, "on_close"):
+        return
     stack = _stack_for(payload)
     if stack:
         stack.on_agent_stream_close(payload.get("stream", ""))
@@ -789,6 +855,41 @@ async def start() -> None:
     if rt.started or not vpn_enabled():
         return
     priv, stored_pub = server_keys()
+
+    # ZUERST wireguard-go versuchen. Es ist die Referenzumsetzung der
+    # WireGuard-Entwickler und damit die verlaessliche Wahl; unsere eigene
+    # Umsetzung ist nur noch die Rueckfallebene fuer Systeme ohne TUN-Geraet.
+    from app import wg_userspace
+    req = wg_userspace.requirements()
+    if req["usable"]:
+        engine = wg_userspace.UserspaceWireGuard(
+            private_key=priv, listen_port=vpn_port(),
+            address=f"{server_tunnel_ip()}/{ipaddress.ip_network(vpn_subnet(), strict=False).prefixlen}",
+            on_packet=_on_userspace_packet)
+        if await engine.start():
+            rt.wg = engine
+            rt.engine = "wireguard-go"
+            rt.started = True
+            _userspace_routes()
+            for row in db.list_vpn_tunnels(active_only=True):
+                if (row.get("transport") or "relay") == "direct":
+                    continue
+                _activate(row["id"], row["public_key"], row["preshared_key"],
+                          row["client_id"], row.get("mode") or "client")
+            print(f"[vpn] WireGuard laeuft ueber wireguard-go auf UDP "
+                  f"{vpn_port()} ({len(rt.stacks)} Tunnel geladen)")
+            asyncio.ensure_future(_engine_watch())
+            _supervise_or_task(_tick_loop, "vpn-tick")
+            _supervise_or_task(_expiry_loop, "vpn-ablauf")
+            return
+        print("[vpn] wireguard-go nicht startbar - weiter mit der eigenen "
+              "Umsetzung")
+    else:
+        for m in req["missing"]:
+            print(f"[vpn] wireguard-go nicht nutzbar: {m}")
+        print("[vpn] Es wird die eigene Python-Umsetzung benutzt. Sie ist "
+              "die Rueckfallebene und weniger erprobt.")
+
 
     # SCHLUESSELPRUEFUNG. Der oeffentliche Schluessel, der in jeder
     # Tunnel-Datei landet, kommt aus den Einstellungen. Der Server rechnet
@@ -855,6 +956,67 @@ async def start() -> None:
         # laufen als gar nicht.
         asyncio.ensure_future(_tick_loop())
         asyncio.ensure_future(_expiry_loop())
+
+
+def _supervise_or_task(factory, name: str) -> None:
+    try:
+        from app.main import _supervise
+        _supervise(name, factory)
+    except Exception:
+        asyncio.ensure_future(factory())
+
+
+def _on_userspace_packet(packet: bytes) -> None:
+    """
+    Ein IP-Paket kam vom TUN-Geraet - also von einem Benutzer im Tunnel.
+
+    Bei wireguard-go gibt es keine Zuordnung "Paket -> Tunnel" mehr, denn
+    die Krypto liegt ausserhalb. Die Zuordnung erfolgt deshalb ueber die
+    ABSENDERADRESSE: Jeder Benutzer hat eine feste Adresse im virtuellen
+    Netz, und die steht im Paket.
+    """
+    if len(packet) < 20 or (packet[0] >> 4) != 4:
+        return
+    src = ".".join(str(b) for b in packet[12:16])
+    tunnel_id = rt.address_to_tunnel.get(src)
+    if not tunnel_id:
+        return
+    stack = rt.stacks.get(tunnel_id)
+    if stack:
+        stack.on_tunnel_packet(packet)
+
+
+def _userspace_routes() -> None:
+    """Setzt die Routen, die ueber unser TUN-Geraet laufen sollen."""
+    if not rt.wg:
+        return
+    wanted = [vpn_subnet()]
+    for row in db.list_vpn_tunnels(active_only=True):
+        for entry in (row.get("allowed_ips") or "").split(","):
+            entry = entry.strip()
+            if entry and entry not in wanted:
+                wanted.append(entry)
+    rt.wg.set_routes(wanted)
+
+
+async def _engine_watch() -> None:
+    """
+    Ueberwacht wireguard-go und startet es bei Bedarf neu.
+
+    Ein Endpunkt, der still verschwindet, ist schlimmer als einer, der gar
+    nicht erst startet: Die Tunnel stehen dann als 'offen' im Dashboard,
+    funktionieren aber nicht.
+    """
+    while rt.started and rt.wg:
+        await asyncio.sleep(15)
+        if rt.wg and not rt.wg.alive():
+            report(Codes.VPN_ENDPOINT, None,
+                   "wireguard-go hat sich beendet - Neustart")
+            await rt.wg.stop()
+            rt.started = False
+            rt.wg = None
+            await start()
+            return
 
 
 def _on_wg_packet(peer, packet: bytes) -> None:
@@ -987,6 +1149,22 @@ def endpoint_check() -> dict:
       3. Handschlag steht, aber keine Daten. Dann liegt es hinter dem
          Tunnel (Dienst laeuft nicht, falscher Port, Betriebsart).
     """
+    if rt.wg:
+        # Bei wireguard-go liefert 'wg show' die echten Zahlen.
+        peers = rt.wg.peers()
+        return {"stage": "verbunden" if any(p["last_handshake"] for p in peers)
+                         else "kein-handschlag",
+                "hint": ("wireguard-go ist aktiv. " + (
+                    f"{sum(1 for p in peers if p['last_handshake'])} von "
+                    f"{len(peers)} Gegenstellen haben einen Handschlag."
+                    if peers else "Es ist noch kein Tunnel eingetragen.")),
+                "engine": "wireguard-go", "peers": peers,
+                "stats": {"handshakes": sum(1 for p in peers if p["last_handshake"]),
+                          "initiations": len(peers),
+                          "transport": sum(p["rx_bytes"] for p in peers)},
+                "port": vpn_port(), "endpoint_host": endpoint_host(),
+                "running": True}
+
     stats = dict(rt.server.stats) if rt.server else {}
     packets = stats.get("packets", 0)
     handshakes = stats.get("handshakes", 0)

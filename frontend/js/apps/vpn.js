@@ -154,6 +154,7 @@ export function renderVpn(body, win) {
             <button id="vpn-refresh" class="taskbar-btn" style="margin-left:auto">⟳</button>
           </div>
           <div id="vpn-net" style="padding:8px 12px;border-bottom:1px solid var(--border)"></div>
+          <div id="vpn-fwd" style="padding:8px 12px;border-bottom:1px solid var(--border)"></div>
           <div id="vpn-list" style="flex:1;overflow:auto;padding:8px"></div>
         </div>
       </div>
@@ -415,6 +416,49 @@ das zeigt immer auf den eigenen Rechner.">Gerät selbst:
     } catch { box.innerHTML = ""; }
   }
 
+  // Offene Port-Weiterleitungen. Sie sind der Weg, der OHNE VPN
+  // funktioniert - und für die meisten Fälle (VNC, RDP, Weboberfläche)
+  // der praktischere.
+  async function loadForwards() {
+    const box = $("#vpn-fwd");
+    if (!box) return;
+    try {
+      const res = await api.listForwards();
+      const list = res.forwards || [];
+      const host = window.location.hostname;
+      box.innerHTML = `
+        <details ${list.length ? "open" : ""}>
+          <summary style="cursor:pointer;font-size:13px">
+            <b>🔀 Port-Weiterleitungen</b>
+            <span style="color:var(--subtext);font-weight:400">
+              ${list.length} offen · ohne VPN, über die Agenten-Verbindung</span>
+          </summary>
+          ${list.length ? `<table style="font-size:12px;border-collapse:collapse;
+            margin-top:6px;width:100%">${list.map((f) => `
+            <tr>
+              <td style="padding:2px 8px 2px 0">${f.client_online ? "🟢" : "⚪"}</td>
+              <td style="padding:2px 10px 2px 0;font-family:ui-monospace,monospace">
+                ${esc(host)}:${f.listen_port}</td>
+              <td style="padding:2px 10px 2px 0;color:var(--subtext)">→
+                ${esc(f.hostname || "")} ${esc(f.target || "")}</td>
+              <td style="padding:2px 10px 2px 0;color:var(--subtext)">
+                ${f.active || 0} aktiv</td>
+              <td style="padding:2px 0;text-align:right">
+                <button class="taskbar-btn fwd-del" data-id="${esc(f.id)}"
+                  style="padding:0 7px" title="Weiterleitung schliessen">✖</button></td>
+            </tr>`).join("")}</table>`
+          : `<div style="color:var(--subtext);font-size:11.5px;margin-top:5px">
+              Keine offen. Anlegen über den Knopf „🔀 Port" beim Client.</div>`}
+        </details>`;
+      box.querySelectorAll(".fwd-del").forEach((b) =>
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          try { await api.deleteForward(b.dataset.id); await loadForwards(); }
+          catch (e) { window.notify?.(e.message, "error"); b.disabled = false; }
+        }));
+    } catch { box.innerHTML = ""; }
+  }
+
   async function loadInfo() {
     try {
       info = await api.vpnInfo();
@@ -425,10 +469,24 @@ das zeigt immer auf den eigenen Rechner.">Gerät selbst:
         box.innerHTML = `<b style="color:var(--danger,#ff4d6d)">Der VPN-Endpunkt läuft nicht.</b>
           UDP-Port ${esc(String(info.port))} muss im Container und in der Firewall freigegeben sein.`;
       } else {
+      const eng = info.engine === "wireguard-go"
+        ? `<span style="color:var(--online,#3ecf8e)">wireguard-go</span>`
+        : `<span style="color:var(--warn,#f5a524)" title="${esc(
+             (info.engine_check?.missing || []).join(" · ") ||
+             "Rückfallebene")}">eigene Umsetzung</span>`;
+      const engHint = info.engine !== "wireguard-go"
+        ? `<div style="margin-top:5px;font-size:11.5px;color:var(--warn,#f5a524)">
+             Es läuft die eingebaute Rückfallebene – weniger erprobt als
+             wireguard-go. Fehlt:
+             ${esc((info.engine_check?.missing || []).join("; ") || "unbekannt")}
+             ${info.engine_check?.hint ? "<br>" + esc(info.engine_check.hint) : ""}
+           </div>`
+        : "";
         box.innerHTML = info.endpoint_host
           ? `Endpunkt: <b>${esc(info.endpoint_host)}:${esc(String(info.port))}</b>
              <span style="opacity:.7">· Tunnel-Netz ${esc(info.subnet)}
-             · Gerät selbst: ${esc(info.loopback_alias || "10.77.0.1")}</span>`
+             · Gerät selbst: ${esc(info.loopback_alias || "10.77.0.1")}
+             · Umsetzung: ${eng}</span>${engHint}`
           : `<b style="color:var(--danger,#ff4d6d)">Die Server-Adresse ist nicht
              hinterlegt.</b> Ohne sie enthält die Tunnel-Datei kein Ziel und der
              Tunnel kommt nicht zustande. Einstellungen → Allgemein →
@@ -635,7 +693,9 @@ keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
     overlay.querySelector(".vpn-close").addEventListener("click", () => overlay.remove());
   }
 
-  $("#vpn-refresh").addEventListener("click", () => { refresh(); loadNetwork(); });
+  $("#vpn-refresh").addEventListener("click", () => {
+    refresh(); loadNetwork(); loadForwards();
+  });
 
   // Live-Aktualisierung: Das Backend meldet Änderungen über den
   // Dashboard-Kanal - auch das automatische Schliessen abgelaufener Tunnel.
@@ -650,6 +710,7 @@ keine Verbindungsversuche von WireGuard-Clients.">Node-Prüfpakete:
 
   fillClients();
   loadNetwork();
+  loadForwards();
   updateModeHint();
   loadNodeState();
   loadInfo();

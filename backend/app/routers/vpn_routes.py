@@ -55,6 +55,11 @@ def vpn_info(user: dict = Depends(get_current_user)):
         "may_unlimited": user_has_permission(user, "vpn_unlimited"),
         # Sagt, an welcher der drei moeglichen Stellen es haengt.
         "check": vpn.endpoint_check(),
+        # Welche Umsetzung laeuft: 'wireguard-go' (Referenz) oder 'python'
+        # (eigene Rueckfallebene). Das gehoert sichtbar - die beiden
+        # verhalten sich nicht gleich zuverlaessig.
+        "engine": vpn.rt.engine,
+        "engine_check": _engine_info(),
     }
 
 
@@ -172,6 +177,14 @@ def _tunnel_filename(record: dict) -> str:
     record["display_name"] = full
     record["wg_name"] = (base[:15] or "tunnel")
     return f"{full}.conf"
+
+
+def _engine_info() -> dict:
+    from app import wg_userspace
+    req = wg_userspace.requirements()
+    req["hint"] = (wg_userspace.windows_hint() if req["platform"].lower()
+                   .startswith("win") else "")
+    return req
 
 
 @router.get("/api/vpn/network")

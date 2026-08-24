@@ -113,10 +113,22 @@ services:
     # für plötzliche Hänger bei laufenden Fernsitzungen.
     memswap_limit: "${RMM_MEMORY:-4g}"
 
-    # Netzwerk-Scanner und Ping brauchen rohe Sockets.
+    # Netzwerk-Scanner und Ping brauchen rohe Sockets, WireGuard braucht
+    # zusaetzlich das Anlegen von Schnittstellen und Routen (NET_ADMIN).
     cap_add:
       - NET_RAW
       - NET_ADMIN
+
+    # TUN-Geraet fuer wireguard-go. Ohne diese Zeile faellt das VPN auf die
+    # eigene Python-Umsetzung zurueck (weniger erprobt).
+    #
+    # Fehlt /dev/net/tun auf dem Wirt, einmalig laden:
+    #     sudo modprobe tun
+    # Dauerhaft (Debian/Ubuntu):  echo tun >> /etc/modules
+    # Auf Synology/QNAP ist das Modul vorhanden, aber nach einem Neustart
+    # oft nicht geladen - dann in den Aufgabenplaner eintragen.
+    devices:
+      - /dev/net/tun:/dev/net/tun
 
     depends_on:
       - guacd

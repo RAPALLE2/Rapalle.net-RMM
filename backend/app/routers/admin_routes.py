@@ -189,6 +189,7 @@ PERM_LABELS = {
     "c_vpn": "VPN-Tunnel ausstellen",
     "c_vpn_unlimited": "VPN-Tunnel ohne Ablaufzeit",
     "c_nodeproxy": "Reverse Proxy dieser Node benutzen",
+    "c_portforward": "Port-Weiterleitung auf diesen Client einrichten",
     "c_notes_view": "Notizen sehen",
     "c_notes_edit": "Notizen bearbeiten",
     "c_websites_view": "Websites sehen",

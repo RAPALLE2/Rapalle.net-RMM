@@ -736,6 +736,23 @@ def init_db() -> None:
             PRIMARY KEY (kind, ref)
         );
 
+        -- Port-Weiterleitungen: ein Lauschport am Backend zeigt auf einen
+        -- Dienst eines Clients. Braucht weder VPN noch offene Ports beim
+        -- Kunden - es laeuft ueber die bestehende Agenten-Verbindung.
+        CREATE TABLE IF NOT EXISTS port_forwards (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            target_host TEXT NOT NULL DEFAULT '127.0.0.1',
+            target_port INTEGER NOT NULL,
+            listen_port INTEGER NOT NULL,
+            username TEXT NOT NULL DEFAULT '',
+            allow_from TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0,
+            closed_at INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS vpn_tunnels (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
@@ -1750,6 +1767,51 @@ def remove_vpn_member(kind: str, ref: str) -> None:
     _conn.commit()
 
 
+# ------------------------------------------------------------------
+# Port-Weiterleitungen
+# ------------------------------------------------------------------
+
+def create_port_forward(rec: dict) -> None:
+    _conn.execute(
+        """INSERT INTO port_forwards (id, client_id, label, target_host,
+               target_port, listen_port, username, allow_from, created_at,
+               expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (rec["id"], rec["client_id"], rec.get("label", ""),
+         rec.get("target_host", "127.0.0.1"), int(rec["target_port"]),
+         int(rec["listen_port"]), rec.get("username", ""),
+         rec.get("allow_from", ""), int(rec["created_at"]),
+         int(rec.get("expires_at") or 0)))
+    _conn.commit()
+
+
+def list_port_forwards(active_only: bool = True,
+                       client_id: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM port_forwards"
+    where, params = [], []
+    if active_only:
+        where.append("closed_at = 0")
+    if client_id:
+        where.append("client_id = ?")
+        params.append(client_id)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return [dict(r) for r in _conn.execute(sql + " ORDER BY created_at DESC",
+                                           tuple(params)).fetchall()]
+
+
+def get_port_forward(forward_id: str) -> dict | None:
+    row = _conn.execute("SELECT * FROM port_forwards WHERE id = ?",
+                        (forward_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def close_port_forward(forward_id: str) -> None:
+    _conn.execute("UPDATE port_forwards SET closed_at = ? "
+                  "WHERE id = ? AND closed_at = 0", (_now_ms(), forward_id))
+    _conn.commit()
+
+
 def create_vpn_tunnel(rec: dict) -> None:
     """Legt einen neuen Tunnel an. 'rec' kommt aus app/vpn.py."""
     _conn.execute(
@@ -2683,6 +2745,7 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_relay", "c_relay_unlimited",
     "c_vpn", "c_vpn_unlimited",     # VPN-Tunnel auf diesen Client ausstellen
     "c_nodeproxy",                  # Reverse Proxy dieser Node benutzen
+    "c_portforward",                # Port-Weiterleitung auf diesen Client
     "c_notes_view", "c_notes_edit",
     "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
     "c_websites_view", "c_websites_edit",

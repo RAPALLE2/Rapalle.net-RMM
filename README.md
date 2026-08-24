@@ -87,6 +87,58 @@ which address it is bound to, and which settings are locked.
 
 
 
+### VPN (WireGuard) – Voraussetzungen je Betriebsart
+
+Das VPN benutzt bevorzugt **wireguard-go**, die Referenzumsetzung der
+WireGuard-Entwickler. Sie läuft vollständig im Userspace und braucht **kein
+Kernelmodul** – wichtig auf NAS-Systemen, denn WireGuard kam erst mit Linux
+5.6 in den Kernel. Fehlt eine Voraussetzung, fällt das Backend automatisch
+auf seine eingebaute Umsetzung zurück und sagt das im Protokoll sowie in der
+VPN-App. Es bricht nichts ab.
+
+**Docker (empfohlen)** – alles ist vorbereitet:
+
+```bash
+sudo modprobe tun          # einmalig, falls /dev/net/tun fehlt
+echo tun | sudo tee -a /etc/modules   # damit es einen Neustart übersteht
+docker compose up -d --build
+```
+
+Das Image bringt `wireguard-go` und `wireguard-tools` mit; `NET_ADMIN` und
+`/dev/net/tun` sind in `docker-compose.yml` bereits eingetragen.
+Auf **Synology/QNAP** ist das Modul vorhanden, nach einem Neustart aber oft
+nicht geladen – dann `modprobe tun` in den Aufgabenplaner eintragen
+(Auslöser: Hochfahren, Benutzer: root).
+
+**Linux ohne Docker:**
+
+```bash
+sudo apt install wireguard-go wireguard-tools iproute2
+sudo modprobe tun
+```
+
+Das Backend braucht `CAP_NET_ADMIN`. Als Dienst genügt dafür:
+
+```ini
+[Service]
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+```
+
+**Windows:** Der automatische Aufbau ist dort noch nicht umgesetzt. Das
+Backend läuft normal, das VPN benutzt dann die eingebaute Umsetzung. Wer
+WireGuard unter Windows produktiv braucht, richtet die ausgestellte
+`.conf` mit dem offiziellen Client als Dienst ein:
+
+```
+wireguard.exe /installtunnelservice C:\Pfad\zur\datei.conf
+```
+
+**Ohne all das** funktioniert weiterhin die **Port-Weiterleitung**
+(Knopf „🔀 Port" beim Client). Sie macht einen Dienst des Geräts über den
+Server erreichbar, läuft über die bestehende Agenten-Verbindung und braucht
+weder Treiber noch offene Ports beim Kunden – für VNC, RDP, SSH und
+Weboberflächen ist das meist der einfachere Weg.
+
 ## Support & Feedback
 
 Feel free to join the RAPALLE.net Discord community:

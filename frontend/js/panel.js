@@ -226,6 +226,8 @@ export function renderStatusPart(target, client) {
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="${t("uninstall_agent")}">🗑️ ${t("uninstall_agent")}</button>` : ""}
       ${hasClientPerm(client.id, "c_vpn") ? `
       <button data-quick="vpn" title="WireGuard-kompatible Tunnel-Datei auf diesen Client ausstellen">🔐 VPN</button>` : ""}
+      ${hasClientPerm(client.id, "c_portforward") ? `
+      <button data-quick="forward" title="Einen Dienst dieses Geräts über den Server erreichbar machen – ohne VPN und ohne offene Ports beim Kunden">🔀 Port</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✏️ ${t("edit")}</button>` : ""}
     </div>
     <div style="flex:1;min-width:200px;display:flex;flex-direction:column;justify-content:center">
@@ -1015,6 +1017,53 @@ export const OVERVIEW_SUBS = {
 // -----------------------------------------------------------------
 
 export async function handleQuickAction(action, client) {
+  if (action === "forward") {
+    // Port-Weiterleitung. Der praktischste Weg zu einem Dienst auf dem
+    // Gerät: Der Server macht ihn auf einem eigenen Port erreichbar und
+    // reicht alles über die bestehende Agenten-Verbindung durch. Kein VPN,
+    // kein Treiber, keine offenen Ports beim Kunden.
+    let presets = [];
+    try { presets = (await api.listForwards()).presets || []; } catch { }
+    const dienst = await uiChoice(`Welchen Dienst auf ${client.hostname}?`,
+      [...presets.map((p) => ({ label: `${p.name} (Port ${p.port})`, value: String(p.port) })),
+       { label: "Anderer Port …", value: "custom" }],
+      { description: "Der Dienst wird über den Server erreichbar gemacht. "
+                     + "Auf dem Gerät ändert sich nichts." });
+    if (!dienst) return;
+
+    let port = parseInt(dienst, 10);
+    if (dienst === "custom") {
+      const eingabe = await uiPrompt("Port auf dem Gerät", {
+        description: "Die Portnummer des Dienstes, z.B. 8080.", value: "8080" });
+      port = parseInt(eingabe, 10);
+      if (!port) return;
+    }
+
+    const dauer = await uiChoice("Wie lange?", [
+      { label: "1 Stunde", value: "60" },
+      { label: "4 Stunden", value: "240" },
+      { label: "24 Stunden", value: "1440" },
+      { label: "Bis zum Schliessen", value: "0" },
+    ], { description: "Danach wird der Port automatisch wieder geschlossen." });
+    if (dauer === null || dauer === undefined) return;
+
+    try {
+      const rec = await api.createForward(client.id, port,
+        { minutes: parseInt(dauer, 10), label: client.hostname });
+      const host = window.location.hostname;
+      const preset = presets.find((p) => p.port === port);
+      await uiConfirm(`✅ ${host}:${rec.listen_port}`, {
+        description: `Der Dienst (Port ${port} auf ${client.hostname}) ist jetzt `
+          + `unter ${host}:${rec.listen_port} erreichbar.\n\n`
+          + (preset ? preset.hint + "\n\n" : "")
+          + `Die Weiterleitung läuft über den Server – auf dem Gerät wurde `
+          + `nichts installiert und es musste kein Port geöffnet werden.`,
+        okText: "Verstanden" });
+    } catch (e) {
+      window.notify?.("Weiterleitung fehlgeschlagen: " + e.message, "error", 12000);
+    }
+    return;
+  }
   if (action === "vpn") {
     // Die VPN-App mit vorbelegtem Client oeffnen. Eigener Fensterschluessel
     // je Client, damit man fuer mehrere Geraete parallel Tunnel ausstellen
