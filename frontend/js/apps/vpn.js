@@ -116,8 +116,9 @@ export function renderVpn(body, win) {
 
           <label style="font-size:12px;color:var(--subtext)">Betriebsart
             <select id="vpn-mode" style="width:100%;margin-top:4px">
-              <option value="client">Peer-to-Peer – nur dieses Gerät</option>
+              <option value="peer">Peer-to-Peer – direkt zu diesem Gerät</option>
               <option value="site">Site-to-Site – ganzes Netz dahinter</option>
+              <option value="net">Virtuelles Netz – alle Geräte über das Backend</option>
             </select>
             <div id="vpn-mode-hint" style="font-size:11px;margin-top:3px"></div>
           </label>
@@ -202,7 +203,7 @@ export function renderVpn(body, win) {
     const mode = body.querySelector("#vpn-mode").value;
     const alias = info?.loopback_alias || "10.77.0.1";
     const nets = (nodeState?.subnets || []);
-    body.querySelector("#vpn-mode-hint").innerHTML = mode === "client"
+    body.querySelector("#vpn-mode-hint").innerHTML = mode === "peer"
       ? `<span style="color:var(--subtext)">Eine Punkt-zu-Punkt-Verbindung
          genau zu diesem Gerät – sonst nichts. Die Beschränkung wird auf der
          Gegenseite durchgesetzt, nicht in der Datei.<br>
@@ -260,23 +261,23 @@ export function renderVpn(body, win) {
       ${l2 && direct ? `<input type="text" id="vpn-lan" placeholder="freie Adresse im LAN, z.B. 192.168.1.99"
              style="width:100%;margin-top:6px">` : ""}
       ${!l2 ? `<button class="taskbar-btn" id="vpn-setup-l2" style="margin-top:7px">
-           🔧 L2-Brücke auf dieser Node einrichten …</button>` : ""}`;
+           🔧 WireGuard auf dieser Node einrichten …</button>` : ""}`;
 
     body.querySelector("#vpn-setup-l2")?.addEventListener("click",
-      () => setupL2(selected, st));
+      () => setupWireguard(selected, st));
   }
 
   // Einrichtung der L2-Brücke. Bewusst mit einer klaren Warnung davor:
   // Unter Windows wird dabei ein Netzwerktreiber installiert, unter Linux
   // greift der Agent auf Ethernet-Ebene zu. Beides ist ein Eingriff, den
   // niemand versehentlich auslösen soll.
-  async function setupL2(clientId, st) {
+  async function setupWireguard(clientId, st) {
     const win = /win/i.test(String(st?.platform || ""))
       || /win/i.test(String((state.clients || []).find((c) => c.id === clientId)?.platform || ""));
     const reason = (st?.caps || {}).l2_reason || "";
     const needsDriver = /npcap|treiber/i.test(reason) || win;
 
-    const ok = await uiConfirm("L2-Brücke einrichten?", {
+    const ok = await uiConfirm("WireGuard auf der Node einrichten?", {
       description:
         (needsDriver
           ? "Auf diesem Gerät wird dafür der Netzwerktreiber Npcap "
@@ -296,7 +297,7 @@ export function renderVpn(body, win) {
     window.notify?.("L2-Brücke wird eingerichtet – das kann einige Minuten "
       + "dauern …", "info", 300000, { tag: "l2:" + clientId });
     try {
-      const res = await api.nodeSetupL2(clientId, needsDriver, "");
+      const res = await api.nodeSetupWireguard(clientId, needsDriver);
       if (res.ok) {
         window.notify?.(`L2-Brücke aktiv auf ${res.interface || "dem Adapter"}`
           + (res.mac ? ` (${res.mac})` : ""), "success", 10000,

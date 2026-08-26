@@ -2020,8 +2020,10 @@ NODE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "node_module
 # dieses Geraet nicht aufgewertet hat.
 _node = {
     "active": False,
-    "vpn": None,          # node_vpn.NodeVpn
-    "l2": None,           # node_l2.L2Bridge
+    "wg": None,           # node_wg.NodeWireGuard - echtes WireGuard
+    "wg_mod": None,       # das Modul selbst (fuer probe/install)
+    "relay": None,        # node_relay.NodeRelay - Erreichbarkeit hinter NAT
+    "relay_mod": None,
     "proxy": None,        # Modul node_proxy
     "modules": {},        # Name -> Pruefsumme
     "probe": None,        # {host, port, token}
@@ -2097,12 +2099,12 @@ def _node_sync_modules(manifest: list) -> bool:
 @sio.on("node-enable", namespace="/agent")
 async def on_node_enable(payload):
     """
-    Dieses Geraet wurde zur Node aufgewertet (oder meldet sich als Node neu an).
+    Dieses Geraet wurde zur Node aufgewertet (oder meldet sich neu an).
 
-    Ablauf: Module holen -> VPN-Endpunkt starten -> Erreichbarkeit pruefen
-    -> Bericht ans Backend. Die L2-Bruecke wird hier BEWUSST NICHT
-    angefasst; sie fasst den Netzwerkadapter an und wird nur auf
-    ausdrueckliche Anweisung aus dem Dashboard eingerichtet.
+    Ablauf: Module holen -> WireGuard-Zustand pruefen -> Bericht ans
+    Backend. Installiert oder gestartet wird hier NICHTS von selbst: Das
+    passiert nur auf ausdrueckliche Anweisung aus dem Dashboard, denn
+    dabei kommt ein Netzwerktreiber ins System des Kunden.
     """
     payload = payload or {}
     if not _node_sync_modules(payload.get("modules")):
@@ -2113,104 +2115,196 @@ async def on_node_enable(payload):
     try:
         import importlib
         pkg = os.path.basename(NODE_DIR)
-        node_vpn = importlib.import_module(f"{pkg}.node_vpn")
+        node_wg = importlib.import_module(f"{pkg}.node_wg")
+        node_relay = importlib.import_module(f"{pkg}.node_relay")
         node_proxy = importlib.import_module(f"{pkg}.node_proxy")
-        importlib.reload(node_vpn)
-        importlib.reload(node_proxy)
+        for m in (node_wg, node_relay, node_proxy):
+            importlib.reload(m)
     except Exception as e:
         _print(f"[node] Module nicht ladbar: {e}")
         await _node_report(error=f"Module nicht ladbar: {e}")
         return
 
+    _node["wg_mod"] = node_wg
+    _node["relay_mod"] = node_relay
     _node["proxy"] = node_proxy
     _node["probe"] = payload.get("probe") or {}
-
-    # Laeuft schon ein Endpunkt? Dann sauber beenden, bevor ein neuer
-    # denselben Port belegen will.
-    if _node["vpn"]:
-        try:
-            _node["vpn"].shutdown()
-        except Exception:
-            pass
-
-    vpn = node_vpn.NodeVpn(payload.get("private_key") or "",
-                           int(payload.get("vpn_port") or 51821), log=_print)
-    started = await vpn.start([get_local_ip() or ""], payload.get("blocked") or [])
-    _node["vpn"] = vpn if started else None
     _node["active"] = True
 
-    if started:
-        # Bereits vorhandene L2-Bruecke wieder anhaengen (z.B. nach einem
-        # Neustart des Agenten, wenn der Treiber noch installiert ist).
-        if _node["l2"]:
-            vpn.attach_bridge(_node["l2"])
-        _node_send_probe()
+    # Laeuft schon eine Schnittstelle? Dann weiterbenutzen statt neu
+    # aufzubauen - ein Neustart wuerde bestehende Tunnel abreissen.
+    if _node.get("wg") is None:
+        _node["wg"] = node_wg.NodeWireGuard(log=_print)
 
+    # Wenn das Backend Schluessel und Port mitschickt UND WireGuard bereits
+    # installiert ist, die Schnittstelle direkt hochbringen.
+    if payload.get("private_key") and node_wg.probe().get("installed"):
+        res = _node["wg"].start(payload["private_key"],
+                                int(payload.get("wg_port") or 51822),
+                                payload.get("address") or "",
+                                payload.get("routes") or [])
+        if not res.ok:
+            _print(f"[node] WireGuard nicht gestartet: {res.reason}")
+
+    _node_start_relay(payload)
     await _node_report()
-    _print(f"[node] Node-Betrieb {'aktiv' if started else 'ohne VPN-Endpunkt'}")
+    _print("[node] Node-Betrieb aktiv")
+
+
+def _node_start_relay(payload) -> None:
+    """Erreichbarkeit herstellen: Probe zum Backend, Relay bei Bedarf."""
+    relay_mod = _node.get("relay_mod")
+    if not relay_mod:
+        return
+    probe = payload.get("probe") or _node.get("probe") or {}
+    wg = _node.get("wg")
+    try:
+        if _node.get("relay"):
+            _node["relay"].stop()
+        _node["relay"] = relay_mod.NodeRelay(
+            backend_host=probe.get("host") or "",
+            relay_port=int(probe.get("relay_port") or 51821),
+            wg_port=int(payload.get("wg_port") or (wg.listen_port if wg else 51822)),
+            token=probe.get("token") or "",
+            send_via_agent=_relay_via_agent,
+            log=_print)
+        _node["relay"].start()
+    except Exception as e:
+        _print(f"[node] Relay nicht startbar: {e}")
+
+
+def _relay_via_agent(token: str, data: bytes) -> None:
+    """Ein WireGuard-Paket ueber die Socket.IO-Verbindung zum Backend."""
+    _vpn_emit("wg-relay", {"token": token,
+                           "data": base64.b64encode(data).decode()})
+
+
+@sio.on("wg-relay", namespace="/agent")
+async def on_wg_relay_in(payload):
+    """Ein WireGuard-Paket kam ueber die Agent-Verbindung vom Backend."""
+    relay = _node.get("relay")
+    if not relay:
+        return
+    try:
+        relay.inject(base64.b64decode((payload or {}).get("data") or ""))
+    except Exception as e:
+        _print(f"[node] Relay-Paket verworfen: {e}")
+
+
+@sio.on("node-wg", namespace="/agent")
+async def on_node_wg(payload):
+    """
+    Einrichten, starten oder pruefen - immer auf ausdrueckliche Anweisung.
+
+    'install' ist der einzige Weg, auf dem ein Treiber ins System kommt.
+    Ohne diesen Aufruf passiert das nie.
+    """
+    payload = payload or {}
+    request_id = payload.get("requestId")
+    action = payload.get("action") or "probe"
+
+    def reply(data: dict):
+        data["requestId"] = request_id
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("node-wg-result", data, namespace="/agent"), _AGENT_LOOP)
+
+    node_wg = _node.get("wg_mod")
+    if not node_wg:
+        reply({"ok": False, "reason": "Node-Module sind nicht geladen"})
+        return
+
+    def run():
+        try:
+            if action == "probe":
+                reply({"ok": True, "reason": "geprueft", **node_wg.probe()})
+            elif action == "install":
+                _print("[node] Installation wurde im Dashboard bestaetigt")
+                reply(node_wg.install(_node_driver_download, log=_print).as_dict())
+            elif action == "start":
+                if _node.get("wg") is None:
+                    _node["wg"] = node_wg.NodeWireGuard(log=_print)
+                res = _node["wg"].start(payload.get("private_key") or "",
+                                        int(payload.get("wg_port") or 51822),
+                                        payload.get("address") or "",
+                                        payload.get("routes") or [])
+                if res.ok:
+                    _node_start_relay(payload)
+                reply(res.as_dict())
+            elif action == "stop":
+                if _node.get("wg"):
+                    _node["wg"].stop()
+                if _node.get("relay"):
+                    _node["relay"].stop()
+                reply({"ok": True, "reason": "beendet"})
+            else:
+                reply({"ok": False, "reason": f"Unbekannte Aktion: {action}"})
+        except Exception as e:
+            reply({"ok": False, "reason": f"{type(e).__name__}: {e}"})
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+@sio.on("node-wg-peer", namespace="/agent")
+async def on_node_wg_peer(payload):
+    """Das Backend traegt eine Gegenstelle ein oder entfernt sie."""
+    payload = payload or {}
+    wg = _node.get("wg")
+    if not wg or not wg.up:
+        _print("[node] Gegenstelle abgelehnt - WireGuard laeuft hier nicht")
+        return
+    try:
+        if payload.get("remove"):
+            wg.remove_peer(payload.get("public_key") or "")
+        else:
+            wg.add_peer(payload.get("public_key") or "",
+                        payload.get("preshared_key"),
+                        payload.get("allowed_ips") or "")
+            routes = payload.get("routes") or []
+            if payload.get("mode") == "site" and routes:
+                # Site-to-Site: Der Verkehr bekommt die Adresse dieser Node
+                # als Absender. Eine echte Adresse im fremden Netz waere
+                # aufwendiger (ARP auf Ethernet-Ebene) und ist bewusst nicht
+                # umgesetzt.
+                wg._enable_masquerade([r for r in routes if "/" in r])
+    except Exception as e:
+        _print(f"[node] Gegenstelle nicht uebernommen: {e}")
+    await _node_report()
+
+
+@sio.on("node-net-packet", namespace="/agent")
+async def on_node_net_packet(payload):
+    """
+    Ein Paket aus dem virtuellen Netz an dieses Geraet.
+
+    Im virtuellen Netz ist das Backend die Gegenstelle; das Geraet selbst
+    braucht dafuer kein WireGuard. Das Paket wird hier lokal zugestellt.
+    """
+    relay = _node.get("relay")
+    if relay:
+        try:
+            relay.deliver_local(base64.b64decode((payload or {}).get("data") or ""))
+        except Exception as e:
+            _print(f"[node] Netzpaket verworfen: {e}")
 
 
 @sio.on("node-disable", namespace="/agent")
 async def on_node_disable(payload=None):
     """Zurueckgestuft: alles beenden und die Zusatzmodule entfernen."""
-    if _node["vpn"]:
-        try:
-            _node["vpn"].shutdown()
-        except Exception:
-            pass
-    if _node["l2"]:
-        try:
-            _node["l2"].stop()
-        except Exception:
-            pass
-    _node.update({"active": False, "vpn": None, "l2": None, "proxy": None,
-                  "modules": {}, "probe": None})
+    for key, stopper in (("wg", "stop"), ("relay", "stop")):
+        obj = _node.get(key)
+        if obj:
+            try:
+                getattr(obj, stopper)()
+            except Exception:
+                pass
+    _node.update({"active": False, "wg": None, "relay": None, "proxy": None,
+                  "wg_mod": None, "relay_mod": None, "modules": {},
+                  "probe": None})
     try:
         shutil.rmtree(NODE_DIR, ignore_errors=True)
         _print("[node] Zusatzmodule entfernt - wieder ein gewoehnlicher Client")
     except Exception as e:
         _print(f"[node] Aufraeumen fehlgeschlagen: {e}")
-
-
-def _node_send_probe() -> None:
-    """
-    Prueft, ob diese Node von aussen direkt erreichbar ist.
-
-    Das Paket geht aus DEMSELBEN UDP-Socket, den spaeter auch der Tunnel
-    benutzt. Nur so beobachtet das Backend die Adresse, die das NAT dieser
-    Node wirklich fuer den Tunnel vergeben hat.
-    """
-    probe = _node.get("probe") or {}
-    vpn = _node.get("vpn")
-    if not vpn or not probe.get("host"):
-        return
-    try:
-        vpn.send_probe(probe["host"], int(probe.get("port") or 51820),
-                       probe.get("token") or "")
-    except Exception as e:
-        _print(f"[node] Probe fehlgeschlagen: {e}")
-
-
-@sio.on("node-tunnel-add", namespace="/agent")
-async def on_node_tunnel_add(payload):
-    """Das Backend uebergibt einen Tunnel, der HIER enden soll."""
-    vpn = _node.get("vpn")
-    if not vpn:
-        _print("[node] Tunnel abgelehnt - kein VPN-Endpunkt aktiv")
-        return
-    try:
-        vpn.add_tunnel(payload or {})
-    except Exception as e:
-        _print(f"[node] Tunnel nicht aufgenommen: {e}")
-    await _node_report()
-
-
-@sio.on("node-tunnel-remove", namespace="/agent")
-async def on_node_tunnel_remove(payload):
-    vpn = _node.get("vpn")
-    if vpn:
-        vpn.remove_tunnel((payload or {}).get("id") or "")
-    await _node_report()
 
 
 @sio.on("node-proxy", namespace="/agent")
@@ -2234,100 +2328,34 @@ async def on_node_proxy(payload):
     proxy.fetch_async(payload, done, log=_print)
 
 
-@sio.on("node-l2-setup", namespace="/agent")
-async def on_node_l2_setup(payload):
-    """
-    Richtet die L2-Bruecke ein - der einzige Weg, auf dem ein Treiber
-    installiert wird. Ohne diesen Aufruf passiert das nie.
-    """
-    payload = payload or {}
-    request_id = payload.get("requestId")
-
-    def reply(result: dict):
-        result["requestId"] = request_id
-        asyncio.run_coroutine_threadsafe(
-            sio.emit("node-l2-result", result, namespace="/agent"), _AGENT_LOOP)
-
-    def run():
-        try:
-            import importlib
-            node_l2 = importlib.import_module(
-                f"{os.path.basename(NODE_DIR)}.node_l2")
-        except Exception as e:
-            reply({"ok": False, "reason": f"L2-Modul nicht ladbar: {e}"})
-            return
-
-        state = node_l2.probe()
-        if not state.ok and state.needs_driver:
-            if not payload.get("install_driver"):
-                reply({"ok": False, "reason": state.reason,
-                       "needs_driver": True})
-                return
-            _print("[node] Treiberinstallation wurde im Dashboard bestaetigt")
-            installed = node_l2.install_driver(_node_driver_download, log=_print)
-            if not installed.ok:
-                # Ausdruecklich KEIN harter Fehler: Ohne Bruecke laufen die
-                # Tunnel im NAT-Betrieb weiter.
-                reply({"ok": False, "reason": installed.reason,
-                       "needs_driver": installed.needs_driver,
-                       "fallback": "NAT"})
-                return
-
-        # Eine bereits laufende Bruecke zuerst sauber beenden - sonst
-        # haengen zwei am selben Adapter und antworten beide auf ARP.
-        if _node.get("l2"):
-            try:
-                _node["l2"].stop()
-            except Exception:
-                pass
-
-        bridge = node_l2.L2Bridge(payload.get("interface") or "", log=_print)
-        result = bridge.start()
-        if result.ok:
-            _node["l2"] = bridge
-            # attach_bridge() statt einfach 'vpn.l2 = bridge': Nur so
-            # bekommt die Bruecke den Rueckweg in den Tunnel. Ohne diesen
-            # Draht faengt sie Rahmen ein, die nirgends ankommen.
-            if _node.get("vpn"):
-                _node["vpn"].attach_bridge(bridge)
-        reply({"ok": result.ok, "reason": result.reason,
-               "fallback": None if result.ok else "NAT",
-               "interface": getattr(bridge, "interface", ""),
-               "mac": bridge.stats().get("mac") if result.ok else ""})
-
-    threading.Thread(target=run, daemon=True).start()
-
-
 def _node_driver_download(url: str) -> str:
     """Laedt eine Installationsdatei herunter und gibt den lokalen Pfad zurueck."""
     import urllib.request
     target = os.path.join(tempfile.gettempdir(), os.path.basename(url))
-    with urllib.request.urlopen(url, timeout=300) as resp, \
+    with urllib.request.urlopen(url, timeout=600) as resp, \
             open(target, "wb") as f:
         shutil.copyfileobj(resp, f)
     return target
 
 
 async def _node_report(error: str = "") -> None:
-    """
-    Meldet dem Backend, wie es dieser Node geht.
-
-    Enthaelt auch die Zahlen der direkt endenden Tunnel - die kann NUR die
-    Node liefern, weil deren Daten am Backend vorbeilaufen.
-    """
-    vpn = _node.get("vpn")
-    l2 = _node.get("l2")
+    """Meldet dem Backend, wie es dieser Node geht."""
+    wg = _node.get("wg")
+    relay = _node.get("relay")
+    node_wg = _node.get("wg_mod")
     try:
-        await sio.emit("node-report", {
+        status = wg.status() if wg else {}
+        await sio.emit("node-wg-state", {
             "id": DEVICE_ID,
             "modules": _node.get("modules") or {},
-            "vpn_running": bool(vpn),
-            "proxy": bool(_node.get("proxy")),
-            "l2": bool(l2 and getattr(l2, "available", False)),
-            "l2_reason": getattr(l2, "reason", "") if l2 else "nicht eingerichtet",
-            "l2_stats": l2.stats() if l2 else {},
+            "installed": bool(node_wg and node_wg.probe().get("installed")),
+            "admin": bool(node_wg and node_wg.probe().get("admin")),
+            "wg": status,
+            "peers": status.get("peers", []),
+            "public_endpoint": relay.public_endpoint if relay else "",
+            "relay": relay.stats() if relay else {},
             "local_ips": [get_local_ip() or ""],
-            "tunnels": vpn.stats() if vpn else [],
+            "subnets": get_local_subnets(),
             "error": error,
         }, namespace="/agent")
     except Exception as e:

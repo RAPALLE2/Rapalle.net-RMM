@@ -3189,6 +3189,10 @@ DEFAULT_SETTINGS = {
     "vpn_mtu": "1380",
     # Namenszone des virtuellen Netzes: <hostname>.rmm
     "vpn_zone": "rmm",
+    # UDP-Port des Relays (Erreichbarkeit hinter NAT).
+    "vpn_relay_port": "51821",
+    # Port, auf dem Nodes ihr eigenes WireGuard aufmachen.
+    "vpn_node_port": "51822",
     # DNS im Tunnel auf das Backend zeigen lassen (Namensaufloesung im
     # virtuellen Netz). 0 = der Client behaelt seinen eigenen DNS.
     "vpn_use_internal_dns": "1",

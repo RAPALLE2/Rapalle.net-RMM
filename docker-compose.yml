@@ -59,6 +59,10 @@ services:
       # Backend abgewickelt - es braucht weder das Kernel-Modul noch
       # NET_ADMIN. Ohne diese Freigabe erreicht kein VPN-Client den Server.
       - "${VPN_PORT:-51820}:${VPN_PORT:-51820}/udp"
+      # Relay: Bringt Benutzer und Node zusammen, wenn beide hinter NAT
+      # sitzen. Ohne diesen Port laeuft alles ueber die Agent-Verbindung -
+      # das funktioniert auch, ist aber deutlich langsamer.
+      - "${VPN_RELAY_PORT:-51821}:${VPN_RELAY_PORT:-51821}/udp"
 
     volumes:
       # Der komplette Projektcode liegt als Bind-Mount im Container.

@@ -107,35 +107,53 @@ async def node_demote(client_id: str, user: dict = Depends(get_current_user)):
     return result
 
 
-class L2Body(BaseModel):
-    # Ohne ausdrückliche Zustimmung wird kein Treiber angefasst. Das Feld
-    # ist deshalb Pflicht und hat bewusst keinen Standardwert 'True'.
-    install_driver: bool = False
-    interface: str = ""
+class WgBody(BaseModel):
+    # Ohne ausdrueckliche Zustimmung wird nichts installiert. Das Feld hat
+    # deshalb bewusst KEINEN Standardwert True.
+    install: bool = False
 
 
-@router.post("/api/nodes/{client_id}/l2")
-async def node_l2(client_id: str, body: L2Body,
-                  user: dict = Depends(get_current_user)):
+@router.post("/api/nodes/{client_id}/wireguard")
+async def node_wireguard(client_id: str, body: WgBody,
+                         user: dict = Depends(get_current_user)):
     """
-    Richtet die L2-Brücke ein (echte LAN-Adressen für VPN-Benutzer).
+    Richtet WireGuard auf der Node ein.
 
-    Unter Windows wird dafür ein Netzwerktreiber (Npcap) installiert, unter
-    Linux werden Root-Rechte gebraucht. Schlägt beides fehl, ist das kein
-    Fehler: Die Tunnel laufen dann weiter im NAT-Betrieb. Die Antwort sagt
-    ausdrücklich, was passiert ist.
+    Damit enden Tunnel direkt auf dem Geraet statt im Backend - schneller,
+    und die Nutzdaten laufen am Server vorbei. Unter Windows wird dabei der
+    offizielle WireGuard-Dienst installiert (Treiber, Administratorrechte);
+    unter Linux wird NICHT automatisch installiert, sondern gesagt, was zu
+    tun ist.
     """
     require_perm(user, "manage_agent", client_id)
     if not db.is_client_node(client_id):
-        raise HTTPException(400, "Nur Nodes können eine L2-Brücke betreiben")
-    from app.sockets import request_node_l2
+        raise HTTPException(400, "Nur Nodes koennen WireGuard betreiben")
+
+    from app.sockets import request_node_wg
+    from app import vpn, vpn_net
+
     try:
-        result = await request_node_l2(client_id, body.install_driver,
-                                       body.interface)
+        if body.install:
+            result = await request_node_wg(client_id, "install")
+            if not result.get("ok"):
+                return result
+        priv, _pub = vpn.node_keys(client_id)
+        result = await request_node_wg(client_id, "start", {
+            "private_key": priv,
+            "wg_port": vpn.node_port(),
+            "address": f"{vpn_net.client_address(client_id)}/32",
+            "probe": {
+                "host": vpn.endpoint_host(),
+                "relay_port": __import__("app.wg_relay", fromlist=["x"]).relay_port(),
+                "token": "",
+            },
+        })
     except RuntimeError as e:
         raise HTTPException(503, str(e))
-    db.add_audit_entry(user["username"], "node.l2_setup", target=client_id,
-                       details=f"Treiber={body.install_driver}, "
+
+    db.add_audit_entry(user["username"], "node.wireguard",
+                       target=client_id,
+                       details=f"install={body.install}, "
                                f"Ergebnis={result.get('reason')}")
     await _broadcast(client_id)
     return result

@@ -133,7 +133,7 @@ const SLOW_SUFFIXES = {
   // Dateisystem eines Agenten: haengt an dessen Antwortzeit.
   "/fs": 120000,
   // Treiberinstallation und Modul-Verteilung auf einer Node.
-  "/l2": 600000,
+  "/wireguard": 600000,
   "/promote": 300000,
   "/demote": 300000,
 };
@@ -629,10 +629,11 @@ export const api = {
     request(`/api/nodes/${encodeURIComponent(clientId)}/promote`, { method: "POST" }),
   nodeDemote: (clientId) =>
     request(`/api/nodes/${encodeURIComponent(clientId)}/demote`, { method: "POST" }),
-  nodeSetupL2: (clientId, installDriver, iface) =>
-    request(`/api/nodes/${encodeURIComponent(clientId)}/l2`, {
-      method: "POST",
-      body: JSON.stringify({ install_driver: !!installDriver, interface: iface || "" }),
+  // Richtet echtes WireGuard auf der Node ein. Damit enden Tunnel dort
+  // statt im Backend - die Nutzdaten laufen am Server vorbei.
+  nodeSetupWireguard: (clientId, install) =>
+    request(`/api/nodes/${encodeURIComponent(clientId)}/wireguard`, {
+      method: "POST", body: JSON.stringify({ install: !!install }),
     }),
   nodeProbe: (clientId) =>
     request(`/api/nodes/${encodeURIComponent(clientId)}/probe`, { method: "POST" }),
@@ -662,18 +663,15 @@ export const api = {
     { method: "DELETE" }),
 
   vpnNetwork: () => request("/api/vpn/network"),
-  vpnSelftest: () => request("/api/vpn/selftest", { timeoutMs: 30000 }),
   vpnTunnels: (clientId) => request("/api/vpn/tunnels"
     + (clientId ? `?client_id=${encodeURIComponent(clientId)}` : "")),
   vpnCreateTunnel: (clientId, minutes, name, routes, opts = {}) => request("/api/vpn/tunnels", {
     method: "POST",
     body: JSON.stringify({
       client_id: clientId, minutes, name: name || "", routes: routes || "",
-      // 'client' = nur das Geraet selbst, 'site' = ganzes Netz dahinter
-      mode: opts.mode || "client",
-      prefer_direct: opts.preferDirect !== false,
-      want_l2: !!opts.wantL2,
-      lan_address: opts.lanAddress || "",
+      // 'peer' = nur dieses Geraet, 'site' = ganzes Netz dahinter,
+      // 'net' = virtuelles Netz ueber das Backend
+      mode: opts.mode || "peer",
     }),
   }),
   vpnRevokeTunnel: (tunnelId) =>

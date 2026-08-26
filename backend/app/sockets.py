@@ -1216,61 +1216,80 @@ async def _handle_heartbeat(client_id, payload):
 
 
 # ------------------------------------------------------------------
-# VPN (WireGuard-kompatibel): Rückweg vom Agenten
+# VPN: Meldungen der Nodes
 # ------------------------------------------------------------------
-# Der Agent hält für den Tunnel ganz normale Sockets offen und meldet hier,
-# was darüber hereinkommt. Die Übersetzung zurück in IP-Pakete macht
-# app/vpn_stack.py; diese Handler sind bewusst nur eine dünne Weiterleitung,
-# damit im Socket-Modul keine Protokoll-Logik liegt.
+# Seit die Tunnel auf den Nodes enden (echtes WireGuard) trägt das Backend
+# keine Nutzdaten mehr. Was hier ankommt, sind nur noch Zustandsmeldungen
+# und - falls die Node hinter symmetrischem NAT sitzt - die Pakete des
+# Relays. Die Handler sind bewusst dünn; die Logik liegt in vpn.py.
 
-def _vpn_dispatch(fn_name: str, payload: dict) -> None:
-    try:
-        from app import vpn as _vpn
-        getattr(_vpn, fn_name)(payload or {})
-    except Exception as e:
-        print(f"[vpn] {fn_name} fehlgeschlagen: {e!r}")
+@sio.on("node-wg-state", namespace="/agent")
+async def on_node_wg_state(sid, payload):
+    """Eine Node meldet ihren WireGuard-Zustand und ihre Erreichbarkeit."""
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id:
+        return
+    from app import vpn
+    vpn.on_node_state(client_id, payload or {})
 
+
+@sio.on("wg-relay", namespace="/agent")
+async def on_wg_relay(sid, payload):
+    """Ein WireGuard-Paket kommt über die Agent-Verbindung herein."""
+    from app import vpn
+    vpn.on_relay_packet(payload or {})
+
+
+@sio.on("node-net-packet", namespace="/agent")
+async def on_node_net_packet(sid, payload):
+    """Ein Paket aus dem virtuellen Netz kommt von einem Gerät zurück."""
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id:
+        return
+    from app import vpn
+    vpn.on_net_packet(client_id, payload or {})
+
+
+# --- Port-Weiterleitung -------------------------------------------
+# Sie benutzt dieselben Ereignisse wie frueher das VPN (vpn-open/-data/
+# -close). Der Agent kennt sie bereits; nur die Gegenstelle im Backend ist
+# jetzt eine andere - nicht mehr der (entfernte) Userspace-Stack, sondern
+# unmittelbar die Weiterleitung.
 
 @sio.on("vpn-open-result", namespace="/agent")
-async def on_vpn_open_result(sid, payload):
-    """Der Agent meldet, ob die Verbindung zum Ziel zustande kam."""
-    _vpn_dispatch("on_agent_open_result", payload)
+async def on_forward_open_result(sid, payload):
+    from app import portforward
+    portforward.on_open_result(payload or {})
 
 
 @sio.on("vpn-data", namespace="/agent")
-async def on_vpn_data(sid, payload):
-    """Daten, die der Zielrechner an den Agenten geschickt hat."""
-    _vpn_dispatch("on_agent_data", payload)
+async def on_forward_data(sid, payload):
+    from app import portforward
+    portforward.on_data(payload or {})
 
 
 @sio.on("vpn-close", namespace="/agent")
-async def on_vpn_close(sid, payload):
-    """Die Gegenstelle im Netz des Clients hat die Verbindung beendet."""
-    _vpn_dispatch("on_agent_close", payload)
+async def on_forward_close(sid, payload):
+    from app import portforward
+    portforward.on_close(payload or {})
 
 
-@sio.on("vpn-udp", namespace="/agent")
-async def on_vpn_udp(sid, payload):
-    """Antwort-Datagramm einer UDP-Zuordnung."""
-    _vpn_dispatch("on_agent_udp", payload)
+@sio.on("node-wg-result", namespace="/agent")
+async def on_node_wg_result(sid, payload):
+    """Antwort auf eine Einrichtungs-Anfrage (Installation, Start)."""
+    future = state.pending_requests.get((payload or {}).get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
 
 
-@sio.on("vpn-ping-result", namespace="/agent")
-async def on_vpn_ping_result(sid, payload):
-    """Ergebnis einer Erreichbarkeitsprüfung (ICMP-Echo durch den Tunnel)."""
-    _vpn_dispatch("on_agent_ping", payload)
+async def request_node_wg(client_id: str, action: str, spec: dict | None = None,
+                          timeout_seconds: float = 600.0) -> dict:
+    """
+    Lässt eine Node WireGuard einrichten, starten oder prüfen.
 
-
-# ------------------------------------------------------------------
-# NODE-STUFE: Anfragen ans Gerät und Berichte zurück
-# ------------------------------------------------------------------
-# Eine Node ist ein aufgewerteter Client: eigener VPN-Endpunkt, Reverse
-# Proxy, optional L2-Brücke. Die Anfragen hier folgen demselben
-# Frage/Antwort-Muster wie request_exec() weiter oben.
-
-async def request_node_proxy(client_id: str, spec: dict,
-                             timeout_seconds: float = 40.0) -> dict:
-    """Lässt eine Node eine Webseite aus ihrem Netz holen."""
+    Das Zeitlimit ist grosszügig: Unter Windows wird dabei der offizielle
+    WireGuard-Installer ausgeführt, und der braucht seine Zeit.
+    """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
         raise RuntimeError("Node ist offline")
@@ -1278,100 +1297,14 @@ async def request_node_proxy(client_id: str, spec: dict,
     future: asyncio.Future = asyncio.get_event_loop().create_future()
     state.pending_requests[request_id] = future
     try:
-        await sio.emit("node-proxy", {"requestId": request_id, **spec},
+        await sio.emit("node-wg", {"requestId": request_id, "action": action,
+                                   **(spec or {})},
                        to=sid, namespace="/agent")
         return await asyncio.wait_for(future, timeout=timeout_seconds)
     except asyncio.TimeoutError:
         raise RuntimeError("Die Node hat nicht rechtzeitig geantwortet")
     finally:
         state.pending_requests.pop(request_id, None)
-
-
-async def request_node_l2(client_id: str, install_driver: bool,
-                          interface: str = "",
-                          timeout_seconds: float = 360.0) -> dict:
-    """
-    Richtet die L2-Brücke ein. Das Zeitlimit ist grosszügig, weil unter
-    Windows dabei ein Treiber installiert wird - das dauert.
-    """
-    sid = state.client_id_to_sid.get(client_id)
-    if not sid:
-        raise RuntimeError("Node ist offline")
-    request_id = _new_request_id()
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
-    state.pending_requests[request_id] = future
-    try:
-        await sio.emit("node-l2-setup", {
-            "requestId": request_id, "install_driver": bool(install_driver),
-            "interface": interface,
-        }, to=sid, namespace="/agent")
-        return await asyncio.wait_for(future, timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        raise RuntimeError("Die Node hat die Einrichtung nicht abgeschlossen")
-    finally:
-        state.pending_requests.pop(request_id, None)
-
-
-@sio.on("node-proxy-result", namespace="/agent")
-async def on_node_proxy_result(sid, payload):
-    future = state.pending_requests.get(payload.get("requestId"))
-    if future and not future.done():
-        future.set_result(payload)
-
-
-@sio.on("node-l2-result", namespace="/agent")
-async def on_node_l2_result(sid, payload):
-    future = state.pending_requests.get(payload.get("requestId"))
-    if future and not future.done():
-        future.set_result(payload)
-
-
-@sio.on("node-report", namespace="/agent")
-async def on_node_report(sid, payload):
-    """
-    Selbstauskunft einer Node: welche Module laufen, ob die L2-Brücke steht,
-    und die Zahlen der direkt endenden Tunnel.
-
-    Letztere kann nur die Node liefern - bei einem direkten Tunnel laufen
-    die Daten am Backend vorbei. Genau das ist gewollt.
-    """
-    client_id = state.sid_to_client_id.get(sid)
-    if not client_id:
-        return
-    try:
-        from app import node_manager, vpn
-        node_manager.update_caps(client_id, payload or {})
-        vpn.apply_node_stats(client_id, (payload or {}).get("tunnels") or [])
-        await sio.emit("node-changed", {"client_id": client_id},
-                       namespace="/dashboard")
-    except Exception as e:
-        print(f"[node] Bericht von {client_id} nicht verarbeitet: {e!r}")
-
-
-# ------------------------------------------------------------------
-# WARTUNGSMODUS: Logzeilen der Agenten einsammeln
-# ------------------------------------------------------------------
-
-@sio.on("diag-log", namespace="/agent")
-async def on_diag_log(sid, payload):
-    """
-    Ein Agent liefert seine gesammelten Logzeilen ab.
-
-    Sie landen in derselben Zeitachse wie die Backend-Ausgabe. Genau
-    darum geht es: Bei einem Absturz kurz nach dem Verbindungsaufbau ist
-    die entscheidende Frage, was auf BEIDEN Seiten in derselben Sekunde
-    passiert ist.
-    """
-    client_id = state.sid_to_client_id.get(sid)
-    if not client_id:
-        return
-    try:
-        from app import diagnostics
-        client = db.get_client(client_id) or {}
-        diagnostics.agent_log(client_id, client.get("hostname") or "",
-                              (payload or {}).get("lines") or [])
-    except Exception as e:
-        print(f"[diag] Agenten-Log von {client_id} verworfen: {e!r}")
 
 
 @sio.on("exec-result", namespace="/agent")

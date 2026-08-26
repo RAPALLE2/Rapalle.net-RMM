@@ -251,9 +251,28 @@ def _resolve(name: str) -> str | None:
 def dns_reply_packet(src_ip: str, src_port: int, dst_ip: str, dst_port: int,
                      payload: bytes) -> bytes:
     """Baut das fertige IP/UDP-Paket fuer eine DNS-Antwort."""
-    from app.vpn_stack import _ip4, _checksum, _pseudo, PROTO_UDP, ip_raw
+    # IP- und UDP-Kopf von Hand. Frueher kam das aus vpn_stack.py; seit die
+    # Krypto und der Userspace-Stack draussen sind, sind es genau diese
+    # zwanzig Zeilen, die noch gebraucht werden.
+    def checksum(data: bytes) -> int:
+        if len(data) % 2:
+            data += b"\x00"
+        total = 0
+        for i in range(0, len(data), 2):
+            total += (data[i] << 8) | data[i + 1]
+        while total >> 16:
+            total = (total & 0xFFFF) + (total >> 16)
+        return (~total) & 0xFFFF
+
+    def raw(text: str) -> bytes:
+        return bytes(int(p) for p in text.split("."))
+
+    s, d = raw(src_ip), raw(dst_ip)
     udp = struct.pack(">HHHH", src_port, dst_port, 8 + len(payload), 0) + payload
-    s, d = ip_raw(src_ip), ip_raw(dst_ip)
-    chk = _checksum(_pseudo(s, d, PROTO_UDP, len(udp)) + udp)
-    udp = udp[:6] + struct.pack(">H", chk or 0xFFFF) + udp[8:]
-    return _ip4(s, d, PROTO_UDP, udp)
+    pseudo = s + d + struct.pack(">BBH", 0, 17, len(udp))
+    udp = udp[:6] + struct.pack(">H", checksum(pseudo + udp) or 0xFFFF) + udp[8:]
+
+    total = 20 + len(udp)
+    head = struct.pack(">BBHHHBBH4s4s", 0x45, 0, total, 0, 0x4000, 64, 17, 0, s, d)
+    head = head[:10] + struct.pack(">H", checksum(head)) + head[12:]
+    return head + udp

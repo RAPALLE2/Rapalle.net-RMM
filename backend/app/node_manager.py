@@ -36,11 +36,9 @@ MODULE_DIR = Path(__file__).resolve().parents[1] / "agent_modules"
 
 # Welche Module eine Node bekommt. Reihenfolge egal - die Node laedt alle.
 NODE_MODULES = [
-    "node_wireguard.py",   # WireGuard-Protokoll (identisch zum Backend)
-    "node_ipstack.py",     # IPv4/TCP/UDP-Stack (identisch zum Backend)
-    "node_vpn.py",         # Tunnel-Endpunkt auf der Node
-    "node_proxy.py",       # Reverse Proxy
-    "node_l2.py",          # L2-Bruecke (optional, faellt auf NAT zurueck)
+    "node_wg.py",      # echtes WireGuard auf der Node (Tunnel enden dort)
+    "node_relay.py",   # Erreichbarkeit hinter NAT: Probe + Relay
+    "node_proxy.py",   # Reverse Proxy fuer Webseiten im Netz der Node
 ]
 
 _hash_cache: dict[str, tuple[float, str]] = {}
@@ -155,16 +153,16 @@ def node_keys(client_id: str) -> tuple[str, str]:
     alle Nodes waere bequemer und genau deshalb falsch: Wer eine Node
     uebernimmt, haette sonst die Schluessel aller anderen.
     """
-    from app import wireguard
+    from app import wg_keys
     caps = _caps(client_id)
     priv = caps.get("private_key")
     if not priv:
-        priv, pub = wireguard.generate_keypair()
+        priv, pub = wg_keys.generate()
         caps["private_key"] = priv
         caps["public_key"] = pub
         db.set_node_caps(client_id, json.dumps(caps))
         return priv, pub
-    return priv, caps.get("public_key") or wireguard.public_from_private(priv)
+    return priv, caps.get("public_key") or wg_keys.public_from_private(priv)
 
 
 def node_udp_port() -> int:

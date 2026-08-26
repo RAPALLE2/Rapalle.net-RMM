@@ -33,34 +33,18 @@ router = APIRouter()
 class TunnelBody(BaseModel):
     client_id: str
     minutes: int = 60          # 0 = unbegrenzt (setzt das Unbegrenzt-Recht voraus)
+    # 'peer' (nur dieses Geraet), 'site' (ganzes Netz), 'net' (virtuelles Netz)
+    mode: str = "peer"
     name: str = ""
-    routes: str = ""           # zusätzliche Netze, kommagetrennt
+    routes: str = ""           # zusaetzliche Netze, kommagetrennt
 
 
 @router.get("/api/vpn/info")
 def vpn_info(user: dict = Depends(get_current_user)):
-    """Grunddaten für die Oberfläche: läuft der Endpunkt, wie heisst er?"""
-    _, server_pub = vpn.server_keys()
-    return {
-        "enabled": vpn.vpn_enabled(),
-        "running": vpn.rt.started,
-        "port": vpn.vpn_port(),
-        "subnet": vpn.vpn_subnet(),
-        # Die Adresse, unter der Dienste auf dem Geraet selbst erreichbar
-        # sind. 'localhost' funktioniert dafuer NICHT - das zeigt auf den
-        # Rechner des Benutzers und geht nie durch den Tunnel.
-        "loopback_alias": vpn.loopback_alias(),
-        "server_public_key": server_pub,
-        "endpoint_host": vpn.endpoint_host(),
-        "may_unlimited": user_has_permission(user, "vpn_unlimited"),
-        # Sagt, an welcher der drei moeglichen Stellen es haengt.
-        "check": vpn.endpoint_check(),
-        # Welche Umsetzung laeuft: 'wireguard-go' (Referenz) oder 'python'
-        # (eigene Rueckfallebene). Das gehoert sichtbar - die beiden
-        # verhalten sich nicht gleich zuverlaessig.
-        "engine": vpn.rt.engine,
-        "engine_check": _engine_info(),
-    }
+    """Zustand des VPN: Betriebsarten, virtuelles Netz, Relay, Nodes."""
+    data = vpn.status()
+    data["may_unlimited"] = user_has_permission(user, "vpn_unlimited")
+    return data
 
 
 @router.get("/api/vpn/tunnels")
@@ -90,10 +74,11 @@ async def vpn_create(body: TunnelBody, user: dict = Depends(get_current_user)):
     require_perm(user, "c_vpn", body.client_id)
     if not vpn.vpn_enabled():
         raise HTTPException(400, "VPN ist in den Einstellungen deaktiviert")
-    if not vpn.rt.started:
+    if body.mode == vpn.MODE_NET and not vpn.rt.wg:
         raise HTTPException(
-            503, "Der VPN-Endpunkt läuft nicht – ist der UDP-Port "
-                 f"{vpn.vpn_port()} im Container freigegeben?")
+            503, "Das virtuelle Netz läuft nicht. Es braucht wireguard-go "
+                 "und /dev/net/tun im Container. Peer-to-Peer und "
+                 "Site-to-Site funktionieren davon unabhängig.")
 
     # Ohne bekannte Server-Adresse waere die .conf UNBRAUCHBAR: In der Zeile
     # 'Endpoint' stuende nur ein Platzhalter, und der WireGuard-Client haette
@@ -101,7 +86,7 @@ async def vpn_create(body: TunnelBody, user: dict = Depends(get_current_user)):
     # ausgestellt - sie sah vollstaendig aus, es kam nur nie ein Handschlag
     # zustande, und im Protokoll stand dazu nichts. Das ist genau die Art
     # Fehler, an der man stundenlang sucht.
-    if not vpn.endpoint_host():
+    if body.mode == vpn.MODE_NET and not vpn.endpoint_host():
         raise HTTPException(
             400,
             "Die Adresse dieses Servers ist nicht hinterlegt – ohne sie "
@@ -122,8 +107,8 @@ async def vpn_create(body: TunnelBody, user: dict = Depends(get_current_user)):
     try:
         record = vpn.create_tunnel(
             client_id=body.client_id, username=user["username"],
-            minutes=minutes, name=body.name.strip(), routes=body.routes,
-        )
+            minutes=minutes, mode=body.mode, name=body.name.strip(),
+            routes=body.routes)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except RuntimeError as e:
@@ -179,14 +164,6 @@ def _tunnel_filename(record: dict) -> str:
     return f"{full}.conf"
 
 
-def _engine_info() -> dict:
-    from app import wg_userspace
-    req = wg_userspace.requirements()
-    req["hint"] = (wg_userspace.windows_hint() if req["platform"].lower()
-                   .startswith("win") else "")
-    return req
-
-
 @router.get("/api/vpn/network")
 def vpn_network(user: dict = Depends(get_current_user)):
     """
@@ -209,31 +186,6 @@ def vpn_network(user: dict = Depends(get_current_user)):
         "clients": sum(1 for m in visible if m["kind"] == "client"),
         "users": sum(1 for m in visible if m["kind"] == "user"),
     }
-
-
-@router.get("/api/vpn/selftest")
-def vpn_selftest(user: dict = Depends(get_current_user)):
-    """
-    Prüft die WireGuard-Umsetzung gegen sich selbst und spielt – falls
-    vorhanden – das letzte gescheiterte Handschlag-Paket Schritt für
-    Schritt durch.
-
-    Das beantwortet die Frage, die man sonst nur durch Codelesen klären
-    kann: Liegt es am Server oder am Client? Der Selbsttest braucht dafür
-    keinen Client.
-    """
-    if not vpn.rt.server:
-        raise HTTPException(503, "Der VPN-Endpunkt läuft nicht.")
-    result = vpn.rt.server.selftest()
-    captured = getattr(vpn.rt.server, "captured", None)
-    if captured:
-        result["gescheitertes_paket"] = {
-            "von": captured.get("from"),
-            "schritt": captured.get("step"),
-            "hex": captured.get("hex"),
-            "schritte": vpn.rt.server.replay(captured.get("hex", "")),
-        }
-    return result
 
 
 @router.post("/api/vpn/tunnels/{tunnel_id}/revoke")
