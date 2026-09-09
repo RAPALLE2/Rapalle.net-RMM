@@ -108,6 +108,22 @@ def _is_ip_literal(host: str) -> bool:
         return False
 
 
+def _forwarded_scheme(request: Request) -> str:
+    """Schema, unter dem uns der Client WIRKLICH erreicht hat.
+
+    Hinter einem Reverse-Proxy (nginx, Traefik, Cloudflare) kommt die Anfrage
+    intern als http an, von aussen war sie aber https. Ohne diese Auswertung
+    baut man Adressen, die nur im internen Netz funktionieren. Fehlt der
+    Header ganz, ist https die sichere Annahme fuer eine Domain - ein
+    oeffentlich erreichbarer RMM-Server ohne TLS waere ohnehin ein Problem.
+    """
+    fproto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    if fproto in ("http", "https"):
+        return fproto
+    scheme = (request.url.scheme or "").strip()
+    return scheme if scheme in ("http", "https") else "https"
+
+
 def _backend_url(request: Request) -> str:
     """
     Liefert die Basis-Adresse, die in Install-Befehle/Skripte eingebaut wird.
@@ -147,6 +163,29 @@ def _backend_url(request: Request) -> str:
             port = int(db.get_setting("server_backend_port"))
         except (TypeError, ValueError):
             port = 4000
+
+        # Steht hier eine DOMAIN (keine nackte IP), sitzt praktisch immer ein
+        # Reverse-Proxy davor - bei Cloudflare zwingend, denn Cloudflare
+        # proxyt nur 80/443 und einige wenige Alternativports; 4000 gehoert
+        # NICHT dazu.
+        #
+        # Bisher wurde hier stur "http://domain:<backend_port>" gebaut. Bei der
+        # Standard-Kombination server_domain=meine.domain + backend_port=4000
+        # entstand daraus http://meine.domain:4000 - eine Adresse, die vom
+        # Internet aus NIE erreichbar ist. Der Installer lief trotzdem durch
+        # (er selbst wurde ja ueber die richtige Adresse geladen), der Agent
+        # bekam die kaputte URL in seine .env und tauchte nie im Dashboard auf.
+        #
+        # Deshalb: Bei einer Domain wird der INTERNE Backend-Port ignoriert und
+        # das Schema aus der laufenden Anfrage uebernommen (X-Forwarded-Proto
+        # setzt jeder gaengige Proxy, Cloudflare eingeschlossen).
+        if not _is_ip_literal(target.split(":")[0]):
+            if ":" in target:
+                # Der Admin hat selbst einen Port angegeben - der gilt.
+                return f"{_forwarded_scheme(request)}://{target}"
+            return f"{_forwarded_scheme(request)}://{target}"
+
+        # Nackte IP: hier gibt es keinen Proxy, der Port muss mit.
         scheme = "https" if port == 443 else "http"
         if port in (80, 443):
             return f"{scheme}://{target}"
@@ -446,8 +485,58 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now rapalle-agent
 
-echo "Fertig! Der Agent läuft jetzt und verbindet sich mit {backend_url}"
-echo "Status prüfen mit: sudo systemctl status rapalle-agent"
+# --- Abschluss-Pruefung -----------------------------------------------------
+# Bisher stand hier bedingungslos "Fertig!". Das war eine Behauptung, keine
+# Feststellung: systemctl enable --now meldet Erfolg, sobald der Prozess
+# GESTARTET wurde - ob er eine Sekunde spaeter am Backend scheitert oder sich
+# gleich wieder beendet, sieht der Installer damit nicht. Genau deshalb las
+# man "fehlerfrei durchgelaufen", waehrend im Dashboard nie ein Client auftauchte.
+FAIL=0
+
+echo ""
+echo "--- Pruefe Installation ---"
+
+# 1. Ist die Backend-Adresse von DIESEM Geraet aus ueberhaupt erreichbar?
+#    Das faengt den haeufigsten Fall ab: eine BACKEND_URL mit internem Port,
+#    die hinter einem Reverse-Proxy/Cloudflare von aussen nicht existiert.
+if curl -fsS --max-time 15 "{backend_url}/api/agent/version" >/dev/null 2>&1; then
+  echo "[OK]     Backend erreichbar: {backend_url}"
+else
+  echo "[FEHLER] Backend NICHT erreichbar: {backend_url}"
+  echo "         Der Agent kann sich so nicht anmelden."
+  echo "         Pruefe im Dashboard unter Einstellungen die 'Server-URL'."
+  FAIL=1
+fi
+
+# 2. Laeuft der Dienst nach ein paar Sekunden noch? Ein Absturz beim Start
+#    (fehlende Abhaengigkeit, falsches Token) zeigt sich genau hier.
+sleep 6
+if sudo systemctl is-active --quiet rapalle-agent; then
+  echo "[OK]     Dienst rapalle-agent laeuft"
+else
+  echo "[FEHLER] Dienst rapalle-agent laeuft NICHT (mehr)"
+  FAIL=1
+fi
+
+# 3. Was sagt der Agent selbst? Seine letzten Zeilen sind aussagekraeftiger
+#    als jede Vermutung des Installers.
+if sudo journalctl -u rapalle-agent -n 15 --no-pager 2>/dev/null | grep -qiE "Ungueltiges Agent-Token|Ungültiges Agent-Token|Invalid.*token"; then
+  echo "[FEHLER] Das Backend lehnt das AGENT_TOKEN ab."
+  FAIL=1
+fi
+
+echo ""
+if [ "$FAIL" = "0" ]; then
+  echo "Fertig! Der Agent laeuft und verbindet sich mit {backend_url}"
+  echo "Er sollte binnen einer Minute im Dashboard erscheinen."
+else
+  echo "INSTALLATION UNVOLLSTAENDIG - der Agent wird NICHT im Dashboard erscheinen."
+  echo "Letzte Meldungen des Agenten:"
+  sudo journalctl -u rapalle-agent -n 25 --no-pager 2>/dev/null || \
+    sudo tail -n 25 "$INSTALL_DIR/agent.log" 2>/dev/null || true
+fi
+echo "Status jederzeit pruefen mit: sudo systemctl status rapalle-agent"
+exit $FAIL
 """
     return PlainTextResponse(script, media_type="text/x-sh")
 
