@@ -50,9 +50,52 @@ import socketio
 from app.config import AGENT_TOKEN
 from app import db
 
+
+def _int_env_early(name: str, default: int) -> int:
+    """Ganzzahl aus einer Umgebungsvariablen - schon vor dem Anlegen des
+    Servers nutzbar (das spätere _env_int steht erst weiter unten und wird
+    hier noch nicht gebraucht). Unsinnige Werte fallen auf den Standard
+    zurück, statt den Start zu verhindern."""
+    import os
+    try:
+        v = int(os.getenv(name, "") or default)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
 # Der eigentliche Socket.IO-Server. async_mode="asgi" bedeutet: er läuft
 # zusammen mit FastAPI im selben modernen Python-Webserver-Standard (ASGI).
-sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+# ----------------------------------------------------------------------
+# Server-Grenzwerte: MÜSSEN gesetzt sein, sonst gelten die Defaults von
+# python-socketio - und die passen nicht zu dem, was dieses Projekt sendet.
+#
+# max_http_buffer_size (Default: 1 MB)
+#   Ein Screen-Frame ist ein JPEG, das der Agent auf bis zu 1920 px
+#   skaliert, base64-kodiert (+37 %) und in EINEM Paket schickt. Bei
+#   Qualität 70-90 liegt so ein Frame regelmässig zwischen 400 KB und
+#   1,1 MB. Überschreitet EIN Paket das Limit, verwirft Engine.IO nicht
+#   etwa nur das Paket - es trennt die Verbindung. Genau deshalb läuft
+#   der Screen "halbwegs" (einfache Bilder gehen durch, detailreiche
+#   sprengen das Limit) und genau deshalb fällt der Agent dabei offline.
+#   50 MB lassen jedem Frame Luft, ohne dass ein einzelner Client
+#   nennenswert Speicher binden kann.
+#
+# ping_interval / ping_timeout (Default: 25 s / 20 s)
+#   Hinter Cloudflare werden ungenutzte WebSockets nach etwa 100 s
+#   Stille geschlossen. Mit 20 s Takt liegen immer mehrere Pings
+#   innerhalb dieses Fensters; die 40 s Timeout verhindern, dass ein
+#   kurzer Aussetzer (Proxy-Umschaltung, Mobilfunk) sofort als
+#   Verbindungsabbruch gewertet wird.
+_SOCKET_MAX_PACKET = _int_env_early("RMM_SOCKET_MAX_PACKET", 50_000_000)
+
+sio = socketio.AsyncServer(
+    async_mode="asgi",
+    cors_allowed_origins="*",
+    max_http_buffer_size=_SOCKET_MAX_PACKET,
+    ping_interval=20,
+    ping_timeout=40,
+)
 
 
 # ======================================================================
@@ -971,6 +1014,20 @@ async def _do_register(sid, payload):
     # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
     db.set_agent_version(client_id, payload.get("agent_version"))
 
+    # Merken, ob der Client vor dem Upsert schon existierte (für den
+    # "Neuer Client registriert"-Trigger der Benachrichtigungs-Regeln).
+    _was_known = db.get_client(client_id) is not None
+
+    # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
+    db.upsert_client(
+        client_id,
+        hostname,
+        payload.get("platform"),
+        payload.get("arch"),
+        payload.get("release"),
+        payload.get("ip"),
+    )
+
     # "Alle Agenten aktualisieren" mit Offline-Option: War der Client beim
     # Massen-Update offline und wurde VORGEMERKT (pending_agent_update), wird
     # das Update jetzt - direkt beim Wiederverbinden - nachgeholt.
@@ -994,19 +1051,6 @@ async def _do_register(sid, payload):
         if db.get_setting("agent_auto_update_offline", "1") == "1":
             await _maybe_auto_update(client_id, payload.get("agent_version"))
 
-    # Merken, ob der Client vor dem Upsert schon existierte (für den
-    # "Neuer Client registriert"-Trigger der Benachrichtigungs-Regeln).
-    _was_known = db.get_client(client_id) is not None
-
-    # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
-    db.upsert_client(
-        client_id,
-        hostname,
-        payload.get("platform"),
-        payload.get("arch"),
-        payload.get("release"),
-        payload.get("ip"),
-    )
 
     # Automatisch erkannter Gerätetyp (VM/LXC): wird nur GESPEICHERT
     # (detected_device_type) - übernommen wird er erst nach Bestätigung durch

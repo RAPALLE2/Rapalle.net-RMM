@@ -161,8 +161,19 @@ export function renderTerminal(body, win) {
       username: state.user?.username || "unknown",
     });
     statusEl.textContent = `${t("vnc_connected")} (${isWindows ? shellMode : "shell"}). ${t("term_click_hint")}`;
-    // Präzise Diagnose nach 3s, falls keine Ausgabe kam.
-    setTimeout(() => {
+    // Präzise Diagnose, falls keine Ausgabe kam.
+    //
+    // Das Fenster war 3 Sekunden. Das reicht auf einem LAN, aber nicht auf
+    // dem Weg Browser -> Cloudflare -> Backend -> Agent -> Shell-Start ->
+    // zurück. Eine PowerShell braucht beim ersten Start allein oft mehrere
+    // Sekunden. Die Folge: Das Terminal meldete "Verbindung fehlgeschlagen",
+    // obwohl die Sitzung gleich darauf ansprang - die Fehlermeldung stand
+    // dann mitten in der laufenden Shell.
+    //
+    // Deshalb: 12 Sekunden warten, und die Meldung nur schreiben, wenn bis
+    // dahin WIRKLICH nichts kam. Ein zweiter Blick nach 25 s räumt den
+    // Hinweis weg, falls die Sitzung doch noch startet.
+    const diagTimer = setTimeout(() => {
       if (gotOutput || !term) return;
       if (!gotAck) {
         term.write(t("term_no_backend") + t("term_no_backend2") + t("term_restart_hint"));
@@ -176,7 +187,17 @@ export function renderTerminal(body, win) {
           + t("term_no_shell4") + t("term_no_shell5"));
         statusEl.textContent = t("term_agent_nosupport");
       }
-    }, 3000);
+    }, 12000);
+    win._termDiagTimer = diagTimer;
+
+    // Nachkontrolle: Kam die Ausgabe doch noch (langsame Shell, kurzer
+    // Netz-Aussetzer), soll der Status das auch sagen statt auf einer
+    // überholten Fehlermeldung stehen zu bleiben.
+    setTimeout(() => {
+      if (!term || !gotOutput) return;
+      statusEl.textContent =
+        `${t("vnc_connected")} (${isWindows ? shellMode : "shell"}). ${t("term_click_hint")}`;
+    }, 25000);
   }
 
   // Terminal-Emulator aufbauen (sofort, keine externen Abhängigkeiten).
