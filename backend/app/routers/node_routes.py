@@ -107,56 +107,11 @@ async def node_demote(client_id: str, user: dict = Depends(get_current_user)):
     return result
 
 
-class WgBody(BaseModel):
-    # Ohne ausdrueckliche Zustimmung wird nichts installiert. Das Feld hat
-    # deshalb bewusst KEINEN Standardwert True.
-    install: bool = False
-
-
-@router.post("/api/nodes/{client_id}/wireguard")
-async def node_wireguard(client_id: str, body: WgBody,
-                         user: dict = Depends(get_current_user)):
-    """
-    Richtet WireGuard auf der Node ein.
-
-    Damit enden Tunnel direkt auf dem Geraet statt im Backend - schneller,
-    und die Nutzdaten laufen am Server vorbei. Unter Windows wird dabei der
-    offizielle WireGuard-Dienst installiert (Treiber, Administratorrechte);
-    unter Linux wird NICHT automatisch installiert, sondern gesagt, was zu
-    tun ist.
-    """
-    require_perm(user, "manage_agent", client_id)
-    if not db.is_client_node(client_id):
-        raise HTTPException(400, "Nur Nodes koennen WireGuard betreiben")
-
-    from app.sockets import request_node_wg
-    from app import vpn, vpn_net
-
-    try:
-        if body.install:
-            result = await request_node_wg(client_id, "install")
-            if not result.get("ok"):
-                return result
-        priv, _pub = vpn.node_keys(client_id)
-        result = await request_node_wg(client_id, "start", {
-            "private_key": priv,
-            "wg_port": vpn.node_port(),
-            "address": f"{vpn_net.client_address(client_id)}/32",
-            "probe": {
-                "host": vpn.endpoint_host(),
-                "relay_port": __import__("app.wg_relay", fromlist=["x"]).relay_port(),
-                "token": "",
-            },
-        })
-    except RuntimeError as e:
-        raise HTTPException(503, str(e))
-
-    db.add_audit_entry(user["username"], "node.wireguard",
-                       target=client_id,
-                       details=f"install={body.install}, "
-                               f"Ergebnis={result.get('reason')}")
-    await _broadcast(client_id)
-    return result
+# VPN AUSGEBAUT (2026-09-20)
+# --------------------------
+# Hier stand POST /api/nodes/{id}/wireguard - der Endpunkt, der auf der Node
+# echtes WireGuard installiert und startet. Mit dem VPN ist er entfallen.
+# Wer den Bereich zurueckholen will, findet ihn in der Versionsgeschichte.
 
 
 @router.post("/api/nodes/{client_id}/probe")

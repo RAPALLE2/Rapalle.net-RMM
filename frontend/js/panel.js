@@ -224,8 +224,6 @@ export function renderStatusPart(target, client) {
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
       <button data-quick="uninstall" ${client.online ? "" : "disabled"} title="${t("uninstall_agent")}">🗑️ ${t("uninstall_agent")}</button>` : ""}
-      ${hasClientPerm(client.id, "c_vpn") ? `
-      <button data-quick="vpn" title="WireGuard-kompatible Tunnel-Datei auf diesen Client ausstellen">🔐 VPN</button>` : ""}
       ${hasClientPerm(client.id, "c_portforward") ? `
       <button data-quick="forward" title="Einen Dienst dieses Geräts über den Server erreichbar machen – ohne VPN und ohne offene Ports beim Kunden">🔀 Port</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button data-quick="edit">✏️ ${t("edit")}</button>` : ""}
@@ -1062,18 +1060,6 @@ export async function handleQuickAction(action, client) {
     } catch (e) {
       window.notify?.("Weiterleitung fehlgeschlagen: " + e.message, "error", 12000);
     }
-    return;
-  }
-  if (action === "vpn") {
-    // Die VPN-App mit vorbelegtem Client oeffnen. Eigener Fensterschluessel
-    // je Client, damit man fuer mehrere Geraete parallel Tunnel ausstellen
-    // kann, ohne dass sich die Fenster gegenseitig ueberschreiben.
-    openWindow({
-      key: `vpn-${client.id}`, appId: "vpn",
-      title: `VPN — ${client.hostname}`,
-      props: { clientId: client.id, clientName: client.hostname },
-      w: 980, h: 640,
-    });
     return;
   }
   if (action === "edit") {

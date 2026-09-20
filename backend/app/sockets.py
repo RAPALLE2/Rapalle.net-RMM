@@ -882,13 +882,13 @@ async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
         _auto_update_last.pop(client_id, None)   # aktuell -> Cooldown zurücksetzen
         return
 
-    client = db.get_client(client_id)
+    client = await db.call(db.get_client, client_id)
     if not client or not client.get("active", 1):
         return
     mode = (client.get("auto_update") or "global").lower()
     if mode == "off":
         return
-    if mode != "on" and db.get_setting("agent_auto_update", "0") != "1":
+    if mode != "on" and await db.call(db.get_setting, "agent_auto_update", "0") != "1":
         return
 
     now = time.monotonic()
@@ -899,8 +899,9 @@ async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
 
     ok = await send_to_agent(client_id, "update-agent", {})
     if ok:
-        db.add_audit_entry(None, "agent.auto_update_triggered", target=client_id,
-                           details=f"{client.get('hostname')}: {agent_version} -> {latest}")
+        await db.call(db.add_audit_entry, None, "agent.auto_update_triggered",
+                      target=client_id,
+                      details=f"{client.get('hostname')}: {agent_version} -> {latest}")
         print(f"[auto-update] {client.get('hostname')} ({client_id}): "
               f"Agent {agent_version} -> {latest} wird aktualisiert")
         # Dashboard informieren (gleiches Event wie beim manuellen Update-Start).
@@ -936,53 +937,114 @@ async def connect(sid, environ, auth):
 @sio.on("register", namespace="/agent")
 async def on_register(sid, payload):
     """
-    Aussenhülle der Anmeldung: sorgt dafür, dass immer nur EINE Anmeldung
-    gleichzeitig verarbeitet wird, und gibt danach den Schleusen-Platz für
-    den nächsten Agenten frei.
+    Aussenhuelle der Anmeldung.
 
-    Warum das Lock zusätzlich zur Schleuse? Die Schleuse begrenzt, wie viele
-    Agenten sich anmelden dürfen; das Lock garantiert, dass die Verarbeitung
-    selbst nicht überlappt - auch dann nicht, wenn man die Schleuse später
-    weiter aufdreht oder ein Agent ein zweites 'register' schickt.
+    UMGEBAUT (2026-09-20). Die alte Fassung hatte zwei Fehler, die zusammen
+    genau das Bild erzeugten, das in der Praxis auftrat: "Der Agent
+    installiert sich sauber, meldet sich verbunden - und taucht im Dashboard
+    nie auf."
 
-    Zum Schluss bekommt der Agent ein 'register-ack'. Erst danach beginnt er
-    mit Heartbeats - so entsteht die gewünschte Reihenfolge:
-    verbinden -> Daten übermitteln -> Bestätigung -> der Nächste.
+      1. Sie fing JEDE Ausnahme aus _do_register() ab, schrieb sie nur auf
+         die Konsole und schickte trotzdem 'register-ack' mit ok=True. Der
+         Agent hielt sich fuer angemeldet und begann mit Heartbeats, obwohl
+         in der Datenbank nie ein Client-Datensatz entstanden war. Der
+         Fehlschlag war damit vollstaendig unsichtbar.
+
+      2. Sie hielt waehrend der GESAMTEN Verarbeitung ein globales Lock -
+         und die Verarbeitung machte rund fuenfzehn SYNCHRONE
+         Datenbankaufrufe direkt im Event-Loop. Bei einer grossen Datenbank
+         reichte das, um die Anmeldungen so zu stauen, dass die Schleuse
+         nach 45 s mit "busy" abwies. Auch dann sah der Agent nur eine
+         Verbindung, die immer wieder neu aufgebaut wurde.
+
+    Jetzt gilt: Das Lock ist PRO CLIENT (zwei verschiedene Geraete stoeren
+    sich nicht mehr gegenseitig), saemtliche Datenbankarbeit laeuft in
+    Arbeits-Threads, und das 'register-ack' sagt die Wahrheit - inklusive
+    Grund, wenn es schiefging.
     """
     _ensure_gate()
+    client_id = (payload or {}).get("id") or ""
+    ok, reason = False, "unbekannt"
     try:
-        async with _register_lock:
-            await _do_register(sid, payload)
+        async with _register_lock_for(client_id):
+            ok, reason = await _do_register(sid, payload)
     except Exception as e:
-        print(f"[gate] Anmeldung von {sid} fehlgeschlagen: {e!r}")
+        from app.errors import report as _report, Codes as _Codes
+        code = _report(_Codes.API_UNHANDLED, e, "Agenten-Anmeldung",
+                       client=client_id or sid)
+        ok, reason = False, f"Serverfehler ({code})"
     finally:
         try:
-            await sio.emit("register-ack", {"ok": True}, to=sid, namespace="/agent")
+            ack = {"ok": ok}
+            if not ok:
+                ack["reason"] = reason
+            await sio.emit("register-ack", ack, to=sid, namespace="/agent")
         except Exception:
             pass
         _admission_release(sid)
 
+    if not ok:
+        # Bewusst laut: Eine fehlgeschlagene Anmeldung ist der Unterschied
+        # zwischen "Geraet ist im Dashboard" und "Geraet existiert nicht".
+        print(f"[register] FEHLGESCHLAGEN fuer {client_id or sid}: {reason}")
 
-async def _do_register(sid, payload):
+
+# Ein Lock je Client statt eines globalen. Die Schleuse (_admission_sem)
+# begrenzt weiterhin, WIE VIELE Anmeldungen gleichzeitig laufen duerfen; das
+# Lock verhindert nur noch, dass DERSELBE Agent sich zweimal parallel
+# anmeldet (das passiert, wenn er kurz hintereinander neu verbindet).
+_register_locks: dict = {}
+
+
+def _register_lock_for(client_id: str):
+    lock = _register_locks.get(client_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _register_locks[client_id] = lock
+        # Aufraeumen, damit das Verzeichnis nicht unbegrenzt waechst.
+        if len(_register_locks) > 5000:
+            for key in [k for k, v in list(_register_locks.items())
+                        if not v.locked()][:2500]:
+                _register_locks.pop(key, None)
+    return lock
+
+
+async def _do_register(sid, payload) -> tuple[bool, str]:
     """
-    Ein Agent meldet sich frisch an (direkt nach dem Verbindungsaufbau).
-    payload enthält: id, hostname, platform, arch, release, ip
-    und optional "enrollment_token" (falls der Agent über die
-    "Client hinzufügen"-Funktion installiert wurde).
+    Ein Agent meldet sich an. Rueckgabe: (erfolgreich, Grund).
+
+    Der Ablauf ist bewusst in zwei Haelften geteilt:
+
+      PFLICHT   Alles, ohne das das Geraet nicht im Dashboard erscheint:
+                Datensatz anlegen, einem Mandanten zuordnen, Dashboards
+                benachrichtigen. Scheitert hier etwas, meldet die Funktion
+                einen Fehlschlag - der Agent erfaehrt das und versucht es
+                erneut, statt in einen stillen Leerlauf zu gehen.
+
+      KUER      Alles Weitere: Auto-Update, Benachrichtigungsregeln,
+                Patch-Angaben, Node-Konfiguration, Absturzmeldung. Jeder
+                dieser Punkte steht in seinem eigenen try - ein Fehler dort
+                darf die Anmeldung nicht mehr kippen. Frueher konnte genau
+                das passieren: eine kaputte Benachrichtigungsregel verhinderte
+                die Aufnahme eines Geraets.
+
+    Saemtliche Datenbankaufrufe laufen ueber db.call() in einem
+    Arbeits-Thread. Im Event-Loop darf nichts mehr auf eine Dateisperre
+    warten - dort haengen alle Agenten, die Shell und der Remote-Screen dran.
     """
+    payload = payload or {}
     client_id = payload.get("id")
     hostname = payload.get("hostname")
     if not client_id or not hostname:
-        return  # unvollständige Daten -> ignorieren
+        return False, "Anmeldung ohne id/hostname"
 
+    # ---------------- PFLICHT ----------------------------------------
     state.client_id_to_sid[client_id] = sid
     state.sid_to_client_id[sid] = client_id
-    # Gemeldete Code-Prüfsumme merken - MUSS vor jeder Veraltet-Prüfung
-    # weiter unten passieren, sonst hielte die erste Prüfung nach dem
-    # Verbinden jeden Agenten für veraltet.
+
+    # Gemeldete Code-Pruefsumme merken - MUSS vor jeder Veraltet-Pruefung
+    # passieren, sonst hielte die erste Pruefung jeden Agenten fuer veraltet.
     _agent_code_hashes[client_id] = str(payload.get("agent_code_hash") or "")
-    # Selbstauskunft zum Patching. Fehlt sie, läuft dort Agent-Code ohne
-    # Patch-Modul - das ist eine Feststellung, keine Vermutung.
     _agent_caps[client_id] = {
         "protocol": int(payload.get("patch_protocol") or 0),
         "sources": list(payload.get("patch_sources") or []),
@@ -990,172 +1052,166 @@ async def _do_register(sid, payload):
         "agent_code_hash": payload.get("agent_code_hash") or "",
     }
 
-    # Kommt der Agent frisch aus einem Update? Dann Zeitpunkt merken, damit der
-    # Update-Endpunkt das Update als erfolgreich bestätigen kann, und das
-    # Dashboard informieren.
-    if payload.get("updated"):
-        import time as _time
-        state.update_confirmed[client_id] = _time.monotonic()
-        await sio.emit("client:updated", {"id": client_id}, namespace="/dashboard")
-        # Benachrichtigungs-Regel: Agent wurde aktualisiert
-        try:
-            from app import notifier
-            from app.routers.admin_routes import build_notification
-            _host = payload.get("hostname") or client_id
-            await notifier.fire_event("agent_update", client_id=client_id,
-                notification=build_notification(
-                    f"Agent auf {_host} wurde auf Version "
-                    f"{payload.get('agent_version') or '?'} aktualisiert.",
-                    head=f"⬆️ Agent aktualisiert – {_host}",
-                    client=_host, service="Agent-Update", level="success"))
-        except Exception:
-            pass
+    try:
+        was_known = await db.call(db.get_client, client_id) is not None
+        await db.call(
+            db.upsert_client,
+            client_id,
+            hostname,
+            payload.get("platform"),
+            payload.get("arch"),
+            payload.get("release"),
+            payload.get("ip"),
+        )
+    except Exception as e:
+        from app.errors import report as _report, Codes as _Codes
+        code = _report(_Codes.API_UNHANDLED, e,
+                       "Client-Datensatz beim Anmelden schreiben",
+                       client=client_id)
+        return False, f"Datenbank schreibt nicht ({code})"
 
-    # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
-    db.set_agent_version(client_id, payload.get("agent_version"))
+    # Zuordnung zu Mandant/Standort. Ohne tenant_id blendet das Dashboard
+    # den Client in den meisten Ansichten AUS - deshalb gehoert das hier in
+    # die Pflicht und nicht in die Kuer.
+    try:
+        client = await db.call(db.get_client, client_id)
+        if client and not client["tenant_id"]:
+            token = payload.get("enrollment_token")
+            token_row = (await db.call(db.get_enrollment_token, token)) if token else None
 
-    # Merken, ob der Client vor dem Upsert schon existierte (für den
-    # "Neuer Client registriert"-Trigger der Benachrichtigungs-Regeln).
-    _was_known = db.get_client(client_id) is not None
+            if token_row and token_row["tenant_id"]:
+                fields = {"tenant_id": token_row["tenant_id"],
+                          "location_id": token_row["location_id"]}
+                if token_row["client_name"]:
+                    fields["hostname"] = token_row["client_name"]
+            else:
+                tenant, location = await db.call(db.ensure_uncategorized)
+                fields = {"tenant_id": tenant, "location_id": location}
+                if token_row and token_row["client_name"]:
+                    fields["hostname"] = token_row["client_name"]
 
-    # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
-    db.upsert_client(
-        client_id,
-        hostname,
-        payload.get("platform"),
-        payload.get("arch"),
-        payload.get("release"),
-        payload.get("ip"),
-    )
+            await db.call(db.update_client, client_id, fields)
+            if token:
+                await db.call(db.mark_enrollment_token_used, token)
+    except Exception as e:
+        from app.errors import report as _report, Codes as _Codes
+        code = _report(_Codes.API_UNHANDLED, e,
+                       "Client einem Mandanten zuordnen", client=client_id)
+        return False, f"Zuordnung fehlgeschlagen ({code})"
 
-    # "Alle Agenten aktualisieren" mit Offline-Option: War der Client beim
-    # Massen-Update offline und wurde VORGEMERKT (pending_agent_update), wird
-    # das Update jetzt - direkt beim Wiederverbinden - nachgeholt.
-    _pending_client = db.get_client(client_id)
-    if _pending_client and _pending_client.get("pending_agent_update"):
-        db.set_pending_agent_update(client_id, False)
-        if _agent_outdated(payload.get("agent_version") or "",
-                           _latest_agent_version(), client_id):
-            ok = await send_to_agent(client_id, "update-agent", {})
-            if ok:
-                db.add_audit_entry(None, "agent.pending_update_triggered", target=client_id,
-                                   details=(_pending_client.get("hostname") or client_id))
-                await sio.emit("client:update-started", {"id": client_id, "auto": True},
-                               namespace="/dashboard")
-    else:
-        # Automatisches Agent-Update: Ist der Agent veraltet und Auto-Update für
-        # diesen Client aktiv (pro Client 'on' oder 'global' + Settings-Schalter),
-        # wird das Update direkt beim Verbinden angestoßen. Über das Setting
-        # 'agent_auto_update_offline' ("1" = Standard) lässt sich steuern, ob
-        # Clients, die offline waren, beim Wiederverbinden aktualisiert werden.
-        if db.get_setting("agent_auto_update_offline", "1") == "1":
-            await _maybe_auto_update(client_id, payload.get("agent_version"))
-
-
-    # Automatisch erkannter Gerätetyp (VM/LXC): wird nur GESPEICHERT
-    # (detected_device_type) - übernommen wird er erst nach Bestätigung durch
-    # den Nutzer im Client-Panel (device_type_ack).
-    if db.apply_detected_device_type(client_id, payload.get("device_type")):
+    # Ab hier gilt die Anmeldung als geglueckt: Der Datensatz steht, und die
+    # Dashboards erfahren es. Das geschieht VOR der Kuer, damit kein
+    # Nebenschauplatz das Erscheinen im Dashboard verzoegern kann.
+    try:
+        await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
         _emit_clients_changed_soon()
-
-    # Absturz-Meldung des Agenten (Crash-Schutz: Agent startet sich selbst neu
-    # und meldet den Traceback beim nächsten Registrieren) -> Audit + dem
-    # Nutzer im Dashboard anzeigen.
-    _crash = payload.get("last_crash")
-    if _crash:
-        _c = db.get_client(client_id)
-        _host = (_c or {}).get("hostname") or payload.get("hostname") or client_id
-        db.add_audit_entry(None, "agent.crashed", target=client_id, details=str(_crash)[:1000])
-        print(f"[agent-crash] {_host}: Agent ist abgestürzt und wurde neu gestartet:\n{_crash}")
-        await sio.emit("client:agent-crashed", {
-            "id": client_id, "hostname": _host, "error": str(_crash)[-2000:],
-        }, namespace="/dashboard")
-
-    # Nach dem Speichern den aktuellen Stand aus der DB holen
-    client = db.get_client(client_id)
-
-    # Client einem Tenant/Standort zuordnen, FALLS er noch keinem zugeordnet ist.
-    # (Ein bereits manuell zugeordneter Client wird NICHT überschrieben.)
-    if client and not client["tenant_id"]:
-        enrollment_token = payload.get("enrollment_token")
-        token_row = db.get_enrollment_token(enrollment_token) if enrollment_token else None
-
-        if token_row and token_row["tenant_id"]:
-            # Fall 1: Gültiger Token mit Tenant/Location -> dorthin einsortieren
-            update_fields = {
-                "tenant_id": token_row["tenant_id"],
-                "location_id": token_row["location_id"],
-            }
-            # Optionaler Wunschname aus dem Onboarding-Dialog
-            if token_row["client_name"]:
-                update_fields["hostname"] = token_row["client_name"]
-            db.update_client(client_id, update_fields)
-            db.mark_enrollment_token_used(enrollment_token)
-        else:
-            # Fall 2: Kein (brauchbarer) Token-Tenant -> ins "Uncategorized"-Tenant
-            uncategorized_tenant, default_location = db.ensure_uncategorized()
-            update_fields = {
-                "tenant_id": uncategorized_tenant,
-                "location_id": default_location,
-            }
-            # Falls der Token trotzdem einen Wunschnamen trug, diesen übernehmen
-            if token_row and token_row["client_name"]:
-                update_fields["hostname"] = token_row["client_name"]
-            db.update_client(client_id, update_fields)
-            if enrollment_token:
-                db.mark_enrollment_token_used(enrollment_token)
-
-    # Netze des Clients merken - Grundlage fuer Site-to-Site-Routen.
-    try:
-        subnets = payload.get("subnets")
-        if subnets:
-            db.set_client_subnets(client_id, subnets)
     except Exception as e:
-        print(f"[register] Netze von {client_id} nicht gespeichert: {e}")
+        print(f"[register] Dashboards nicht benachrichtigt: {e!r}")
 
-    # Wartungsmodus: Der Agent erfährt bei JEDER Anmeldung, ob er
-    # mitschreiben soll. Sonst wüsste ein Agent, der gerade neu gestartet
-    # ist, nichts davon - und ausgerechnet seine Startphase fehlte im Log.
-    try:
-        if db.get_setting("maintenance_agents", "0") == "1":
-            await sio.emit("diag-mode", {"enabled": True, "minutes": 0},
-                           to=sid, namespace="/agent")
-    except Exception as e:
-        print(f"[diag] Modus für {client_id} nicht übermittelt: {e!r}")
+    # ---------------- KUER -------------------------------------------
+    async def _side(name, coro_factory):
+        """Ein Nebenschauplatz - darf scheitern, ohne die Anmeldung zu kippen."""
+        try:
+            await coro_factory()
+        except Exception as e:
+            print(f"[register] '{name}' fuer {client_id} fehlgeschlagen: {e!r}")
 
-    # Ist dieses Gerät eine Node? Dann bekommt es jetzt seine Betriebsdaten:
-    # Modulliste, Schlüssel, UDP-Port und die Probe-Adresse. Das geschieht
-    # bei JEDER Anmeldung, damit eine Node nach einem Neustart oder einem
-    # Modul-Update von selbst wieder den richtigen Stand hat.
-    try:
-        if db.is_client_node(client_id):
-            from app import node_manager
-            await node_manager.push_config(client_id)
-    except Exception as e:
-        print(f"[node] Konfiguration für {client_id} fehlgeschlagen: {e!r}")
+    async def _version():
+        await db.call(db.set_agent_version, client_id, payload.get("agent_version"))
 
-    # Dashboard(s) informieren, dass sich die Client-Liste geändert hat
-    await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
-    _emit_clients_changed_soon()
-
-    # Benachrichtigungs-Regeln: "Client kommt online" / "Neuer Client".
-    try:
+    async def _updated_flag():
+        if not payload.get("updated"):
+            return
+        state.update_confirmed[client_id] = time.monotonic()
+        await sio.emit("client:updated", {"id": client_id}, namespace="/dashboard")
         from app import notifier
         from app.routers.admin_routes import build_notification
-        _host = hostname or client_id
+        host = hostname or client_id
+        await notifier.fire_event("agent_update", client_id=client_id,
+            notification=build_notification(
+                f"Agent auf {host} wurde auf Version "
+                f"{payload.get('agent_version') or '?'} aktualisiert.",
+                head=f"\u2b06\ufe0f Agent aktualisiert \u2013 {host}",
+                client=host, service="Agent-Update", level="success"))
+
+    async def _auto_update():
+        pending = await db.call(db.get_client, client_id)
+        if pending and pending.get("pending_agent_update"):
+            await db.call(db.set_pending_agent_update, client_id, False)
+            if _agent_outdated(payload.get("agent_version") or "",
+                               _latest_agent_version(), client_id):
+                if await send_to_agent(client_id, "update-agent", {}):
+                    await db.call(db.add_audit_entry, None,
+                                  "agent.pending_update_triggered",
+                                  target=client_id,
+                                  details=(pending.get("hostname") or client_id))
+                    await sio.emit("client:update-started",
+                                   {"id": client_id, "auto": True},
+                                   namespace="/dashboard")
+        elif await db.call(db.get_setting, "agent_auto_update_offline", "1") == "1":
+            await _maybe_auto_update(client_id, payload.get("agent_version"))
+
+    async def _device_type():
+        if await db.call(db.apply_detected_device_type, client_id,
+                         payload.get("device_type")):
+            _emit_clients_changed_soon()
+
+    async def _crash_report():
+        crash = payload.get("last_crash")
+        if not crash:
+            return
+        row = await db.call(db.get_client, client_id)
+        host = (row or {}).get("hostname") or hostname or client_id
+        await db.call(db.add_audit_entry, None, "agent.crashed",
+                      target=client_id, details=str(crash)[:1000])
+        print(f"[agent-crash] {host}: Agent ist abgestuerzt und wurde neu "
+              f"gestartet:\n{crash}")
+        await sio.emit("client:agent-crashed", {
+            "id": client_id, "hostname": host, "error": str(crash)[-2000:],
+        }, namespace="/dashboard")
+
+    async def _subnets():
+        subnets = payload.get("subnets")
+        if subnets:
+            await db.call(db.set_client_subnets, client_id, subnets)
+
+    async def _diag_mode():
+        if await db.call(db.get_setting, "maintenance_agents", "0") == "1":
+            await sio.emit("diag-mode", {"enabled": True, "minutes": 0},
+                           to=sid, namespace="/agent")
+
+    async def _node_config():
+        if await db.call(db.is_client_node, client_id):
+            from app import node_manager
+            await node_manager.push_config(client_id)
+
+    async def _notify_online():
+        from app import notifier
+        from app.routers.admin_routes import build_notification
+        host = hostname or client_id
         await notifier.fire_event("client_online", client_id=client_id,
             notification=build_notification(
-                f"{_host} ist jetzt online.",
-                head=f"🟢 Client online – {_host}",
-                client=_host, service="Status", level="success"))
-        if not _was_known:
+                f"{host} ist jetzt online.",
+                head=f"\U0001f7e2 Client online \u2013 {host}",
+                client=host, service="Status", level="success"))
+        if not was_known:
             await notifier.fire_event("client_new", client_id=client_id,
                 notification=build_notification(
-                    f"Neuer Client {_host} wurde registriert.",
-                    head=f"✨ Neuer Client – {_host}",
-                    client=_host, service="Onboarding", level="info"))
-    except Exception as _e:
-        print(f"[notify] online-Event fehlgeschlagen: {_e}")
+                    f"Neuer Client {host} wurde registriert.",
+                    head=f"\u2728 Neuer Client \u2013 {host}",
+                    client=host, service="Onboarding", level="info"))
+
+    await _side("agent-version", _version)
+    await _side("update-bestaetigung", _updated_flag)
+    await _side("auto-update", _auto_update)
+    await _side("geraetetyp", _device_type)
+    await _side("absturzmeldung", _crash_report)
+    await _side("netze", _subnets)
+    await _side("wartungsmodus", _diag_mode)
+    await _side("node-konfiguration", _node_config)
+    await _side("benachrichtigungen", _notify_online)
+
+    return True, "ok"
 
 
 @sio.on("heartbeat", namespace="/agent")
@@ -1172,12 +1228,20 @@ async def on_heartbeat(sid, payload):
     # DIESE Vorrang: ein ausgelassener Heartbeat ist folgenlos, eine
     # abgebrochene Anmeldung nicht.
     _ensure_gate()
-    if _register_lock.locked() or _admission_waiting:
+    # Anmeldungen haben Vorrang: ein ausgelassener Messpunkt ist folgenlos,
+    # eine verzoegerte Anmeldung nicht. Geprueft wird jetzt die Schleuse
+    # selbst (wartende + belegte Plaetze) - das alte globale Register-Lock
+    # gibt es nicht mehr, es war der Flaschenhals bei den Anmeldungen.
+    if _admission_waiting or _admission_held:
         return
     if _heartbeat_sem.locked():
         return   # Rückstau -> diesen Messpunkt überspringen statt aufstauen
     async with _heartbeat_sem:
         await _handle_heartbeat(client_id, payload)
+
+
+# Zeitpunkt des letzten Aufraeumens der Messwert-Historie (siehe unten).
+_last_prune = [0]
 
 
 async def _handle_heartbeat(client_id, payload):
@@ -1205,7 +1269,7 @@ async def _handle_heartbeat(client_id, payload):
     if now_check - _auto_update_hb_check.get(client_id, 0.0) >= 60.0:
         _auto_update_hb_check[client_id] = now_check
         try:
-            _c = db.get_client(client_id)
+            _c = await db.call(db.get_client, client_id)
             if _c:
                 await _maybe_auto_update(client_id, _c.get("agent_version"))
         except Exception:
@@ -1219,26 +1283,38 @@ async def _handle_heartbeat(client_id, payload):
     # --- Persistenz: höchstens alle metrics_interval_seconds einen Punkt speichern ---
     # (Heartbeats kommen alle paar Sekunden, gespeichert wird aber nur im
     #  eingestellten Takt, damit die DB nicht vollläuft.)
+    # Der Messpunkt wird geschrieben UND aufgeraeumt - beides sind Schreib-
+    # zugriffe auf eine Tabelle, die schnell sehr gross wird. Sie liefen
+    # bisher synchron im Event-Loop; ein einziges langsames fsync legte damit
+    # das ganze Backend still. Jetzt: Arbeits-Thread.
     try:
-        interval_ms = db.get_int_setting("metrics_interval_seconds") * 1000
+        interval_ms = (await db.call(db.get_int_setting,
+                                     "metrics_interval_seconds")) * 1000
         last_save = state.last_metric_save.get(client_id, 0)
         if now_ms - last_save >= interval_ms:
             state.last_metric_save[client_id] = now_ms
             mem_total = metrics.get("memTotal") or 0
             cpu = metrics.get("cpuLoad") or 0
             ram = (metrics.get("memUsed", 0) / mem_total * 100) if mem_total else 0
-            db.record_metric_point(
+            await db.call(
+                db.record_metric_point,
                 client_id, cpu, ram,
                 metrics.get("netIn") or 0, metrics.get("netOut") or 0,
                 now_ms,
                 extra=_json_dumps_safe(metrics),
             )
-            # Alles außerhalb der Aufbewahrungsdauer wegräumen.
+            # Alles ausserhalb der Aufbewahrungsdauer wegraeumen.
             # 0 (oder negativ) = unbegrenzt aufbewahren -> NIE prunen.
-            retention_hours = db.get_int_setting("metrics_retention_hours")
-            if retention_hours > 0:
+            # Das Aufraeumen laeuft hoechstens alle fuenf Minuten, nicht bei
+            # jedem Messpunkt: Es war bei vielen Agenten der teuerste
+            # Einzelvorgang im Heartbeat-Pfad und trotzdem hundertfach
+            # redundant - geloescht ist geloescht.
+            retention_hours = await db.call(db.get_int_setting,
+                                            "metrics_retention_hours")
+            if retention_hours > 0 and now_ms - _last_prune[0] >= 300_000:
+                _last_prune[0] = now_ms
                 retention_ms = retention_hours * 3600 * 1000
-                db.prune_metrics_history(now_ms - retention_ms)
+                await db.call(db.prune_metrics_history, now_ms - retention_ms)
     except Exception as e:
         print(f"[metrics] Konnte Messpunkt nicht speichern: {e}")
 
@@ -1252,7 +1328,7 @@ async def _handle_heartbeat(client_id, payload):
         _threshold_check[client_id] = now_check2
         try:
             from app import notifier
-            _c = db.get_client(client_id)
+            _c = await db.call(db.get_client, client_id)
             if _c:
                 await notifier.check_metric_thresholds(_c, metrics)
         except Exception as e:
@@ -1267,31 +1343,17 @@ async def _handle_heartbeat(client_id, payload):
 # und - falls die Node hinter symmetrischem NAT sitzt - die Pakete des
 # Relays. Die Handler sind bewusst dünn; die Logik liegt in vpn.py.
 
-@sio.on("node-wg-state", namespace="/agent")
-async def on_node_wg_state(sid, payload):
-    """Eine Node meldet ihren WireGuard-Zustand und ihre Erreichbarkeit."""
-    client_id = state.sid_to_client_id.get(sid)
-    if not client_id:
-        return
-    from app import vpn
-    vpn.on_node_state(client_id, payload or {})
-
-
-@sio.on("wg-relay", namespace="/agent")
-async def on_wg_relay(sid, payload):
-    """Ein WireGuard-Paket kommt über die Agent-Verbindung herein."""
-    from app import vpn
-    vpn.on_relay_packet(payload or {})
-
-
-@sio.on("node-net-packet", namespace="/agent")
-async def on_node_net_packet(sid, payload):
-    """Ein Paket aus dem virtuellen Netz kommt von einem Gerät zurück."""
-    client_id = state.sid_to_client_id.get(sid)
-    if not client_id:
-        return
-    from app import vpn
-    vpn.on_net_packet(client_id, payload or {})
+# VPN AUSGEBAUT (2026-09-20)
+# ---------------------------
+# Hier standen 'node-wg-state', 'wg-relay' und 'node-net-packet'. Der letzte
+# war der gefaehrliche: JEDES einzelne IP-Paket eines Tunnels lief als
+# Socket.IO-Ereignis durch diesen Event-Loop und wurde von dort per
+# ensure_future weiterverteilt. Ein aktiver Tunnel hat damit dieselbe
+# Schleife geflutet, die auch Anmeldungen, Shell und Screen bedient.
+#
+# Die Ereignisse werden jetzt bewusst NICHT mehr entgegengenommen. Ein alter
+# Agent, der sie noch sendet, bekommt von python-socketio schlicht keine
+# Reaktion - das ist folgenlos und kostet nichts.
 
 
 # --- Port-Weiterleitung -------------------------------------------
@@ -1318,37 +1380,8 @@ async def on_forward_close(sid, payload):
     portforward.on_close(payload or {})
 
 
-@sio.on("node-wg-result", namespace="/agent")
-async def on_node_wg_result(sid, payload):
-    """Antwort auf eine Einrichtungs-Anfrage (Installation, Start)."""
-    future = state.pending_requests.get((payload or {}).get("requestId"))
-    if future and not future.done():
-        future.set_result(payload)
-
-
-async def request_node_wg(client_id: str, action: str, spec: dict | None = None,
-                          timeout_seconds: float = 600.0) -> dict:
-    """
-    Lässt eine Node WireGuard einrichten, starten oder prüfen.
-
-    Das Zeitlimit ist grosszügig: Unter Windows wird dabei der offizielle
-    WireGuard-Installer ausgeführt, und der braucht seine Zeit.
-    """
-    sid = state.client_id_to_sid.get(client_id)
-    if not sid:
-        raise RuntimeError("Node ist offline")
-    request_id = _new_request_id()
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
-    state.pending_requests[request_id] = future
-    try:
-        await sio.emit("node-wg", {"requestId": request_id, "action": action,
-                                   **(spec or {})},
-                       to=sid, namespace="/agent")
-        return await asyncio.wait_for(future, timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        raise RuntimeError("Die Node hat nicht rechtzeitig geantwortet")
-    finally:
-        state.pending_requests.pop(request_id, None)
+# 'node-wg-result' und request_node_wg() sind mit dem VPN entfallen: Sie
+# dienten ausschliesslich dazu, WireGuard auf einer Node einzurichten.
 
 
 @sio.on("exec-result", namespace="/agent")
@@ -1542,7 +1575,7 @@ async def on_term_output(sid, payload):
 @sio.on("term-exit", namespace="/agent")
 async def on_term_exit(sid, payload):
     await sio.emit("term-exit", payload, namespace="/dashboard")
-    _finalize_term_session(payload.get("session"))
+    await _finalize_term_session(payload.get("session"))
 
 
 # --- Agent-Konsole: Dashboard liest den Log des Agenten mit ---
@@ -1552,7 +1585,7 @@ async def on_term_exit(sid, payload):
 @sio.on("agent-console-open", namespace="/dashboard")
 async def dashboard_agent_console_open(sid, data):
     client_id = data.get("clientId")
-    if not _ws_user_may(data.get("username"), "use_terminal", client_id):
+    if not await _ws_user_may(data.get("username"), "use_terminal", client_id):
         await sio.emit("agent-console", {
             "id": client_id,
             "data": "\r\n\x1b[31mKeine Berechtigung für die Agent-Konsole dieses Clients.\x1b[0m\r\n",
@@ -1595,7 +1628,7 @@ async def disconnect(sid):
         try:
             from app import notifier
             from app.routers.admin_routes import build_notification
-            _c = db.get_client(client_id)
+            _c = await db.call(db.get_client, client_id)
             _host = (_c or {}).get("hostname") or client_id
             await notifier.fire_event("client_offline", client_id=client_id,
                 notification=build_notification(
@@ -1654,12 +1687,16 @@ async def dashboard_disconnect(sid):
 # Frontend mitgeschickten Benutzernamen (best effort, analog zum Audit-Log).
 # Die REST-Routen bleiben die harte Sicherheitsgrenze; hier verhindern wir
 # zusätzlich versehentliche/naive Zugriffe ohne Recht.
-def _ws_user_may(username: str | None, perm: str, client_id: str | None) -> bool:
+async def _ws_user_may(username: str | None, perm: str,
+                       client_id: str | None) -> bool:
+    # Jetzt async: Die Rechtepruefung liest den Benutzer aus der Datenbank.
+    # Vorher lief dieser Lesezugriff synchron im Event-Loop - bei jedem
+    # Start eines Remote-Bildschirms und jeder Terminal-Sitzung.
     from app import db as _db
     from app.auth import user_has_permission
     if not username:
         return False
-    u = _db.get_user_by_username(username)
+    u = await _db.call(_db.get_user_by_username, username)
     if not u:
         return False
     return user_has_permission(u, perm, client_id)
@@ -1670,7 +1707,7 @@ async def dashboard_screen_start(sid, data):
     """Dashboard möchte den Bildschirm eines Clients sehen -> Agent anweisen + Aufnahme starten."""
     from app import recording, db as _db
     client_id = data.get("clientId")
-    if not _ws_user_may(data.get("username"), "use_screen", client_id):
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
         await sio.emit("screen-error",
                        {"id": client_id, "error": "Keine Berechtigung für den Remote-Bildschirm dieses Clients."},
                        namespace="/dashboard")
@@ -1679,15 +1716,15 @@ async def dashboard_screen_start(sid, data):
     # Aufnahme-Qualität/FPS aus den Einstellungen an den Agent mitgeben, damit
     # er die Frames passend erzeugt (bessere/schlechtere Qualität, mehr/weniger
     # Bilder). Der Agent nutzt diese Werte fürs JPEG-Encoding & die Sende-Rate.
-    quality = _db.get_int_setting("screen_record_quality") or 40
-    fps = _db.get_int_setting("screen_record_fps") or 5
+    quality = await _db.call(_db.get_int_setting, "screen_record_quality") or 40
+    fps = await _db.call(_db.get_int_setting, "screen_record_fps") or 5
 
     # Zustimmung am Gerät: Physische Geräte UND VMs bekommen eine Abfrage
     # angezeigt (z.B. wenn jemand per RDP in der VM arbeitet) - der Bildschirm
     # startet erst nach Bestätigung. Ist niemand angemeldet, verbindet der
     # Agent direkt. Nur LXC-Container sind ausgenommen (keine grafische
     # Anmeldung möglich).
-    client = _db.get_client(client_id)
+    client = await _db.call(_db.get_client, client_id)
     needs_consent = bool(client) and (client.get("device_type") or "physical") != "lxc"
 
     # Silent-Modus (einmalig): Hat der Benutzer den Modus im Profil aktiviert
@@ -1695,15 +1732,16 @@ async def dashboard_screen_start(sid, data):
     # Client, wird die Zustimmungs-Abfrage am Gerät übersprungen. Direkt beim
     # Verbindungsaufbau schaltet sich der Modus automatisch wieder AUS, damit
     # er wirklich nur für DIESE eine Sitzung gilt.
-    _u = _db.get_user_by_username(data.get("username") or "")
+    _u = await _db.call(_db.get_user_by_username, data.get("username") or "")
     if needs_consent and _u and _u.get("silent_screen"):
         from app.auth import is_super_admin as _is_sa
         if (_is_sa(_u) or user_has_permission(_u, "screen_silent")
                 or user_has_permission(_u, "c_screen_silent", client_id)):
             needs_consent = False
-            _db.set_user_silent_screen(_u["id"], False)   # einmalig -> wieder aus
-            _db.add_audit_entry(_u["username"], "screen.silent_used", target=client_id,
-                                details=client.get("hostname") if client else client_id)
+            await _db.call(_db.set_user_silent_screen, _u["id"], False)  # einmalig
+            await _db.call(_db.add_audit_entry, _u["username"],
+                           "screen.silent_used", target=client_id,
+                           details=client.get("hostname") if client else client_id)
             print(f"[screen] Silent-Modus von {_u['username']} genutzt -> keine "
                   f"Abfrage, Modus wieder deaktiviert")
             # Alle Dashboards informieren: Das Profil (falls offen) schaltet den
@@ -1722,7 +1760,7 @@ async def dashboard_screen_start(sid, data):
     })
 
     # Aufzeichnung nur starten, wenn global aktiviert.
-    recording_on = _db.get_setting("recording_enabled", "1") == "1"
+    recording_on = await _db.call(_db.get_setting, "recording_enabled", "1") == "1"
 
     # Aufzeichnung starten (falls Client bekannt und aktiviert) + Audit-Log.
     if client:
@@ -1731,7 +1769,8 @@ async def dashboard_screen_start(sid, data):
         ) if recording_on else None
         # Audit-Eintrag IMMER (Zugriff protokollieren) - mit Replay-Verknüpfung,
         # falls aufgezeichnet wurde.
-        _db.add_audit_entry(
+        await _db.call(
+            _db.add_audit_entry,
             data.get("username", "unbekannt"),
             "screen.session_started",
             target=client_id,
@@ -1808,7 +1847,7 @@ async def dashboard_rdp_start(sid, data):
     """
     from app import rdp_gateway, db as _db
     client_id = data.get("clientId")
-    client = _db.get_client(client_id) if client_id else None
+    client = (await _db.call(_db.get_client, client_id)) if client_id else None
     if not client:
         await _rdp_emit_error(client_id, "Client nicht gefunden.")
         return
@@ -1855,7 +1894,7 @@ async def dashboard_term_open(sid, data):
     client_id = data.get("clientId")
     shell = data.get("shell", "auto")
     session = data.get("session")
-    if not _ws_user_may(data.get("username"), "use_terminal", client_id):
+    if not await _ws_user_may(data.get("username"), "use_terminal", client_id):
         await sio.emit("term-output", {
             "id": client_id, "session": session,
             "data": "\r\n\x1b[31mKeine Berechtigung für das Terminal dieses Clients.\x1b[0m\r\n",
@@ -1883,8 +1922,8 @@ async def dashboard_term_open(sid, data):
         import time as _t
         from app import recording, db as _db
         rec_id = None
-        if _db.get_setting("recording_enabled", "1") == "1":
-            client = _db.get_client(client_id)
+        if await _db.call(_db.get_setting, "recording_enabled", "1") == "1":
+            client = await _db.call(_db.get_client, client_id)
             rec_id = recording.start_term_recording(
                 session, client_id,
                 (client or {}).get("hostname") or client_id,
@@ -1926,10 +1965,10 @@ async def dashboard_term_close(sid, data):
     await send_to_agent(data.get("clientId"), "term-close", {
         "session": data.get("session"),
     })
-    _finalize_term_session(data.get("session"))
+    await _finalize_term_session(data.get("session"))
 
 
-def _finalize_term_session(session: str) -> None:
+async def _finalize_term_session(session: str) -> None:
     """Beendet die Terminal-Aufzeichnung (Replay) und schreibt EINEN kompakten
     Audit-Eintrag mit Verweis auf das Replay - statt Befehle/Ausgaben einzeln
     ins Log zu schreiben."""
@@ -1945,8 +1984,8 @@ def _finalize_term_session(session: str) -> None:
         # Gleiche Verknüpfung wie beim Screen-Recording: das Audit-Log kann
         # daraus einen "Aufzeichnung ansehen"-Link machen.
         details = f"rec:{rec_id} " + details
-    _db.add_audit_entry(meta["username"], "terminal.session",
-                        target=meta["client_id"], details=details)
+    await _db.call(_db.add_audit_entry, meta["username"], "terminal.session",
+                   target=meta["client_id"], details=details)
 
 
 # ==========================================================================

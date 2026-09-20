@@ -35,8 +35,10 @@ from app import db
 MODULE_DIR = Path(__file__).resolve().parents[1] / "agent_modules"
 
 # Welche Module eine Node bekommt. Reihenfolge egal - die Node laedt alle.
+# VPN AUSGEBAUT (2026-09-20): "node_wg.py" ist aus dieser Liste entfernt.
+# Eine Node bekommt damit kein WireGuard-Modul mehr ausgeliefert. Reverse
+# Proxy und NAT-Probe bleiben - beide haben mit dem Tunnel nichts zu tun.
 NODE_MODULES = [
-    "node_wg.py",      # echtes WireGuard auf der Node (Tunnel enden dort)
     "node_relay.py",   # Erreichbarkeit hinter NAT: Probe + Relay
     "node_proxy.py",   # Reverse Proxy fuer Webseiten im Netz der Node
 ]
@@ -107,10 +109,6 @@ async def demote(client_id: str, username: str) -> dict:
                        details=client.get("hostname"))
     from app.sockets import send_to_agent
     await send_to_agent(client_id, "node-disable", {})
-    # Offene Tunnel auf diese Node ergeben ohne Node-Modul keinen Sinn mehr.
-    from app import vpn
-    for row in db.list_vpn_tunnels(active_only=True, client_id=client_id):
-        vpn.revoke_tunnel(row["id"])
     return {"ok": True, "is_node": False}
 
 
@@ -122,48 +120,20 @@ async def push_config(client_id: str) -> bool:
     if not db.is_client_node(client_id):
         return False
     from app.sockets import send_to_agent
-    from app import vpn
 
-    priv, pub = node_keys(client_id)
+    # Ohne VPN braucht die Node weder Schluessel noch UDP-Port noch eine
+    # Probe-Adresse. Uebrig bleibt die Modulliste - mehr war der Rest nie.
     return await send_to_agent(client_id, "node-enable", {
         "modules": module_manifest(),
-        "vpn_port": node_udp_port(),
-        "private_key": priv,
-        "public_key": pub,
-        "probe": {
-            "host": vpn.endpoint_host(),
-            "port": vpn.vpn_port(),
-            "token": probe_token(client_id),
-        },
-        # Diese Netze darf ein Tunnel auf der Node nie ansprechen: das
-        # Tunnel-Netz selbst (sonst zeigt der Tunnel auf sich zurueck).
-        "blocked": [vpn.vpn_subnet()],
     })
 
 
 # ----------------------------------------------------------------------
-# Schluessel und Adressen der Node
+# Adressen der Node
 # ----------------------------------------------------------------------
-
-def node_keys(client_id: str) -> tuple[str, str]:
-    """
-    Eigenes WireGuard-Schluesselpaar je Node.
-
-    Es liegt in den Node-Angaben des Clients. Ein gemeinsames Paar fuer
-    alle Nodes waere bequemer und genau deshalb falsch: Wer eine Node
-    uebernimmt, haette sonst die Schluessel aller anderen.
-    """
-    from app import wg_keys
-    caps = _caps(client_id)
-    priv = caps.get("private_key")
-    if not priv:
-        priv, pub = wg_keys.generate()
-        caps["private_key"] = priv
-        caps["public_key"] = pub
-        db.set_node_caps(client_id, json.dumps(caps))
-        return priv, pub
-    return priv, caps.get("public_key") or wg_keys.public_from_private(priv)
-
+# VPN AUSGEBAUT (2026-09-20): node_keys() erzeugte je Node ein
+# WireGuard-Schluesselpaar. Ohne Tunnel gibt es nichts mehr zu verschluesseln,
+# die Funktion ist ersatzlos entfallen (samt Abhaengigkeit auf app.wg_keys).
 
 def node_udp_port() -> int:
     """UDP-Port, auf dem Nodes ihren Endpunkt aufmachen."""

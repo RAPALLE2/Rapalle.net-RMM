@@ -62,7 +62,6 @@ from app.routers import (
     todos_routes,
     privacy_routes,
     patch_routes,
-    vpn_routes,
     node_routes,
     diag_routes,
     portforward_routes,
@@ -280,7 +279,10 @@ _mount("media_routes", media_routes)       # Medien-Bibliothek des Audio-Players
 _mount("todos_routes", todos_routes)       # Persönliche Todo-Liste (privat)
 _mount("privacy_routes", privacy_routes)     # DSGVO: Auskunft, Löschung, Fristen
 _mount("patch_routes", patch_routes)       # Software-Patching
-_mount("vpn_routes", vpn_routes)         # WireGuard-kompatibles VPN
+# VPN AUSGEBAUT (2026-09-20): Der WireGuard-Teil ist vollstaendig entfernt.
+# Grund: Sein Datenweg hing im Event-Loop (siehe unten) und hat das Backend
+# reihenweise in den Loop-Waechter laufen lassen. Port-Weiterleitung und
+# Relay-Explorer bleiben - die brauchen kein VPN.
 _mount("node_routes", node_routes)        # Node-Stufe + Reverse Proxy
 _mount("diag_routes", diag_routes)
 _mount("portforward_routes", portforward_routes)  # Port-Weiterleitung ohne VPN
@@ -660,11 +662,12 @@ async def _start_background_tasks():
     except Exception as _e:
         print(f"[weiterleitung] Start uebersprungen: {_e}")
 
-    try:
-        from app import vpn as _vpn
-        _asyncio.create_task(_vpn.start())
-    except Exception as _e:
-        print(f"[vpn] Start uebersprungen: {_e}")
+    # Frueher wurde hier vpn.start() angeworfen (wireguard-go + TUN-Geraet).
+    # Der TUN-Leser hing per add_reader DIREKT im Event-Loop und erzeugte pro
+    # IP-Paket einen asyncio-Task - bei echtem Tunnel-Verkehr tausende pro
+    # Sekunde in genau der Schleife, die auch alle Agenten, die Shell und den
+    # Remote-Screen bedient. Das war die Hauptquelle der Loop-Blockaden.
+    # Der VPN-Start ist ersatzlos entfallen.
 
 
 # ----------------------------------------------------------------------

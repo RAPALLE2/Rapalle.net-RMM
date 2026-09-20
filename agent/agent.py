@@ -714,14 +714,39 @@ async def connect():
 @sio.on("register-ack", namespace="/agent")
 async def on_register_ack(data=None):
     """
-    Das Backend hat unsere Anmeldung fertig verarbeitet.
+    Das Backend hat unsere Anmeldung verarbeitet - erfolgreich ODER NICHT.
 
-    Erst ab hier schicken wir Heartbeats. Vorher wäre jeder Heartbeat nur
-    zusätzliche Last auf einem Server, der gerade reihum alle anderen
-    Agenten aufnimmt - genau die Überlast, die den Container umgebracht hat.
+    Erst nach einer ERFOLGREICHEN Anmeldung schicken wir Heartbeats. Vorher
+    waere jeder Heartbeat nur zusaetzliche Last auf einem Server, der gerade
+    reihum alle anderen Agenten aufnimmt.
+
+    GEAENDERT (2026-09-20): Frueher stand hier nur '_REGISTERED.set()' - die
+    Bestaetigung wurde ungeprueft geglaubt. Das Backend schickte aber auch
+    dann ok=True, wenn die Anmeldung in Wahrheit gescheitert war. Ergebnis:
+    Der Agent lief zufrieden weiter und meldete Heartbeats, waehrend es im
+    Dashboard gar keinen Client-Datensatz gab. Genau das Bild von
+    "installiert sich sauber, taucht nie auf".
+
+    Jetzt wird der Inhalt ausgewertet. Bei einem Fehlschlag sagt der Agent
+    deutlich, WARUM, und meldet sich nach kurzer Pause erneut an - der
+    haeufigste Grund (Server gerade unter Last) erledigt sich von selbst.
     """
-    _REGISTERED.set()
-    _print("[agent] Anmeldung vom Server bestätigt - Heartbeats starten")
+    data = data or {}
+    if data.get("ok", True):
+        _REGISTERED.set()
+        _print("[agent] Anmeldung vom Server bestaetigt - Heartbeats starten")
+        return
+
+    _REGISTERED.clear()
+    reason = data.get("reason") or "kein Grund angegeben"
+    _print(f"[agent] ANMELDUNG ABGELEHNT: {reason}. "
+           f"Dieses Geraet erscheint deshalb NICHT im Dashboard. "
+           f"Neuer Versuch in 15 Sekunden.")
+    await asyncio.sleep(15)
+    try:
+        await connect()          # schickt dasselbe 'register' noch einmal
+    except Exception as e:
+        _print(f"[agent] Erneute Anmeldung fehlgeschlagen: {e!r}")
 
 
 @sio.event(namespace="/agent")
@@ -2112,18 +2137,29 @@ async def on_node_enable(payload):
         await _node_report(error="Module unvollstaendig")
         return
 
+    # VPN AUSGEBAUT (2026-09-20): 'node_wg' ist OPTIONAL geworden.
+    # Das Backend liefert dieses Modul nicht mehr aus. Frueher war der
+    # Import hart verlangt - eine Node ohne node_wg meldete deshalb
+    # "Module nicht ladbar" und blieb komplett inaktiv, samt Reverse Proxy
+    # und NAT-Probe, die mit WireGuard nie etwas zu tun hatten.
     try:
         import importlib
         pkg = os.path.basename(NODE_DIR)
-        node_wg = importlib.import_module(f"{pkg}.node_wg")
         node_relay = importlib.import_module(f"{pkg}.node_relay")
         node_proxy = importlib.import_module(f"{pkg}.node_proxy")
-        for m in (node_wg, node_relay, node_proxy):
+        for m in (node_relay, node_proxy):
             importlib.reload(m)
     except Exception as e:
         _print(f"[node] Module nicht ladbar: {e}")
         await _node_report(error=f"Module nicht ladbar: {e}")
         return
+
+    node_wg = None          # nur noch vorhanden, wenn die Datei liegengeblieben ist
+    try:
+        node_wg = importlib.import_module(f"{pkg}.node_wg")
+        importlib.reload(node_wg)
+    except Exception:
+        pass
 
     _node["wg_mod"] = node_wg
     _node["relay_mod"] = node_relay
@@ -2131,20 +2167,8 @@ async def on_node_enable(payload):
     _node["probe"] = payload.get("probe") or {}
     _node["active"] = True
 
-    # Laeuft schon eine Schnittstelle? Dann weiterbenutzen statt neu
-    # aufzubauen - ein Neustart wuerde bestehende Tunnel abreissen.
-    if _node.get("wg") is None:
+    if node_wg is not None and _node.get("wg") is None:
         _node["wg"] = node_wg.NodeWireGuard(log=_print)
-
-    # Wenn das Backend Schluessel und Port mitschickt UND WireGuard bereits
-    # installiert ist, die Schnittstelle direkt hochbringen.
-    if payload.get("private_key") and node_wg.probe().get("installed"):
-        res = _node["wg"].start(payload["private_key"],
-                                int(payload.get("wg_port") or 51822),
-                                payload.get("address") or "",
-                                payload.get("routes") or [])
-        if not res.ok:
-            _print(f"[node] WireGuard nicht gestartet: {res.reason}")
 
     _node_start_relay(payload)
     await _node_report()

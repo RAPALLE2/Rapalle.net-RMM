@@ -630,11 +630,6 @@ def sample() -> dict:
         data["pending"] = len(sock_state.pending_requests)
     except Exception:
         pass
-    try:
-        from app import vpn
-        data["tunnels"] = len(vpn.rt.stacks)
-    except Exception:
-        pass
     return data
 
 
