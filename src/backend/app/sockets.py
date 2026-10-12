@@ -1088,138 +1088,159 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
         "agent_code_hash": payload.get("agent_code_hash") or "",
     }
 
-    try:
-        was_known = await db.call(db.get_client, client_id) is not None
-        await db.call(
-            db.upsert_client,
-            client_id,
-            hostname,
-            payload.get("platform"),
-            payload.get("arch"),
-            payload.get("release"),
-            payload.get("ip"),
-        )
-    except Exception as e:
-        from app.errors import report as _report, Codes as _Codes
-        code = _report(_Codes.API_UNHANDLED, e,
-                       "Client-Datensatz beim Anmelden schreiben",
-                       client=client_id)
-        return False, f"Datenbank schreibt nicht ({code})"
-
-    # Zuordnung zu Mandant/Standort. Ohne tenant_id blendet das Dashboard
-    # den Client in den meisten Ansichten AUS - deshalb gehoert das hier in
-    # die Pflicht und nicht in die Kuer.
-    try:
-        client = await db.call(db.get_client, client_id)
-        if client and not client["tenant_id"]:
-            token = payload.get("enrollment_token")
-            token_row = (await db.call(db.get_enrollment_token, token)) if token else None
-
-            if token_row and token_row["tenant_id"]:
-                fields = {"tenant_id": token_row["tenant_id"],
-                          "location_id": token_row["location_id"]}
-                if token_row["client_name"]:
-                    fields["hostname"] = token_row["client_name"]
-            else:
-                tenant, location = await db.call(db.ensure_uncategorized)
-                fields = {"tenant_id": tenant, "location_id": location}
-                if token_row and token_row["client_name"]:
-                    fields["hostname"] = token_row["client_name"]
-
-            await db.call(db.update_client, client_id, fields)
-            if token:
-                await db.call(db.mark_enrollment_token_used, token)
-    except Exception as e:
-        from app.errors import report as _report, Codes as _Codes
-        code = _report(_Codes.API_UNHANDLED, e,
-                       "Client einem Mandanten zuordnen", client=client_id)
-        return False, f"Zuordnung fehlgeschlagen ({code})"
-
-    # Ab hier gilt die Anmeldung als geglueckt: Der Datensatz steht, und die
-    # Dashboards erfahren es. Das geschieht VOR der Kuer, damit kein
-    # Nebenschauplatz das Erscheinen im Dashboard verzoegern kann.
-    try:
-        await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
-        _emit_clients_changed_soon()
-    except Exception as e:
-        print(f"[register] Dashboards nicht benachrichtigt: {e!r}")
-
-    # ---------------- KUER -------------------------------------------
-    async def _side(name, coro_factory):
-        """Ein Nebenschauplatz - darf scheitern, ohne die Anmeldung zu kippen."""
-        try:
-            await coro_factory()
-        except Exception as e:
-            print(f"[register] '{name}' fuer {client_id} fehlgeschlagen: {e!r}")
-
-    async def _version():
-        await db.call(db.set_agent_version, client_id, payload.get("agent_version"))
-
-    async def _updated_flag():
-        if not payload.get("updated"):
-            return
-        state.update_confirmed[client_id] = time.monotonic()
+    # Kommt der Agent frisch aus einem Update? Dann Zeitpunkt merken, damit der
+    # Update-Endpunkt das Update als erfolgreich bestätigen kann, und das
+    # Dashboard informieren.
+    if payload.get("updated"):
+        import time as _time
+        state.update_confirmed[client_id] = _time.monotonic()
         await sio.emit("client:updated", {"id": client_id}, namespace="/dashboard")
-        from app import notifier
-        from router.admin_routes import build_notification
-        host = hostname or client_id
-        await notifier.fire_event("agent_update", client_id=client_id,
-            notification=build_notification(
-                f"Agent auf {host} wurde auf Version "
-                f"{payload.get('agent_version') or '?'} aktualisiert.",
-                head=f"\u2b06\ufe0f Agent aktualisiert \u2013 {host}",
-                client=host, service="Agent-Update", level="success"))
+        # Benachrichtigungs-Regel: Agent wurde aktualisiert
+        try:
+            from app import notifier
+            from app.routers.admin_routes import build_notification
+            _host = payload.get("hostname") or client_id
+            await notifier.fire_event("agent_update", client_id=client_id,
+                notification=build_notification(
+                    f"Agent auf {_host} wurde auf Version "
+                    f"{payload.get('agent_version') or '?'} aktualisiert.",
+                    head=f"⬆️ Agent aktualisiert – {_host}",
+                    client=_host, service="Agent-Update", level="success"))
+        except Exception:
+            pass
 
-    async def _auto_update():
-        pending = await db.call(db.get_client, client_id)
-        if pending and pending.get("pending_agent_update"):
-            await db.call(db.set_pending_agent_update, client_id, False)
-            if _agent_outdated(payload.get("agent_version") or "",
-                               _latest_agent_version(), client_id):
-                if await send_to_agent(client_id, "update-agent", {}):
-                    await db.call(db.add_audit_entry, None,
-                                  "agent.pending_update_triggered",
-                                  target=client_id,
-                                  details=(pending.get("hostname") or client_id))
-                    await sio.emit("client:update-started",
-                                   {"id": client_id, "auto": True},
-                                   namespace="/dashboard")
-        elif await db.call(db.get_setting, "agent_auto_update_offline", "1") == "1":
+    # Gemeldete Agent-Version speichern (für den "veraltet"-Hinweis im Dashboard).
+    db.set_agent_version(client_id, payload.get("agent_version"))
+
+    # Merken, ob der Client vor dem Upsert schon existierte (für den
+    # "Neuer Client registriert"-Trigger der Benachrichtigungs-Regeln).
+    _was_known = db.get_client(client_id) is not None
+
+    # Basis-Infos speichern (legt den Client an, falls neu, sonst aktualisieren)
+    db.upsert_client(
+        client_id,
+        hostname,
+        payload.get("platform"),
+        payload.get("arch"),
+        payload.get("release"),
+        payload.get("ip"),
+    )
+
+    # "Alle Agenten aktualisieren" mit Offline-Option: War der Client beim
+    # Massen-Update offline und wurde VORGEMERKT (pending_agent_update), wird
+    # das Update jetzt - direkt beim Wiederverbinden - nachgeholt.
+    _pending_client = db.get_client(client_id)
+    if _pending_client and _pending_client.get("pending_agent_update"):
+        db.set_pending_agent_update(client_id, False)
+        if _agent_outdated(payload.get("agent_version") or "",
+                           _latest_agent_version(), client_id):
+            ok = await send_to_agent(client_id, "update-agent", {})
+            if ok:
+                db.add_audit_entry(None, "agent.pending_update_triggered", target=client_id,
+                                   details=(_pending_client.get("hostname") or client_id))
+                await sio.emit("client:update-started", {"id": client_id, "auto": True},
+                               namespace="/dashboard")
+    else:
+        # Automatisches Agent-Update: Ist der Agent veraltet und Auto-Update für
+        # diesen Client aktiv (pro Client 'on' oder 'global' + Settings-Schalter),
+        # wird das Update direkt beim Verbinden angestoßen. Über das Setting
+        # 'agent_auto_update_offline' ("1" = Standard) lässt sich steuern, ob
+        # Clients, die offline waren, beim Wiederverbinden aktualisiert werden.
+        if db.get_setting("agent_auto_update_offline", "1") == "1":
             await _maybe_auto_update(client_id, payload.get("agent_version"))
 
-    async def _device_type():
-        if await db.call(db.apply_detected_device_type, client_id,
-                         payload.get("device_type")):
-            _emit_clients_changed_soon()
 
-    async def _crash_report():
-        crash = payload.get("last_crash")
-        if not crash:
-            return
-        row = await db.call(db.get_client, client_id)
-        host = (row or {}).get("hostname") or hostname or client_id
-        await db.call(db.add_audit_entry, None, "agent.crashed",
-                      target=client_id, details=str(crash)[:1000])
-        print(f"[agent-crash] {host}: Agent ist abgestuerzt und wurde neu "
-              f"gestartet:\n{crash}")
+    # Automatisch erkannter Gerätetyp (VM/LXC): wird nur GESPEICHERT
+    # (detected_device_type) - übernommen wird er erst nach Bestätigung durch
+    # den Nutzer im Client-Panel (device_type_ack).
+    if db.apply_detected_device_type(client_id, payload.get("device_type")):
+        _emit_clients_changed_soon()
+
+    # Absturz-Meldung des Agenten (Crash-Schutz: Agent startet sich selbst neu
+    # und meldet den Traceback beim nächsten Registrieren) -> Audit + dem
+    # Nutzer im Dashboard anzeigen.
+    _crash = payload.get("last_crash")
+    if _crash:
+        _c = db.get_client(client_id)
+        _host = (_c or {}).get("hostname") or payload.get("hostname") or client_id
+        db.add_audit_entry(None, "agent.crashed", target=client_id, details=str(_crash)[:1000])
+        print(f"[agent-crash] {_host}: Agent ist abgestürzt und wurde neu gestartet:\n{_crash}")
         await sio.emit("client:agent-crashed", {
-            "id": client_id, "hostname": host, "error": str(crash)[-2000:],
+            "id": client_id, "hostname": _host, "error": str(_crash)[-2000:],
         }, namespace="/dashboard")
 
-    async def _subnets():
+    # Nach dem Speichern den aktuellen Stand aus der DB holen
+    client = db.get_client(client_id)
+
+    # Client einem Tenant/Standort zuordnen, FALLS er noch keinem zugeordnet ist.
+    # (Ein bereits manuell zugeordneter Client wird NICHT überschrieben.)
+    if client and not client["tenant_id"]:
+        enrollment_token = payload.get("enrollment_token")
+        token_row = db.get_enrollment_token(enrollment_token) if enrollment_token else None
+
+        if token_row and token_row["tenant_id"]:
+            # Fall 1: Gültiger Token mit Tenant/Location -> dorthin einsortieren
+            update_fields = {
+                "tenant_id": token_row["tenant_id"],
+                "location_id": token_row["location_id"],
+            }
+            # Optionaler Wunschname aus dem Onboarding-Dialog
+            if token_row["client_name"]:
+                update_fields["hostname"] = token_row["client_name"]
+            db.update_client(client_id, update_fields)
+            db.mark_enrollment_token_used(enrollment_token)
+        else:
+            # Fall 2: Kein (brauchbarer) Token-Tenant -> ins "Uncategorized"-Tenant
+            uncategorized_tenant, default_location = db.ensure_uncategorized()
+            update_fields = {
+                "tenant_id": uncategorized_tenant,
+                "location_id": default_location,
+            }
+            # Falls der Token trotzdem einen Wunschnamen trug, diesen übernehmen
+            if token_row and token_row["client_name"]:
+                update_fields["hostname"] = token_row["client_name"]
+            db.update_client(client_id, update_fields)
+            if enrollment_token:
+                db.mark_enrollment_token_used(enrollment_token)
+
+    # Netze des Clients merken - Grundlage fuer Site-to-Site-Routen.
+    try:
         subnets = payload.get("subnets")
         if subnets:
-            await db.call(db.set_client_subnets, client_id, subnets)
+            db.set_client_subnets(client_id, subnets)
+    except Exception as e:
+        print(f"[register] Netze von {client_id} nicht gespeichert: {e}")
 
-    async def _diag_mode():
-        if await db.call(db.get_setting, "maintenance_agents", "0") == "1":
+    # Wartungsmodus: Der Agent erfährt bei JEDER Anmeldung, ob er
+    # mitschreiben soll. Sonst wüsste ein Agent, der gerade neu gestartet
+    # ist, nichts davon - und ausgerechnet seine Startphase fehlte im Log.
+    try:
+        if db.get_setting("maintenance_agents", "0") == "1":
             await sio.emit("diag-mode", {"enabled": True, "minutes": 0},
                            to=sid, namespace="/agent")
+    except Exception as e:
+        print(f"[diag] Modus für {client_id} nicht übermittelt: {e!r}")
 
-    async def _notify_online():
+    # Ist dieses Gerät eine Node? Dann bekommt es jetzt seine Betriebsdaten:
+    # Modulliste, Schlüssel, UDP-Port und die Probe-Adresse. Das geschieht
+    # bei JEDER Anmeldung, damit eine Node nach einem Neustart oder einem
+    # Modul-Update von selbst wieder den richtigen Stand hat.
+    try:
+        if db.is_client_node(client_id):
+            from app import node_manager
+            await node_manager.push_config(client_id)
+    except Exception as e:
+        print(f"[node] Konfiguration für {client_id} fehlgeschlagen: {e!r}")
+
+    # Dashboard(s) informieren, dass sich die Client-Liste geändert hat
+    await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
+    _emit_clients_changed_soon()
+
+    # Benachrichtigungs-Regeln: "Client kommt online" / "Neuer Client".
+    try:
         from app import notifier
-        from router.admin_routes import build_notification
-        host = hostname or client_id
+        from app.routers.admin_routes import build_notification
+        _host = hostname or client_id
         await notifier.fire_event("client_online", client_id=client_id,
             notification=build_notification(
                 f"{host} ist jetzt online.",
@@ -1228,25 +1249,11 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
         if not was_known:
             await notifier.fire_event("client_new", client_id=client_id,
                 notification=build_notification(
-                    f"Neuer Client {host} wurde registriert.",
-                    head=f"\u2728 Neuer Client \u2013 {host}",
-                    client=host, service="Onboarding", level="info"))
-
-    async def _node_check():
-        from app import node_manager
-        await node_manager.on_agent_online(client_id)
-
-    await _side("node-pruefung", _node_check)
-    await _side("agent-version", _version)
-    await _side("update-bestaetigung", _updated_flag)
-    await _side("auto-update", _auto_update)
-    await _side("geraetetyp", _device_type)
-    await _side("absturzmeldung", _crash_report)
-    await _side("netze", _subnets)
-    await _side("wartungsmodus", _diag_mode)
-    await _side("benachrichtigungen", _notify_online)
-
-    return True, "ok"
+                    f"Neuer Client {_host} wurde registriert.",
+                    head=f"✨ Neuer Client – {_host}",
+                    client=_host, service="Onboarding", level="info"))
+    except Exception as _e:
+        print(f"[notify] online-Event fehlgeschlagen: {_e}")
 
 
 @sio.on("heartbeat", namespace="/agent")
@@ -1376,19 +1383,33 @@ async def _handle_heartbeat(client_id, payload):
 # Seit die Tunnel auf den Nodes enden (echtes WireGuard) trägt das Backend
 # keine Nutzdaten mehr. Was hier ankommt, sind nur noch Zustandsmeldungen
 # und - falls die Node hinter symmetrischem NAT sitzt - die Pakete des
-# Relays. Die Handler sind bewusst dünn; die Logik liegt in der Port-Weiterleitung.
+# Relays. Die Handler sind bewusst dünn; die Logik liegt in vpn.py.
 
-# VPN AUSGEBAUT (2026-09-20)
-# ---------------------------
-# Hier standen 'node-wg-state', 'wg-relay' und 'node-net-packet'. Der letzte
-# war der gefaehrliche: JEDES einzelne IP-Paket eines Tunnels lief als
-# Socket.IO-Ereignis durch diesen Event-Loop und wurde von dort per
-# ensure_future weiterverteilt. Ein aktiver Tunnel hat damit dieselbe
-# Schleife geflutet, die auch Anmeldungen, Shell und Screen bedient.
-#
-# Die Ereignisse werden jetzt bewusst NICHT mehr entgegengenommen. Ein alter
-# Agent, der sie noch sendet, bekommt von python-socketio schlicht keine
-# Reaktion - das ist folgenlos und kostet nichts.
+@sio.on("node-wg-state", namespace="/agent")
+async def on_node_wg_state(sid, payload):
+    """Eine Node meldet ihren WireGuard-Zustand und ihre Erreichbarkeit."""
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id:
+        return
+    from app import vpn
+    vpn.on_node_state(client_id, payload or {})
+
+
+@sio.on("wg-relay", namespace="/agent")
+async def on_wg_relay(sid, payload):
+    """Ein WireGuard-Paket kommt über die Agent-Verbindung herein."""
+    from app import vpn
+    vpn.on_relay_packet(payload or {})
+
+
+@sio.on("node-net-packet", namespace="/agent")
+async def on_node_net_packet(sid, payload):
+    """Ein Paket aus dem virtuellen Netz kommt von einem Gerät zurück."""
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id:
+        return
+    from app import vpn
+    vpn.on_net_packet(client_id, payload or {})
 
 
 # --- Port-Weiterleitung -------------------------------------------
@@ -1655,8 +1676,8 @@ async def disconnect(sid):
         # Benachrichtigungs-Regeln: "Client geht offline".
         try:
             from app import notifier
-            from router.admin_routes import build_notification
-            _c = await db.call(db.get_client, client_id)
+            from app.routers.admin_routes import build_notification
+            _c = db.get_client(client_id)
             _host = (_c or {}).get("hostname") or client_id
             await notifier.fire_event("client_offline", client_id=client_id,
                 notification=build_notification(
