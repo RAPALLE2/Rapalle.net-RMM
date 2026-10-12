@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "recordings",
+  "name": "Aufzeichnungen",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "recordings",
+      "label": "Aufzeichnungen",
+      "icon": "🎥",
+      "title": "Session-Aufzeichnungen",
+      "entry": "recordings.js",
+      "export": "renderRecordings",
+      "w": 820,
+      "h": 560,
+      "perm": "see_replay"
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}

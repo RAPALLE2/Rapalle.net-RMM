@@ -30,7 +30,7 @@ Please keep in mind that parts of this project were vibe-coded, which means that
 
 ## Installation
 
-To install RAPALLE.net RMM on your own server, download the latest release as a ZIP archive and extract it to a directory of your choice, and run the run.py file.
+To install RAPALLE.net RMM on your own server, download the latest release as a ZIP archive and extract it to a directory of your choice, and run the main.py file in src/backend.
 
 ### Requirements
 
@@ -41,12 +41,12 @@ To install RAPALLE.net RMM on your own server, download the latest release as a 
 ### Installation Steps
 
 1. Download and extract the latest release.
-2. Open a terminal with admin/root privilages in the backend sub-directory.
-3. Start the application using: python run.py
+2. Open a terminal with admin/root privilages in the src/backend sub-directory.
+3. Start the application using: python main.py
 4. On first startup, RAPALLE.net RMM automatically creates all required files, initializes the database, and installs any missing Python dependencies.
 5. Open a browsertab with http://YOUR-SERVERS-IP:4000; standart account is user: admin, password: admin.
 
-6. Please consider changing the AGENT_TOKEN and JWT_SECRET in the env file inside the backend and agent folders.
+6. Please consider changing the AGENT_TOKEN and JWT_SECRET in the env file inside src/backend/data and src/agent.
 
 ### Installation with Docker
 
@@ -59,7 +59,7 @@ docker compose up -d --build
 
 Then open `http://YOUR-SERVERS-IP:4000` (default login `admin` / `admin`).
 
-The project folders `backend/`, `frontend/` and `agent/` are mounted into the
+The project folder `src/` (backend, frontend, agent, node) is mounted into the
 container as bind mounts. This keeps the database, recordings and your `.env`
 outside the image and keeps the built-in source editor and the self-update
 feature working.
@@ -72,7 +72,7 @@ Remove it from `docker-compose.yml` if you do not need remote sessions.
 Inside a container some settings are fixed the moment the container starts:
 
 - **PORT** and **HOST** — the port mapping is defined in `docker-compose.yml`.
-  Changing `PORT` in `backend/.env` will lock you out, because the container
+  Changing `PORT` in `src/backend/data/.env` will lock you out, because the container
   keeps forwarding the old port. To change the port, edit `RMM_PORT` in `.env`
   and run `docker compose up -d` again.
 - **Volumes / data paths** — anything not stored in a mounted folder is lost
@@ -147,3 +147,26 @@ https://dc.rapalle.net
 
 You can open a ticket in the **Tickets** section to get in touch directly with the developer and discuss issues, suggestions, feature requests, or general questions about RAPALLE.net RMM.
 
+## Modules
+
+The RMM core (dashboard, clients, updates, settings, permissions, terminal, screen view, task manager, source explorer)
+runs **without any module**. Everything else is an optional module under `src/modules/<area>/<name>/`
+(`backend`, `frontend`, ...). All modules are **disabled by default**; administrators switch them on in the **Modules** app
+(start menu), where each module also has its own settings menu and crash reports.
+
+| Module | Contains |
+|---|---|
+| `collab` | Tickets, chat, calendar & org chart, todos (each switchable) |
+| `scripts` | Scripts, bulk actions, automation (each switchable) |
+| `network` | Network scan & port scan, speed test, port forwarding (each switchable) |
+| `patching` | Patch scans and installs |
+| `recordings` | Session recordings and playback |
+| `privacy` | GDPR export/erasure and retention (retention is enforced only while active) |
+| `guacamole` | RDP/SSH/VNC via Guacamole incl. guacd container monitoring |
+| `relay` | Explorer relay (FTP/SFTP), storage and deployment |
+| `audioplayer`, `browser`, `gamehub`, `ai` | Audio player + Spotify, embedded browser, games, AI chat |
+| `example` | Reference module with a full guide: `src/modules/backend/example/GUIDE.md` |
+
+A crashing module never takes the backend down: it is deactivated automatically and a crash report is stored
+(`src/backend/logs/modules/<id>/`). Python packages needed by a module are listed in its `module.json` (`pip`) and are
+installed when the module is activated - `requirements.txt` only contains the core.

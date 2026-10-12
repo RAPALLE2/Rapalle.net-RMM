@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "patching",
+  "name": "Patching",
+  "version": "1.0.0",
+  "description": "Software-Patching: Scans und Installationen von Updates auf den Clients, Verlauf und Planung.",
+  "author": "RAPALLE.net",
+  "category": "Betrieb",
+  "icon": "🩹",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "patch_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "entry": "module"
+}

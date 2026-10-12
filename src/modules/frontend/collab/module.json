@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "id": "collab",
+  "name": "Zusammenarbeit",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "tickets",
+      "label": "Tickets",
+      "icon": "🎫",
+      "title": "Tickets",
+      "entry": "tickets.js",
+      "export": "renderTickets",
+      "w": 960,
+      "h": 660,
+      "perm": "ticket_read",
+      "feature": "tickets"
+    },
+    {
+      "id": "chat",
+      "label": "Chat",
+      "icon": "💬",
+      "title": "Chat",
+      "entry": "chat.js",
+      "export": "renderChat",
+      "w": 900,
+      "h": 620,
+      "perm": "use_chat",
+      "feature": "chat"
+    },
+    {
+      "id": "calendar",
+      "label": "Kalender",
+      "icon": "🗓️",
+      "title": "Kalender",
+      "entry": "calendar.js",
+      "export": "renderCalendar",
+      "w": 900,
+      "h": 680,
+      "perm": "use_calendar",
+      "feature": "calendar"
+    },
+    {
+      "id": "todos",
+      "label": "Todos",
+      "icon": "✅",
+      "title": "Todos",
+      "entry": "todos.js",
+      "export": "renderTodos",
+      "w": 960,
+      "h": 640,
+      "perm": "use_todos",
+      "feature": "todos"
+    },
+    {
+      "id": "orgchart",
+      "label": "Organigramm",
+      "icon": "🏛️",
+      "title": "Organigramm",
+      "entry": "orgchart.js",
+      "export": "renderOrgChart",
+      "w": 780,
+      "h": 640,
+      "perm": "see_org",
+      "feature": "calendar"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "example",
+  "name": "Beispiel-Modul",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "example",
+      "label": "Beispiel",
+      "icon": "🧪",
+      "title": "Beispiel-Modul",
+      "entry": "example.js",
+      "export": "renderExample",
+      "w": 560,
+      "h": 460
+    }
+  ]
+}

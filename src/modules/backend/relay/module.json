@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "id": "relay",
+  "name": "Explorer-Relay",
+  "version": "1.0.0",
+  "description": "Gibt Dateien von Clients per Relay frei (FTP/SFTP/WebDAV) und stellt Storage und Deployment bereit.",
+  "author": "RAPALLE.net",
+  "category": "Fernzugriff",
+  "icon": "🔌",
+  "requires": [],
+  "pip": [
+    "paramiko>=3.4"
+  ],
+  "routers": [
+    "relay_routes",
+    "storage_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "entry": "module"
+}

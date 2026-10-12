@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "id": "network",
+  "name": "Netzwerk-Werkzeuge",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "network",
+      "label": "Netzwerk-Scanner",
+      "icon": "📡",
+      "title": "Netzwerk-Scanner",
+      "entry": "network.js",
+      "export": "renderNetwork",
+      "w": 620,
+      "h": 500,
+      "perm": "network_scan",
+      "feature": "scan"
+    },
+    {
+      "id": "portscan",
+      "label": "Portscan",
+      "icon": "🎯",
+      "title": "Portscan",
+      "entry": "portscan.js",
+      "export": "renderPortscan",
+      "w": 560,
+      "h": 480,
+      "perm": "port_scan",
+      "feature": "scan"
+    },
+    {
+      "id": "speedtest",
+      "label": "Speedtest",
+      "icon": "🚀",
+      "title": "Speedtest",
+      "entry": "speedtest.js",
+      "export": "renderSpeedtest",
+      "w": 560,
+      "h": 640,
+      "feature": "speedtest"
+    }
+  ]
+}

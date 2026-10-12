@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "browser",
+  "name": "Web-Browser",
+  "version": "1.0.0",
+  "description": "Eingebetteter Browser (ueber den Server) und gespeicherte Webseiten in der Seitenleiste.",
+  "author": "RAPALLE.net",
+  "category": "Werkzeuge",
+  "icon": "🧭",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "webproxy_routes"
+  ]
+}

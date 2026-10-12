@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "gamehub",
+  "name": "Gaming-Hub",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "gaminghub",
+      "label": "Gaming Hub",
+      "icon": "🎮",
+      "title": "Gaming Hub",
+      "entry": "gaminghub.js",
+      "export": "renderGamingHub",
+      "w": 820,
+      "h": 640,
+      "perm": "play_games"
+    },
+    {
+      "id": "towerdefense",
+      "label": "Tower Defense",
+      "icon": "🏰",
+      "title": "Tower Defense",
+      "entry": "towerdefense.js",
+      "export": "renderTowerDefense",
+      "w": 760,
+      "h": 620,
+      "perm": "play_games",
+      "startmenu": false
+    }
+  ]
+}

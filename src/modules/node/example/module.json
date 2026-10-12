@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "example",
+  "name": "Beispiel-Modul",
+  "version": "1.0.0",
+  "node": {
+    "kind": "compose",
+    "compose": "docker-compose.yml",
+    "requires_docker": true,
+    "autostart": true,
+    "actions": ["up", "down", "restart", "status", "logs"],
+    "params": [
+      { "key": "port", "label": "Port auf der Node", "type": "number", "default": 18080 }
+    ]
+  }
+}

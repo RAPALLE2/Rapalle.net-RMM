@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "browser",
+  "name": "Web-Browser",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "webbrowser",
+      "label": "Browser",
+      "icon": "🌐",
+      "title": "Browser",
+      "entry": "webbrowser.js",
+      "export": "renderWebBrowser",
+      "w": 1020,
+      "h": 720
+    },
+    {
+      "id": "webapp",
+      "label": "Web-App",
+      "icon": "🌐",
+      "title": "Web-App",
+      "entry": "webbrowser.js",
+      "export": "renderWebApp",
+      "w": 1020,
+      "h": 720,
+      "startmenu": false
+    }
+  ],
+  "init": {
+    "entry": "index.js",
+    "export": "init"
+  }
+}

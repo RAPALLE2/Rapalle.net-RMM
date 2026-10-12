@@ -1,0 +1,381 @@
+/* ==========================================================================
+   RAPALLE.net RMM - EINHEITLICHE BEDIENELEMENTE (Design-System)
+   --------------------------------------------------------------------------
+   Diese Datei ist die EINZIGE Stelle, an der Aussehen und Größe von
+   Buttons, Tabs ("Register"), Eingabefeldern, Dropdowns, Checkboxen und
+   Radio-Buttons festgelegt werden. Sie wird NACH style.css geladen.
+
+   Bitte in JS/HTML KEINE Inline-Styles für Farbe, Größe, Rahmen oder
+   Innenabstand an diesen Elementen mehr setzen - nur noch die Klassen:
+
+   BUTTONS
+     .btn               Standard-Knopf (sekundär, neutral)
+     .btn-primary       Hauptaktion (Akzentfarbe) - funktioniert auch allein
+     .btn-danger        gefährliche Aktion (Löschen, Entfernen, Stoppen)
+     .btn-warn          Warnung / heikle Aktion
+     .btn-ghost         ohne Rahmen/Hintergrund (z.B. in Leisten)
+     .btn-tool          kleiner Icon-Knopf in Kopfzeilen von Widgets
+   Modifikatoren
+     .btn-sm            kompakte Größe (Tabellenzeilen, Listen)
+     .btn-icon          quadratisch, nur ein Symbol
+     .btn-block         volle Breite
+     .active            ausgewählt / eingerastet (Umschalter, Sortierung)
+
+   REGISTER / TABS
+     <div class="tab-bar"> <button class="tab-btn active">…</button> … </div>
+     (.sub-nav aus subtabs.js sieht automatisch identisch aus)
+
+   FELDER
+     input (Text, Zahl, Passwort, Datum, …), select, textarea -> automatisch
+     .input-sm          kompakte Größe für Felder/Dropdowns in Leisten
+
+   CHECKBOX / RADIO     -> automatisch, keine Klasse nötig
+   ========================================================================== */
+
+:root {
+  --ui-h: 30px;            /* Höhe von Buttons, Feldern, Dropdowns */
+  --ui-h-sm: 24px;         /* kompakte Höhe */
+  --ui-h-tab: 28px;        /* Höhe der Register-Knöpfe */
+  --ui-radius: 6px;
+  --ui-fs: 12.5px;
+  --ui-fs-sm: 11.5px;
+  --ui-px: 12px;           /* horizontaler Innenabstand */
+  --ui-px-sm: 8px;
+  --ui-gap: 6px;
+  --ui-on-accent: #0c1420; /* Schriftfarbe auf Akzent-Hintergrund */
+  --ui-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+  --ui-danger-rgb: 247, 92, 92;
+  --ui-warn-rgb: 245, 165, 36;
+}
+
+/* ==========================================================================
+   BUTTONS
+   :where() hält die Spezifität bei 0 - Varianten (.btn-primary …) und
+   Modifikatoren (.btn-sm …) überschreiben die Basis damit immer sauber.
+   ========================================================================== */
+:where(
+  .btn, .btn-primary, .btn-danger, .btn-warn, .btn-ghost,
+  .action-btn, .quick-actions button, .explorer-toolbar button,
+  .dash-edit-tools button, .dash-edit-toggle, .tm-sort-btn,
+  .rmm-window-body .taskbar-btn, .uid-ok, .uic-opt
+) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-gap);
+  box-sizing: border-box;
+  min-height: var(--ui-h);
+  padding: 0 var(--ui-px);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-fs);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease, border-color .15s ease, color .15s ease,
+              box-shadow .15s ease, filter .08s ease;
+}
+:where(
+  .btn, .action-btn, .quick-actions button, .explorer-toolbar button,
+  .dash-edit-tools button, .dash-edit-toggle, .tm-sort-btn,
+  .rmm-window-body .taskbar-btn, .uic-opt
+):hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+:where(
+  .btn, .btn-primary, .btn-danger, .btn-warn, .btn-ghost, .btn-tool,
+  .action-btn, .quick-actions button, .explorer-toolbar button,
+  .dash-edit-tools button, .dash-edit-toggle, .tm-sort-btn,
+  .rmm-window-body .taskbar-btn, .uid-ok, .uic-opt, .tab-btn, .sub-nav button
+):focus-visible {
+  outline: none;
+  box-shadow: var(--ui-ring);
+}
+
+/* --- Varianten ------------------------------------------------------------ */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ui-on-accent);
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); color: var(--ui-on-accent); }
+
+.btn-danger {
+  background: rgba(var(--ui-danger-rgb), 0.10);
+  border-color: rgba(var(--ui-danger-rgb), 0.55);
+  color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger); border-color: var(--danger); color: #fff;
+}
+
+.btn-warn {
+  background: rgba(var(--ui-warn-rgb), 0.10);
+  border-color: rgba(var(--ui-warn-rgb), 0.55);
+  color: var(--warn);
+}
+.btn-warn:hover:not(:disabled) {
+  background: var(--warn); border-color: var(--warn); color: var(--ui-on-accent);
+}
+
+.btn-ghost { background: transparent; border-color: transparent; color: var(--subtext); }
+.btn-ghost:hover:not(:disabled) { background: rgba(255,255,255,0.06); color: var(--text); }
+
+/* Ausgewählt / eingerastet (Sortier-Knöpfe, Umschalter) */
+.btn.active, .tm-sort-btn.active, .dash-edit-toggle.on, .action-btn.active {
+  background: rgba(var(--accent-rgb), 0.14);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Kleine Icon-Knöpfe in Widget-/Panel-Köpfen --------------------------- */
+.btn-tool, .dash-w-btn, .dash-lp-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: var(--ui-h-sm); height: var(--ui-h-sm);
+  padding: 0 6px; margin: 0;
+  border: 1px solid transparent; border-radius: var(--ui-radius);
+  background: transparent; color: var(--subtext);
+  font: inherit; font-size: 13px; line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.btn-tool:hover:not(:disabled), .dash-w-btn:hover:not(:disabled), .dash-lp-btn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.08); color: var(--text);
+}
+
+/* --- Modifikatoren -------------------------------------------------------- */
+.btn-sm {
+  min-height: var(--ui-h-sm);
+  padding: 0 var(--ui-px-sm);
+  font-size: var(--ui-fs-sm);
+  gap: 4px;
+}
+.btn-icon { padding: 0; min-width: var(--ui-h); width: var(--ui-h); }
+.btn-icon.btn-sm { min-width: var(--ui-h-sm); width: var(--ui-h-sm); }
+.btn-block { display: flex; width: 100%; }
+
+/* Listen-/Auswahl-Knöpfe: Text linksbündig, mehrzeilig erlaubt */
+.uic-opt, .btn-list {
+  justify-content: flex-start; text-align: left;
+  white-space: normal; padding-top: 6px; padding-bottom: 6px;
+}
+
+/* --- Gesperrt ------------------------------------------------------------- */
+:where(
+  .btn, .btn-primary, .btn-danger, .btn-warn, .btn-ghost, .btn-tool,
+  .action-btn, .quick-actions button, .explorer-toolbar button,
+  .dash-edit-tools button, .tm-sort-btn, .rmm-window-body .taskbar-btn,
+  .uid-ok, .uic-opt, .tab-btn, .sub-nav button
+):disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  filter: none;
+  box-shadow: none;
+}
+
+/* ==========================================================================
+   REGISTER / TABS  (Einstellungen, Module, Patching, Übersicht, Sub-Tabs …)
+   ========================================================================== */
+.tab-bar, .sub-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.tab-btn, .sub-nav button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  box-sizing: border-box;
+  min-height: var(--ui-h-tab);
+  padding: 0 var(--ui-px);
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius);
+  background: transparent;
+  color: var(--subtext);
+  font: inherit;
+  font-size: var(--ui-fs);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.tab-btn:hover:not(:disabled):not(.active),
+.sub-nav button:hover:not(:disabled):not(.active) {
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+}
+.tab-btn.active, .sub-nav button.active {
+  background: rgba(var(--accent-rgb), 0.12);
+  border-color: rgba(var(--accent-rgb), 0.50);
+  color: var(--accent);
+}
+
+/* ==========================================================================
+   EINGABEFELDER & DROPDOWNS
+   :where() -> kontextbezogene Regeln (Terminal-Zeile, Login …) gewinnen.
+   ========================================================================== */
+:where(
+  input:not([type]), input[type="text"], input[type="password"], input[type="email"],
+  input[type="number"], input[type="search"], input[type="url"], input[type="tel"],
+  input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"],
+  select, textarea
+) {
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: var(--ui-fs);
+  color: var(--text);
+  background-color: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+:where(
+  input:not([type]), input[type="text"], input[type="password"], input[type="email"],
+  input[type="number"], input[type="search"], input[type="url"], input[type="tel"],
+  input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"],
+  select
+) {
+  height: var(--ui-h);
+  padding: 0 10px;
+}
+:where(textarea) {
+  padding: 7px 10px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 60px;
+}
+:where(input, textarea)::placeholder { color: var(--subtext); opacity: .75; }
+
+:where(
+  input:not([type]), input[type="text"], input[type="password"], input[type="email"],
+  input[type="number"], input[type="search"], input[type="url"], input[type="tel"],
+  input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"],
+  select, textarea
+):hover:not(:disabled):not(:focus) {
+  border-color: rgba(var(--accent-rgb), .45);
+}
+:where(
+  input:not([type]), input[type="text"], input[type="password"], input[type="email"],
+  input[type="number"], input[type="search"], input[type="url"], input[type="tel"],
+  input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"],
+  select, textarea
+):focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ui-ring);
+}
+:where(input, select, textarea):disabled { opacity: .55; cursor: not-allowed; }
+
+/* --- Dropdown ------------------------------------------------------------- */
+:where(select) {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 28px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237f93ad' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px;
+  text-overflow: ellipsis;
+}
+:where(select[multiple], select[size]:not([size="1"])) {
+  height: auto; padding: 4px; background-image: none;
+}
+select option { background: var(--panel-2); color: var(--text); }
+select option:checked { background: rgba(var(--accent-rgb), .35); color: #fff; }
+
+/* --- Kompakte Felder ------------------------------------------------------ */
+.input-sm { height: var(--ui-h-sm) !important; font-size: var(--ui-fs-sm) !important; padding-left: 7px; }
+select.input-sm { padding-right: 24px; background-position: right 7px center; }
+
+/* ==========================================================================
+   CHECKBOX & RADIO
+   ========================================================================== */
+input[type="checkbox"], input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  position: relative;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  vertical-align: middle;
+  border: 1.5px solid var(--border);
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+input[type="checkbox"] { border-radius: 4px; }
+input[type="radio"] { border-radius: 50%; }
+
+input[type="checkbox"]:hover:not(:disabled),
+input[type="radio"]:hover:not(:disabled) { border-color: var(--accent); }
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible { outline: none; box-shadow: var(--ui-ring); }
+
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--ui-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) scale(1);
+  animation: ui-check-pop .18s ease;
+}
+input[type="checkbox"]:indeterminate {
+  background: var(--accent); border-color: var(--accent);
+}
+input[type="checkbox"]:indeterminate::after {
+  content: ""; position: absolute; left: 3px; right: 3px; top: 6px; height: 2px;
+  background: var(--ui-on-accent); border: none; transform: none;
+}
+input[type="radio"]:checked { border-color: var(--accent); }
+input[type="radio"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ui-radio-pop .18s ease;
+}
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { opacity: .5; cursor: not-allowed; }
+
+@keyframes ui-check-pop {
+  from { transform: rotate(45deg) scale(0); }
+  to   { transform: rotate(45deg) scale(1); }
+}
+@keyframes ui-radio-pop {
+  from { transform: scale(0); }
+  to   { transform: scale(1); }
+}
+
+label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+/* Schnellaktionen im Client-Panel: Symbol + Text linksbündig */
+.quick-actions .btn, .quick-actions button { justify-content: flex-start; }

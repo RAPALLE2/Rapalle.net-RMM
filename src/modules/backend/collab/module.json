@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "id": "collab",
+  "name": "Zusammenarbeit",
+  "version": "1.0.0",
+  "description": "Tickets, Chat, Kalender mit Organigramm und persoenliche Todo-Liste - jeweils einzeln schaltbar.",
+  "author": "RAPALLE.net",
+  "category": "Kollaboration",
+  "icon": "🤝",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    {
+      "module": "tickets_routes",
+      "feature": "tickets"
+    },
+    {
+      "module": "chat_routes",
+      "feature": "chat"
+    },
+    {
+      "module": "calendar_routes",
+      "feature": "calendar"
+    },
+    {
+      "module": "todos_routes",
+      "feature": "todos"
+    }
+  ],
+  "features": [
+    {
+      "id": "tickets",
+      "label": "Tickets",
+      "default": true
+    },
+    {
+      "id": "chat",
+      "label": "Chat",
+      "default": true
+    },
+    {
+      "id": "calendar",
+      "label": "Kalender & Organigramm",
+      "default": true
+    },
+    {
+      "id": "todos",
+      "label": "Todo-Liste",
+      "default": true
+    }
+  ]
+}

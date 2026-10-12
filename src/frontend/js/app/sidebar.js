@@ -1,0 +1,689 @@
+// sidebar.js
+// ----------
+// Baut die linke Seitenleiste als aufklappbaren Baum:
+//   Tenant -> Location -> (Ordner ->) Client -> (VM/CT als Kind-Client)
+//
+// Die Daten kommen aus state.hierarchy (Tenants/Locations/Folders) und
+// state.clients. Beim Klick auf einen Eintrag wird state.selection gesetzt und
+// das Haupt-Panel neu gerendert (renderMainContent aus panel.js).
+
+import { state } from "./state.js";
+import { esc } from "./utils.js";
+import { t } from "./i18n.js";
+import { api } from "./api.js";
+
+// Wird von app.js gesetzt, um bei Auswahl das Haupt-Panel zu aktualisieren
+let onSelectCallback = null;
+export function setOnSelect(fn) {
+  onSelectCallback = fn;
+}
+
+// Von anderen Apps (z.B. Dashboard-Favoriten) nutzbar: Client auswählen + im Baum zeigen.
+export function selectClientExternal(id) {
+  revealClient(id);
+  select("client", id);
+}
+
+// Merkt sich, welche Knoten aufgeklappt sind (damit ein Re-Render sie nicht zuklappt)
+const expanded = new Set();
+
+// -----------------------------------------------------------------
+// Favoriten-System: Clients UND Tenants können mit ★ markiert werden.
+// Gespeichert pro Benutzer im Browser (localStorage), damit die Auswahl
+// Reloads überlebt. Format: { clients: [id,...], tenants: [id,...] }
+// -----------------------------------------------------------------
+let _favUser = "anon";
+// Zwei Dimensionen pro Eintrag: s = Seitenleiste, d = Dashboard.
+// clients/tenants: {id:{s,d}} ; websites: {id:{s,d,meta:{name,url,clientId,clientHostname}}}
+//
+// NEU: "pins" = frei anheftbare Einträge, die man über den ★-Knopf in der
+// Favoriten-Leiste selbst anlegt. Damit lassen sich Dinge anheften, die vorher
+// keinen Stern hatten:
+//   { id: { s, d, meta: {
+//       kind: "app"      -> appId (+ optional props, z.B. {tab:"source"})
+//            | "session" -> clientId + action (terminal/explorer/vnc/...)
+//            | "website" -> url + open_mode
+//            | "client" | "tenant"  -> Auswahl in der Sidebar
+//       label, icon, ... } } }
+const favorites = { clients: {}, tenants: {}, websites: {}, pins: {} };
+let favExpanded = true;   // Favoriten-Sektion aufgeklappt?
+
+function _favKey() { return `rapalle-favs:${_favUser}`; }
+
+export function initFavorites(username) {
+  _favUser = username || "anon";
+  favorites.clients = {}; favorites.tenants = {}; favorites.websites = {}; favorites.pins = {};
+  try {
+    const raw = localStorage.getItem(_favKey());
+    if (raw) {
+      const d = JSON.parse(raw);
+      // Migration vom alten Format (Arrays = nur Seitenleiste)
+      if (Array.isArray(d.clients)) d.clients.forEach((id) => favorites.clients[id] = { s: true, d: false });
+      else Object.assign(favorites.clients, d.clients || {});
+      if (Array.isArray(d.tenants)) d.tenants.forEach((id) => favorites.tenants[id] = { s: true, d: false });
+      else Object.assign(favorites.tenants, d.tenants || {});
+      Object.assign(favorites.websites, d.websites || {});
+      Object.assign(favorites.pins, d.pins || {});
+      if (typeof d.expanded === "boolean") favExpanded = d.expanded;
+    }
+  } catch {}
+}
+
+function _saveFavorites() {
+  try {
+    localStorage.setItem(_favKey(), JSON.stringify({
+      clients: favorites.clients, tenants: favorites.tenants,
+      websites: favorites.websites, pins: favorites.pins, expanded: favExpanded,
+    }));
+    // Favoriten zusätzlich serverseitig sichern (in jedem Browser gleich).
+    import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
+  } catch {}
+}
+
+// -----------------------------------------------------------------
+// Angeheftete Einträge (Pins)
+// -----------------------------------------------------------------
+function _pinId() {
+  return "p_" + (window.crypto?.randomUUID?.().slice(0, 8)
+    || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
+}
+
+// meta = {kind, label, icon, appId?, props?, clientId?, action?, url?, open_mode?, targetId?}
+// dims = {s, d}  (Seitenleiste / Dashboard) - Standard: beide.
+export function addPin(meta, dims = { s: true, d: false }) {
+  const id = _pinId();
+  favorites.pins[id] = { s: !!dims.s, d: !!dims.d, meta: meta || {} };
+  _saveFavorites();
+  renderSidebar();
+  window.dispatchEvent(new CustomEvent("favorites-changed", { detail: { kind: "pins", id } }));
+  return id;
+}
+
+export function removePin(id) {
+  delete favorites.pins[id];
+  _saveFavorites();
+  renderSidebar();
+  window.dispatchEvent(new CustomEvent("favorites-changed", { detail: { kind: "pins", id } }));
+}
+
+export function favPinList(dim) {
+  return Object.entries(favorites.pins)
+    .filter(([, v]) => v[dim])
+    .map(([id, v]) => ({ id, s: !!v.s, d: !!v.d, ...(v.meta || {}) }));
+}
+
+// Einen Pin ausführen (öffnet App / Sitzung / Website oder wählt aus).
+export async function openPin(pin) {
+  if (!pin) return;
+  try {
+    if (pin.kind === "app") {
+      const { openWindow } = await import("./windowmanager.js");
+      const props = pin.props || {};
+      if (pin.appId && Object.keys(props).length) {
+        // App mit Unterseite (z.B. Einstellungen -> Source): direkt öffnen,
+        // damit die props (tab) wirklich ankommen.
+        openWindow({
+          key: `${pin.appId}`, appId: pin.appId,
+          title: pin.label || pin.appId, props,
+          w: pin.w || 900, h: pin.h || 640,
+        });
+      } else if (window.openRmmApp) {
+        window.openRmmApp(pin.appId);
+      }
+      return;
+    }
+    if (pin.kind === "session") {
+      const client = state.clients.find((c) => c.id === pin.clientId);
+      if (!client) { window.notify?.(`${t("sb_client_gone")}`, "warn", 4000); return; }
+      const { handleAction } = await import("./panel.js");
+      handleAction(pin.action || "terminal", client);
+      return;
+    }
+    if (pin.kind === "website") {
+      const m = await import("./modules.js");   // Browser-Modul, sonst neuer Tab
+      m.openWebsiteEntry({ url: pin.url, name: pin.label || pin.url, open_mode: pin.open_mode || "internal" });
+      return;
+    }
+    if (pin.kind === "client") { revealClient(pin.targetId); select("client", pin.targetId); return; }
+    if (pin.kind === "tenant") { select("tenant", pin.targetId); return; }
+  } catch (e) {
+    window.notify?.(t("sb_fav_failed") + ": " + e.message, "error", 6000);
+  }
+}
+
+// Icon-Vorschlag je nach Pin-Art (falls keins gesetzt).
+export function pinIcon(pin) {
+  if (pin.icon) return pin.icon;
+  if (pin.kind === "session") {
+    return { terminal: "🖥️", explorer: "📁", vnc: "🖵", guacamole: "🪟", taskmanager: "📈" }[pin.action] || "🔧";
+  }
+  if (pin.kind === "website") return pin.open_mode === "internal" ? "🪟" : "🔗";
+  if (pin.kind === "client") return "💻";
+  if (pin.kind === "tenant") return "🏢";
+  return "⭐";
+}
+
+// Aktueller Zustand: {s, d}
+export function favState(kind, id) {
+  const e = favorites[kind]?.[id];
+  return { s: !!e?.s, d: !!e?.d };
+}
+
+// Durchschalten: keiner -> Seitenleiste -> Dashboard -> beide -> keiner
+export function cycleFav(kind, id, meta) {
+  const cur = favState(kind, id);
+  let next;
+  if (!cur.s && !cur.d) next = { s: true, d: false };
+  else if (cur.s && !cur.d) next = { s: false, d: true };
+  else if (!cur.s && cur.d) next = { s: true, d: true };
+  else next = { s: false, d: false };
+
+  if (!next.s && !next.d) {
+    delete favorites[kind][id];
+  } else if (kind === "websites") {
+    favorites[kind][id] = { ...next, meta: meta || favorites[kind][id]?.meta || {} };
+  } else {
+    favorites[kind][id] = next;
+  }
+  _saveFavorites();
+  _refreshStars(kind, id);
+  renderSidebar();
+  window.dispatchEvent(new CustomEvent("favorites-changed", { detail: { kind, id } }));
+}
+
+function _favClass(kind, id) {
+  const { s, d } = favState(kind, id);
+  if (s && d) return "both";
+  if (s) return "sb";
+  if (d) return "db";
+  return "";
+}
+
+function _escAttr(s) { return String(s).replace(/&/g, "&amp;").replace(/'/g, "&#39;").replace(/</g, "&lt;"); }
+
+// Stern-HTML. Für Websites die Anzeige-Infos als data-fav-meta mitgeben.
+export function favStarHtml(kind, id, meta) {
+  const cls = _favClass(kind, id);
+  const glyph = cls ? "★" : "☆";
+  const metaAttr = (kind === "websites" && meta)
+    ? ` data-fav-meta='${_escAttr(JSON.stringify(meta))}'` : "";
+  return `<span class="fav-star ${cls}" data-fav="${kind}:${id}"${metaAttr} title="Favorit durchschalten: ☆ → Seitenleiste → Dashboard → beide">${glyph}</span>`;
+}
+
+// Alle sichtbaren Sterne eines Eintrags nach dem Umschalten aktualisieren.
+function _refreshStars(kind, id) {
+  const cls = _favClass(kind, id);
+  const glyph = cls ? "★" : "☆";
+  document.querySelectorAll(`.fav-star[data-fav="${kind}:${id}"]`).forEach((el) => {
+    el.className = `fav-star ${cls}`;
+    el.textContent = glyph;
+  });
+}
+
+// Listen für Seitenleiste (dim="s") bzw. Dashboard (dim="d")
+export function favClientIds(dim) { return Object.keys(favorites.clients).filter((id) => favorites.clients[id][dim]); }
+export function favTenantIds(dim) { return Object.keys(favorites.tenants).filter((id) => favorites.tenants[id][dim]); }
+export function favWebsiteList(dim) {
+  return Object.entries(favorites.websites)
+    .filter(([, v]) => v[dim])
+    .map(([id, v]) => ({ id, ...(v.meta || {}) }));
+}
+
+// Rückwärtskompatibler Helfer für bestehende Aufrufe im Baum.
+function favStar(kind, id) { return favStarHtml(kind, id); }
+
+// Für die Persistenz (persist.js): aktuellen Aufklapp-Zustand lesen/setzen.
+export function getExpandedIds() { return [...expanded]; }
+export function setExpandedIds(ids) {
+  expanded.clear();
+  for (const id of ids || []) expanded.add(id);
+}
+
+// Wird von app.js gesetzt, damit Änderungen am Aufklapp-Zustand gespeichert werden.
+let onTreeStateChanged = null;
+export function setOnTreeStateChanged(fn) { onTreeStateChanged = fn; }
+
+function toggleExpand(nodeId) {
+  if (expanded.has(nodeId)) expanded.delete(nodeId);
+  else expanded.add(nodeId);
+  renderSidebar();
+  if (onTreeStateChanged) onTreeStateChanged();
+}
+
+// Klappt den Pfad zu einem Client auf (Tenant + Location + evtl. Host-Client),
+// damit der ausgewählte Client in der Sidebar immer sichtbar ist.
+// Wird aufgerufen, wenn man z.B. aus der Geräteübersicht einen Client öffnet.
+export function revealClient(clientId) {
+  const client = state.clients.find((c) => c.id === clientId);
+  if (!client) return;
+  if (client.tenant_id) expanded.add(client.tenant_id);
+  if (client.location_id) expanded.add(client.location_id);
+  if (client.folder_id) expanded.add(client.folder_id);
+  // Falls es eine VM/CT unter einem Host ist, auch den Host aufklappen
+  // (bzw. den Pseudo-Ordner, wenn der Host selbst nicht sichtbar ist).
+  if (client.parent_client_id) {
+    expanded.add(client.parent_client_id);
+    expanded.add(`hostgrp:${client.parent_client_id}`);
+  }
+  renderSidebar();
+}
+
+function select(type, id) {
+  state.selection = { type, id };
+  renderSidebar();
+  if (onSelectCallback) onSelectCallback();
+  if (onTreeStateChanged) onTreeStateChanged();
+}
+
+// Baut das kleine "online"-Pünktchen für einen Client
+function clientDot(client) {
+  let color = "var(--subtext)"; // offline
+  if (client.status_override === "maintenance") color = "var(--warn)";
+  else if (client.online) color = "var(--online)";
+  return `<span class="dot" style="background:${color}"></span>`;
+}
+
+// Rendert rekursiv die Ordnerstruktur + Clients innerhalb einer Location
+// -----------------------------------------------------------------
+// "Verwaiste" VMs/LXCs: Der Benutzer hat Rechte auf die VM, aber NICHT auf
+// den physischen Host - der Host fehlt dann in state.clients. Solche VMs
+// würden sonst nirgends auftauchen (sie werden normalerweise nur unter ihrem
+// Host gerendert). Sie werden stattdessen an ihrer Position in einem
+// Pseudo-Ordner angezeigt, der wie der physische Host heißt (parent_hostname
+// liefert das Backend mit).
+// -----------------------------------------------------------------
+function isOrphanVm(c) {
+  return !!c.parent_client_id && !state.clients.some((p) => p.id === c.parent_client_id);
+}
+
+// Rendert eine Client-Liste; verwaiste VMs werden dabei nach Host gruppiert
+// und in einem auf-/zuklappbaren Pseudo-Ordner (🖥 Host-Name) dargestellt.
+function renderClientList(clients) {
+  let html = "";
+  const orphanGroups = new Map();   // parent_client_id -> [vms]
+  for (const c of clients) {
+    if (isOrphanVm(c)) {
+      if (!orphanGroups.has(c.parent_client_id)) orphanGroups.set(c.parent_client_id, []);
+      orphanGroups.get(c.parent_client_id).push(c);
+    } else {
+      html += renderClientNode(c);
+    }
+  }
+  for (const [pid, vms] of orphanGroups) {
+    const key = `hostgrp:${pid}`;
+    const isOpen = expanded.has(key);
+    const name = vms[0].parent_hostname || "Host";
+    html += `
+      <div class="tree-node">
+        <div class="tree-row" data-toggle="${esc(key)}" title="${t("u_physischer_host_kein_zugriff_entha")}">
+          <span>${isOpen ? "▾" : "▸"}</span> 🖥️ ${esc(name)}
+        </div>
+        ${isOpen ? `<div class="tree-children">${vms.map(renderClientNode).join("")}</div>` : ""}
+      </div>
+    `;
+  }
+  return html;
+}
+
+function renderFolderChildren(locationId, parentFolderId) {
+  const folders = state.hierarchy.folders.filter(
+    (f) => f.location_id === locationId && f.parent_folder_id === parentFolderId
+  );
+  const clients = state.clients.filter(
+    (c) => c.location_id === locationId && c.folder_id === parentFolderId &&
+           (!c.parent_client_id || isOrphanVm(c))
+  );
+
+  let html = "";
+
+  // Unter-Ordner
+  for (const folder of folders) {
+    const isOpen = expanded.has(folder.id);
+    html += `
+      <div class="tree-node">
+        <div class="tree-row" data-toggle="${folder.id}" data-drop-folder="${folder.id}">
+          <span>${isOpen ? "▾" : "▸"}</span> 📁 ${esc(folder.name)}
+        </div>
+        ${isOpen ? `<div class="tree-children">${renderFolderChildren(locationId, folder.id)}</div>` : ""}
+      </div>
+    `;
+  }
+
+  // Clients in diesem Ordner (bzw. direkt in der Location, wenn parentFolderId null ist)
+  // - inkl. verwaister VMs im Host-Pseudo-Ordner.
+  html += renderClientList(clients);
+
+  return html;
+}
+
+// Rendert einen einzelnen Client + seine VM/CT-Kinder
+function renderClientNode(client) {
+  const children = state.clients.filter((c) => c.parent_client_id === client.id);
+  const isOpen = expanded.has(client.id);
+  const selected = state.selection?.type === "client" && state.selection.id === client.id;
+
+  return `
+    <div class="tree-node">
+      <div class="tree-row row-anim ${selected ? "selected" : ""}" data-select-client="${client.id}" data-drag-client="${client.id}" draggable="true">
+        ${children.length ? `<span data-toggle="${client.id}">${isOpen ? "▾" : "▸"}</span>` : `<span style="width:10px;display:inline-block"></span>`}
+        ${clientDot(client)} <span style="flex:1">${esc(client.hostname)}</span>
+        ${favStar("clients", client.id)}
+      </div>
+      ${isOpen && children.length ? `<div class="tree-children">${children.map(renderClientNode).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+export function renderSidebar() {
+  // Dashboard-Eintrag wie einen ausgewählten Client markieren, wenn das
+  // Dashboard die aktive Ansicht ist (selection leer = ebenfalls Dashboard).
+  const dashNav = document.getElementById("sidebar-dashboard");
+  if (dashNav) dashNav.classList.toggle("selected",
+    !state.selection || state.selection.type === "dashboard");
+  const tree = document.getElementById("sidebar-tree");
+  if (!tree) return;
+
+  let html = "";
+
+  for (const tenant of state.hierarchy.tenants) {
+    const isOpen = expanded.has(tenant.id);
+    const selected = state.selection?.type === "tenant" && state.selection.id === tenant.id;
+    const locations = state.hierarchy.locations.filter((l) => l.tenant_id === tenant.id);
+
+    html += `
+      <div class="tree-node">
+        <div class="tree-row row-anim ${selected ? "selected" : ""}" data-drop-tenant="${tenant.id}">
+          <span data-toggle="${tenant.id}">${isOpen ? "▾" : "▸"}</span>
+          <span data-select-tenant="${tenant.id}" style="flex:1">
+            <span class="dot" style="background:${esc(tenant.color)}"></span> ${esc(tenant.name)}
+          </span>
+          ${favStar("tenants", tenant.id)}
+        </div>
+    `;
+
+    if (isOpen) {
+      html += `<div class="tree-children">`;
+      for (const location of locations) {
+        const locOpen = expanded.has(location.id);
+        const locSelected = state.selection?.type === "location" && state.selection.id === location.id;
+        html += `
+          <div class="tree-node">
+            <div class="tree-row ${locSelected ? "selected" : ""}" data-drop-location="${location.id}">
+              <span data-toggle="${location.id}">${locOpen ? "▾" : "▸"}</span>
+              <span data-select-location="${location.id}" style="flex:1">📍 ${esc(location.name)}</span>
+            </div>
+            ${locOpen ? `<div class="tree-children">${renderFolderChildren(location.id, null)}</div>` : ""}
+          </div>
+        `;
+      }
+      // Clients, die direkt im Tenant liegen (Tenant gesetzt, aber keine Location)
+      // - z.B. nach dem Ziehen auf einen Tenant. Damit sie sichtbar bleiben.
+      const tenantClients = state.clients.filter(
+        (c) => c.tenant_id === tenant.id && !c.location_id &&
+               (!c.parent_client_id || isOrphanVm(c))
+      );
+      html += renderClientList(tenantClients);
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+  }
+
+  // Clients, die noch keinem Tenant zugeordnet sind ("nicht zugeordnet")
+  const unassigned = state.clients.filter(
+    (c) => !c.tenant_id && (!c.parent_client_id || isOrphanVm(c)));
+  if (unassigned.length) {
+    html += `
+      <div class="tree-node">
+        <div class="tree-row" style="color:var(--subtext)">${t("not_assigned")}</div>
+        <div class="tree-children">${renderClientList(unassigned)}</div>
+      </div>
+    `;
+  }
+
+  tree.innerHTML = html || `<div style="color:var(--subtext);padding:10px;font-size:12px">${t("no_devices_sidebar")}</div>`;
+
+  // Event-Listener anhängen (nachdem das HTML im DOM ist)
+  tree.querySelectorAll("[data-toggle]").forEach((el) =>
+    el.addEventListener("click", (e) => { e.stopPropagation(); toggleExpand(el.dataset.toggle); })
+  );
+  tree.querySelectorAll("[data-select-tenant]").forEach((el) =>
+    el.addEventListener("click", (e) => { e.stopPropagation(); select("tenant", el.dataset.selectTenant); })
+  );
+  tree.querySelectorAll("[data-select-location]").forEach((el) =>
+    el.addEventListener("click", (e) => { e.stopPropagation(); select("location", el.dataset.selectLocation); })
+  );
+  tree.querySelectorAll("[data-select-client]").forEach((el) =>
+    el.addEventListener("click", (e) => { e.stopPropagation(); select("client", el.dataset.selectClient); })
+  );
+
+  // Stern-Klicks werden global über einen delegierten Handler behandelt
+  // (siehe initSidebarNav -> _wireGlobalStars).
+
+  // --- Drag & Drop: Client in anderen Tenant / Location / Ordner ziehen ---
+  tree.querySelectorAll("[data-drag-client]").forEach((el) => {
+    el.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", el.dataset.dragClient);
+      // Zusätzlicher Typ: erlaubt das Ablegen auf dem Desktop (Fenster-Layer),
+      // um den Client als eigenes Fenster herauszuziehen.
+      e.dataTransfer.setData("text/x-rmm-client", el.dataset.dragClient);
+      e.dataTransfer.effectAllowed = "copyMove";
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => {
+      el.classList.remove("dragging");
+      tree.querySelectorAll(".drag-over").forEach((x) => x.classList.remove("drag-over"));
+    });
+  });
+
+  const dropSel = "[data-drop-tenant],[data-drop-location],[data-drop-folder]";
+  tree.querySelectorAll(dropSel).forEach((el) => {
+    el.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();               // nur das innerste Ziel hervorheben
+      e.dataTransfer.dropEffect = "move";
+      tree.querySelectorAll(".drag-over").forEach((x) => x.classList.remove("drag-over"));
+      el.classList.add("drag-over");
+    });
+    el.addEventListener("dragleave", (e) => {
+      if (!el.contains(e.relatedTarget)) el.classList.remove("drag-over");
+    });
+    el.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove("drag-over");
+      const clientId = e.dataTransfer.getData("text/plain");
+      moveClient(clientId, {
+        tenant: el.dataset.dropTenant,
+        location: el.dataset.dropLocation,
+        folder: el.dataset.dropFolder,
+      });
+    });
+  });
+
+  renderFavorites();
+}
+
+// Verschiebt einen Client per Drag&Drop in einen Tenant/eine Location/einen Ordner.
+// Wirkt wie das Bearbeiten der Eigenschaften (tenant_id/location_id/folder_id).
+async function moveClient(clientId, target) {
+  const c = state.clients.find((x) => x.id === clientId);
+  if (!c) return;
+
+  let fields = null;
+  if (target.folder) {
+    const folder = state.hierarchy.folders.find((f) => f.id === target.folder);
+    if (!folder) return;
+    const loc = state.hierarchy.locations.find((l) => l.id === folder.location_id);
+    fields = { tenant_id: loc ? loc.tenant_id : c.tenant_id, location_id: folder.location_id, folder_id: folder.id };
+  } else if (target.location) {
+    const loc = state.hierarchy.locations.find((l) => l.id === target.location);
+    if (!loc) return;
+    fields = { tenant_id: loc.tenant_id, location_id: loc.id, folder_id: null };
+  } else if (target.tenant) {
+    fields = { tenant_id: target.tenant, location_id: null, folder_id: null };
+  }
+  if (!fields) return;
+
+  // Keine Änderung? -> nichts tun.
+  if (c.tenant_id === fields.tenant_id &&
+      (c.location_id || null) === (fields.location_id || null) &&
+      (c.folder_id || null) === (fields.folder_id || null)) {
+    return;
+  }
+
+  try {
+    await api.updateClient(clientId, fields);
+    Object.assign(c, fields);            // lokalen Zustand sofort aktualisieren
+    // Zielpfad aufklappen, damit der Client sichtbar bleibt.
+    if (fields.tenant_id) expanded.add(fields.tenant_id);
+    if (fields.location_id) expanded.add(fields.location_id);
+    if (fields.folder_id) expanded.add(fields.folder_id);
+    renderSidebar();
+    if (onSelectCallback) onSelectCallback();   // Hauptpanel ggf. aktualisieren
+    window.notify?.(`${c.hostname} verschoben.`, "success", 2500);
+  } catch (e) {
+    window.notify?.("Verschieben fehlgeschlagen: " + e.message, "error", 6000);
+  }
+}
+
+// -----------------------------------------------------------------
+// Favoriten-Sektion oben in der Sidebar rendern
+// -----------------------------------------------------------------
+function renderFavorites() {
+  const box = document.getElementById("sidebar-fav-list");
+  const header = document.getElementById("fav-header");
+  if (!box || !header) return;
+
+  // Aufklapp-Zustand der Favoriten-Sektion
+  const caret = header.querySelector(".fav-caret");
+  if (caret) caret.textContent = favExpanded ? "▾" : "▸";
+  box.style.display = favExpanded ? "block" : "none";
+
+  const favTenants = state.hierarchy.tenants.filter((tn) => favTenantIds("s").includes(tn.id));
+  const sClientIds = favClientIds("s");
+  const favClients = state.clients.filter((c) => sClientIds.includes(c.id));
+  const favSites = favWebsiteList("s");
+  const pins = favPinList("s");
+
+  if (!favTenants.length && !favClients.length && !favSites.length && !pins.length) {
+    box.innerHTML = `<div class="fav-empty">${t("sb_no_favs")}</div>`;
+  } else {
+    let h = "";
+    // Selbst angeheftete Einträge zuerst (Apps, Sitzungen, Links).
+    for (const p of pins) {
+      h += `
+        <div class="tree-row row-anim fav-row fav-pin" data-fav-pin="${esc(p.id)}" title="${esc(p.sub || p.label || "")}">
+          <span class="fav-pin-ico">${esc(pinIcon(p))}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.label || "Favorit")}</span>
+          <span class="fav-star both fav-pin-del" data-pin-del="${esc(p.id)}" title="Favorit entfernen">★</span>
+        </div>`;
+    }
+    for (const tn of favTenants) {
+      h += `
+        <div class="tree-row row-anim fav-row" data-fav-select="tenant:${tn.id}">
+          <span class="dot" style="background:${esc(tn.color)}"></span>
+          <span style="flex:1">${esc(tn.name)}</span>
+          ${favStarHtml("tenants", tn.id)}
+        </div>`;
+    }
+    for (const c of favClients) {
+      h += `
+        <div class="tree-row row-anim fav-row" data-fav-select="client:${c.id}">
+          ${clientDot(c)} <span style="flex:1">${esc(c.hostname)}</span>
+          ${favStarHtml("clients", c.id)}
+        </div>`;
+    }
+    for (const w of favSites) {
+      const meta = { name: w.name, url: w.url, clientId: w.clientId,
+                     clientHostname: w.clientHostname, open_mode: w.open_mode };
+      h += `
+        <div class="tree-row row-anim fav-row" data-fav-web="${esc(w.url || "")}"
+             data-fav-mode="${esc(w.open_mode || "external")}" data-fav-name="${esc(w.name || "")}"
+             title="${esc(w.url || "")}">
+          <span>${w.open_mode === "internal" ? "🪟" : "🔗"}</span> <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name || w.url || "")}</span>
+          ${favStarHtml("websites", w.id, meta)}
+        </div>`;
+    }
+    box.innerHTML = h;
+  }
+
+  // Angeheftete Einträge: Klick öffnet, Klick auf den Stern entfernt.
+  box.querySelectorAll("[data-fav-pin]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      const del = e.target.closest("[data-pin-del]");
+      if (del) { e.stopPropagation(); removePin(del.dataset.pinDel); return; }
+      const p = favPinList("s").find((x) => x.id === el.dataset.favPin);
+      openPin(p);
+    })
+  );
+
+  // Klick auf Favorit -> auswählen (+ Pfad aufklappen bei Clients)
+  box.querySelectorAll("[data-fav-select]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-fav]")) return;  // Stern-Klick separat
+      const [type, id] = el.dataset.favSelect.split(":");
+      if (type === "client") revealClient(id);
+      select(type, id);
+    })
+  );
+  // Website-Favorit anklicken -> je nach open_mode im internen Browser-Fenster
+  // oder als externer Tab öffnen.
+  box.querySelectorAll("[data-fav-web]").forEach((el) =>
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-fav]")) return;
+      const url = el.dataset.favWeb;
+      if (!url) return;
+      import("./modules.js").then((m) => m.openWebsiteEntry({
+        url, name: el.dataset.favName || url, open_mode: el.dataset.favMode,
+      })).catch(() => window.open(url, "_blank", "noopener"));
+    })
+  );
+}
+
+// Favoriten-Header (Ein-/Ausklappen) + Dashboard-Tab verkabeln. Wird einmal
+// von app.js aufgerufen.
+export function initSidebarNav() {
+  // Globaler, delegierter Handler für ALLE Favoriten-Sterne (nur einmal binden).
+  if (!window.__favStarBound) {
+    window.__favStarBound = true;
+    document.addEventListener("click", (e) => {
+      const star = e.target.closest(".fav-star[data-fav]");
+      if (!star) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const [kind, id] = star.dataset.fav.split(":");
+      let meta;
+      if (star.dataset.favMeta) { try { meta = JSON.parse(star.dataset.favMeta); } catch {} }
+      star.classList.add("fav-pop");
+      setTimeout(() => cycleFav(kind, id, meta), 120);
+    }, true);
+  }
+
+  const header = document.getElementById("fav-header");
+  if (header) header.addEventListener("click", (e) => {
+    if (e.target.closest("#fav-add-btn")) return;   // ★-Knopf: eigener Handler
+    favExpanded = !favExpanded;
+    _saveFavorites();
+    renderFavorites();
+  });
+
+  // ★-Knopf neben "Favoriten": eigenen Favoriten anlegen (App, App mit
+  // Unterseite, Client-Sitzung, Website, Client/Tenant).
+  const addBtn = document.getElementById("fav-add-btn");
+  if (addBtn) addBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!favExpanded) { favExpanded = true; _saveFavorites(); renderFavorites(); }
+    const m = await import("./favadd.js");
+    m.openAddFavoriteDialog();
+  });
+  const dash = document.getElementById("sidebar-dashboard");
+  if (dash) dash.addEventListener("click", () => {
+    dash.classList.add("nav-pulse");
+    setTimeout(() => dash.classList.remove("nav-pulse"), 400);
+    state.selection = { type: "dashboard" };
+    renderSidebar();
+    if (onSelectCallback) onSelectCallback();
+    if (onTreeStateChanged) onTreeStateChanged();
+  });
+}

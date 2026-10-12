@@ -11,9 +11,7 @@ venv/
 agent.log
 
 # Aufzeichnungen (Session-Recordings)
-recordings/*json
-recordings/*term.jsonl
-recordings/*.webm
+src/backend/media/recordings/*
 *.webm
 *.jsonl
 
@@ -24,12 +22,15 @@ memory.md
 
 # Notizen
 LIES-MICH.txt
-# Lokal gebaute Agent-Installationspakete (tools/build_installers.py)
-dist/
+# Lokal gebaute Agent-Installationspakete (src/backend/app/build_installers.py)
+src/backend/temp/dist/
 
 # Startprotokoll des Containers (docker-entrypoint.sh)
-backend/startup.log
+src/backend/logs/
 
 # Diagnose-Logs des Wartungsmodus (koennen gross werden)
-backend/logs/
-agent/restart_count.txt
+src/agent/restart_count.txt
+
+# Modul-System: aktivierte Module, Einstellungen, Crash-Zusammenfassung und Modul-Daten
+src/backend/data/modules.json
+src/backend/data/modules/

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "id": "audioplayer",
+  "name": "Audio-Player",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "audioplayer",
+      "label": "Audio Player",
+      "icon": "🎵",
+      "title": "Audio Player",
+      "entry": "audioplayer.js",
+      "export": "renderAudioPlayer",
+      "w": 1120,
+      "h": 700,
+      "perm": "use_media"
+    }
+  ],
+  "init": {
+    "entry": "index.js",
+    "export": "init"
+  },
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}

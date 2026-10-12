@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "id": "network",
+  "name": "Netzwerk-Werkzeuge",
+  "version": "1.0.0",
+  "description": "Netzwerk-Scan, Portscan, Speedtest und Port-Weiterleitung. Jede Teilfunktion ist einzeln schaltbar.",
+  "author": "RAPALLE.net",
+  "category": "Netzwerk",
+  "icon": "🌐",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    {
+      "module": "network_routes",
+      "feature": "scan"
+    },
+    {
+      "module": "speedtest_routes",
+      "feature": "speedtest"
+    },
+    {
+      "module": "portforward_routes",
+      "feature": "portforward"
+    }
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "features": [
+    {
+      "id": "scan",
+      "label": "Netzwerk-Scan & Portscan",
+      "default": true
+    },
+    {
+      "id": "speedtest",
+      "label": "Speedtest",
+      "default": true
+    },
+    {
+      "id": "portforward",
+      "label": "Port-Weiterleitung",
+      "default": true
+    }
+  ],
+  "entry": "module"
+}

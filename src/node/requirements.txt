@@ -1,0 +1,5 @@
+# Abhaengigkeiten der NODE (src/node/main.py).
+# Die Node laeuft im selben Python wie der Agent - diese Pakete sind dort bereits
+# installiert. Die Datei dient der Dokumentation und fuer eine eigenstaendige Installation.
+python-socketio[asyncio_client]>=5.11.0   # Verbindung zum Backend (Namespace /node)
+aiohttp>=3.10.0                           # Transport fuer python-socketio

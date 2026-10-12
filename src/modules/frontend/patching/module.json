@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "patching",
+  "name": "Patching",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "patching",
+      "label": "Updates",
+      "icon": "🔄",
+      "title": "Updates",
+      "entry": "patching.js",
+      "export": "renderPatching",
+      "w": 940,
+      "h": 700,
+      "perm": "patching"
+    }
+  ]
+}

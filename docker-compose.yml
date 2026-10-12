@@ -8,12 +8,12 @@
 #
 # WICHTIG - was im Container NICHT mehr zur Laufzeit änderbar ist:
 #   * PORT und HOST. Beides wird beim Container-Start festgelegt (Port-Mapping
-#     unten + Umgebungsvariablen). Wer PORT/HOST in backend/.env ändert, sperrt
+#     unten + Umgebungsvariablen). Wer PORT/HOST in src/backend/data/.env ändert, sperrt
 #     sich aus: der Container mappt weiterhin den alten Port.
 #     -> Port ändern heißt: RMM_PORT unten (bzw. in .env) ändern und
 #        "docker compose up -d" erneut ausführen.
 #   * Alles, was nicht in einem Volume liegt, ist nach einem Rebuild weg.
-#     Deshalb sind backend/ frontend/ agent/ als Bind-Mounts eingehängt.
+#     Deshalb ist src/ (backend, frontend, agent, node) als Bind-Mounts eingehängt.
 # Die Oberfläche zeigt das unter Einstellungen -> Source ebenfalls an.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -68,9 +68,7 @@ services:
       # Der komplette Projektcode liegt als Bind-Mount im Container.
       # Nur so funktionieren: Source-Editor (Dateien speichern),
       # Selbst-Update (Code austauschen), Datenbank/Aufzeichnungen dauerhaft.
-      - ./backend:/app/backend
-      - ./frontend:/app/frontend
-      - ./agent:/app/agent
+      - ./src:/app/src
       # Zeitzone vom Host übernehmen (read-only).
       - /etc/localtime:/etc/localtime:ro
       # Docker-Socket: Damit kann das Backend Nachbar-Container selbst starten -
@@ -91,8 +89,8 @@ services:
     # Soll er unter einer eigenen UID laufen (rootless Docker, strenge
     # Vorgaben), hier setzen und die Bind-Mounts entsprechend freigeben:
     #   user: "1000:1000"
-    #   und auf dem Host:  chmod -R a+rX backend frontend agent
-    #                      chmod -R u+rwX,a+rwX backend/recordings backend/media_files
+    #   und auf dem Host:  chmod -R a+rX src
+    #                      chmod -R u+rwX,a+rwX src/backend/data src/backend/logs src/backend/media
     # Wichtig bei UNPRIVILEGIERTEM LXC (z.B. Proxmox): dort werden die UIDs der
     # Bind-Mounts verschoben (root wird zu 100000). Die Projektdateien muessen
     # dann fuer "andere" les- UND betretbar sein (a+rX), sonst findet Python
@@ -144,7 +142,7 @@ services:
     # dann aber die Logs ueber "docker compose logs -f rmm" lesen.
     #
     # Unabhaengig davon schreibt der Container seinen Start immer zusaetzlich
-    # nach  backend/startup.log  - diese Datei ist ueber die Dateifreigabe
+    # nach  src/backend/logs/backend/startup.log  - diese Datei ist ueber die Dateifreigabe
     # bzw. Settings -> Source lesbar, auch wenn die Oberflaeche nichts zeigt.
     # logging:
     #   driver: json-file
@@ -176,4 +174,4 @@ services:
     volumes:
       # Aufzeichnungen der Sitzungen landen im gleichen Ordner wie beim
       # nativen Betrieb, damit sie im Dashboard auftauchen.
-      - ./backend/recordings:/recordings
+      - ./src/backend/media/recordings:/recordings

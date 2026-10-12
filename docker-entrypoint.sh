@@ -16,7 +16,7 @@
 # Dieses Skript schreibt deshalb ZUERST einen Umgebungsbericht (unter welcher
 # UID laeuft es, welche Pfade sind lesbar/beschreibbar, ist Python da), prueft
 # dann Schritt fuer Schritt die Startvoraussetzungen und startet erst danach
-# run.py. Geht etwas schief, bleibt die Meldung stehen und der Neustart wird
+# main.py. Geht etwas schief, bleibt die Meldung stehen und der Neustart wird
 # absichtlich verzoegert, damit man sie ueberhaupt lesen kann.
 #
 # Nuetzliche Schalter (in docker-compose.yml unter "environment"):
@@ -34,7 +34,8 @@
 # Umgesetzt durch einen einmaligen Neustart des Skripts durch "tee". Die
 # Variable RMM_LOG_WRAPPED verhindert eine Endlosschleife.
 if [ "${RMM_LOG_WRAPPED:-0}" != "1" ]; then
-    RMM_LOG="${RMM_LOG:-${RMM_APP_DIR:-/app/backend}/startup.log}"
+    RMM_LOG="${RMM_LOG:-${RMM_APP_DIR:-/app/src/backend}/logs/backend/startup.log}"
+    mkdir -p "$(dirname "$RMM_LOG")" 2>/dev/null || true
     # Beschreibbar? Sonst nach /tmp ausweichen, sonst ganz ohne Datei.
     if ! ( touch "$RMM_LOG" ) 2>/dev/null; then
         RMM_LOG=/tmp/rmm-startup.log
@@ -102,51 +103,51 @@ else
 
     # --- 2. Liegt der Code da, wo er hingehoert? ---------------------------
     # Ueberschreibbar - hilft beim Nachstellen ausserhalb des Containers.
-    APP_DIR=${RMM_APP_DIR:-/app/backend}
+    APP_DIR=${RMM_APP_DIR:-/app/src/backend}
     if [ ! -d "$APP_DIR" ]; then
         fail "$APP_DIR existiert nicht. Sehr wahrscheinlich zeigt ein Volume in
        docker-compose.yml auf einen falschen oder leeren Ordner."
     fi
-    if [ ! -f "$APP_DIR/run.py" ]; then
-        err "$APP_DIR/run.py fehlt. Inhalt von $APP_DIR:"
+    if [ ! -f "$APP_DIR/main.py" ]; then
+        err "$APP_DIR/main.py fehlt. Inhalt von $APP_DIR:"
         ls -la "$APP_DIR" 2>&1 | head -30
-        fail "Ohne run.py kann das Backend nicht starten (falsches Volume?)."
+        fail "Ohne main.py kann das Backend nicht starten (falsches Volume?)."
     fi
-    if [ ! -r "$APP_DIR/run.py" ]; then
-        err "$APP_DIR/run.py ist NICHT LESBAR fuer uid=$(id -u)."
-        ls -la "$APP_DIR/run.py" 2>&1
-        fail "Dateirechte. Auf dem HOST ausfuehren:  chmod -R a+rX backend frontend agent
+    if [ ! -r "$APP_DIR/main.py" ]; then
+        err "$APP_DIR/main.py ist NICHT LESBAR fuer uid=$(id -u)."
+        ls -la "$APP_DIR/main.py" 2>&1
+        fail "Dateirechte. Auf dem HOST ausfuehren:  chmod -R a+rX src
        (unprivilegiertes LXC verschiebt die UIDs der Bind-Mounts - die Dateien
         muessen dann fuer 'andere' les- und betretbar sein)."
     fi
-    say "Code:        $APP_DIR/run.py gefunden und lesbar"
+    say "Code:        $APP_DIR/main.py gefunden und lesbar"
 
     # --- 3. Schreibrechte fuer die Daten ----------------------------------
-    for d in "$APP_DIR" "$APP_DIR/recordings" "$APP_DIR/media_files"; do
+    for d in "$APP_DIR" "$APP_DIR/data" "$APP_DIR/logs" "$APP_DIR/media" "$APP_DIR/media/recordings"; do
         [ -d "$d" ] || continue
         if [ -w "$d" ]; then
             say "Schreibbar:  $d"
         else
             warn "$d ist NICHT beschreibbar (uid=$(id -u)) - Datenbank, Uploads
        oder Aufzeichnungen koennen dort spaeter fehlschlagen.
-       Abhilfe auf dem Host:  chmod -R a+rwX backend/recordings backend/media_files"
+       Abhilfe auf dem Host:  chmod -R a+rwX src/backend/data src/backend/logs src/backend/media"
         fi
     done
 
     # --- 4. Eigenes Paket importierbar? ------------------------------------
     # Genau hier scheiterte es bisher lautlos: fehlende Leserechte auf
-    # backend/app oder ein falscher Suchpfad.
+    # src/backend/app oder ein falscher Suchpfad.
     if ! python -c "import sys; sys.path.insert(0, '$APP_DIR'); import app" 2>/tmp/imp.err; then
         err "Das eigene Paket 'app' laesst sich nicht importieren:"
         sed 's/^/[start]   /' /tmp/imp.err
         ls -la "$APP_DIR/app" 2>&1 | head -15
         fail "Meist Dateirechte (chmod -R a+rX) oder ein Volume, das
-       backend/app ueberdeckt."
+       src/backend/app ueberdeckt."
     fi
     say "Import:      Paket 'app' ist importierbar"
 
     # --- 5. Kernbibliotheken ----------------------------------------------
-    # Fehlen sie, versucht run.py sie selbst nachzuinstallieren - hier wird nur
+    # Fehlen sie, versucht main.py sie selbst nachzuinstallieren - hier wird nur
     # frueh gemeldet, was Sache ist.
     MISSING=$(python - <<'PYEOF' 2>/dev/null
 import importlib
@@ -162,7 +163,7 @@ PYEOF
 )
     if [ -n "$MISSING" ]; then
         warn "Fehlende Bibliotheken: $MISSING"
-        warn "run.py versucht gleich, sie nachzuinstallieren. Schlaegt das fehl,
+        warn "main.py versucht gleich, sie nachzuinstallieren. Schlaegt das fehl,
        stehen die Gruende unter [bootstrap] im Log."
     else
         say "Bibliotheken: alle Kernpakete vorhanden"
@@ -170,10 +171,10 @@ PYEOF
 fi
 
 echo "[start] ------------------------------------------------------------"
-say "Starte Backend (Weg 1 von 3):  python -u run.py"
+say "Starte Backend (Weg 1 von 3):  python -u main.py"
 echo "[start] ------------------------------------------------------------"
 
-APP_DIR="${RMM_APP_DIR:-/app/backend}"
+APP_DIR="${RMM_APP_DIR:-/app/src/backend}"
 cd "$APP_DIR" || fail "Wechsel nach $APP_DIR nicht moeglich."
 
 # ============================================================================
@@ -195,12 +196,12 @@ RESTARTS=0
 MAX_QUICK_RESTARTS="${RMM_MAX_QUICK_RESTARTS:-20}"
 while : ; do
     STARTED=$(date +%s)
-    python -u run.py
+    python -u main.py
     rc=$?
     RAN=$(( $(date +%s) - STARTED ))
 
     if [ "$rc" = "0" ]; then
-        say "Weg 1 (run.py) reguleaer beendet."
+        say "Weg 1 (main.py) reguleaer beendet."
         break
     fi
 
@@ -219,7 +220,7 @@ while : ; do
         continue
     fi
 
-    err "Weg 1 (run.py) endete mit Exit-Code $rc (nach ${RAN}s, Fehlstart $RESTARTS/$MAX_QUICK_RESTARTS)."
+    err "Weg 1 (main.py) endete mit Exit-Code $rc (nach ${RAN}s, Fehlstart $RESTARTS/$MAX_QUICK_RESTARTS)."
     if [ "$RESTARTS" -ge "$MAX_QUICK_RESTARTS" ]; then
         err "Zu viele schnelle Fehlstarts - die anderen Wege werden probiert."
         break
@@ -230,7 +231,7 @@ while : ; do
 done
 
 # --- Weg 2: uvicorn direkt ---------------------------------------------------
-# Sinnvoll, wenn run.py selbst stolpert (z.B. beim Nachinstallieren von
+# Sinnvoll, wenn main.py selbst stolpert (z.B. beim Nachinstallieren von
 # Paketen oder in der Absturz-Neustart-Schleife), die App aber importierbar
 # waere. Bindet bewusst an 0.0.0.0 - im Container ist alles andere sinnlos.
 echo "[start] ------------------------------------------------------------"
@@ -265,7 +266,7 @@ say "Dieser Server endet nach ${RMM_DIAG_SECONDS:-180}s, damit der Container"
 say "neu startet. Mit RMM_KEEP_ALIVE=1 bleibt er zum Nachsehen offen."
 echo "[start] ------------------------------------------------------------"
 
-RMM_DIAG_LOG="${RMM_LOG:-$APP_DIR/startup.log}" \
+RMM_DIAG_LOG="${RMM_LOG:-$APP_DIR/logs/backend/startup.log}" \
 RMM_DIAG_PORT="${PORT:-4000}" \
 python -u - <<'PYEOF'
 """
@@ -326,7 +327,7 @@ class Handler(BaseHTTPRequestHandler):
 </style></head><body>
 <h1>Das RMM-Backend laeuft nicht</h1>
 <div class="sub">Dieser Notfall-Server antwortet nur, damit die Ursache sichtbar ist.</div>
-<div class="box">Beide Startversuche sind fehlgeschlagen (run.py und uvicorn direkt).
+<div class="box">Beide Startversuche sind fehlgeschlagen (main.py und uvicorn direkt).
 Der Grund steht im Protokoll unten - meist fehlende Pakete oder Dateirechte.</div>
 <h2 style="font-size:14px">Umgebung</h2>
 <pre>{html.escape(facts())}</pre>

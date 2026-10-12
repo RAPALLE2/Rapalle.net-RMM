@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "relay",
+  "name": "Explorer-Relay",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "relay-explorer",
+      "label": "Relay-Explorer",
+      "icon": "📦",
+      "title": "Relay-Explorer",
+      "entry": "relayexplorer.js",
+      "export": "renderRelayExplorer",
+      "w": 860,
+      "h": 560
+    },
+    {
+      "id": "relay-manager",
+      "label": "Explorer-Relay",
+      "icon": "🔌",
+      "title": "Explorer-Relay verwalten",
+      "entry": "relaymanager.js",
+      "export": "renderRelayManager",
+      "w": 760,
+      "h": 560,
+      "perm": "use_relay"
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}

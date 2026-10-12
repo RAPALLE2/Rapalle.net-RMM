@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "ai",
+  "name": "KI-Chat",
+  "version": "1.0.0",
+  "description": "Chat mit KI-Anbietern ueber den Server (Verbindungen + Proxy).",
+  "author": "RAPALLE.net",
+  "category": "KI",
+  "icon": "🤖",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "ai_routes"
+  ]
+}

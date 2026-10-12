@@ -1,0 +1,9 @@
+# Beispiel-Node-Modul: ein winziger Webserver, der zeigt, was bei ihm ankommt.
+# Der Parameter "port" aus der module.json landet als PORT in der .env neben dieser Datei.
+services:
+  whoami:
+    image: traefik/whoami:latest
+    container_name: rmm-example-whoami
+    ports:
+      - "${PORT:-18080}:80"
+    restart: unless-stopped

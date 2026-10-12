@@ -1,0 +1,58 @@
+# RAPALLE.net RMM - Backend Abhängigkeiten
+# Installieren mit: pip install -r src/backend/data/requirements.txt
+#
+# Diese EINE Datei enthaelt alle Abhaengigkeiten des CORE (Laufzeit UND Bau-Werkzeuge,
+# frueher getrennt in requirements-build.txt).
+# Pakete OPTIONALER MODULE stehen NICHT hier, sondern im Feld "pip" der module.json
+# des Moduls und werden erst beim Aktivieren installiert (z.B. paramiko im Modul 'relay').
+#
+# Untere Grenzen (>=) statt fester Versionen, damit pip eine stimmige
+# Kombination wählt (verhindert z.B. aiohttp/socketio-Versionskonflikte).
+
+fastapi>=0.115.0          # Web-Framework für die REST-API
+uvicorn[standard]>=0.32.0 # ASGI-Server, der FastAPI ausführt
+python-socketio>=5.11.0   # Echtzeit-Verbindungen (Agenten + Dashboard)
+python-dotenv>=1.0.0      # Liest .env Dateien für Konfiguration
+bcrypt>=4.2.0             # Sicheres Passwort-Hashing (direkt, ohne passlib)
+PyJWT>=2.9.0              # Login-Tokens (JWT)
+qrcode>=7.4               # QR-Code fuer die Zwei-Faktor-Einrichtung. Fehlt es,
+                          # zeigt die Oberflaeche das Geheimnis zum Abtippen.
+python-multipart>=0.0.9   # Datei-Uploads und Formulare (FastAPI braucht es fuer
+                          # UploadFile/Form - ohne das startet die App NICHT,
+                          # sobald ein Router einen Upload anbietet)
+pydantic>=2.9.0          # Datenvalidierung für die API
+psutil>=6.0.0            # Laufwerksauflistung für "dieser Server" im Datei-Explorer
+cryptography>=42.0.0    # Verschlüsselt das Konto-Passwort für den Explorer-Relay (Digest/WebDAV)
+Pillow>=10.0.0         # Bildverarbeitung für die (optionale) serverseitige Screen-Aufnahme
+ldap3>=2.9.0            # LDAP/Active-Directory-Anmeldung (Realms). Optional: ohne
+                        # dieses Paket funktioniert nur die lokale Anmeldung.
+
+# --- Optional, EXPERIMENTELL ---
+# pyrdp aktiviert das eingebettete RDP-Streaming für headless VMs (Button
+# "Im Browser versuchen"). Es ist ein Security-Forschungswerkzeug und KEIN
+# polierter RDP-Client - das Bild kann unvollständig sein oder abbrechen.
+# Der zuverlässige Weg ist immer der native ".rdp"-Download (mstsc).
+# Zum Aktivieren die folgende Zeile einkommentieren:
+# pyrdp-mitm>=2.1.0
+
+# --- Externe SQL-Datenbank (Einstellungen -> Datenbank) ---
+# Die Treiber werden IMMER mitinstalliert. Frueher waren sie auskommentiert -
+# dann scheiterte das Umschalten auf MySQL/PostgreSQL mit "Treiber fehlt", und
+# man musste erst von Hand pip aufrufen. Beide Pakete sind klein und ziehen
+# keine schweren Abhaengigkeiten nach.
+PyMySQL>=1.1.0            # MySQL / MariaDB
+psycopg2-binary>=2.9.0    # PostgreSQL
+
+# --- Bau-Abhaengigkeiten (src/backend/app/build_installers.py) ---
+# NUR noetig, wenn Windows-Installationspakete gebaut werden sollen. Das
+# Build-Skript installiert diese Pakete bei Bedarf selbst nach.
+#
+# Fuer die MSI wird zusaetzlich WiX v3 gebraucht. Das ist KEIN Python-Paket;
+# build_installers.py laedt die offiziellen Binaries (candle.exe/light.exe)
+# einmalig nach %LOCALAPPDATA%\.rmm-build\wix314 herunter - ohne Setup und ohne
+# Administratorrechte. Alternativ WiX v3 normal installieren, dann werden
+# candle/light aus dem PATH benutzt.
+#
+# Die Linux-Pakete (.deb/.rpm/.run) brauchen KEINE Python-Pakete, nur
+# dpkg-deb bzw. rpmbuild - und das .run gar nichts.
+pyinstaller>=6.0          # baut RapalleRmmAgent-Setup.exe (Onefile, --uac-admin)

@@ -1,0 +1,1498 @@
+/* ==========================================================
+   RAPALLE.net RMM - Styles
+   Alle Farben als CSS-Variablen (--Name), damit später ein
+   Light-Mode/eigene Farbpalette einfach durch Austauschen dieser
+   Variablen umsetzbar ist (siehe Kommentar am Dateiende).
+   ========================================================== */
+
+:root {
+  --bg: #0c1420;
+  --panel: #141d2b;
+  --panel-2: #1a2536;
+  --border: #26344a;
+  --text: #dbe4f0;
+  --subtext: #7f93ad;
+  --accent: #2dd4bf;
+  --accent-2: #38bdf8;
+  --accent-rgb: 45, 212, 191;
+  --accent-2-rgb: 56, 189, 248;
+  --warn: #f5a524;
+  --danger: #f75c5c;
+  --online: #22c55e;   /* fester Grünton für "online" - NICHT von der Farbpalette abhängig */
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, "Segoe UI", sans-serif,
+    /* Emoji/Symbol-Fallbacks: Windows, macOS/iOS, Android/Linux */
+    "Segoe UI Emoji", "Segoe UI Symbol", "Apple Color Emoji",
+    "Noto Color Emoji", "Noto Sans Symbols 2", "Android Emoji", "EmojiOne Color";
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* ---------------- Login-Bildschirm ---------------- */
+
+
+.login-screen {
+    position: fixed;
+    inset: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background-image: url("/image/login-bg.jpg");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+
+    overflow: hidden;
+}
+
+.login-screen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+
+    z-index: 1;
+}
+
+
+
+
+.login-box {
+    position: relative;
+    z-index: 2;
+
+    width: 340px;
+
+    background: rgba(20, 29, 43, 0.92);
+    border: 1px solid rgba(255,255,255,0.08);
+
+    border-radius: 12px;
+    padding: 28px;
+
+    box-shadow:
+        0 20px 60px -15px rgba(0,0,0,0.7),
+        0 0 40px rgba(56,189,248,0.18);
+}
+
+
+.login-logo { text-align: center; font-size: 22px; margin: 0 0 4px; }
+.login-logo span { color: var(--accent); }
+.login-subtitle { text-align: center; color: var(--subtext); margin-top: 0; margin-bottom: 20px; }
+
+.login-box label { display: block; font-size: 12px; color: var(--subtext); margin: 12px 0 4px; }
+.login-box input, .login-box select {
+  width: 100%; padding: 9px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+
+/* Aussehen von .btn-primary: siehe ui.css. Login: volle Breite, etwas höher. */
+.login-box .btn-primary { width: 100%; margin-top: 20px; min-height: 38px; font-size: 13.5px; }
+
+.form-error {
+  margin-top: 12px; font-size: 13px; color: var(--danger);
+  background: rgba(247,92,92,0.1); border: 1px solid rgba(247,92,92,0.3);
+  padding: 8px 10px; border-radius: 6px;
+}
+
+/* ---------------- App-Grundgerüst ---------------- */
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Kopfleiste */
+.topbar {
+  height: 48px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.topbar-left { display: flex; align-items: center; gap: 10px; }
+.topbar-logo { height: 32px; border-radius: 2px; width: auto; }
+.topbar-title { font-weight: 600; }
+.topbar-title .accent { color: var(--accent); }
+.topbar-version { font-size: 11px; color: var(--subtext); }
+
+.topbar-right { position: relative; }
+.user-menu-btn {
+  background: none; border: none; color: var(--text); cursor: pointer; font-size: 14px;
+}
+.user-menu {
+  position: absolute; right: 0; top: 34px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px; width: 220px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4); z-index: 500; overflow: hidden;
+}
+.user-menu button {
+  display: block; width: 100%; text-align: left; padding: 10px 14px;
+  background: none; border: none; color: var(--text); cursor: pointer; font-size: 13px;
+}
+.user-menu button:hover { background: rgba(255,255,255,0.06); }
+.user-menu hr { border-color: var(--border); margin: 4px 0; }
+
+/* Haupt-Bereich: Sidebar + Content */
+.main-area { flex: 1; display: flex; min-height: 0; }
+
+.sidebar {
+  width: 260px; flex-shrink: 0; background: var(--panel);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  transition: width 0.15s ease;
+}
+.sidebar.collapsed { width: 46px !important; cursor: pointer; }
+.sidebar.collapsed .sidebar-tree, .sidebar.collapsed .btn-add-client,
+.sidebar.collapsed .sidebar-header span, .sidebar.collapsed .sidebar-fav,
+.sidebar.collapsed .sidebar-section-label, .sidebar.collapsed .sidebar-nav-item { display: none; }
+/* Während des Ziehens keine Breiten-Animation (snappy), sonst "hinterherlaufen". */
+.sidebar.resizing { transition: none; }
+
+/* Zieh-Griff am rechten Rand der Sidebar (wie bei den App-Panels). */
+.sidebar-resizer {
+  width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent;
+  margin-left: -3px; z-index: 5; position: relative;
+}
+/* ---- Schönere Scrollbars (horizontal + vertikal) ---- */
+* {
+  scrollbar-width: thin;                                   /* Firefox */
+  scrollbar-color: var(--border) transparent;
+}
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--subtext) 45%, transparent);
+  border-radius: 999px;
+  border: 3px solid transparent;                            /* schlanker Look */
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 70%, var(--subtext));
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+/* Beim Hovern über scrollbare Bereiche etwas kräftiger */
+:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--subtext) 60%, transparent);
+  background-clip: content-box;
+}
+
+/* ---- Dashboard (Donut-Charts) ---- */
+.dash-wrap { padding: 20px; }
+.dash-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+.dash-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+.dash-card {
+  background: var(--panel, #131c2b); border: 1px solid var(--border, #2a3550);
+  border-radius: 14px; padding: 16px 18px;
+}
+.dash-card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+.dash-legend-row:hover { background: var(--panel-2, #1b2740); }
+
+.sidebar-resizer:hover, .sidebar-resizer.active { background: var(--accent); opacity: 0.5; }
+
+/* Drag & Drop von Clients in der Sidebar */
+.tree-row[data-drag-client] { cursor: grab; }
+.tree-row.dragging { opacity: 0.45; }
+.tree-row.drag-over {
+  outline: 2px dashed var(--accent); outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 4px;
+}
+
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; font-size: 12px; text-transform: uppercase; color: var(--subtext);
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-header button { background: none; border: none; color: var(--subtext); cursor: pointer; }
+
+.sidebar-tree { flex: 1; overflow-y: auto; padding: 6px; }
+
+.tree-node { user-select: none; }
+.tree-row {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 6px;
+  cursor: pointer; font-size: 13px; white-space: nowrap;
+}
+.tree-row:hover { background: rgba(255,255,255,0.05); }
+.tree-row.selected {
+  background: linear-gradient(90deg, rgba(var(--accent-2-rgb), 0.22), rgba(var(--accent-2-rgb), 0.08));
+  color: var(--accent-2);
+  box-shadow: inset 3px 0 0 var(--accent-2);
+}
+.tree-row .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.tree-children { margin-left: 16px; border-left: 1px solid var(--border); padding-left: 6px; }
+
+.btn-add-client {
+  margin: 10px; padding: 8px; border-radius: 6px; border: 1px dashed var(--border);
+  background: none; color: var(--subtext); cursor: pointer; font-size: 12px;
+}
+.btn-add-client:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Hauptinhalt */
+.main-content { flex: 1; overflow-y: auto; padding: 18px; }
+.empty-state { color: var(--subtext); text-align: center; margin-top: 80px; }
+
+/* Status/Metrics/Actions Raster (1x1 links, 2x1 rechts oben, Actions darunter links) */
+.dash-grid {
+  display: grid; grid-template-columns: minmax(260px, 1fr) 2.2fr;
+  gap: 14px; align-items: start;
+}
+.dash-left-col { display: flex; flex-direction: column; gap: 14px; }
+.panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+}
+.panel h3 {
+  margin: 0 0 12px; font-size: 13px; text-transform: uppercase; color: var(--subtext);
+  display: flex; align-items: center; justify-content: space-between;
+}
+
+.status-dot-lg { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+.status-online { background: var(--online); }
+.status-offline { background: var(--subtext); }
+.status-maintenance { background: var(--warn); }
+.status-crashed { background: var(--danger); }
+
+.status-label { font-size: 15px; font-weight: 600; }
+
+.quick-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+/* .action-btn / .quick-actions button / .tab-btn: Aussehen siehe ui.css */
+.action-btn { display: flex; }
+
+.metrics-row { display: flex; gap: 20px; margin-top: 10px; flex-wrap: wrap; align-items: flex-start; }
+
+.donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.donut-label { font-size: 11px; color: var(--subtext); text-transform: uppercase; }
+.donut-value { font-size: 12px; text-align: center; margin-top: -70px; }
+.donut-value b { font-size: 16px; display: block; }
+
+/* Alle Verlaufs-Charts (CPU, RAM, Netzwerk) gleich groß */
+.mini-chart { flex: 1 1 0; min-width: 220px; overflow: visible; }
+.mini-chart svg { width: 100%; height: auto; overflow: visible; }
+
+.notes-textarea {
+  /* Kleiner Innenabstand zum Container: Der Fokus-Glow (box-shadow) wurde
+     sonst vom scrollenden .dash-lp-body oben/seitlich abgeschnitten und war
+     nur unten und an den Ecken sichtbar. */
+  box-sizing: border-box;
+  width: calc(100% - 8px); min-height: 232px; height: calc(100% - 8px); margin: 4px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); padding: 10px; resize: vertical;
+}
+.notes-textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+/* ----------------------------------------------------------------
+   Einheitliche, saubere Eingabefelder ÜBERALL
+   Bisher waren nur .form-row und .notes-textarea gestaltet - Felder in
+   Widgets (Notizen, Chat, Kommentare, Dialoge) sahen unfertig aus.
+   Diese Regeln greifen für alle Textfelder, ohne bestehende zu stören.
+   ---------------------------------------------------------------- */
+/* Grundaussehen aller Eingabefelder/Dropdowns: siehe ui.css */
+/* Ungültige Eingaben (z.B. leeres Pflichtfeld nach dem Absenden) */
+input.invalid, textarea.invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(255,77,109,.15);
+}
+
+/* Notiz-Formular im Widget: etwas luftiger und mit klarer Abgrenzung */
+.note-form textarea {
+  min-height: 62px; padding: 9px 11px; font-size: 13px; line-height: 1.55;
+}
+.note-form { background: var(--panel-2); }
+
+/* Auswahl-Liste (Benutzer/Gruppen) - kompakt, aber gut lesbar */
+.subject-picker .sp-scroll { background: var(--panel-2); }
+.subject-picker .sp-row:hover { background: rgba(255,255,255,.05); border-radius: 5px; }
+.subject-picker .sp-folder > summary::-webkit-details-marker { display: none; }
+.subject-picker .sp-folder > summary::before { content: "▸ "; }
+.subject-picker .sp-folder[open] > summary::before { content: "▾ "; }
+
+.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* Übersichts-Panel rechts; Status-Panel links kann kleiner sein */
+.dash-panel { min-height: auto; }
+.overview-content { min-height: 260px; }
+
+/* Status-Infoliste (OS, IP, Hostname, ...) */
+.status-info { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.status-info > div {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12.5px; gap: 2px 10px;
+  /* Zu wenig Platz? Dann bricht der Wert automatisch in die naechste Zeile um
+     -> Label oben, Wert darunter (Betriebssystem / Debian ... / IP / Wert ...). */
+  flex-wrap: wrap;
+}
+.status-info > div span { color: var(--subtext); }
+.status-info > div b { color: var(--text); text-align: right; word-break: break-word; margin-left: auto; }
+
+/* Zusatzinfo unter den Donuts (Cores/Threads, freier RAM) */
+.metric-sub { font-size: 11px; color: var(--subtext); text-align: center; margin-top: 4px; }
+
+/* Raster für Client-Kacheln in der aggregierten Ansicht */
+.client-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+
+/* ---------------- Fenster (Terminal/Explorer/Settings/...) ---------------- */
+
+.window-layer { position: absolute; top: 48px; left: 0; right: 0; bottom: 40px; pointer-events: none; }
+
+.rmm-window {
+  position: absolute; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 20px 60px -15px rgba(0,0,0,0.6);
+  min-width: 380px; min-height: 260px; pointer-events: all; overflow: hidden;
+}
+.rmm-window-titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border);
+  cursor: move; font-size: 13px;
+}
+.rmm-window-titlebar .win-controls { display: flex; gap: 4px; }
+.rmm-window-titlebar button {
+  width: 22px; height: 22px; border: none; border-radius: 5px; background: none;
+  color: var(--subtext); cursor: pointer;
+}
+.rmm-window-titlebar button:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+/* 📌 Anheften: standardmäßig gedimmt, angepinnt = Akzent-Hintergrund.
+   WICHTIG: Die Rotation liegt NUR auf dem Icon (.win-pin-glyph), damit die
+   Button-Box – und damit der Hover-/Angepinnt-Hintergrund – immer gerade bleibt. */
+.rmm-window-titlebar .win-pin-btn { font-size: 11px; filter: grayscale(1); opacity: 0.55; transition: opacity 0.15s ease; display: inline-flex; align-items: center; justify-content: center; }
+.rmm-window-titlebar .win-pin-btn:hover { opacity: 1; }
+.rmm-window-titlebar .win-pin-btn.pinned { filter: none; opacity: 1; background: rgba(79,140,255,0.22); }
+.rmm-window-titlebar .win-pin-btn .win-pin-glyph { display: inline-block; transform: rotate(35deg); transition: transform 0.15s ease; }
+.rmm-window-titlebar .win-pin-btn.pinned .win-pin-glyph { transform: rotate(0deg); }
+
+/* Audit-Log: kurz hervorgehobener Eintrag (Sprung aus einer Benachrichtigung) */
+@keyframes audit-flash {
+  0%   { background: rgba(79,140,255,0.45); }
+  70%  { background: rgba(79,140,255,0.28); }
+  100% { background: transparent; }
+}
+tr.audit-flash td { animation: audit-flash 3s ease forwards; }
+.rmm-window-body { flex: 1; overflow: auto; position: relative; }
+.rmm-window-resize-handle {
+  position: absolute; right: 0; bottom: 0; width: 20px; height: 20px;
+  cursor: nwse-resize; z-index: 10;
+}
+/* Sichtbare diagonale Griff-Linien in der Ecke */
+.rmm-window-resize-handle::after {
+  content: ""; position: absolute; right: 3px; bottom: 3px;
+  width: 10px; height: 10px;
+  background:
+    linear-gradient(135deg, transparent 0 45%, var(--subtext) 45% 55%, transparent 55%),
+    linear-gradient(135deg, transparent 0 70%, var(--subtext) 70% 80%, transparent 80%);
+  opacity: 0.6;
+}
+.rmm-window-resize-handle:hover::after { opacity: 1; }
+
+/* Kanten-Griffe zum Resizen (rechts und unten) */
+.rmm-window-resize-edge-r {
+  position: absolute; top: 0; right: 0; width: 6px; height: 100%;
+  cursor: ew-resize; z-index: 9;
+}
+.rmm-window-resize-edge-b {
+  position: absolute; left: 0; bottom: 0; width: 100%; height: 6px;
+  cursor: ns-resize; z-index: 9;
+}
+
+/* ---------------- Taskleiste ---------------- */
+
+.taskbar {
+  height: 40px; flex-shrink: 0; background: var(--panel); border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 6px; padding: 0 8px; position: relative; z-index: 900;
+}
+/* Nur die Knöpfe der echten Taskleiste - Knöpfe in Fenstern nutzen .btn (ui.css) */
+.taskbar .taskbar-btn {
+  height: 28px; padding: 0 10px; border-radius: var(--ui-radius, 6px); border: none; background: rgba(255,255,255,0.05);
+  color: var(--text); cursor: pointer; font: inherit; font-size: 13px;
+}
+.taskbar .taskbar-btn:hover { background: rgba(255,255,255,0.1); }
+.taskbar-menu-btn { color: var(--accent); }
+.taskbar-windows { flex: 1; display: flex; gap: 6px; overflow-x: auto; }
+.taskbar-window-btn {
+  height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent;
+  background: rgba(255,255,255,0.05); color: var(--subtext); cursor: pointer; font-size: 12px;
+  display: flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.taskbar-window-btn.active {
+  background: rgba(var(--accent-2-rgb), 0.20);
+  border-color: rgba(var(--accent-2-rgb), 0.55);
+  color: var(--accent-2);
+}
+.taskbar-window-btn .client-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.taskbar-window-btn .tb-icon { font-size: 14px; line-height: 1; flex: none; }
+.taskbar-window-btn .tb-label {
+  overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+}
+/* Minimierte Fenster leicht abgesetzt, damit man sie in der Leiste erkennt */
+.taskbar-window-btn.minimized { opacity: .62; }
+
+/* Icon-Modus: bei vielen offenen Fenstern nur noch Symbole (Titel per Hover).
+   Die Buttons werden quadratisch und schrumpfen nicht weiter, damit die
+   Symbole gut treffbar bleiben. */
+.taskbar-windows.icons-only .taskbar-window-btn {
+  width: 34px; padding: 0; justify-content: center; gap: 0; position: relative;
+}
+.taskbar-windows.icons-only .taskbar-window-btn .tb-icon { font-size: 16px; }
+.taskbar-windows.icons-only .taskbar-window-btn .client-dot {
+  position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px;
+  box-shadow: 0 0 0 1.5px var(--panel);
+}
+/* Scrollbalken der Leiste dezent halten */
+.taskbar-windows { scrollbar-width: thin; }
+.taskbar-windows::-webkit-scrollbar { height: 5px; }
+.taskbar-windows::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+.taskbar-clock { font-size: 12px; color: var(--subtext); font-variant-numeric: tabular-nums; padding: 0 6px; }
+
+/* Großes DSM-artiges App-Menü (zentriertes Overlay) */
+.start-menu-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  background: rgba(8, 14, 24, 0.75); backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+.start-menu-panel {
+  width: min(760px, 90vw); max-height: 80vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+  padding: 24px; box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+}
+.start-menu-header {
+  font-size: 13px; text-transform: uppercase; color: var(--subtext);
+  margin-bottom: 18px; letter-spacing: 1px;
+}
+.start-menu-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px;
+}
+.start-menu-grid button {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 18px 10px; border-radius: 12px; border: 1px solid transparent;
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+  font-size: 12.5px; text-align: center; transition: all 0.12s ease;
+}
+.start-menu-grid button:hover {
+  border-color: var(--accent); transform: translateY(-2px);
+  background: rgba(var(--accent-2-rgb),0.08);
+}
+.start-menu-grid .app-icon { font-size: 34px; line-height: 1; }
+
+/* Startmenü-Popup (alte kleine Variante) */
+.start-menu {
+  position: absolute; left: 8px; bottom: 46px; width: 220px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  overflow: hidden; z-index: 950;
+}
+.start-menu button {
+  display: block; width: 100%; text-align: left; padding: 10px 14px; background: none;
+  border: none; color: var(--text); cursor: pointer; font-size: 13px;
+}
+.start-menu button:hover { background: rgba(255,255,255,0.06); }
+
+/* ---------------- Terminal ---------------- */
+
+.terminal-body { background: #0a0f16; height: 100%; display: flex; flex-direction: column; font-family: "Consolas", monospace; font-size: 13px; }
+.terminal-output { flex: 1; overflow-y: auto; padding: 10px; white-space: pre-wrap; }
+.terminal-line-cmd { color: var(--accent); }
+.terminal-line-err { color: var(--danger); }
+.terminal-line-info { color: var(--subtext); font-style: italic; }
+.terminal-input-row { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding: 8px; }
+.terminal-input-row input { flex: 1; background: none; border: none; color: var(--text); font-family: inherit; outline: none; }
+
+/* ---------------- File Explorer ---------------- */
+
+.explorer-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.explorer-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.explorer-table th { text-align: left; padding: 6px 10px; color: var(--subtext); position: sticky; top: 0; background: var(--panel); }
+.explorer-table td { padding: 5px 10px; border-top: 1px solid rgba(255,255,255,0.04); }
+.explorer-table tr:hover { background: rgba(255,255,255,0.03); cursor: default; }
+
+/* ---------------- Tabellen allgemein (Settings, Audit-Log) ---------------- */
+
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th { text-align: left; color: var(--subtext); padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.data-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+
+.settings-section { padding: 18px 20px; }
+.settings-section h3 {
+  margin: 0 0 12px; font-size: 14px; font-weight: 600;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.settings-section h3:not(:first-child) { margin-top: 24px; }
+.form-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.form-row label { font-size: 12px; color: var(--subtext); font-weight: 500; }
+.form-error {
+  color: var(--danger); font-size: 12px; margin: 4px 0 8px;
+  padding: 6px 10px; background: rgba(255,77,109,0.08);
+  border-radius: 6px; border: 1px solid rgba(255,77,109,0.25);
+}
+.form-error.hidden { display: none; }
+
+/* Einheitliche Datentabellen (Audit, Netzwerk, Benutzer) */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table thead th {
+  text-align: left; padding: 10px 12px; color: var(--subtext);
+  font-weight: 600; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--panel); z-index: 1;
+}
+.data-table tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.data-table tbody tr:hover { background: var(--panel-2); }
+
+/* Einheitliche Toolbar für Apps mit Kopfleiste (Explorer, Netzwerk, Audit) */
+.explorer-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+/* Toolbar-Knöpfe & .tm-sort-btn: siehe ui.css */
+
+/* Farbpaletten-Auswahl im Profil */
+.accent-swatch {
+  width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; padding: 0;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.accent-swatch:hover { transform: scale(1.12); }
+.accent-swatch.selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px var(--panel), 0 0 0 4px var(--text);
+}
+
+/* ==========================================================
+   LIGHT MODE (Vorbereitung)
+   Wird aktiviert, indem body die Klasse "theme-light" bekommt
+   (siehe app.js). Einfach hier die Variablen für ein helles
+   Farbschema überschreiben - der Rest des CSS bleibt unverändert,
+   weil überall mit var(--...) statt festen Farben gearbeitet wird.
+   ========================================================== */
+body.theme-light {
+  --bg: #f3f5f9;
+  --panel: #ffffff;
+  --panel-2: #eef1f6;
+  --border: #dbe2ec;
+  --text: #16202e;
+  --subtext: #64748b;
+}
+
+
+
+
+
+/* Checkboxen/Radios: siehe ui.css */
+
+/* ============================================================
+   ANIMATIONEN - überall etwas Leben (dezent, nicht aufdringlich)
+   ============================================================ */
+
+/* Respektiert Nutzer, die Bewegung reduzieren möchten. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---- Fenster: öffnen / schließen / minimieren / maximieren ---- */
+@keyframes win-open {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes win-close {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.90) translateY(10px); }
+}
+@keyframes win-minimize {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.6) translateY(120px); }
+}
+.rmm-window {
+  animation: win-open 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: box-shadow 0.2s ease;
+}
+.rmm-window.win-closing { animation: win-close 0.16s ease forwards; }
+.rmm-window.win-minimizing { animation: win-minimize 0.2s ease forwards; }
+/* Sanftes Wachsen/Schrumpfen beim Maximieren/Wiederherstellen. */
+.rmm-window.win-animate-geo {
+  transition: left 0.2s cubic-bezier(0.22,1,0.36,1),
+              top 0.2s cubic-bezier(0.22,1,0.36,1),
+              width 0.2s cubic-bezier(0.22,1,0.36,1),
+              height 0.2s cubic-bezier(0.22,1,0.36,1);
+}
+
+/* ---- Sidebar-Zeilen: Hover & Auswahlwechsel (Client im Tenant wechseln) ---- */
+.tree-row {
+  transition: background 0.16s ease, color 0.16s ease,
+              box-shadow 0.16s ease, transform 0.12s ease;
+}
+/* KEIN translateX beim Hover mehr: In Kombination mit dem Sidebar-Rerender
+   bei jedem Metrik-Tick sprangen die Client-Zeilen ständig 2px hin und her
+   ("mega rumbuggen"). Hervorhebung nur noch über Hintergrund/Akzentstreifen. */
+.tree-row:hover { box-shadow: inset 2px 0 0 var(--accent); }
+/* TODO: .row-anim { animation: row-in 0.18s ease; } */
+@keyframes row-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+/* TODO:Aufklappende Kinder gleiten herein. */
+.tree-children { animation: children-in 0.18s ease; overflow: hidden; }
+/* TODO: @keyframes children-in {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 2000px; }
+}*/
+
+/* ---- Favoriten-Stern: Pop beim Umschalten ---- */
+.fav-star {
+  cursor: pointer;
+  margin-left: 6px;
+  color: var(--subtext);
+  opacity: 0.55;
+  transition: color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+}
+.tree-row:hover .fav-star { opacity: 1; }
+.fav-star.on { color: #f6c453; opacity: 1; }
+/* Zustände des durchschaltbaren Sterns */
+.fav-star.both { color: #f6c453; opacity: 1; }               /* gelb = Seitenleiste + Dashboard */
+.fav-star.sb   { color: var(--accent); opacity: 1; }         /* Seitenleiste */
+.fav-star.db   { color: var(--accent-2); opacity: 1; }       /* Dashboard */
+.fav-star.both, .fav-star.sb, .fav-star.db { opacity: 1; }
+.fav-star:hover { transform: scale(1.25); }
+.fav-star.fav-pop { animation: fav-pop 0.32s cubic-bezier(0.34,1.56,0.64,1); }
+@keyframes fav-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.6) rotate(18deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+/* ---- Sidebar-Navigation: Dashboard-Tab + Favoriten-Sektion ---- */
+.sidebar-nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin: 4px 8px; border-radius: 8px;
+  cursor: pointer; color: var(--text); font-size: 13px;
+  transition: background 0.16s ease, transform 0.12s ease;
+}
+.sidebar-nav-item:hover { background: rgba(var(--accent-rgb), 0.12); }
+.sidebar-nav-item .nav-ico { color: var(--accent); }
+.sidebar-nav-item .nav-soon {
+  margin-left: auto; font-size: 10px; color: var(--subtext);
+  border: 1px solid var(--border); border-radius: 10px; padding: 1px 7px;
+}
+.nav-pulse { animation: nav-pulse 0.4s ease; }
+@keyframes nav-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.96); background: rgba(var(--accent-rgb), 0.25); }
+  100% { transform: scale(1); }
+}
+.sidebar-fav { margin: 2px 0 6px; }
+.sidebar-fav-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; margin: 0 8px; border-radius: 8px;
+  cursor: pointer; font-size: 12px; color: var(--subtext);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  transition: background 0.16s ease;
+}
+.sidebar-fav-header:hover { background: rgba(255,255,255,0.05); }
+.sidebar-fav-header .fav-caret { transition: transform 0.18s ease; display: inline-block; }
+.sidebar-fav-list { animation: children-in 0.2s ease; padding: 0 4px; }
+.fav-row { margin: 2px 6px; padding: 5px 8px; border-radius: 7px; cursor: pointer; }
+.fav-empty { font-size: 11px; color: var(--subtext); padding: 6px 12px; line-height: 1.4; }
+
+/* ★-Knopf direkt neben dem Text "Favoriten": legt eigene Favoriten an
+   (Apps, App-Unterseiten, Client-Sitzungen, Links). Bewusst NUR ein Stern. */
+.sidebar-fav-header .fav-title { flex: 1; }
+.fav-add-btn {
+  border: none; background: transparent; color: var(--subtext);
+  font-size: 14px; line-height: 1; padding: 2px 4px; margin-left: 2px;
+  border-radius: 6px; cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+.fav-add-btn:hover {
+  color: var(--accent, #4da6ff);
+  background: rgba(255, 255, 255, 0.08);
+  transform: scale(1.15);
+}
+.fav-add-btn:active { transform: scale(0.94); }
+
+/* Angeheftete Einträge (Pins) */
+.fav-pin { display: flex; align-items: center; gap: 7px; }
+.fav-pin .fav-pin-ico { width: 16px; text-align: center; flex: none; }
+.fav-pin .fav-pin-del { opacity: 0; transition: opacity 0.16s ease; }
+.fav-pin:hover .fav-pin-del { opacity: 1; }
+.sidebar-section-label {
+  font-size: 11px; color: var(--subtext); text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 8px 12px 4px; margin-top: 4px;
+}
+
+
+/* ---- Buttons: Rückmeldung beim Drücken OHNE Größenänderung ----
+   Wichtig: Knöpfe dürfen beim Klicken NICHT skalieren. Sonst wandert das
+   eigentliche Ziel (z.B. ein kleiner Knopf INNERHALB eines Knopfes) unter dem
+   Mauszeiger weg und ist nach der Animation nicht mehr getroffen. Statt
+   Geometrie ändern wir nur Helligkeit/Schatten - das Layout bleibt exakt. */
+button, .btn-primary, .action-btn, .taskbar-btn {
+  transition: background 0.15s ease, border-color 0.15s ease, filter 0.08s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+button:active, .btn-primary:active, .action-btn:active, .taskbar-btn:active {
+  transform: none;
+  filter: brightness(0.88);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+/* Verschachtelte Knöpfe (Knopf im Knopf, z.B. Favoriten-Stern oder Löschen in
+   einer Zeile): Der äußere Bereich bleibt beim Drücken des inneren Knopfes
+   völlig unverändert stehen. */
+button:active > button,
+.action-btn:active > button,
+.action-btn:active > a,
+button:has(> button:active),
+.action-btn:has(button:active),
+.action-btn:has(a:active) {
+  filter: none;
+  box-shadow: none;
+  transform: none;
+}
+/* Website-Zeilen im Websites-Widget (tragen data-ws): Die ganze Zeile darf
+   beim Drücken weder schrumpfen noch abdunkeln - sonst rutschen bzw.
+   verschwimmen Favoriten-Stern und Löschen-Knopf unter dem Cursor. */
+.action-btn[data-ws]:active { transform: none; filter: none; box-shadow: none; }
+.action-btn[data-ws] > a { transition: filter 0.08s ease; }
+.action-btn[data-ws] > a:active { transform: none; filter: brightness(0.88); }
+
+/* ---- Taskbar-Fensterknöpfe: Hereingleiten nur bei NEUEN Knöpfen ----
+   Die Leiste wird nicht mehr komplett neu gebaut (siehe taskbar.js); die
+   Animation läuft daher nur einmal beim Öffnen eines Fensters und nicht mehr
+   bei jedem Klick. */
+.taskbar-window-btn.is-new { animation: row-in 0.16s ease; }
+
+/* ---- Modale/Panels: sanftes Erscheinen ---- */
+.panel { transition: box-shadow 0.2s ease, transform 0.15s ease; }
+
+
+
+
+/* Dropdowns: siehe ui.css */
+/* ---- Snap-System: Windows-artige Fensteranordnung ---- */
+.snap-preview {
+  position: absolute;
+  z-index: 9990;
+  pointer-events: none;
+  opacity: 0;
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 2px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 10px;
+  box-shadow: inset 0 0 40px rgba(var(--accent-rgb), 0.08);
+  transition: left 0.14s cubic-bezier(0.22,1,0.36,1),
+              top 0.14s cubic-bezier(0.22,1,0.36,1),
+              width 0.14s cubic-bezier(0.22,1,0.36,1),
+              height 0.14s cubic-bezier(0.22,1,0.36,1),
+              opacity 0.12s ease;
+}
+/* Unsichtbarer Griff auf der Trennlinie zwischen gesnappten Fenstern.
+   Ziehen resized alle angrenzenden Fenster gemeinsam. */
+.snap-divider {
+  position: absolute;
+  z-index: 9500;
+  pointer-events: auto;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.snap-divider:hover, .snap-divider.dragging {
+  background: rgba(var(--accent-rgb), 0.35);
+  border-radius: 4px;
+}
+.snap-divider-v { cursor: ew-resize; }
+.snap-divider-h { cursor: ns-resize; }
+/* Snap-Assist: Auswahl "welches Fenster soll in diese Zone?" */
+.snap-assist {
+  position: absolute;
+  z-index: 9800;
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  overflow: auto;
+  background: rgba(10, 16, 26, 0.72);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(3px);
+  animation: win-open 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.snap-assist-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.snap-assist-tile:hover {
+  transform: scale(1.04);
+  border-color: var(--accent);
+  background: var(--panel);
+}
+.snap-assist-tile span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snap-assist-tile .client-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+/* ================================================================ */
+/* Anpassbares Dashboard-Layout (dashlayout.js)                     */
+/* ================================================================ */
+/* .dash-edit-toggle: siehe ui.css */
+.dash-edit-tools { display: inline-flex; gap: 6px; margin-left: 8px; }
+
+.dash-layout {
+  display: grid;
+  grid-template-columns: repeat(var(--dash-cols, 12), 1fr);
+  gap: 14px; align-items: start;
+}
+.dash-lp {
+  position: relative;
+  transition: box-shadow 0.18s ease, transform 0.12s ease, opacity 0.15s ease;
+}
+.dash-lp-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: -14px -14px 12px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-lp-title {
+  font-size: 13px; text-transform: uppercase; color: var(--subtext);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dash-lp-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.dash-lp-body { min-height: 60px; }
+.dash-lp-body.overview-content { min-height: 260px; }
+.dash-lp-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* Edit-Modus: Karten wirken "fassbar" */
+.dash-layout.editing .dash-lp {
+  outline: 1px dashed rgba(var(--accent-rgb), 0.4); outline-offset: 2px;
+}
+.dash-layout.editing .dash-lp-head { cursor: grab; }
+.dash-lp.dragging { opacity: 0.9; box-shadow: 0 12px 40px rgba(0,0,0,0.5); cursor: grabbing; }
+.dash-lp.detach-hint { outline: 2px solid var(--accent); }
+.dash-lp.drop-target { outline: 2px dashed var(--accent); background: rgba(var(--accent-rgb), 0.08); }
+.dash-lp-placeholder {
+  border: 2px dashed rgba(var(--accent-rgb), 0.5); border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.06); min-height: 80px;
+}
+/* Breiten-Griff rechts (nur Edit) */
+.dash-lp-resizer {
+  position: absolute; top: 0; right: -7px; width: 12px; height: 100%;
+  cursor: ew-resize; z-index: 3;
+}
+.dash-lp-resizer::after {
+  content: ""; position: absolute; top: 50%; right: 5px; width: 3px; height: 34px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--border);
+  transition: background 0.15s ease;
+}
+.dash-lp-resizer:hover::after { background: var(--accent); }
+/* Sub-Tabs im Ordner: im Edit ziehbar */
+.dash-layout.editing .dash-folder-tabs .tab-btn { cursor: grab; }
+
+/* Desktop-Drop-Hinweis beim Client-Ziehen */
+.desktop-drop-hint {
+  outline: 2px dashed var(--accent); outline-offset: -8px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+/* Herausgelöstes Part-Fenster */
+.panelpart-wrap { display: flex; flex-direction: column; height: 100%; padding: 12px; box-sizing: border-box; }
+.panelpart-tabs { margin-bottom: 10px; }
+.panelpart-body { flex: 1; overflow: auto; }
+.panelpart-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* ================================================================ */
+/* Modulare Dashboard-Widgets (fleetdash.js / dashwidgets.js)       */
+/* ================================================================ */
+.dash-widgets {
+  /* Grid-Parameter (Spalten/AutoRows/Gap) werden in fleetdash.js gesetzt -
+     EXAKT wie die Client-Ansicht (dashlayout), inkl. gridAutoRows=150px und
+     Reihen-Span pro Widget. Hier nur der Fallback. */
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-auto-rows: 150px;
+  gap: 14px;
+  align-items: start;
+}
+.dash-w .dash-w-body { overflow: visible; }
+.dash-w {
+  position: relative;
+  display: flex; flex-direction: column;
+  transition: box-shadow 0.18s ease, transform 0.12s ease, opacity 0.15s ease;
+}
+.dash-w-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: -14px -14px 12px; padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-w-title {
+  font-size: 12.5px; text-transform: uppercase; color: var(--subtext);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em;
+}
+.dash-w-tools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.dash-w-kind {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 5px; font-size: 11px; padding: 2px 5px; cursor: pointer;
+}
+.dash-w-body {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  overflow: auto;
+}
+.dash-w { display: flex; flex-direction: column; overflow: visible; }
+.dash-w-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.dash-w-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.dash-w-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* Edit-Modus */
+.dash-widgets.editing .dash-w { outline: 1px dashed rgba(var(--accent-rgb), 0.4); outline-offset: 2px; }
+.dash-widgets.editing .dash-w-head { cursor: grab; }
+.dash-w.dragging { opacity: 0.95; box-shadow: 0 14px 44px rgba(0,0,0,0.55); cursor: grabbing; }
+.dash-w.detach-hint { outline: 2px solid var(--accent); }
+.dash-w-placeholder {
+  border: 2px dashed rgba(var(--accent-rgb), 0.5); border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.06); min-height: 120px;
+}
+.dash-w-resizer { position: absolute; top: 0; right: -7px; width: 12px; height: 100%; cursor: ew-resize; z-index: 3; }
+.dash-w-resizer::after {
+  content: ""; position: absolute; top: 50%; right: 5px; width: 3px; height: 34px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--border); transition: background 0.15s ease;
+}
+.dash-w-resizer:hover::after { background: var(--accent); }
+
+/* Einzelne Darstellungen */
+.widget-number { text-align: center; padding: 10px 6px; }
+.widget-number .wn-value { font-size: 34px; font-weight: 800; line-height: 1.05; color: var(--text); }
+.widget-number .wn-label { font-size: 12px; color: var(--subtext); margin-top: 6px; }
+
+.widget-text { font-size: 13.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; word-break: break-word; padding: 2px; }
+.widget-text-edit {
+  width: 100%; min-height: 90px; resize: vertical; box-sizing: border-box;
+  background: var(--panel-2); border: 1px solid var(--accent); border-radius: 8px;
+  color: var(--text); padding: 8px 10px; font-size: 13.5px; line-height: 1.5; font-family: inherit;
+}
+
+.widget-bars { display: flex; flex-direction: column; gap: 7px; width: 100%; }
+.wbar-row { display: grid; grid-template-columns: minmax(70px, 34%) 1fr auto; align-items: center; gap: 8px; font-size: 12px; }
+.wbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtext); }
+.wbar-track { height: 10px; border-radius: 6px; background: var(--panel-2); overflow: hidden; }
+.wbar-fill { display: block; height: 100%; border-radius: 6px; transition: width 0.4s ease; }
+.wbar-val { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+.widget-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.widget-table th {
+  text-align: left; font-weight: 600; color: var(--subtext); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.03em; padding: 4px 8px; border-bottom: 1px solid var(--border);
+}
+.widget-table td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.widget-table tbody tr:hover { background: var(--panel-2); }
+
+/* Herausgelöstes Widget-Fenster */
+.fleetwidget-wrap { height: 100%; padding: 14px; box-sizing: border-box; overflow: auto; }
+.fleetwidget-wrap .dash-w-body { height: 100%; }
+
+/* Widget-Auswahldialog */
+.widget-picker-back {
+  position: fixed; inset: 0; z-index: 8000; display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 8, 14, 0.62); backdrop-filter: blur(3px);
+}
+.widget-picker {
+  width: min(760px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.6); overflow: hidden;
+  animation: win-open 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.wp-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-size: 15px;
+}
+.wp-body { padding: 12px 18px 20px; overflow-y: auto; }
+.wp-group-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--subtext);
+  margin: 16px 0 8px; font-weight: 700;
+}
+.wp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.wp-item {
+  display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--panel-2); color: var(--text); cursor: pointer; transition: border-color 0.12s, transform 0.12s;
+}
+.wp-item:hover { border-color: var(--accent); transform: translateY(-1px); }
+.wp-item-label { font-size: 13px; font-weight: 600; }
+.wp-item-kinds { font-size: 10.5px; color: var(--subtext); text-transform: uppercase; letter-spacing: 0.02em; }
+
+/* ================================================================ */
+/* Windows-artige Kachel-Resize-Griffe (paneltiling.js)             */
+/* ================================================================ */
+/* Griffe sind nur im Edit-Modus vorhanden (werden dann angehängt). */
+.tile-grip { position: absolute; z-index: 4; }
+.tile-grip-x { top: 0; right: -6px; width: 12px; height: 100%; cursor: ew-resize; }
+.tile-grip-y { left: 0; bottom: -6px; height: 12px; width: 100%; cursor: ns-resize; }
+.tile-grip-x::after {
+  content: ""; position: absolute; top: 50%; right: 5px; width: 3px; height: 36px;
+  transform: translateY(-50%); border-radius: 3px; background: var(--border); transition: background 0.15s ease;
+}
+.tile-grip-y::after {
+  content: ""; position: absolute; left: 50%; bottom: 5px; height: 3px; width: 36px;
+  transform: translateX(-50%); border-radius: 3px; background: var(--border); transition: background 0.15s ease;
+}
+.tile-grip-x:hover::after, .tile-grip-y:hover::after { background: var(--accent); }
+.tile-resizing { box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.5) inset; }
+
+/* Ordner-Inhalt: eingeschobene Kind-Panels */
+.folder-children { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.folder-child {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); overflow: hidden;
+}
+.folder-child-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; font-size: 11.5px; text-transform: uppercase; color: var(--subtext);
+  border-bottom: 1px solid var(--border);
+}
+.folder-child-body { padding: 10px; }
+.folder-child-body.actions-panel { display: flex; flex-direction: column; gap: 8px; }
+.folder-drop-hint {
+  border: 2px dashed rgba(var(--accent-rgb), 0.4); border-radius: 10px;
+  padding: 16px; text-align: center; color: var(--subtext); font-size: 12px; margin-top: 8px;
+}
+/* Ordner als Ziel beim Einschieben eines Panels hervorheben */
+.dash-lp.folder-hover {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.15);
+}
+
+/* ---- Client-Ansicht: Ordner-Tabs (dashlayout.js, wie Dashboard) ---- */
+.dash-folder-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.dash-folder-tab { user-select: none; }
+.dash-layout.editing .dash-folder-tab { cursor: grab; }
+.dash-folder-tab.tab-dragging {
+  opacity: 0.6; background: rgba(var(--accent-rgb), 0.25); cursor: grabbing;
+  outline: 1px dashed var(--accent);
+}
+.folder-active { min-height: 200px; }
+.dash-lp-body.folder-panel { display: flex; flex-direction: column; }
+
+/* ---- Telemetrie-Metrik-Panels in der Client-Ansicht (clientmetrics.js) ---- */
+.cmetric-body { display: flex; flex-direction: column; gap: 8px; }
+.cmetric-kinds { display: flex; gap: 4px; flex-wrap: wrap; }
+.cmetric-kind {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--subtext);
+  border-radius: 6px; font-size: 13px; padding: 2px 7px; cursor: pointer; line-height: 1.3;
+}
+.cmetric-kind:hover { color: var(--text); border-color: var(--accent); }
+.cmetric-kind.active { background: rgba(var(--accent-rgb), 0.18); color: var(--accent); border-color: var(--accent); }
+.cmetric-holder { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 90px; }
+.cmetric-holder .status-info { width: 100%; }
+
+/* Nicht verfügbare Metrik (VM/LXC) im Edit-Modus */
+.cmetric-na { color: var(--subtext); font-size: 12px; padding: 12px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 8px; }
+
+/* ---- Flüssigeres Panel-Dragging & bessere Handhabung (dashlayout) ---- */
+/* Während eines Drags nichts markieren (kein blauer Text mehr). */
+body.dash-dragging, body.dash-dragging * { user-select: none !important; -webkit-user-select: none !important; cursor: grabbing !important; }
+
+/* Karten in ihre neue Position gleiten lassen (weiches Umsortieren). */
+.dash-layout .dash-lp { transition: box-shadow .18s ease; }
+.dash-layout.editing .dash-lp:not(.dragging) { transition: transform .18s cubic-bezier(.22,1,.36,1), box-shadow .18s ease; }
+/* Die gezogene Karte folgt dem Cursor ohne Transition (sofort), leicht angehoben. */
+.dash-lp.dragging { transition: none !important; box-shadow: 0 18px 50px rgba(0,0,0,.55); opacity: .97; }
+/* Platzhalter weich mitwachsen/-schrumpfen. */
+.dash-lp-placeholder { transition: all .18s cubic-bezier(.22,1,.36,1); }
+
+/* Ordner als Drop-Ziel: bleibt an Ort und Stelle, pulsiert nur. */
+.dash-lp.folder-hover {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+  box-shadow: 0 0 0 5px rgba(var(--accent-rgb), .18);
+  transform: scale(1.012);
+}
+
+/* Panel-Körper scrollt, wenn der Inhalt größer als die (evtl. verkleinerte)
+   Karte ist - Kopfzeile bleibt sichtbar. Die Karte ist eine Flex-Spalte; ihr
+   overflow bleibt sichtbar, damit die Resize-Griffe am Rand greifbar bleiben. */
+.dash-lp { display: flex; flex-direction: column; overflow: visible; }
+.dash-lp-body { flex: 1 1 auto; overflow: auto; min-height: 0; }
+/* Diagramm-Holder: sichtbarer Überlauf, damit der beim Hover verdickte
+   Donut-/Segment-Ring oben und unten nicht abgeschnitten wird. */
+.cmetric-holder { overflow: visible; }
+.cmetric-holder svg, .dash-w-body svg { overflow: visible; }
+.dash-lp-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.dash-lp-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.dash-lp-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* Resize-Griffe im Edit deutlicher sicht- und greifbar machen. */
+.dash-layout.editing .tile-grip-x::after,
+.dash-layout.editing .tile-grip-y::after { background: rgba(var(--accent-rgb), .55); }
+.dash-layout.editing .tile-grip-x:hover::after,
+.dash-layout.editing .tile-grip-y:hover::after { background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb), .6); }
+
+/* Ziehbare Ordner-Tabs: klar als verschiebbar erkennbar. */
+.dash-folder-tab.tab-dragging { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 2; }
+
+/* ================================================================ */
+/* Festes Raster-Layout der Client-Ansicht (dashlayout.js)          */
+/* ================================================================ */
+.dash-grid-layout { display: grid; position: relative; align-items: stretch; }
+.dash-grid-layout .dash-lp { display: flex; flex-direction: column; overflow: visible; min-height: 0; min-width: 0; }
+.dash-grid-layout .dash-w { min-width: 0; }
+.dash-grid-layout.editing .dash-lp,
+.dash-grid-layout.editing .dash-w { outline: 1px dashed rgba(var(--accent-rgb), 0.35); outline-offset: 2px; }
+.dash-grid-layout.editing .dash-lp-head,
+.dash-grid-layout.editing .dash-w-head { cursor: grab; }
+.dash-grid-layout .dash-lp:not(.dragging) { transition: box-shadow .18s ease; }
+
+/* Belegbare Leerzelle */
+.grid-empty-cell {
+  border: 1.5px dashed var(--border); border-radius: 10px; background: rgba(255,255,255,0.015);
+  color: var(--subtext); font-size: 22px; cursor: pointer; z-index: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.grid-empty-cell:hover { background: rgba(var(--accent-rgb),0.10); border-color: var(--accent); color: var(--accent); }
+.grid-empty-cell span { opacity: .6; }
+.grid-empty-cell:hover span { opacity: 1; }
+
+/* Ziel-Vorschau beim Ziehen (rastet an der Zelle ein) */
+.grid-drop-preview {
+  z-index: 1; pointer-events: none; border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.14); border: 2px solid rgba(var(--accent-rgb), 0.6);
+  box-shadow: inset 0 0 30px rgba(var(--accent-rgb), 0.10);
+  transition: grid-column .08s ease, grid-row .08s ease;
+}
+
+/* Eck-Griff (Breite + Höhe gleichzeitig) */
+.tile-grip-xy { position: absolute; right: -6px; bottom: -6px; width: 18px; height: 18px; cursor: nwse-resize; z-index: 5; }
+.tile-grip-xy::after {
+  content: ""; position: absolute; right: 4px; bottom: 4px; width: 9px; height: 9px;
+  border-right: 3px solid var(--border); border-bottom: 3px solid var(--border); border-radius: 2px;
+  transition: border-color .15s ease;
+}
+.dash-grid-layout.editing .tile-grip-x::after, .dash-grid-layout.editing .tile-grip-y::after { background: rgba(var(--accent-rgb), .55); }
+.tile-grip-xy:hover::after { border-color: var(--accent); }
+
+/* Status-Panel im Raster kompakter, damit es in 2 Rasterreihen passt */
+.dash-grid-layout .dash-lp .status-label { font-size: 14px; }
+.dash-grid-layout .dash-lp .status-info { margin-top: 8px; gap: 3px; }
+.dash-grid-layout .dash-lp .status-info > div { font-size: 12px; }
+.dash-grid-layout .dash-lp .quick-actions { margin-top: 10px; gap: 6px; }
+
+
+/* --- Widget-Bedienelemente IMMER über den Diagrammen -------------------- */
+/* SVGs/Charts (teils overflow:visible) lagen über den Ansicht-Umschaltern - */
+/* dadurch waren die Buttons nicht klickbar. Die Bedienleisten bekommen eine */
+/* eigene Stapel-Ebene über allen Chart-Inhalten.                            */
+.cmetric-kinds {            /* Ansicht-Umschalter der Client-Widgets */
+  position: relative;
+  z-index: 30;
+}
+.cmetric-kinds .cmetric-kind { position: relative; z-index: 31; }
+.dash-lp-head, .dash-lp-tools,      /* Kopf/Werkzeuge der Client-Panels */
+.dash-w-head, .dash-w-tools {       /* Kopf/Werkzeuge der Dashboard-Widgets */
+  position: relative;
+  z-index: 30;
+}
+.dash-w-kind { position: relative; z-index: 31; }   /* Ansicht-Select im Dashboard */
+.tile-grip { z-index: 32; }                          /* Resize-Griffe darüber */
+.cmetric-holder svg, .dash-w-body svg { z-index: 0; }
+
+
+/* Dashboard-Eintrag in der Seitenleiste: ausgewählt EXAKT wie ein Client
+   (gleicher Verlauf, Akzentfarbe und Akzentstreifen wie .tree-row.selected). */
+.sidebar-nav-item.selected {
+  background: linear-gradient(90deg, rgba(var(--accent-2-rgb), 0.22), rgba(var(--accent-2-rgb), 0.08));
+  color: var(--accent-2);
+  box-shadow: inset 3px 0 0 var(--accent-2);
+}
+.sidebar-nav-item.selected .nav-ico { color: var(--accent-2); }
+
+
+/* Fleet-Widgets teilen sich jetzt das Client-Raster (.dash-grid-layout):
+   volle Zellhöhe, gleiche Kartenoptik. */
+.dash-grid-layout .dash-w { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.dash-grid-layout .dash-w .dash-w-body { flex: 1; min-height: 0; overflow: visible; }
+
+/* ------------------------------------------------------------------ */
+/* Widgets füllen die KOMPLETTE Rasterzelle aus (Client-Panels):       */
+/* Body bekommt die echte Resthöhe der Karte (wie .dash-w-body im      */
+/* Dashboard), damit der Skalierer den Inhalt auf die volle Boxgröße   */
+/* bringen kann.                                                       */
+/* ------------------------------------------------------------------ */
+.dash-lp { display: flex; flex-direction: column; }
+.dash-lp-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.dash-lp-body.overview-content { min-height: 0; }
+.cmetric-body { flex: 1 1 auto; min-height: 0; }
+.cmetric-holder { min-height: 0; }
+
+/* ---- Einklappbare Options-Leisten (Terminal/VNC/Guacamole) ---- */
+/* Desktop: .bar-opts ist "unsichtbarer" Wrapper (Kinder liegen direkt in der
+   Leiste, Layout wie zuvor), der Toggle-Knopf existiert nur am Handy. */
+.bar-opts { display: contents; }
+.bar-opts-toggle { display: none; }
+
+/* ---- Browser-Vollbild fuer Remote Screen / Guacamole ---- */
+.rmm-window:fullscreen {
+  left: 0 !important; top: 0 !important;
+  width: 100vw !important; height: 100vh !important;
+  border-radius: 0; border: none;
+}
+.rmm-window:fullscreen .rmm-window-resize-handle,
+.rmm-window:fullscreen .rmm-window-resize-edge-r,
+.rmm-window:fullscreen .rmm-window-resize-edge-b { display: none; }
+
+/* ---- SVG-Icons (Ersatz fuer Emojis, Profil > Symbole) ---- */
+.svgicon {
+  display: inline-block; width: 1.05em; height: 1.05em;
+  vertical-align: -0.16em; line-height: 0; flex-shrink: 0;
+}
+.svgicon svg { width: 100%; height: 100%; display: block; }
+/* Grosse Kachel-Icons (Startmenue) skalieren ueber font-size automatisch mit */
+.start-menu-grid .app-icon .svgicon { width: 1em; height: 1em; vertical-align: -0.1em; }
+
+/* SVG-Icons in Buttons/Leisten sauber vertikal zentrieren */
+button > .svgicon:only-child { vertical-align: middle; }
+.taskbar-btn .svgicon { vertical-align: middle; }
+
+/* --- widget overflow guard (herausgeloeste Panels/Fenster) --- */
+.cmetric-fit-holder { overflow: hidden; }
+.cmetric-fit-holder > * { max-width: 100%; }
+.rmm-window-body .dash-w-body,
+.rmm-window-body .panelpart-body,
+.rmm-window-body .cmetric-fit-holder { min-width: 0; }
+/* Werte/Label in Kacheln nie horizontal ueberlaufen lassen */
+.dash-w-body [style*="font-weight:800"],
+.cmetric-fit-holder [style*="font-weight:800"] { overflow-wrap: anywhere; }
+
+/* ============================================================
+   ANPASSBARES ANWENDUNGSMENÜ (startmenu.js)
+   ============================================================ */
+.start-menu-header .sm-tools { display: inline-flex; gap: 8px; }
+.start-menu-header .sm-tools button {
+  font-size: 12px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.start-menu-header .sm-tools button:hover { border-color: var(--accent); }
+
+/* Live-Grid: freie Anordnung, gleiche Optik wie zuvor */
+.sm-live-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr)); /* wird von JS ueberschrieben */
+}
+/* Leerer Rasterplatz: unsichtbar (haelt Position); im Bearbeiten-Modus sichtbar */
+.sm-cell-empty { min-height: 92px; border-radius: 12px; }
+.sm-cell-empty.sm-cell-visible {
+  border: 1.5px dashed var(--border); background: rgba(255,255,255,0.02);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.sm-cell-empty.sm-drop-into {
+  border-color: var(--accent); background: rgba(var(--accent-2-rgb),0.16);
+}
+.sm-tile {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  min-height: 92px;
+  padding: 16px 10px; border-radius: 12px; border: 1px solid transparent;
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+  font-size: 12.5px; text-align: center; transition: border-color 0.12s ease, transform 0.12s ease, background 0.12s ease;
+}
+.sm-tile:hover { border-color: var(--accent); transform: translateY(-2px); background: rgba(var(--accent-2-rgb),0.08); }
+.sm-tile .app-icon { font-size: 34px; line-height: 1; }
+.sm-tile .app-icon .svgicon { width: 1em; height: 1em; vertical-align: -0.1em; }
+.sm-tile .sm-label { font-weight: 500; line-height: 1.25; }
+
+/* Ordner-Kachel: 2x2-Icon-Vorschau + Name + App-Anzahl */
+.sm-folder { background: rgba(var(--accent-2-rgb),0.06); border-color: var(--border); }
+.sm-folder .sm-folder-icon {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+  width: 40px; height: 40px; align-items: center; justify-items: center;
+  background: rgba(255,255,255,0.05); border-radius: 10px; padding: 4px; font-size: 16px; line-height: 1;
+}
+.sm-folder .sm-fp { font-size: 15px; line-height: 1; }
+.sm-folder .sm-fp .svgicon { width: 15px; height: 15px; }
+.sm-folder-name { font-weight: 700; }
+.sm-folder-count { font-size: 11px; color: var(--subtext); }
+
+/* Bearbeiten-Modus: Wackeln + Entfernen-Kreuz */
+.start-menu-panel.sm-editing .sm-tile { cursor: grab; }
+.start-menu-panel.sm-editing .sm-tile:active { cursor: grabbing; }
+.sm-remove {
+  position: absolute; top: 4px; right: 4px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--danger, #f75c5c); color: #fff;
+  font-size: 11px; line-height: 18px; text-align: center; cursor: pointer;
+}
+.sm-remove:hover { filter: brightness(1.15); }
+
+/* Drag-Zustände */
+.sm-tile.sm-dragging { opacity: 0.4; }
+.sm-tile.sm-drop-before { box-shadow: -3px 0 0 0 var(--accent); }
+.sm-tile.sm-drop-after { box-shadow: 3px 0 0 0 var(--accent); }
+.sm-tile.sm-drop-into, .sm-drawer-grid.sm-drop-into {
+  border-color: var(--accent); background: rgba(var(--accent-2-rgb),0.16);
+}
+
+/* Aufgeklappter Ordner (Drawer) über volle Breite */
+.sm-folder-drawer {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: rgba(255,255,255,0.03); padding: 12px; margin: 2px 0 4px;
+}
+.sm-drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; font-size: 13.5px;
+}
+.sm-drawer-tools { display: inline-flex; gap: 6px; }
+.sm-drawer-tools button {
+  font-size: 11.5px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+.sm-drawer-tools button:hover { border-color: var(--accent); }
+.sm-drawer-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px;
+  min-height: 60px;
+}
+.sm-drawer-empty {
+  grid-column: 1 / -1; color: var(--subtext); font-size: 12px;
+  text-align: center; padding: 16px; border: 1px dashed var(--border); border-radius: 8px;
+}
+
+/* Mobil: kompaktere Kacheln */
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+  .sm-live-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+  .sm-tile { padding: 12px 6px; font-size: 11.5px; gap: 6px; min-height: 76px; }
+  .sm-tile .app-icon { font-size: 28px; }
+  .sm-drawer-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+}
+
+.start-menu-panel .sm-catalog-hidden { display: none !important; }
+
+
+/* ---------------- Organigramm: Baumdiagramm ----------------
+   Klassische Kästchen-Darstellung mit Verbindungslinien, rein per CSS
+   (verschachtelte <ul>/<li>). Die Linien entstehen aus ::before/::after,
+   die erste und letzte Spalte bekommen die halbe waagerechte Linie. */
+.oc-tree, .oc-tree ul {
+  display: flex; justify-content: center; list-style: none;
+  margin: 0; padding: 0; position: relative;
+}
+.oc-tree ul { padding-top: 20px; }
+.oc-tree li {
+  list-style: none; position: relative;
+  padding: 20px 10px 0; text-align: center;
+}
+/* senkrechte Linie nach oben zum Elternteil */
+.oc-tree li::before, .oc-tree li::after {
+  content: ""; position: absolute; top: 0; right: 50%;
+  border-top: 1px solid var(--border); width: 50%; height: 20px;
+}
+.oc-tree li::after { right: auto; left: 50%; border-left: 1px solid var(--border); }
+.oc-tree li:only-child::after, .oc-tree li:only-child::before { display: none; }
+.oc-tree li:only-child { padding-top: 0; }
+.oc-tree li:first-child::before, .oc-tree li:last-child::after { border: 0 none; }
+.oc-tree li:last-child::before {
+  border-right: 1px solid var(--border); border-radius: 0 5px 0 0;
+}
+.oc-tree li:first-child::after { border-radius: 5px 0 0 0; }
+/* Strich von der Elternbox nach unten */
+.oc-tree ul::before {
+  content: ""; position: absolute; top: 0; left: 50%;
+  border-left: 1px solid var(--border); width: 0; height: 20px;
+}
+.oc-boxwrap { display: inline-block; }
+.oc-box {
+  position: relative; display: inline-block; min-width: 130px; max-width: 190px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 7px 11px; font-size: 12.5px; color: var(--text); cursor: grab;
+  transition: border-color .15s, box-shadow .15s, transform .1s;
+}
+.oc-box:hover { border-color: rgba(var(--accent-rgb), .6); transform: translateY(-1px); }
+.oc-box.oc-drop { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .2); }
+.oc-box.oc-me { border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(var(--accent-2-rgb), .25); }
+.oc-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-sub { font-size: 10.5px; color: var(--subtext); margin-top: 1px; }
+.oc-count { font-size: 10px; color: var(--subtext); margin-top: 3px; opacity: .85; }
+.oc-toggle {
+  position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%);
+  width: 18px; height: 18px; line-height: 15px; padding: 0; z-index: 2;
+  border-radius: 50%; border: 1px solid var(--border); background: var(--panel);
+  color: var(--text); font-size: 12px; cursor: pointer;
+}
+.oc-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ==========================================================
+   Hilfe-Fragezeichen (help.js)
+   Ersetzt lange Erklaertexte unter den Einstellungen: kleines "?"
+   neben dem Feature, Erklaerung erscheint beim Ueberfahren.
+   ========================================================== */
+.help-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--subtext);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  vertical-align: middle;
+  user-select: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.help-dot:hover,
+.help-dot:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0f14;
+  outline: none;
+}
+
+.help-tip {
+  position: fixed;
+  z-index: 99999;
+  display: none;
+  max-width: 340px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, #1b2740);
+  color: var(--text, #e6edf7);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+/* Unternavigation innerhalb eines Einstellungen-Reiters */
+.sub-nav {
+  padding: 10px 14px 0;
+}
+/* .sub-nav button: siehe ui.css (identisch zu .tab-btn) */

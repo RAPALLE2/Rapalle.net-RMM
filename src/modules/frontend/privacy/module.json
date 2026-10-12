@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "privacy",
+  "name": "Datenschutz (DSGVO)",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "privacy",
+      "label": "Datenschutz",
+      "icon": "🛡️",
+      "title": "Datenschutz",
+      "entry": "privacy.js",
+      "export": "renderPrivacy",
+      "w": 820,
+      "h": 680
+    }
+  ]
+}

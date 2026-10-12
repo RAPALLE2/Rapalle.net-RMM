@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "id": "example",
+  "name": "Beispiel-Modul",
+  "version": "1.0.0",
+  "description": "Lehrbeispiel fuer eigene Module: Router, Hooks, Hintergrundaufgabe, Einstellungen, Teilfunktionen und ein absichtlicher Absturz zum Testen des Crashschutzes. Anleitung: GUIDE.md",
+  "author": "RAPALLE.net",
+  "category": "Entwicklung",
+  "icon": "🧪",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "example_routes",
+    {
+      "module": "example_crash_routes",
+      "feature": "crash_demo"
+    }
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "shutdown": "on_shutdown",
+    "enable": "on_enable",
+    "disable": "on_disable",
+    "client_online": "on_client_online",
+    "client_offline": "on_client_offline",
+    "node_online": "on_node_online",
+    "node_offline": "on_node_offline"
+  },
+  "features": [
+    {
+      "id": "ticker",
+      "label": "Hintergrund-Ticker",
+      "description": "Eine Dauerschleife, die jede Minute eine Zeile ins Log schreibt.",
+      "default": true
+    },
+    {
+      "id": "crash_demo",
+      "label": "Absturz-Demo",
+      "description": "Stellt einen Endpunkt bereit, der absichtlich abstuerzt - zum Testen des Crashschutzes.",
+      "default": false
+    }
+  ],
+  "settings": [
+    {
+      "key": "greeting",
+      "label": "Begruessung",
+      "type": "string",
+      "default": "Hallo aus dem Beispiel-Modul"
+    },
+    {
+      "key": "interval",
+      "label": "Ticker-Intervall (Sekunden)",
+      "type": "number",
+      "default": 60,
+      "min": 5,
+      "max": 3600
+    },
+    {
+      "key": "shout",
+      "label": "Begruessung in Grossbuchstaben",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "mode",
+      "label": "Modus",
+      "type": "select",
+      "default": "normal",
+      "options": [
+        {
+          "value": "normal",
+          "label": "Normal"
+        },
+        {
+          "value": "verbose",
+          "label": "Ausfuehrlich"
+        }
+      ]
+    },
+    {
+      "key": "secret",
+      "label": "Geheimer Schluessel (Beispiel)",
+      "type": "password",
+      "default": ""
+    },
+    {
+      "key": "auto_deploy",
+      "label": "Auf jeder Node automatisch bereitstellen",
+      "type": "bool",
+      "default": false,
+      "description": "Sobald eine Node online geht, wird der Node-Teil dieses Moduls (docker-compose) dort installiert."
+    },
+    {
+      "key": "node_port",
+      "label": "Port des Node-Beispiels",
+      "type": "number",
+      "default": 18080,
+      "min": 1,
+      "max": 65535
+    }
+  ]
+}

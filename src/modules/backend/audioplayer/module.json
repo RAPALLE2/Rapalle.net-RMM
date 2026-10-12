@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "audioplayer",
+  "name": "Audio-Player",
+  "version": "1.0.0",
+  "description": "Audio-Player mit Medien-Bibliothek und Spotify-Anbindung.",
+  "author": "RAPALLE.net",
+  "category": "Medien",
+  "icon": "🎵",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "media_routes"
+  ]
+}

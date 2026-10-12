@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "id": "scripts",
+  "name": "Skripte & Automation",
+  "version": "1.0.0",
+  "description": "Skript-Bibliothek, Bulk-Aktionen und Automationen (geplante Befehle). Die drei Teilfunktionen sind einzeln schaltbar.",
+  "author": "RAPALLE.net",
+  "category": "Betrieb",
+  "icon": "📜",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    {
+      "module": "scripts_routes",
+      "feature": "scripts"
+    },
+    {
+      "module": "automation_routes",
+      "feature": "automation"
+    }
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "features": [
+    {
+      "id": "scripts",
+      "label": "Skripte",
+      "description": "Skript-Bibliothek zum Ausfuehren auf Clients.",
+      "default": true
+    },
+    {
+      "id": "bulk",
+      "label": "Bulk-Aktionen",
+      "description": "Befehle/Skripte auf vielen Clients gleichzeitig.",
+      "default": true
+    },
+    {
+      "id": "automation",
+      "label": "Automation",
+      "description": "Geplante, wiederkehrende Befehle.",
+      "default": true
+    }
+  ],
+  "entry": "module"
+}

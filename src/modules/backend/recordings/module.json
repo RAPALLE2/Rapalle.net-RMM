@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "recordings",
+  "name": "Aufzeichnungen",
+  "version": "1.0.0",
+  "description": "Zeichnet Remote-Bildschirm- und Terminal-Sitzungen auf und bietet die Wiedergabe. Ohne dieses Modul laufen Sitzungen weiter, werden aber nicht mitgeschnitten.",
+  "author": "RAPALLE.net",
+  "category": "Betrieb",
+  "icon": "🎬",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "recordings_routes"
+  ]
+}

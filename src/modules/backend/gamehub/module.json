@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "gamehub",
+  "name": "Gaming-Hub",
+  "version": "1.0.0",
+  "description": "Minispiele, Tower Defense, Game of Life und Highscores.",
+  "author": "RAPALLE.net",
+  "category": "Spiele",
+  "icon": "🎮",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "games_routes"
+  ]
+}

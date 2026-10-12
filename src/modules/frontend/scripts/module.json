@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "id": "scripts",
+  "name": "Skripte & Automation",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "scripts",
+      "label": "Scripts",
+      "icon": "📜",
+      "title": "Scripts",
+      "entry": "scripts.js",
+      "export": "renderScripts",
+      "w": 680,
+      "h": 560,
+      "perm": "use_scripts",
+      "feature": "scripts"
+    },
+    {
+      "id": "bulk",
+      "label": "Bulk Remote Shell",
+      "icon": "⚡",
+      "title": "Bulk Remote Shell",
+      "entry": "bulk.js",
+      "export": "renderBulk",
+      "w": 720,
+      "h": 600,
+      "perm": "bulk_shell",
+      "feature": "bulk"
+    },
+    {
+      "id": "automation",
+      "label": "Automation",
+      "icon": "🔁",
+      "title": "Automation",
+      "entry": "automation.js",
+      "export": "renderAutomation",
+      "w": 620,
+      "h": 640,
+      "perm": "automation",
+      "feature": "automation"
+    }
+  ]
+}

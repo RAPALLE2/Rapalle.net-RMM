@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "guacamole",
+  "name": "Guacamole (RDP/SSH/VNC)",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "guacamole",
+      "label": "Guacamole",
+      "icon": "🪟",
+      "title": "Guacamole",
+      "entry": "guacamole.js",
+      "export": "renderGuacamole",
+      "w": 900,
+      "h": 640,
+      "startmenu": false
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}
