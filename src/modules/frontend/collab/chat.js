@@ -13,9 +13,44 @@ import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { dashboardSocket } from "/js/app/socket.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 import { t } from "/js/app/i18n.js";
+import { getModuleApi } from "/js/app/modules.js";
 
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 const fmtDay = (ms) => new Date(ms).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+// --- Bilder im Chat (Modul "spaces") -----------------------------------
+// Ein Bild steht als [[space-img:<token>|<name>]] im Nachrichtentext. Die Datei
+// liegt im Space des Absenders; geladen wird sie mit Anmeldung (Blob-URL).
+const IMG_RE = /\[\[space-img:([A-Za-z0-9_-]+)\|([^\]]*)\]\]/g;
+const imgCache = new Map();          // token -> Objekt-URL
+const spaces = () => getModuleApi("spaces");
+
+function renderText(text) {
+  return esc(text).replace(IMG_RE, (_, tok, name) =>
+    `<img data-sptok="${tok}" alt="${name}" title="${name}" style="display:block;max-width:260px;max-height:260px;border-radius:8px;margin:2px 0;cursor:zoom-in;background:rgba(0,0,0,.15);min-width:60px;min-height:40px">`);
+}
+
+async function loadImages(box, jumpToEnd) {
+  const api2 = spaces();
+  for (const img of box.querySelectorAll("img[data-sptok]")) {
+    const tok = img.dataset.sptok;
+    img.addEventListener("click", () => api2?.openShareLink(tok));
+    img.addEventListener("error", () => {
+      if (!img.src) return;
+      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `🖼️ ${img.alt || "Bild"} (nicht darstellbar)` }));
+    }, { once: true });
+    if (imgCache.has(tok)) { img.src = imgCache.get(tok); continue; }
+    if (!api2) { img.replaceWith(Object.assign(document.createElement("span"), { textContent: "🖼️ " + (img.alt || "Bild") })); continue; }
+    try {
+      const u = await api2.blobUrl(`/api/spaces/s/${tok}/download?inline=1`);
+      imgCache.set(tok, u);
+      img.src = u;
+      if (jumpToEnd) img.addEventListener("load", () => { box.scrollTop = box.scrollHeight; }, { once: true });
+    } catch {
+      img.replaceWith(Object.assign(document.createElement("span"), { textContent: "🖼️ " + (img.alt || "Bild") + " (nicht verfügbar)" }));
+    }
+  }
+}
 
 export function renderChat(body, win) {
   let convs = [];
@@ -110,6 +145,8 @@ export function renderChat(body, win) {
       <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--border)">
         <textarea id="ch-input" rows="1" placeholder="Nachricht schreiben…  (Enter = senden, Shift+Enter = Zeile)"
           style="flex:1;resize:none;min-height:36px;max-height:120px"></textarea>
+        ${spaces() ? `<button class="btn btn-icon" id="ch-img" title="Bild senden (wird in deinem Space gespeichert)" style="flex:none;align-self:stretch;height:auto">🖼️</button>
+        <input type="file" id="ch-imgfile" accept="image/*" multiple style="display:none">` : ""}
         <button class="btn-primary" id="ch-send" style="flex:none;width:100px">Senden ➤</button>
       </div>`;
 
@@ -132,6 +169,36 @@ export function renderChat(body, win) {
       }
       currentId = null; loadConvs();
     });
+
+    // --- Bilder (Modul "spaces"): Knopf, Einfügen (Strg+V), Drag & Drop ---
+    async function sendImages(files) {
+      const api2 = spaces();
+      const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+      if (!api2 || !imgs.length) return;
+      for (const f of imgs) {
+        try {
+          const a = await api2.uploadAttachment(f, "chat");
+          const name = (a.name || "Bild").replace(/[\]|]/g, "_");
+          await api.chatSend(conv.id, `[[space-img:${a.token}|${name}]]`);
+        } catch (e) { window.notify?.("Bild nicht gesendet: " + e.message, "error"); }
+      }
+      await loadMessages(conv, true);
+      loadConvs(true);
+    }
+    const imgBtn = mainEl.querySelector("#ch-img");
+    const imgFile = mainEl.querySelector("#ch-imgfile");
+    imgBtn?.addEventListener("click", () => imgFile.click());
+    imgFile?.addEventListener("change", () => { sendImages(imgFile.files); imgFile.value = ""; });
+    if (spaces()) {
+      input.addEventListener("paste", (e) => {
+        const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+        if (files.length) { e.preventDefault(); sendImages(files); }
+      });
+      const msgsBox = mainEl.querySelector("#ch-msgs");
+      msgsBox.addEventListener("dragover", (e) => { e.preventDefault(); msgsBox.style.outline = "2px dashed var(--accent)"; });
+      msgsBox.addEventListener("dragleave", () => { msgsBox.style.outline = ""; });
+      msgsBox.addEventListener("drop", (e) => { e.preventDefault(); msgsBox.style.outline = ""; sendImages(e.dataTransfer?.files || []); });
+    }
 
     async function send() {
       const text = input.value.trim();
@@ -176,7 +243,7 @@ export function renderChat(body, win) {
                border-bottom-${mine ? "right" : "left"}-radius:4px;padding:6px 10px">
             ${conv.type === "group" && !mine
               ? `<div style="font-size:11px;font-weight:700;opacity:.85">${esc(m.sender_name || "?")}</div>` : ""}
-            <div style="font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere">${esc(m.text)}</div>
+            <div style="font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere">${renderText(m.text)}</div>
             <div style="font-size:10px;opacity:.65;text-align:right;margin-top:2px">${fmtTime(m.created_at)}</div>
           </div>
         </div>`;
@@ -197,6 +264,7 @@ export function renderChat(body, win) {
       box.prepend(more);
     }
     if (jumpToEnd) box.scrollTop = box.scrollHeight;
+    loadImages(box, jumpToEnd);
   }
 
   // ---------------- Gruppen-Einstellungen ----------------

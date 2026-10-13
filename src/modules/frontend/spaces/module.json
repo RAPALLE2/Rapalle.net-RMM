@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "id": "spaces",
+  "name": "Spaces",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "spaces",
+      "label": "Spaces",
+      "icon": "☁️",
+      "title": "Spaces",
+      "entry": "spaces.js",
+      "export": "renderSpacesApp",
+      "w": 900,
+      "h": 620
+    }
+  ],
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  }
+}

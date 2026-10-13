@@ -1392,6 +1392,8 @@ _DEFAULT_USER_PERMS = [
     # laeuft der "Rechte fehlen -> Ticket erstellen"-Weg ins Leere: Genau die
     # Leute, denen ein Recht fehlt, koennten sich dann nicht einmal melden.
     "ticket_read", "ticket_create", "ticket_comment",
+    # Modul "spaces" (seit Seed 3): eigener Space + Public Spaces
+    "get_user_space", "use_public_space",
 ]
 # Der Admin-Gruppe reicht das Wildcard-Recht: es deckt alle anderen ab.
 _DEFAULT_ADMIN_PERMS = ["admin"]
@@ -1407,13 +1409,23 @@ _DEFAULT_SUPPORT_PERMS = _DEFAULT_USER_PERMS + [
 # in dieser Version neu dazugekommenen Rechte nachgetragen. Absichtlich nicht
 # die komplette Liste - sonst bekaeme ein Administrator Rechte zurueck, die er
 # bewusst aus der Gruppe entfernt hat.
-_DEFAULT_GROUPS_SEED = "2"
+_DEFAULT_GROUPS_SEED = "3"
 _SEED_ADD_V2 = {
     DEFAULT_GROUP_USER: ["ticket_read", "ticket_create", "ticket_comment"],
     DEFAULT_GROUP_ADMIN: [],
     # Die Support-Gruppe ist in dieser Version NEU - sie wird komplett angelegt.
     DEFAULT_GROUP_SUPPORT: _DEFAULT_SUPPORT_PERMS,
 }
+# Seed 3: Modul "spaces" - normale Benutzer (und Support) duerfen ihren eigenen
+# Space und die Public Spaces benutzen.
+_SEED_ADD_V3 = {
+    DEFAULT_GROUP_USER: ["get_user_space", "use_public_space"],
+    DEFAULT_GROUP_ADMIN: [],
+    DEFAULT_GROUP_SUPPORT: ["get_user_space", "use_public_space"],
+}
+# Version -> nachzutragende Rechte. Beim Update werden alle Versionen NACH der
+# gespeicherten angewendet.
+_SEED_ADDS = {"2": _SEED_ADD_V2, "3": _SEED_ADD_V3}
 
 
 def _seed_default_groups() -> None:
@@ -1447,7 +1459,8 @@ def _seed_default_groups() -> None:
                 grp = create_group(name, [p for p in perms if p in ALL_PERMISSIONS])
                 fresh = True
             _conn.execute("UPDATE groups SET auto_assign = ? WHERE id = ?", (kind, grp["id"]))
-            wish = perms if fresh else _SEED_ADD_V2.get(name, [])
+            wish = perms if fresh else [p for v, adds in _SEED_ADDS.items() if v > version
+                                        for p in adds.get(name, [])]
             have = {g["perm"] for g in get_grants("group", grp["id"])
                     if g.get("scope") == "global"}
             add = [{"scope": "global", "perm": p, "effect": "allow"}
@@ -2718,6 +2731,8 @@ GLOBAL_PERM_KEYS = [
     # Module verwalten: Modul-App (aktivieren/deaktivieren, Einstellungen,
     # Teilfunktionen, Crashberichte). Frueher nur fuer Administratoren.
     "manage_modules",
+    # Modul "spaces": eigener Space, Public Spaces, alle Spaces sehen/bearbeiten
+    "get_user_space", "use_public_space", "see_all_spaces", "edit_all_spaces",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",

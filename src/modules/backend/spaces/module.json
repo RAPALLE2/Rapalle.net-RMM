@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "id": "spaces",
+  "name": "Spaces",
+  "version": "1.0.0",
+  "description": "Persönlicher Speicher je Benutzer, Teamspaces und Public Spaces - im Explorer und per Relay (Netzlaufwerk, FTP, SFTP). Ordner und Dateien lassen sich an Benutzer/Gruppen oder per Link freigeben (nur für Angemeldete). Git-Repositories direkt im Space. Grundlage für Notizheft, Bilder in Chat/Tickets und Musik im Audioplayer.",
+  "author": "RAPALLE.net",
+  "category": "Kollaboration",
+  "icon": "☁️",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": ["spaces_routes", "git_ops"],
+  "hooks": {
+    "startup": "on_startup",
+    "enable": "on_enable"
+  },
+  "settings": [
+    {
+      "key": "quota_mb",
+      "label": "Speichergrenze je persönlichem Space (MB, 0 = unbegrenzt)",
+      "type": "number",
+      "default": 0,
+      "min": 0
+    }
+  ]
+}

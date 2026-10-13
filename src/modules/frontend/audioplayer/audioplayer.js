@@ -5,11 +5,12 @@
 // Spotify-Links als offizielles Embed (Spotify erlaubt externe Steuerung
 // nur mit Premium-OAuth - daher steuert man dort im Widget selbst),
 // Internet-Radio (Presets + eigene Stream-URL) über <audio> mit Visualizer.
-import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
+import { esc, uiConfirm, uiPrompt, uiChoice } from "/js/app/utils.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 import { api } from "/js/app/api.js";
 import { t } from "/js/app/i18n.js";
 import { hasGlobalPerm } from "/js/app/state.js";
+import { getModuleApi } from "/js/app/modules.js";
 import { getSpotifyClientId, spotifyLogin, spotifyLoggedIn, spotifyLogout,
          getSpotifyToken, spotifyApi, spotifyDiagnostics } from "./spotify.js";
 
@@ -44,6 +45,8 @@ const LIB_TABS = [
   { key: "spotify", icon: "🟢", label: "Spotify" },
   { key: "youtube", icon: "▶️", label: "YouTube" },
   { key: "local",   icon: "💾", label: "Lokal" },
+  // Modul "spaces": Songs aus dem eigenen Space + eigene Playlists (nur sichtbar, wenn aktiv)
+  { key: "space",   icon: "☁️", label: "Space", needs: "spaces" },
 ];
 
 const RADIO_STATIONS = [
@@ -221,6 +224,12 @@ export function renderAudioPlayer(body, win) {
   let libItems = [];            // gespeicherte Einträge vom Server
   let localQueue = [];          // lokal gewählte Dateien (ohne Upload)
   let localIndex = -1;
+  // Space (Modul "spaces")
+  let spacePath = "Mein Space/Musik";
+  let spaceQueue = [];          // [{path, title}]
+  let spaceIndex = -1;
+  let spaceUrl = null;          // aktuelle Objekt-URL (wird beim Wechsel freigegeben)
+  let spacePlaylist = null;     // geöffnete Playlist {file, name, tracks}
 
   const libEl = body.querySelector("#ap-lib");
   const libTabsEl = body.querySelector("#ap-lib-tabs");
@@ -233,7 +242,7 @@ export function renderAudioPlayer(body, win) {
   body.querySelector("#ap-menu").addEventListener("click", () => toggleLib());
 
   function drawLibTabs() {
-    libTabsEl.innerHTML = LIB_TABS.map((tab) => `
+    libTabsEl.innerHTML = LIB_TABS.filter((tab) => !tab.needs || getModuleApi(tab.needs)).map((tab) => `
       <button class="tab-btn${libTab === tab.key ? " active" : ""}" data-libtab="${tab.key}">
         ${tab.icon} ${esc(tab.label)}
       </button>`).join("");
@@ -292,6 +301,7 @@ export function renderAudioPlayer(body, win) {
     if (libTab === "spotify") return drawSpotifyTab();
     if (libTab === "youtube") return drawYouTubeTab();
     if (libTab === "local") return drawLocalTab();
+    if (libTab === "space") return drawSpaceTab();
   }
 
 
@@ -651,6 +661,177 @@ export function renderAudioPlayer(body, win) {
         window.notify?.("Upload fehlgeschlagen: " + e.message, "error");
         box.style.display = "none";
       }
+    });
+  }
+
+  // ---------------- Space (Modul "spaces") ----------------
+  // Songs liegen im eigenen Space (Standard: Mein Space/Musik). Playlists sind
+  // JSON-Dateien in Mein Space/Musik/Playlists - also selbst Teil des Space
+  // (per Explorer/Relay sichtbar, sicherbar, teilbar).
+  const SP_AUDIO = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|webm|mp4)$/i;
+  const SP_PL_DIR = "Mein Space/Musik/Playlists";
+  const spApi = () => getModuleApi("spaces");
+  const spq = (path, opts) => spApi().request(path, opts);
+  const spEnc = (p) => encodeURIComponent(p);
+
+  async function spEnsureDirs() {
+    for (const p of ["Mein Space/Musik", SP_PL_DIR]) {
+      try { await spq("/fs/mkdir", { method: "POST", body: JSON.stringify({ path: p }) }); } catch { /* kein eigener Space */ }
+    }
+  }
+  async function spPlaylists() {
+    try {
+      const r = await spq(`/fs/list?path=${spEnc(SP_PL_DIR)}`);
+      return r.entries.filter((e) => !e.is_dir && e.name.endsWith(".json"));
+    } catch { return []; }
+  }
+  async function spReadPlaylist(file) {
+    const res = await spq(`/fs/download?path=${spEnc(SP_PL_DIR + "/" + file)}&inline=1`);
+    // .json kommt als application/json -> der Spaces-Helfer liefert dann schon das Objekt
+    const data = typeof res?.json === "function" ? await res.json() : (res || {});
+    return { file, name: data.name || file.replace(/\.json$/, ""), tracks: Array.isArray(data.tracks) ? data.tracks : [] };
+  }
+  async function spSavePlaylist(pl) {
+    await spq("/fs/write", { method: "POST", body: JSON.stringify({
+      path: SP_PL_DIR + "/" + pl.file, text: JSON.stringify({ name: pl.name, tracks: pl.tracks }, null, 1) }) });
+  }
+  async function spNewPlaylist() {
+    const name = await uiPrompt("Neue Playlist", { placeholder: "Name" });
+    if (!name?.trim()) return null;
+    const file = name.trim().replace(/[\\/:*?"<>|]+/g, "_") + ".json";
+    const pl = { file, name: name.trim(), tracks: [] };
+    try { await spSavePlaylist(pl); return pl; } catch (e) { window.notify?.(e.message, "error"); return null; }
+  }
+
+  async function playSpaceIndex(i) {
+    if (i < 0 || i >= spaceQueue.length) return;
+    spaceIndex = i;
+    const tr = spaceQueue[i];
+    let url;
+    try { url = await spApi().blobUrl(`/api/spaces/fs/download?path=${spEnc(tr.path)}&inline=1`); }
+    catch (e) { window.notify?.(`„${tr.title}“: ${e.message}`, "error"); return; }
+    if (spaceUrl) URL.revokeObjectURL(spaceUrl);
+    spaceUrl = url;
+    playMedia(url, tr.title, `☁️ Space · ${i + 1}/${spaceQueue.length}`, /\.(mp4|webm)$/i.test(tr.path),
+      () => playSpaceIndex(shuffleOn ? Math.floor(Math.random() * spaceQueue.length) : spaceIndex + 1));
+    currentSource = null;
+    saveBtn.style.display = "none";
+    if (libTab === "space") drawLib();
+  }
+  function playSpaceQueue(tracks, start = 0) {
+    if (!tracks.length) { window.notify?.("Keine abspielbaren Dateien", "info"); return; }
+    spaceQueue = tracks;
+    playSpaceIndex(start);
+  }
+
+  async function drawSpaceTab() {
+    if (!spApi()) { libBodyEl.innerHTML = `<div style="font-size:12px;color:#8ea2c6">Das Modul „Spaces“ ist nicht aktiv.</div>`; return; }
+    libBodyEl.innerHTML = `<div style="font-size:12px;color:#8ea2c6">Lade …</div>`;
+    if (spacePlaylist) return drawSpacePlaylist();
+    await spEnsureDirs();
+    let listing;
+    try { listing = await spq(`/fs/list?path=${spEnc(spacePath)}`); }
+    catch (e) {
+      libBodyEl.innerHTML = `<div style="font-size:12px;color:#ff8a8a">${esc(e.message)}</div>
+        <button class="btn btn-sm" id="ap-sp-home" style="margin-top:6px">Zu Mein Space/Musik</button>`;
+      libBodyEl.querySelector("#ap-sp-home").addEventListener("click", () => { spacePath = "Mein Space/Musik"; drawLib(); });
+      return;
+    }
+    const pls = await spPlaylists();
+    const folders = listing.entries.filter((e) => e.is_dir && !(spacePath === "Mein Space/Musik" && e.name === "Playlists"));
+    const songs = listing.entries.filter((e) => !e.is_dir && SP_AUDIO.test(e.name));
+    const tracks = songs.map((e) => ({ path: spacePath + "/" + e.name, title: e.name.replace(/\.[^.]+$/, "") }));
+    const playingPath = spaceQueue[spaceIndex]?.path;
+    libBodyEl.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 2px">
+        <span style="font-size:11px;color:#8ea2c6">PLAYLISTS</span>
+        <button class="btn btn-sm" id="ap-sp-newpl">＋ Playlist</button></div>
+      ${pls.map((p) => `<div data-sppl="${esc(p.name)}">${libRow("🗂", p.name.replace(/\.json$/, ""), "Playlist im Space")}</div>`).join("")
+        || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Noch keine Playlist.</div>`}
+      <div style="display:flex;align-items:center;gap:6px;margin:12px 2px 4px">
+        ${spacePath.includes("/") ? `<button class="btn btn-sm btn-icon" id="ap-sp-up" title="Hoch">↑</button>` : ""}
+        <span style="font-size:11px;color:#8ea2c6;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📂 ${esc(spacePath)}</span>
+      </div>
+      ${folders.map((f) => `<div data-spdir="${esc(f.name)}">${libRow("📁", f.name, "Ordner")}</div>`).join("")}
+      ${tracks.map((tr, i) => `<div data-spsong="${i}">${libRow("🎵", tr.title, tr.path === playingPath ? "▶ läuft" : "",
+        `<button class="btn-tool" data-spadd="${i}" title="Zu Playlist hinzufügen">＋</button>`)}</div>`).join("")}
+      ${!folders.length && !tracks.length ? `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Keine Songs in diesem Ordner.</div>` : ""}
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn btn-sm" id="ap-sp-playall" style="flex:1" ${tracks.length ? "" : "disabled"}>▶ Ordner abspielen</button>
+        <button class="btn btn-sm" id="ap-sp-upload" style="flex:1" ${listing.writable ? "" : "disabled"}>⬆️ Hochladen</button>
+      </div>
+      <div style="font-size:10.5px;color:#8ea2c6;margin-top:4px">Songs liegen in deinem Space (auch per Explorer/Relay erreichbar).</div>
+      <input type="file" id="ap-sp-file" accept="audio/*,video/*" multiple hidden />`;
+    libBodyEl.querySelector("#ap-sp-up")?.addEventListener("click", () => { spacePath = spacePath.split("/").slice(0, -1).join("/"); drawLib(); });
+    libBodyEl.querySelectorAll("[data-spdir]").forEach((el) => el.addEventListener("click", () => { spacePath += "/" + el.dataset.spdir; drawLib(); }));
+    libBodyEl.querySelectorAll("[data-spsong]").forEach((el) => el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-spadd]")) return;
+      playSpaceQueue(tracks, +el.dataset.spsong);
+    }));
+    libBodyEl.querySelector("#ap-sp-playall").addEventListener("click", () => playSpaceQueue(tracks, 0));
+    libBodyEl.querySelectorAll("[data-sppl]").forEach((el) => el.addEventListener("click", async () => {
+      const file = pls.find((p) => p.name === el.dataset.sppl)?.name;
+      try { spacePlaylist = await spReadPlaylist(file); drawLib(); } catch (e) { window.notify?.(e.message, "error"); }
+    }));
+    libBodyEl.querySelector("#ap-sp-newpl").addEventListener("click", async () => { if (await spNewPlaylist()) drawLib(); });
+    libBodyEl.querySelectorAll("[data-spadd]").forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const tr = tracks[+b.dataset.spadd];
+      const opts = pls.map((p) => ({ label: "🗂 " + p.name.replace(/\.json$/, ""), value: p.name }));
+      opts.push({ label: "＋ Neue Playlist …", value: "__new__" });
+      const pick = await uiChoice(`„${tr.title}“ hinzufügen zu …`, opts);
+      if (!pick) return;
+      try {
+        const pl = pick === "__new__" ? await spNewPlaylist() : await spReadPlaylist(pick);
+        if (!pl) return;
+        pl.tracks.push(tr);
+        await spSavePlaylist(pl);
+        window.notify?.(`Zu „${pl.name}“ hinzugefügt`, "success");
+        drawLib();
+      } catch (x) { window.notify?.(x.message, "error"); }
+    }));
+    const upIn = libBodyEl.querySelector("#ap-sp-file");
+    libBodyEl.querySelector("#ap-sp-upload").addEventListener("click", () => upIn.click());
+    upIn.addEventListener("change", async () => {
+      const files = [...upIn.files];
+      if (!files.length) return;
+      const fd = new FormData();
+      fd.append("path", spacePath);
+      files.forEach((f) => fd.append("files", f));
+      try { await spq("/fs/upload", { method: "POST", body: fd }); window.notify?.(`${files.length} Song(s) hochgeladen`, "success"); }
+      catch (e) { window.notify?.("Upload fehlgeschlagen: " + e.message, "error"); }
+      drawLib();
+    });
+  }
+
+  function drawSpacePlaylist() {
+    const pl = spacePlaylist;
+    const playingPath = spaceQueue[spaceIndex]?.path;
+    libBodyEl.innerHTML = `
+      <div style="display:flex;gap:6px;align-items:center;margin:4px 2px 8px">
+        <button class="btn btn-sm btn-icon" id="ap-spl-back" title="Zurück">←</button>
+        <b style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🗂 ${esc(pl.name)}</b>
+        <button class="btn btn-sm btn-danger btn-icon" id="ap-spl-del" title="Playlist löschen">🗑</button></div>
+      ${pl.tracks.map((tr, i) => `<div data-spltrack="${i}">${libRow("🎵", tr.title, tr.path === playingPath ? "▶ läuft" : tr.path,
+        `<button class="btn-tool" data-splup="${i}" title="Nach oben">↑</button><button class="btn-tool" data-splrm="${i}" title="Entfernen">✕</button>`)}</div>`).join("")
+        || `<div style="font-size:11.5px;color:#8ea2c6;padding:2px 4px">Leer – Songs über „＋“ in der Ordneransicht hinzufügen.</div>`}
+      <button class="btn btn-sm btn-block" id="ap-spl-play" style="margin-top:8px" ${pl.tracks.length ? "" : "disabled"}>▶ Playlist abspielen</button>`;
+    libBodyEl.querySelector("#ap-spl-back").addEventListener("click", () => { spacePlaylist = null; drawLib(); });
+    libBodyEl.querySelector("#ap-spl-play").addEventListener("click", () => playSpaceQueue(pl.tracks, 0));
+    libBodyEl.querySelectorAll("[data-spltrack]").forEach((el) => el.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      playSpaceQueue(pl.tracks, +el.dataset.spltrack);
+    }));
+    const save = async () => { try { await spSavePlaylist(pl); } catch (e) { window.notify?.(e.message, "error"); } drawLib(); };
+    libBodyEl.querySelectorAll("[data-splrm]").forEach((b) => b.addEventListener("click", () => { pl.tracks.splice(+b.dataset.splrm, 1); save(); }));
+    libBodyEl.querySelectorAll("[data-splup]").forEach((b) => b.addEventListener("click", () => {
+      const i = +b.dataset.splup; if (i < 1) return;
+      [pl.tracks[i - 1], pl.tracks[i]] = [pl.tracks[i], pl.tracks[i - 1]]; save();
+    }));
+    libBodyEl.querySelector("#ap-spl-del").addEventListener("click", async () => {
+      if (!(await uiConfirm(`Playlist „${pl.name}“ löschen?`, { description: "Die Songs selbst bleiben erhalten.", okText: "Löschen", danger: true }))) return;
+      try { await spq("/fs/delete", { method: "POST", body: JSON.stringify({ path: SP_PL_DIR + "/" + pl.file }) }); spacePlaylist = null; drawLib(); }
+      catch (e) { window.notify?.(e.message, "error"); }
     });
   }
 

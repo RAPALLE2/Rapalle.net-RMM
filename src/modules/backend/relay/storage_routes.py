@@ -77,7 +77,7 @@ def storage_list(section: str, path: str = "",
     if not rs.may_read(user, sec):
         raise HTTPException(403, "Fehlendes Recht: use_relay")
     try:
-        return {"section": sec, "path": path, "entries": rs.listdir(sec, path),
+        return {"section": sec, "path": path, "entries": rs.listdir(sec, path, user=user),
                 "writable": rs.may_write(user, sec)}
     except FileNotFoundError:
         raise HTTPException(404, "Ordner nicht gefunden")
@@ -92,7 +92,7 @@ def storage_download(section: str, path: str,
     if not rs.may_read(user, sec):
         raise HTTPException(403, "Fehlendes Recht: use_relay")
     try:
-        data = rs.read(sec, path)
+        data = rs.read(sec, path, user=user)
     except FileNotFoundError:
         raise HTTPException(404, "Datei nicht gefunden")
     except PermissionError as e:
@@ -112,7 +112,7 @@ async def storage_upload(section: str, path: str = "",
         raise HTTPException(403, f"Schreiben in '{sec}' nicht erlaubt")
     target = (path.rstrip("/") + "/" + (file.filename or "datei")).lstrip("/")
     try:
-        rs.write(sec, target, await file.read())
+        rs.write(sec, target, await file.read(), user=user)
     except PermissionError as e:
         raise HTTPException(403, str(e))
     db.add_audit_entry(user["username"], "relay.storage.upload",
@@ -132,7 +132,7 @@ def storage_mkdir(body: PathBody, user: dict = Depends(get_current_user)):
     if not rs.may_write(user, sec):
         raise HTTPException(403, f"Schreiben in '{sec}' nicht erlaubt")
     try:
-        rs.mkdir(sec, body.path)
+        rs.mkdir(sec, body.path, user=user)
     except PermissionError as e:
         raise HTTPException(403, str(e))
     return {"ok": True}
@@ -144,7 +144,7 @@ def storage_delete(body: PathBody, user: dict = Depends(get_current_user)):
     if not rs.may_write(user, sec):
         raise HTTPException(403, f"Schreiben in '{sec}' nicht erlaubt")
     try:
-        rs.delete(sec, body.path)
+        rs.delete(sec, body.path, user=user)
     except FileNotFoundError:
         raise HTTPException(404, "Nicht gefunden")
     except PermissionError as e:
@@ -162,7 +162,7 @@ def storage_move(body: PathBody, user: dict = Depends(get_current_user)):
     if not body.dst:
         raise HTTPException(400, "Ziel fehlt")
     try:
-        rs.move(sec, body.path, body.dst)
+        rs.move(sec, body.path, body.dst, user=user)
     except FileNotFoundError:
         raise HTTPException(404, "Nicht gefunden")
     except PermissionError as e:

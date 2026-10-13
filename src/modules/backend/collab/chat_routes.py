@@ -17,6 +17,7 @@ das Event trägt nur Metadaten für Badge/Toast).
 """
 
 import time
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -104,7 +105,7 @@ def _conv_summary(conv: dict, me: dict) -> dict:
         "members": members,
         "is_admin": bool(my and my["is_admin"]) or is_super_admin(me),
         "unread": unread,
-        "last_message": ({"text": last["text"], "sender": last["sender_name"],
+        "last_message": ({"text": _preview(last["text"]), "sender": last["sender_name"],
                           "created_at": last["created_at"]} if last else None),
     }
 
@@ -247,6 +248,14 @@ class MessageBody(BaseModel):
     text: str
 
 
+# Bilder (Modul "spaces") stehen als [[space-img:<token>|<name>]] im Text.
+_IMG = re.compile(r"\[\[space-img:[A-Za-z0-9_-]+\|([^\]]*)\]\]")
+
+
+def _preview(text: str) -> str:
+    return _IMG.sub(lambda m: f"🖼️ {m.group(1) or 'Bild'}", text)[:140]
+
+
 @router.post("/conversations/{conv_id}/messages")
 async def send_message(conv_id: str, body: MessageBody,
                        user: dict = Depends(get_current_user)):
@@ -274,7 +283,7 @@ async def send_message(conv_id: str, body: MessageBody,
         "conversation_name": display,
         "sender_id": user["id"], "sender_name": user["username"],
         "member_ids": member_ids,
-        "preview": text[:140], "created_at": now,
+        "preview": _preview(text), "created_at": now,
     })
     return {"id": mid, "created_at": now}
 

@@ -2,26 +2,67 @@
   "schema": 1,
   "id": "collab",
   "name": "Zusammenarbeit & Werkzeuge",
-  "version": "1.1.0",
-  "description": "Chat, Kalender mit Organigramm, persönliche Todo-Liste sowie die Werkzeuge Notizheft, Rechner und Uhr (Stoppuhr, Timer, Wecker) - jeweils einzeln schaltbar. Tickets sind ein eigenes Modul.",
+  "version": "1.2.0",
+  "description": "Chat, Kalender mit Organigramm, persönliche Todo-Liste sowie die Werkzeuge Notizheft (Notizen als Dateien im eigenen Space - daher benötigt dieses Modul „Spaces“), Rechner und Uhr (Stoppuhr, Timer, Wecker) - jeweils einzeln schaltbar. Tickets sind ein eigenes Modul.",
   "author": "RAPALLE.net",
   "category": "Kollaboration",
   "icon": "🤝",
-  "requires": [],
+  "requires": [
+    "spaces"
+  ],
   "pip": [],
   "routers": [
-    { "module": "chat_routes", "feature": "chat" },
-    { "module": "calendar_routes", "feature": "calendar" },
-    { "module": "todos_routes", "feature": "todos" },
-    { "module": "notepad_routes", "feature": "notepad" },
-    { "module": "clock_routes", "feature": "clock" }
+    {
+      "module": "chat_routes",
+      "feature": "chat"
+    },
+    {
+      "module": "calendar_routes",
+      "feature": "calendar"
+    },
+    {
+      "module": "todos_routes",
+      "feature": "todos"
+    },
+    {
+      "module": "notepad_routes",
+      "feature": "notepad"
+    },
+    {
+      "module": "clock_routes",
+      "feature": "clock"
+    }
   ],
   "features": [
-    { "id": "chat", "label": "Chat", "default": true },
-    { "id": "calendar", "label": "Kalender & Organigramm", "default": true },
-    { "id": "todos", "label": "Todo-Liste", "default": true },
-    { "id": "notepad", "label": "Notizheft", "default": true },
-    { "id": "calc", "label": "Rechner", "default": true },
-    { "id": "clock", "label": "Uhr (Stoppuhr, Timer, Wecker)", "default": true }
+    {
+      "id": "chat",
+      "label": "Chat",
+      "default": true
+    },
+    {
+      "id": "calendar",
+      "label": "Kalender & Organigramm",
+      "default": true
+    },
+    {
+      "id": "todos",
+      "label": "Todo-Liste",
+      "default": true
+    },
+    {
+      "id": "notepad",
+      "label": "Notizheft",
+      "default": true
+    },
+    {
+      "id": "calc",
+      "label": "Rechner",
+      "default": true
+    },
+    {
+      "id": "clock",
+      "label": "Uhr (Stoppuhr, Timer, Wecker)",
+      "default": true
+    }
   ]
 }

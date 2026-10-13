@@ -127,7 +127,7 @@ class _Files:
         if section:
             if not _rs.may_read(self.user):
                 raise PermissionError("Kein Zugriff auf das Relay")
-            return _rs.listdir(section, sub)
+            return _rs.listdir(section, sub, user=self.user)
 
         client_id, err = rr._resolve_client_segment(parts[0], self.user)
         if not client_id:
@@ -160,7 +160,7 @@ class _Files:
         section, sub = self._server(vpath)
         if section:
             from rmm_mod_relay import relay_storage as _rs
-            return _rs.read(section, sub)
+            return _rs.read(section, sub, user=self.user)
         client_id, real = self.real(vpath)
         res = self._run(request_fs_read(client_id, real), timeout=120)
         data = res.get("data") or ""
@@ -172,7 +172,7 @@ class _Files:
         if section:
             from rmm_mod_relay import relay_storage as _rs
             self._need_write(section)
-            _rs.write(section, sub, payload)
+            _rs.write(section, sub, payload, user=self.user)
             return
         client_id, real = self.real(vpath)
         self._run(request_fs_op(client_id, "fs_write",
@@ -187,14 +187,14 @@ class _Files:
             from rmm_mod_relay import relay_storage as _rs
             self._need_write(section)
             if event == "fs_mkdir":
-                _rs.mkdir(section, sub)
+                _rs.mkdir(section, sub, user=self.user)
             elif event == "fs_delete":
-                _rs.delete(section, sub)
+                _rs.delete(section, sub, user=self.user)
             elif event == "fs_move":
                 dst_section, dst_sub = self._server((extra or {}).get("dst", ""))
                 if dst_section != section:
                     raise PermissionError("Nur innerhalb desselben Ordners möglich")
-                _rs.move(section, sub, dst_sub)
+                _rs.move(section, sub, dst_sub, user=self.user)
             return
         client_id, real = self.real(vpath)
         data = {"path": real}

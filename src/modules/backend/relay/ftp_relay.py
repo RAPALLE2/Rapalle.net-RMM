@@ -245,7 +245,7 @@ class FTPSession:
         if section:
             if not _rs.may_read(self.user):
                 raise PermissionError("Kein Zugriff auf das Relay")
-            return _rs.listdir(section, parts[1:])
+            return _rs.listdir(section, parts[1:], user=self.user)
 
         client_id, err = rr._resolve_client_segment(parts[0], self.user)
         if not client_id:
@@ -541,7 +541,7 @@ class FTPSession:
         section, sub = self._server_path(vpath)
         if section:
             from rmm_mod_relay import relay_storage as _rs
-            payload = _rs.read(section, sub)
+            payload = _rs.read(section, sub, user=self.user)
             await self.send("150 Datei wird gesendet.")
             await self._send_data(payload)
             self._log("download", f"{section}:/{'/'.join(sub)} ({len(payload)} Bytes)")
@@ -582,7 +582,7 @@ class FTPSession:
         payload = b"".join(chunks)
         if section:
             from rmm_mod_relay import relay_storage as _rs
-            _rs.write(section, sub, payload)
+            _rs.write(section, sub, payload, user=self.user)
             self._log("upload", f"{section}:/{'/'.join(sub)} ({len(payload)} Bytes)")
             await self.send("226 Übertragung abgeschlossen.")
             return
@@ -621,7 +621,7 @@ class FTPSession:
         if section:
             from rmm_mod_relay import relay_storage as _rs
             self._need_write(section)
-            _rs.delete(section, sub)
+            _rs.delete(section, sub, user=self.user)
             self._log("delete", f"{section}:/{'/'.join(sub)}")
             await self.send("250 Gelöscht.")
             return
@@ -636,7 +636,7 @@ class FTPSession:
         if section:
             from rmm_mod_relay import relay_storage as _rs
             self._need_write(section)
-            _rs.mkdir(section, sub)
+            _rs.mkdir(section, sub, user=self.user)
             await self.send(f'257 "{arg}" erstellt.')
             return
         client_id, real = await self._real(vpath)
@@ -649,7 +649,7 @@ class FTPSession:
         if section:
             from rmm_mod_relay import relay_storage as _rs
             self._need_write(section)
-            _rs.delete(section, sub)
+            _rs.delete(section, sub, user=self.user)
             await self.send("250 Gelöscht.")
             return
         client_id, real = await self._real(vpath)
@@ -673,7 +673,7 @@ class FTPSession:
                 return
             from rmm_mod_relay import relay_storage as _rs
             self._need_write(src_section)
-            _rs.move(src_section, src_sub, dst_sub)
+            _rs.move(src_section, src_sub, dst_sub, user=self.user)
             self.rename_from = None
             await self.send("250 Umbenannt.")
             return

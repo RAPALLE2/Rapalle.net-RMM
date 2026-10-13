@@ -732,7 +732,7 @@ async def dav(request: Request, full_path: str = ""):
         base_href = "/dav/" + _up.quote(section) + (
             "/" + "/".join(_up.quote(x) for x in sub) if sub else "")
         try:
-            entry = _rs.stat_entry(section, sub)
+            entry = _rs.stat_entry(section, sub, user=user)
         except PermissionError as e:
             return PlainTextResponse(str(e), status_code=403)
 
@@ -743,7 +743,7 @@ async def dav(request: Request, full_path: str = ""):
                 base_href + ("/" if entry["is_dir"] else ""),
                 entry["name"] or section, entry["is_dir"], entry["size"], entry["mtime"])]
             if entry["is_dir"] and request.headers.get("depth", "1") != "0":
-                for e in _rs.listdir(section, sub):
+                for e in _rs.listdir(section, sub, user=user):
                     responses.append(_propfind_response(
                         f"{base_href}/{_up.quote(e['name'])}" + ("/" if e["is_dir"] else ""),
                         e["name"], e["is_dir"], e["size"], e["mtime"]))
@@ -758,7 +758,7 @@ async def dav(request: Request, full_path: str = ""):
                 rows = "".join(
                     f'<li>{"📁" if e["is_dir"] else "📄"} '
                     f'<a href="{base_href}/{_up.quote(e["name"])}">{_xml.escape(e["name"])}</a></li>'
-                    for e in _rs.listdir(section, sub))
+                    for e in _rs.listdir(section, sub, user=user))
                 html = ("<!doctype html><meta charset=utf-8><title>RMM Relay</title>"
                         f"<body style='font-family:sans-serif'><h3>📦 {_xml.escape(section)}</h3>"
                         f"<ul>{rows or '<li>(leer)</li>'}</ul></body>")
@@ -766,7 +766,7 @@ async def dav(request: Request, full_path: str = ""):
             if method == "HEAD":
                 return Response(status_code=200, headers={
                     "Content-Length": str(entry["size"])})
-            data = _rs.read(section, sub)
+            data = _rs.read(section, sub, user=user)
             return Response(content=data, media_type="application/octet-stream")
 
         if not writable:
@@ -775,15 +775,15 @@ async def dav(request: Request, full_path: str = ""):
 
         try:
             if method == "PUT":
-                _rs.write(section, sub, await request.body())
+                _rs.write(section, sub, await request.body(), user=user)
                 db.add_audit_entry(user["username"], "relay.storage.write",
                                    target=section, details="/".join(sub))
                 return Response(status_code=201)
             if method == "MKCOL":
-                _rs.mkdir(section, sub)
+                _rs.mkdir(section, sub, user=user)
                 return Response(status_code=201)
             if method == "DELETE":
-                _rs.delete(section, sub)
+                _rs.delete(section, sub, user=user)
                 db.add_audit_entry(user["username"], "relay.storage.delete",
                                    target=section, details="/".join(sub))
                 return Response(status_code=204)
@@ -797,7 +797,7 @@ async def dav(request: Request, full_path: str = ""):
                     return PlainTextResponse(
                         "Verschieben nur innerhalb desselben Ordners",
                         status_code=502)
-                _rs.move(section, sub, dparts[1:])
+                _rs.move(section, sub, dparts[1:], user=user)
                 return Response(status_code=201)
         except PermissionError as e:
             return PlainTextResponse(str(e), status_code=403)

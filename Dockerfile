@@ -46,10 +46,12 @@ ENV HOST=0.0.0.0 \
 # tzdata      -> korrekte lokale Zeit in Logs/Audit
 # ca-certs    -> HTTPS (GitHub-Update, Webhooks)
 # iputils/net -> Netzwerk-Scanner & Speedtest brauchen ping/traceroute
+# git         -> Modul "spaces": Git-Repositories in einem Space
 # build-essential + libffi/libssl -> Fallback, falls für bcrypt/cryptography
 #                                   kein passendes Wheel existiert
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
+        git \
         ca-certificates \
         tzdata \
         iputils-ping \

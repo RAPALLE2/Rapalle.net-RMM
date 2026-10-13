@@ -3,8 +3,11 @@ relay_storage.py
 ----------------
 Zwei Ordner, die dem SERVER gehoeren und nicht einem Client:
 
-  Storage      Ablage fuer alles, was man einfach irgendwo hinlegen will -
-               Installer, Skripte, Notizen, Backups. Nur angemeldet erreichbar.
+  Spaces       Die Spaces des angemeldeten Benutzers (Modul "spaces"): eigener
+               Space, Teamspaces, Public Spaces, Freigaben. Wird pro Benutzer
+               aufgebaut (virtuell) - siehe src/modules/backend/spaces/vfs.py.
+               Frueher gab es hier den gemeinsamen Ordner "Storage"; sein Inhalt
+               liegt jetzt im Public Space "Storage".
 
   Source       Der QUELLCODE des RMM selbst (Projekt-Wurzel). Damit laesst
                sich der Server ueber das Netzlaufwerk bearbeiten - mit dem
@@ -46,7 +49,8 @@ ROOT = _STORAGE_DIR
 # Anzeigename -> Unterordner. Der Anzeigename ist das, was im Explorer,
 # im Netzlaufwerk und in FTP/SFTP zu sehen ist.
 SECTIONS = {
-    "Storage": "spaces",
+    # Virtuell und benutzerabhaengig - wird an das Modul "spaces" weitergereicht.
+    "Spaces": None,
     "Deployment": "deployment",
     # Source liegt NICHT unter backend/relay/, sondern ist die Projekt-Wurzel
     # selbst (siehe _SPECIAL_BASE). Der Wert hier ist deshalb nur ein Platz-
@@ -72,10 +76,44 @@ READ_PERM = {
 #   Deployment -> zusaetzlich 'manage_settings', denn was hier liegt, kann
 #                 oeffentlich abrufbar sein. Lesen darf jeder mit 'use_relay'.
 WRITE_PERM = {
-    "Storage": "use_relay",
     "Deployment": "manage_settings",
     "Source": "edit_source",
 }
+
+
+# Sektionen, die ein Modul pro Benutzer bereitstellt: Name -> (Modul, Datei).
+_VIRTUAL = {"Spaces": ("spaces", "vfs")}
+
+
+def _vfs(section: str):
+    """Virtuelles Dateisystem einer Modul-Sektion - None, wenn das Modul aus ist."""
+    mod = _VIRTUAL.get(section)
+    if not mod:
+        return None
+    try:
+        from app import modules
+        return modules.use(*mod) if modules.is_enabled(mod[0]) else None
+    except Exception:
+        return None
+
+
+def is_virtual(section: str) -> bool:
+    return section in _VIRTUAL
+
+
+def _vparts(sub) -> list[str]:
+    if isinstance(sub, str):
+        sub = sub.replace("\\", "/").split("/")
+    return [p for p in sub if p and p != "."]
+
+
+def _vcall(section: str, user, fn: str, *args):
+    v = _vfs(section)
+    if v is None:
+        raise FileNotFoundError(section)
+    if user is None:
+        raise PermissionError("Anmeldung erforderlich")
+    return getattr(v, fn)(user, *args)
 
 
 def section_of(name: str) -> str | None:
@@ -89,7 +127,8 @@ def section_of(name: str) -> str | None:
 
 
 def display_names() -> list[str]:
-    return list(SECTIONS.keys())
+    """Sichtbare Sektionen - virtuelle nur, wenn ihr Modul aktiv ist."""
+    return [n for n in SECTIONS if not is_virtual(n) or _vfs(n) is not None]
 
 
 def read_perm(section: str) -> str:
@@ -148,7 +187,9 @@ def _entry(p: Path) -> dict:
     return {"name": p.name, "is_dir": p.is_dir(), "size": size, "mtime": mtime}
 
 
-def listdir(section: str, sub: list[str] | str) -> list[dict]:
+def listdir(section: str, sub: list[str] | str, user=None) -> list[dict]:
+    if is_virtual(section):
+        return _vcall(section, user, "listdir", _vparts(sub))
     target = resolve(section, sub)
     if not target.exists():
         raise FileNotFoundError(target.name)
@@ -159,29 +200,39 @@ def listdir(section: str, sub: list[str] | str) -> list[dict]:
     return out
 
 
-def stat_entry(section: str, sub: list[str] | str) -> dict | None:
+def stat_entry(section: str, sub: list[str] | str, user=None) -> dict | None:
+    if is_virtual(section):
+        return _vcall(section, user, "stat", _vparts(sub))
     target = resolve(section, sub)
     return _entry(target) if target.exists() else None
 
 
-def read(section: str, sub: list[str] | str) -> bytes:
+def read(section: str, sub: list[str] | str, user=None) -> bytes:
+    if is_virtual(section):
+        return _vcall(section, user, "read", _vparts(sub))
     target = resolve(section, sub)
     if not target.is_file():
         raise FileNotFoundError(target.name)
     return target.read_bytes()
 
 
-def write(section: str, sub: list[str] | str, data: bytes) -> None:
+def write(section: str, sub: list[str] | str, data: bytes, user=None) -> None:
+    if is_virtual(section):
+        return _vcall(section, user, "write", _vparts(sub), data)
     target = resolve(section, sub)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data or b"")
 
 
-def mkdir(section: str, sub: list[str] | str) -> None:
+def mkdir(section: str, sub: list[str] | str, user=None) -> None:
+    if is_virtual(section):
+        return _vcall(section, user, "mkdir", _vparts(sub))
     resolve(section, sub).mkdir(parents=True, exist_ok=True)
 
 
-def delete(section: str, sub: list[str] | str) -> None:
+def delete(section: str, sub: list[str] | str, user=None) -> None:
+    if is_virtual(section):
+        return _vcall(section, user, "delete", _vparts(sub))
     target = resolve(section, sub)
     if target == base(section).resolve():
         raise PermissionError("Der Hauptordner kann nicht geloescht werden")
@@ -191,7 +242,9 @@ def delete(section: str, sub: list[str] | str) -> None:
         target.unlink()
 
 
-def move(section: str, src: list[str] | str, dst: list[str] | str) -> None:
+def move(section: str, src: list[str] | str, dst: list[str] | str, user=None) -> None:
+    if is_virtual(section):
+        return _vcall(section, user, "move", _vparts(src), _vparts(dst))
     s = resolve(section, src)
     d = resolve(section, dst)
     if s == base(section).resolve():
@@ -203,6 +256,9 @@ def move(section: str, src: list[str] | str, dst: list[str] | str) -> None:
 def may_write(user, section: str) -> bool:
     """Darf dieser Benutzer in dieser Sektion schreiben?"""
     from app.auth import user_has_permission, is_super_admin
+    if is_virtual(section):
+        # Feinere Rechte prueft das Modul selbst (PermissionError je Pfad).
+        return _vfs(section) is not None and (is_super_admin(user) or user_has_permission(user, "use_relay"))
     if is_super_admin(user):
         return True
     perm = WRITE_PERM.get(section, "use_relay")
@@ -228,4 +284,6 @@ def may_read(user, section: str | None = None) -> bool:
         return False
     if section is None:
         return True
+    if is_virtual(section):
+        return _vfs(section) is not None
     return user_has_permission(user, read_perm(section))

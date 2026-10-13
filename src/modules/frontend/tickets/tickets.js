@@ -17,6 +17,35 @@ import { RMM_TARGET, RMM_LABEL, targetLabel } from "/js/app/tickettarget.js";
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "/js/app/i18n.js";
 import { condenseHints } from "/js/app/help.js";
+import { getModuleApi } from "/js/app/modules.js";
+
+// --- Bilder in Tickets (Modul "spaces") ---------------------------------
+// Ein Bild steht als [[space-img:<token>|<name>]] im Text. Die Datei liegt im
+// Space des Absenders (Ordner "Ticket-Anhänge"); geladen wird sie mit Anmeldung.
+const IMG_RE = /\[\[space-img:([A-Za-z0-9_-]+)\|([^\]]*)\]\]/g;
+const imgCache = new Map();
+const spaces = () => getModuleApi("spaces");
+const richText = (text) => esc(text).replace(IMG_RE, (_, tok, name) =>
+  `<img data-sptok="${tok}" alt="${name}" title="${name}" style="display:block;max-width:320px;max-height:320px;border-radius:6px;margin:4px 0;cursor:zoom-in;background:rgba(0,0,0,.15);min-width:60px;min-height:40px">`);
+async function loadImages(root) {
+  const sp = spaces();
+  for (const img of root.querySelectorAll("img[data-sptok]")) {
+    const tok = img.dataset.sptok;
+    img.addEventListener("click", () => sp?.openShareLink(tok));
+    img.addEventListener("error", () => {
+      if (!img.src) return;
+      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `🖼️ ${img.alt || "Bild"} (nicht darstellbar)` }));
+    }, { once: true });
+    if (imgCache.has(tok)) { img.src = imgCache.get(tok); continue; }
+    try {
+      if (!sp) throw new Error("Spaces aus");
+      const u = await sp.blobUrl(`/api/spaces/s/${tok}/download?inline=1`);
+      imgCache.set(tok, u); img.src = u;
+    } catch {
+      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `🖼️ ${img.alt || "Bild"} (nicht verfügbar)` }));
+    }
+  }
+}
 
 // Farben sind fest, die Bezeichnungen werden ERST BEIM ZUGRIFF uebersetzt.
 // Wichtig: Diese Tabellen werden beim Laden des Moduls ausgewertet - zu diesem
@@ -196,7 +225,7 @@ export function renderTickets(body, win) {
 
         <h3 style="margin:0 0 6px">${tr("tk_description")}</h3>
         <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;
-             font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(t.description) || `<i style='color:var(--subtext)'>${tr("tk_no_description")}</i>`}</div>
+             font-size:13px;white-space:pre-wrap;word-break:break-word">${richText(t.description || "") || `<i style='color:var(--subtext)'>${tr("tk_no_description")}</i>`}</div>
 
         <h3 style="margin:16px 0 6px">${tr("tk_assigned_to")}
           ${may("ticket_assign") ? `<button class="btn btn-sm" id="tkd-assign" style="margin-left:6px">${tr("tk_assign")}</button>` : ""}
@@ -239,7 +268,7 @@ export function renderTickets(body, win) {
               </div>
               <div style="white-space:pre-wrap;word-break:break-word">${c.hidden
                 ? `<i style="color:var(--subtext)">${tr("tk_private_comment")}</i>`
-                : esc(c.text)}</div>
+                : richText(c.text)}</div>
             </div>`; }).join("") || `<span style="color:var(--subtext);font-size:12px">${tr("tk_no_comments")}</span>`}
         </div>
         ${may("ticket_comment") ? `
@@ -247,6 +276,8 @@ export function renderTickets(body, win) {
           <div style="display:flex;gap:8px">
             <textarea id="tkd-comment" rows="2" placeholder="Kommentar schreiben…"
               style="flex:1;resize:none"></textarea>
+            ${spaces() ? `<button class="btn btn-icon" id="tkd-img" title="Bild anhängen (wird in deinem Space gespeichert)" style="align-self:stretch;height:auto">🖼️</button>
+            <input type="file" id="tkd-imgfile" accept="image/*" multiple style="display:none">` : ""}
             <button class="btn-primary" id="tkd-comment-send">Senden</button>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -285,6 +316,29 @@ export function renderTickets(body, win) {
       usersBox.style.display = visSel.value === "custom" ? "" : "none";
     });
     initSubjectPicker(usersBox);
+    // Bilder: hochladen und als Markierung ins Kommentarfeld setzen
+    const commentTa = detailEl.querySelector("#tkd-comment");
+    async function attachImages(files) {
+      const sp = spaces();
+      const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+      if (!sp || !imgs.length || !commentTa) return;
+      for (const f of imgs) {
+        try {
+          const a = await sp.uploadAttachment(f, "tickets");
+          const name = (a.name || "Bild").replace(/[\]|]/g, "_");
+          commentTa.value = (commentTa.value ? commentTa.value.replace(/\s*$/, "\n") : "") + `[[space-img:${a.token}|${name}]]\n`;
+        } catch (e) { window.notify?.("Bild nicht angehängt: " + e.message, "error"); }
+      }
+      commentTa.focus();
+    }
+    const imgFile = detailEl.querySelector("#tkd-imgfile");
+    detailEl.querySelector("#tkd-img")?.addEventListener("click", () => imgFile.click());
+    imgFile?.addEventListener("change", () => { attachImages(imgFile.files); imgFile.value = ""; });
+    commentTa?.addEventListener("paste", (e) => {
+      const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+      if (files.length && spaces()) { e.preventDefault(); attachImages(files); }
+    });
+    loadImages(detailEl);
     detailEl.querySelector("#tkd-comment-send")?.addEventListener("click", async () => {
       const ta = detailEl.querySelector("#tkd-comment");
       if (!ta.value.trim()) return;

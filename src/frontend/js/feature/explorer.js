@@ -17,6 +17,7 @@ import { BACKEND_URL, publicBaseNow, loadPublicBase } from "../app/config.js";
 import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../app/state.js";
 import { scheduleSave } from "../app/persist.js";
 import { t } from "../app/i18n.js";
+import { getModuleApi } from "../app/modules.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
 const RELAY_AUTOCLOSE_BASE = [
@@ -65,6 +66,7 @@ function parentOf(path) {
 
 export function renderExplorer(body, win) {
   const { clientId, clientName } = win.props;
+  const spacesApi = getModuleApi("spaces");      // null, wenn das Modul aus ist
   const where = clientId ? clientName : "Server";
   const history = [""];
   let currentPath = "";
@@ -103,6 +105,7 @@ export function renderExplorer(body, win) {
       <div class="explorer-toolbar tab-bar" style="gap:4px;flex-wrap:wrap">
         <button id="exp-tab-files-${win.key}" class="tab-btn active">${t("exp_files")}</button>
         ${clientId ? `<button id="exp-tab-relay-${win.key}" class="tab-btn">${t("exp_relay")}</button>` : ""}
+        ${spacesApi ? `<button id="exp-tab-spaces-${win.key}" class="tab-btn">☁️ Spaces</button>` : ""}
       </div>
 
       <div id="exp-files-${win.key}" style="display:flex;flex-direction:column;flex:1;min-height:0">
@@ -136,6 +139,7 @@ export function renderExplorer(body, win) {
       </div>
 
       ${clientId ? `<div id="exp-relay-${win.key}" style="display:none;padding:16px;overflow:auto"></div>` : ""}
+      ${spacesApi ? `<div id="exp-spaces-${win.key}" style="display:none;flex:1;min-height:0"></div>` : ""}
     </div>
   `;
 
@@ -145,6 +149,8 @@ export function renderExplorer(body, win) {
   const fileInput = body.querySelector(`#exp-file-${win.key}`);
   const filesPane = body.querySelector(`#exp-files-${win.key}`);
   const relayPane = body.querySelector(`#exp-relay-${win.key}`);
+  const spacesPane = body.querySelector(`#exp-spaces-${win.key}`);
+  let spacesLoaded = false;
 
   function renderCrumbs(path) {
     if (!path) { crumbs.innerHTML = `<b>${esc(where)}</b> : Laufwerke`; return; }
@@ -663,16 +669,27 @@ export function renderExplorer(body, win) {
 
   const tabFiles = body.querySelector(`#exp-tab-files-${win.key}`);
   const tabRelay = body.querySelector(`#exp-tab-relay-${win.key}`);
+  const tabSpaces = body.querySelector(`#exp-tab-spaces-${win.key}`);
   function setMode(m) {
     mode = m;
     filesPane.style.display = m === "files" ? "flex" : "none";
     if (relayPane) relayPane.style.display = m === "relay" ? "block" : "none";
+    if (spacesPane) spacesPane.style.display = m === "spaces" ? "flex" : "none";
     tabFiles.classList.toggle("active", m === "files");
     if (tabRelay) tabRelay.classList.toggle("active", m === "relay");
+    if (tabSpaces) tabSpaces.classList.toggle("active", m === "spaces");
     if (m === "relay") renderRelay();
+    // Spaces (Modul "spaces"): eigener Space, Teams, Öffentlich, Freigaben
+    if (m === "spaces" && !spacesLoaded) {
+      spacesLoaded = true;
+      Promise.resolve(spacesApi.renderSpacesBrowser(spacesPane, {})).catch((e) => {
+        spacesPane.innerHTML = `<div style="padding:16px;color:var(--danger)">${esc(e.message)}</div>`;
+      });
+    }
   }
   tabFiles.addEventListener("click", () => setMode("files"));
   if (tabRelay) tabRelay.addEventListener("click", () => setMode("relay"));
+  if (tabSpaces) tabSpaces.addEventListener("click", () => setMode("spaces"));
 
   body.querySelector(`#exp-back-${win.key}`).addEventListener("click", () => {
     if (history.length > 1) { history.pop(); load(history[history.length - 1]); }

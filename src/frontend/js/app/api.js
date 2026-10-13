@@ -81,6 +81,8 @@ const _PERM_KEY = {
   c_vpn: "perm_c_vpn",
   manage_nodes: "perm_manage_nodes",
   manage_modules: "perm_manage_modules",
+  get_user_space: "perm_get_user_space", use_public_space: "perm_use_public_space",
+  see_all_spaces: "perm_see_all_spaces", edit_all_spaces: "perm_edit_all_spaces",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",
@@ -667,7 +669,7 @@ export const api = {
 
   relayFtpConfig: () => request("/api/relay/ftp"),
 
-  // --- Server-eigene Relay-Ordner (Storage / Deployment) ---
+  // --- Server-eigene Relay-Ordner (Spaces / Deployment / Source) ---
   storageSections: () => request("/api/storage/sections"),
   storageList: (section, path = "") => request(
     `/api/storage/list?section=${encodeURIComponent(section)}&path=${encodeURIComponent(path)}`),

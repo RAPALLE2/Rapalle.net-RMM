@@ -3,7 +3,7 @@
 // Ein Explorer NUR fuer das Relay selbst - ohne die einzelnen Clients.
 //
 // Gezeigt werden die beiden server-eigenen Ordner:
-//   Storage      allgemeine Ablage (Installer, Skripte, Notizen, ...)
+//   Spaces       eigene/Team-/Public Spaces und Freigaben (Modul "spaces", pro Benutzer)
 //   Deployment   dasselbe, zusaetzlich oeffentlich per Link erreichbar
 //                unter /deployment/<datei>, sofern in den Einstellungen
 //                freigegeben.
@@ -31,7 +31,7 @@ function fmtDate(ms) {
 
 export function renderRelayExplorer(body, win) {
   let sections = [];
-  let section = win?.props?.section || "Storage";
+  let section = win?.props?.section || "Spaces";
   let path = win?.props?.path || "";
   let writable = false;
   let publicOn = false;
@@ -95,7 +95,7 @@ export function renderRelayExplorer(body, win) {
         const meta = await api.storageSections();
         sections = meta.sections || [];
         publicOn = !!meta.deployment_public;
-        if (!sections.some((s) => s.name === section)) section = sections[0]?.name || "Storage";
+        if (!sections.some((s) => s.name === section)) section = sections[0]?.name || "Spaces";
       }
       drawTabs();
       const res = await api.storageList(section, path);

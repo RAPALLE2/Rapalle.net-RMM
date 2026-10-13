@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "collab",
   "name": "Zusammenarbeit & Werkzeuge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "apps": [
     {
       "id": "chat",

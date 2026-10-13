@@ -12,6 +12,10 @@ import { esc, uiConfirm, uiPrompt, uiChoice } from "/js/app/utils.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 
 const TEMP = "__temp__";       // Ansicht "Schmierzettel"
+// Notiz-IDs sind Pfade ("Ordner/Titel.md") - jedes Segment einzeln kodieren.
+const encId = (id) => String(id).split("/").map(encodeURIComponent).join("/");
+// Automatisch vergebener Titel ("Notiz 2026-10-13 21.38.08") -> Titelfeld leer lassen
+const isAutoTitle = (t) => /^Notiz \d{4}-\d{2}-\d{2} \d{2}\.\d{2}\.\d{2}( \(\d+\))?$/.test(t || "");
 
 async function req(path, opts = {}) {
   const token = getToken() || "";
@@ -65,9 +69,19 @@ export async function renderNotepad(body, win) {
     if (!pending) return;
     const { id, fields } = pending; pending = null;
     try {
-      const n = await req(`/notes/${id}`, { method: "PATCH", body: JSON.stringify(fields) });
-      const i = data.notes.findIndex((x) => x.id === id);
-      if (i >= 0) data.notes[i] = n;
+      const n = await req(`/notes/${encId(id)}`, { method: "PATCH", body: JSON.stringify(fields) });
+      // Der Dateiname folgt dem Titel -> die ID kann sich geändert haben.
+      if (n.id !== id) {
+        if (currentId === id) currentId = n.id;
+        if (pending?.id === id) pending.id = n.id;
+      }
+      const local = data.notes.find((x) => x.id === id);
+      if (local) {
+        // Objekt AKTUALISIEREN statt ersetzen: der Editor hält eine Referenz darauf
+        // und muss die neue ID kennen. Weitergetippten Text/Titel nicht überschreiben.
+        const { text: _t, title: _ti, ...rest } = n;
+        Object.assign(local, rest);
+      }
       const st = $("#np-state"); if (st) st.textContent = "✓ gespeichert";
       drawList();
     } catch (e) { window.notify?.("Notiz nicht gespeichert: " + e.message, "error"); }
@@ -140,13 +154,15 @@ export async function renderNotepad(body, win) {
     const box = $("#np-editor");
     if (!n) {
       box.innerHTML = `<div style="margin:auto;color:var(--subtext);font-size:13px;text-align:center;padding:20px">
-        Notiz auswählen oder neu anlegen.<br><span style="font-size:12px">Temporäre Notizen bleiben erhalten, bis du aufräumst.</span></div>`;
+        Notiz auswählen oder neu anlegen.<br><span style="font-size:12px">Temporäre Notizen bleiben erhalten, bis du aufräumst.<br>
+        Gespeichert in deinem Space unter <b>${esc(data.location || "Mein Space/Notizen")}</b> (auch im Explorer und per Relay).</span></div>`;
       return;
     }
     const folderName = data.folders.find((f) => f.id === n.folder_id)?.name;
     box.innerHTML = `
       <div style="display:flex;gap:8px;align-items:center;padding:10px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-        <input type="text" id="np-title" placeholder="Titel" style="flex:1;min-width:120px" value="${esc(n.title || "")}">
+        <input type="text" id="np-title" placeholder="${esc(isAutoTitle(n.title) ? n.title : "Titel")}" style="flex:1;min-width:120px"
+          value="${esc(isAutoTitle(n.title) ? "" : (n.title || ""))}">
         <button class="btn btn-sm" id="np-move">${n.folder_id ? "📁 Verschieben" : "💾 In Ordner speichern"}</button>
         <button class="btn btn-sm btn-danger btn-icon" id="np-del" title="Notiz löschen">🗑️</button>
       </div>
@@ -163,7 +179,7 @@ export async function renderNotepad(body, win) {
       if (!(await uiConfirm("Notiz löschen?", { okText: "Löschen", danger: true }))) return;
       pending = null; clearTimeout(saveTimer);
       try {
-        await req(`/notes/${n.id}`, { method: "DELETE" });
+        await req(`/notes/${encId(n.id)}`, { method: "DELETE" });
         data.notes = data.notes.filter((x) => x.id !== n.id);
         currentId = null; drawAll();
       } catch (e) { window.notify?.(e.message, "error"); }
@@ -217,8 +233,9 @@ export async function renderNotepad(body, win) {
     if (!target) return;
     if (target === "__new__") { const f = await newFolder(); if (!f) return; target = f.id; }
     try {
-      const upd = await req(`/notes/${n.id}`, { method: "PATCH", body: JSON.stringify({ folder_id: target === TEMP ? null : target }) });
+      const upd = await req(`/notes/${encId(n.id)}`, { method: "PATCH", body: JSON.stringify({ folder_id: target === TEMP ? null : target }) });
       Object.assign(n, upd);
+      currentId = n.id;
       view = n.folder_id || TEMP;
       drawAll();
     } catch (e) { window.notify?.(e.message, "error"); }
@@ -229,7 +246,11 @@ export async function renderNotepad(body, win) {
     if (!f) return;
     const name = await uiPrompt("Ordner umbenennen", { value: f.name });
     if (!name?.trim()) return;
-    try { Object.assign(f, await req(`/folders/${f.id}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) })); drawAll(); }
+    try {
+      const nf = await req(`/folders/${encodeURIComponent(f.id)}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
+      data = await req("");                 // IDs der Notizen im Ordner haben sich geändert
+      view = nf.id; currentId = null; drawAll();
+    }
     catch (e) { window.notify?.(e.message, "error"); }
   }
 
@@ -239,10 +260,9 @@ export async function renderNotepad(body, win) {
     if (!(await uiConfirm(`Ordner „${f.name}“ löschen?`,
       { description: "Die Notizen darin gehen nicht verloren - sie werden wieder zu temporären Notizen (Schmierzettel).", okText: "Löschen", danger: true }))) return;
     try {
-      await req(`/folders/${f.id}`, { method: "DELETE" });
-      data.folders = data.folders.filter((x) => x.id !== f.id);
-      data.notes.forEach((n) => { if (n.folder_id === f.id) n.folder_id = null; });
-      view = TEMP; drawAll();
+      await req(`/folders/${encodeURIComponent(f.id)}`, { method: "DELETE" });
+      data = await req("");                 // Notizen liegen jetzt im Schmierzettel (neue IDs)
+      view = TEMP; currentId = null; drawAll();
     } catch (e) { window.notify?.(e.message, "error"); }
   }
 

@@ -967,6 +967,8 @@ def _adopt_former_core_features() -> None:
         "sql": lambda: __import__("app.dbsync", fromlist=["dbsync"]).load_config().get("mode") == "external",
         "notify": _notify_used,
         "tickets": _tickets_used,
+        # "collab" (Notizheft) braucht seit Version 1.2 das Modul "spaces".
+        "spaces": lambda: bool(en.get("collab")),
     }
     for mid, used in checks.items():
         if mid in en or mid not in _registry:
