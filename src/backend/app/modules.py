@@ -942,16 +942,31 @@ def init(api, sio) -> None:
 
 def _adopt_former_core_features() -> None:
     """
-    Funktionen, die frueher fest im Core steckten und jetzt Module sind: Wurden
+    Funktionen, die frueher fest im Core (oder in einem anderen Modul) steckten
+    und jetzt eigene Module sind: Wurden
     sie schon benutzt, wird das Modul beim ERSTEN Start nach dem Update
     automatisch eingeschaltet. Sonst waeren z.B. AD-Benutzer ploetzlich
     ausgesperrt. Hat der Administrator ein Modul schon einmal selbst geschaltet
     (Eintrag in modules.json vorhanden), wird nichts veraendert.
     """
     en = _state.setdefault("enabled", {})
+    def _db():
+        return __import__("app.db", fromlist=["db"])
+
+    def _notify_used():
+        d = _db()
+        rules = d._conn.execute("SELECT COUNT(*) FROM notification_rules").fetchone()[0]
+        return bool(rules) or bool(d.list_webhooks())
+
+    def _tickets_used():
+        # Tickets steckten frueher im Modul "collab" (Teilfunktion "tickets").
+        return bool(en.get("collab")) and _state.get("features", {}).get("collab", {}).get("tickets", True) is not False
+
     checks = {
-        "sso": lambda: bool(__import__("app.db", fromlist=["db"]).list_realms()),
+        "sso": lambda: bool(_db().list_realms()),
         "sql": lambda: __import__("app.dbsync", fromlist=["dbsync"]).load_config().get("mode") == "external",
+        "notify": _notify_used,
+        "tickets": _tickets_used,
     }
     for mid, used in checks.items():
         if mid in en or mid not in _registry:
@@ -1002,14 +1017,19 @@ async def shutdown_all() -> None:
             print(f"[module] Shutdown '{mid}': {exc}")
 
 
-async def emit(event: str, **payload) -> None:
-    """Meldet ein Ereignis an alle aktiven Module, die den Hook dafuer haben."""
+async def emit(event: str, /, **payload) -> None:
+    """Meldet ein Ereignis an alle aktiven Module, die den Hook dafuer haben.
+
+    "event" ist positionsgebunden (/), damit Aufrufer auch ein Feld namens
+    event im Payload mitgeben koennen (notifier.fire_event tut das). Vorher
+    gab das "multiple values for argument 'event'" - und kein Hook lief.
+    """
     for mid, ld in list(_loaded.items()):
         if event in ld.hooks and event not in ("startup", "shutdown", "enable", "disable"):
             await _call_hook(ld, event, dict(payload))
 
 
-def emit_nowait(event: str, **payload) -> None:
+def emit_nowait(event: str, /, **payload) -> None:
     """Fuer Aufrufer ohne laufende Ereignisschleife (Threads)."""
     loop = _loop
     if loop is None or loop.is_closed() or not _loaded:

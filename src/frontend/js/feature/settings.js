@@ -16,7 +16,6 @@ import { buildSubTabs } from "../app/subtabs.js";
 import { t } from "../app/i18n.js";
 import { isAdmin, hasGlobalPerm } from "../app/state.js";
 import { renderSource } from "./source.js";
-import { renderNotifications } from "./notifications.js";
 import { registerCleanup } from "../app/windowmanager.js";
 
 export function renderSettings(body, win) {
@@ -40,15 +39,14 @@ export function renderSettings(body, win) {
       general: admin || hasGlobalPerm("see_settings"),
       users: admin || hasGlobalPerm("create_users"),
       branding: admin || hasGlobalPerm("manage_branding"),
-      notifications: admin || hasGlobalPerm("manage_settings"),
       source: admin || hasGlobalPerm("see_source"),
     };
-    const order = ["general", "users", "branding", "notifications", "source"];
+    const order = ["general", "users", "branding", "source"];
     const allowed = order.filter((k) => canTab[k]);
     if (!allowed.includes(activeTab)) activeTab = allowed[0] || "general";
     const tabLabel = { general: t("tab_general"), users: t("tab_users"),
       branding: "Branding",
-      notifications: t("tab_notifications"), source: "Source" };
+      source: "Source" };
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
         <div class="tab-bar" style="padding:10px 14px;border-bottom:1px solid var(--border);gap:6px">
@@ -64,7 +62,6 @@ export function renderSettings(body, win) {
     if (activeTab === "general") renderGeneralTab(content);
     else if (activeTab === "users") renderUsersTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
-    else if (activeTab === "notifications") renderNotifTab(content);
     else if (activeTab === "source") sourceCleanup = renderSource(content);
   }
 
@@ -785,16 +782,9 @@ export function renderSettings(body, win) {
   // ---------------- SSO / REALMS ----------------
   // SSO / Verzeichnis-Anmeldung (Realms): Modul "sso" (src/modules/frontend/sso/settings.js)
 
-  // ---------------- NOTIFICATIONS (Webhook-Verwaltung) ----------------
-  // Benachrichtigungen: kompletter Bereich (Regeln, Webhooks, SMTP) liegt
-  // in apps/notifications.js - hier nur noch delegieren.
-  function renderNotifTab(root) {
-    renderNotifications(root, win);
-    // Erklaertexte in "?"-Symbole umwandeln, sobald der Bereich steht.
-    // (renderNotifications laedt asynchron nach - deshalb zweimal.)
-    condenseHints(root);
-    setTimeout(() => condenseHints(root), 400);
-  }
+  // ---------------- NOTIFICATIONS ----------------
+  // Benachrichtigungen (Regeln, Webhooks, SMTP): Modul "notify"
+  // (src/modules/frontend/notify/notifications.js)
 
   draw();
 }

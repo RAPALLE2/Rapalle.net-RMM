@@ -29,9 +29,8 @@ const APP_SUBPAGES = {
   settings: [
     { value: "general", get label() { return t("tab_general"); } },
     { value: "users", get label() { return t("tab_users"); } },
-    { value: "sso", label: "SSO" },
+    // SSO und Benachrichtigungen sind jetzt eigene Module/Apps
     { value: "branding", label: "Branding" },
-    { value: "notifications", get label() { return t("fa_notifications"); } },
     { value: "source", label: "Source" },
   ],
 };

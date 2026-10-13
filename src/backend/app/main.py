@@ -45,7 +45,6 @@ from router import (
     agent_update_routes,
     update_routes,
     source_routes,
-    notify_routes,
     notes_routes,
     diag_routes,
 )  # noqa: E501 - Sammelimport, Absicherung siehe _import_router() unten
@@ -245,7 +244,7 @@ _mount("agent_update_routes", agent_update_routes)
 _mount("update_routes", update_routes)
 # Datenbank-Verwaltung (lokal/extern/Docker-DB): Modul "sql" (src/modules/backend/sql)
 _mount("source_routes", source_routes)
-_mount("notify_routes", notify_routes)      # Benachrichtigungs-Regeln + SMTP
+# Benachrichtigungen (Regeln, SMTP, Webhooks): Modul "notify" (src/modules/backend/notify)
 _mount("notes_routes", notes_routes)       # Client-Notizen (Sichtbarkeit + Protokoll)
 # VPN AUSGEBAUT (2026-09-20): Der WireGuard-Teil ist vollstaendig entfernt.
 # Grund: Sein Datenweg hing im Event-Loop (siehe unten) und hat das Backend
@@ -419,7 +418,6 @@ import urllib.request as _urlreq
 import urllib.error as _urlerr
 
 from router.admin_routes import build_notification as _build_notification
-from router.admin_routes import send_webhook as _send_webhook
 
 
 def _check_website(url: str) -> tuple[bool, str | None]:
@@ -468,12 +466,12 @@ async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
         client=client.get("hostname"), service="Uptime-Monitor", level=level,
     )
 
-    # 1) Alle Webhooks (synchroner HTTP-Call -> in Thread auslagern)
-    for hook in db.list_webhooks():
-        try:
-            await _asyncio.to_thread(_send_webhook, hook, notification)
-        except Exception as e:
-            print(f"[uptime] Webhook '{hook.get('name')}' fehlgeschlagen: {e}")
+    # 1) Alle Webhooks (Modul "notify"; ist es aus, passiert nichts)
+    try:
+        from app import notifier as _notifier
+        await _notifier.send_all_webhooks(notification)
+    except Exception as e:
+        print(f"[uptime] Webhooks fehlgeschlagen: {e}")
 
     # 2) Normale In-App-Notification an alle verbundenen Dashboards
     try:
@@ -577,11 +575,8 @@ async def _start_background_tasks():
     _supervise("diagnose-messwerte", _diag.sampler_loop)
     _supervise("tabellen-groesse", _diag.table_size_watch)
 
-    from app import notifier as _notifier
-
     _supervise("uptime-monitor", _uptime_monitor_engine)
-    # Garantie-Prüfschleife (Benachrichtigungs-Regeln warranty_expiring/expired)
-    _supervise("garantie", _notifier.warranty_loop)
+    # Garantie-Prüfschleife: laeuft jetzt im Modul "notify" (ctx.spawn)
     _supervise("server-auto-update", _server_auto_update_engine)
     _supervise("db-sync", _db_sync_engine)
 

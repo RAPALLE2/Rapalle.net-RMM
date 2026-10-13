@@ -8,16 +8,30 @@
 //                     <Ziel>" mit vielen Trigger-Arten (offline, Garantie,
 //                     CPU/RAM/Disk/Temp-Schwellwerte, Websites, Logins, ...)
 
-import { api } from "../app/api.js";
-import { state } from "../app/state.js";
-import { esc, uiConfirm } from "../app/utils.js";
+import { api } from "/js/app/api.js";
+import { state } from "/js/app/state.js";
+import { esc, uiConfirm } from "/js/app/utils.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
-import { t as tr } from "../app/i18n.js";
-import { condenseHints } from "../app/help.js";
+import { t as tr } from "/js/app/i18n.js";
+import { condenseHints } from "/js/app/help.js";
 
 const PLACEHOLDER_HELP =
   "Platzhalter: {head} {body} {message} {client} {tenant} {location} {service} {level} {timestamp}";
+
+// Modul "notify": als App "Benachrichtigungen" (renderNotifyApp) und in der
+// Modul-App unter Einstellungen (renderNotifySettings).
+export function renderNotifyApp(body, win) {
+  body.innerHTML = `<div style="height:100%;overflow:auto;box-sizing:border-box"></div>`;
+  return renderNotifySettings(body.firstElementChild, win);
+}
+
+export function renderNotifySettings(root, win) {
+  renderNotifications(root, win);
+  // Erklaertexte in "?"-Symbole umwandeln (laedt asynchron nach - deshalb zweimal).
+  condenseHints(root);
+  setTimeout(() => condenseHints(root), 400);
+}
 
 export function renderNotifications(body, win) {
   // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach

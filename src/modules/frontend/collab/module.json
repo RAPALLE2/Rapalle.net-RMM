@@ -1,21 +1,9 @@
 {
   "schema": 1,
   "id": "collab",
-  "name": "Zusammenarbeit",
-  "version": "1.0.0",
+  "name": "Zusammenarbeit & Werkzeuge",
+  "version": "1.1.0",
   "apps": [
-    {
-      "id": "tickets",
-      "label": "Tickets",
-      "icon": "🎫",
-      "title": "Tickets",
-      "entry": "tickets.js",
-      "export": "renderTickets",
-      "w": 960,
-      "h": 660,
-      "perm": "ticket_read",
-      "feature": "tickets"
-    },
     {
       "id": "chat",
       "label": "Chat",
@@ -63,6 +51,43 @@
       "h": 640,
       "perm": "see_org",
       "feature": "calendar"
+    },
+    {
+      "id": "notepad",
+      "label": "Notizheft",
+      "icon": "🗒️",
+      "title": "Notizheft",
+      "entry": "notepad.js",
+      "export": "renderNotepad",
+      "w": 860,
+      "h": 600,
+      "feature": "notepad"
+    },
+    {
+      "id": "calculator",
+      "label": "Rechner",
+      "icon": "🧮",
+      "title": "Rechner",
+      "entry": "calculator.js",
+      "export": "renderCalculator",
+      "w": 420,
+      "h": 660,
+      "feature": "calc"
+    },
+    {
+      "id": "clock",
+      "label": "Uhr",
+      "icon": "⏰",
+      "title": "Uhr",
+      "entry": "clock.js",
+      "export": "renderClock",
+      "w": 520,
+      "h": 560,
+      "feature": "clock"
     }
-  ]
+  ],
+  "init": {
+    "entry": "clockcore.js",
+    "export": "init"
+  }
 }

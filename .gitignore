@@ -27,6 +27,9 @@ src/backend/temp/dist/
 
 # Startprotokoll des Containers (docker-entrypoint.sh)
 src/backend/logs/
+src/backend/data/backup/
+src/backend/media/images/*
+src/backend/media/recordings/*
 
 # Diagnose-Logs des Wartungsmodus (koennen gross werden)
 src/agent/restart_count.txt

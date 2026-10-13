@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "notify",
+  "name": "Benachrichtigungen",
+  "version": "1.0.0",
+  "description": "Benachrichtigungs-Regeln (Trigger wie Client offline, CPU-Last, Website down, Anmeldung …) mit Versand per E-Mail (SMTP), Webhook (Discord/Custom) oder als Toast im Dashboard. Ist das Modul aus, werden keine Benachrichtigungen verschickt.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🔔",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": ["notify_routes", "webhook_routes"],
+  "hooks": {
+    "startup": "on_startup",
+    "client_online": "on_event",
+    "client_offline": "on_event",
+    "client_new": "on_event",
+    "agent_update": "on_event",
+    "website_up": "on_event",
+    "website_down": "on_event",
+    "user_login": "on_event",
+    "login_failed": "on_event"
+  }
+}

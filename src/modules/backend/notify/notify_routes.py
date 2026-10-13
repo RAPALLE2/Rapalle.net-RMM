@@ -1,6 +1,6 @@
 """
-routers/notify_routes.py
-------------------------
+notify_routes.py (Modul "notify", frueher router/notify_routes.py)
+------------------------------------------------------------------
 Benachrichtigungs-Rework: Regel-Verwaltung + SMTP-Einstellungen.
 
   GET  /api/notify/catalog        -> Trigger-/Kanal-Katalog (für den Editor)
@@ -20,7 +20,9 @@ Benachrichtigungs-Einstellungen im Settings-Fenster).
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import db, notifier
+from app import db
+
+from . import engine as notifier   # Regel-Motor des Moduls (gleiche Funktionsnamen wie frueher)
 from app.auth import get_current_user, is_super_admin, user_has_permission
 from router.admin_routes import build_notification
 

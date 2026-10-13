@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "tickets",
+  "name": "Tickets",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "tickets",
+      "label": "Tickets",
+      "icon": "🎫",
+      "title": "Tickets",
+      "entry": "tickets.js",
+      "export": "renderTickets",
+      "w": 960,
+      "h": 660,
+      "perm": "ticket_read"
+    }
+  ]
+}
