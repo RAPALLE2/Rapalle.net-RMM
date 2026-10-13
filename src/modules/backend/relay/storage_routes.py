@@ -7,15 +7,8 @@ Zwei Dinge:
    (Storage / Deployment) - damit der Explorer im Dashboard sie anzeigen,
    hoch- und herunterladen kann, ohne den Umweg ueber WebDAV.
 
-2. Die oeffentliche Deployment-Seite unter /deployment.
-   Sie zeigt entweder eigenen HTML-Code aus den Einstellungen oder - solange
-   keiner hinterlegt ist - eine einfache Dateiliste. Dateien darunter sind
-   direkt per Link erreichbar: /deployment/logo.png, /deployment/setup.ps1, ...
-
-   ACHTUNG: Genau das ist der Zweck, aber es heisst auch: Alles im Ordner
-   'Deployment' ist ohne Anmeldung abrufbar, sobald die Freigabe aktiv ist.
-   Der Schalter dafuer liegt in den Einstellungen (Standard: AUS), damit
-   niemand versehentlich etwas veroeffentlicht.
+2. (Die oeffentliche Deployment-Seite /deployment und ihre Einstellungen
+   gehoeren jetzt zum Modul "deployment" - src/modules/backend/deployment.)
 """
 
 import mimetypes
@@ -31,15 +24,14 @@ from app.auth import get_current_user, require_perm
 
 router = APIRouter(tags=["storage"])
 
-SETTING_HTML = "deployment_html"
-SETTING_PUBLIC = "deployment_public"
-SETTING_TITLE = "deployment_title"
-
-
 def deployment_public() -> bool:
-    """Ist die oeffentliche Seite freigeschaltet? Standard: nein."""
-    raw = db.get_setting(SETTING_PUBLIC)
-    return str(raw or "0").strip().lower() in ("1", "true", "yes", "on")
+    """Ist die oeffentliche Deployment-Seite freigeschaltet? (Modul "deployment")"""
+    try:
+        from app import modules
+        dep = modules.use("deployment", "deploy_store") if modules.is_enabled("deployment") else None
+        return bool(dep and dep.is_public())
+    except Exception:
+        return False
 
 
 # ==================================================================
@@ -168,109 +160,3 @@ def storage_move(body: PathBody, user: dict = Depends(get_current_user)):
     except PermissionError as e:
         raise HTTPException(403, str(e))
     return {"ok": True}
-
-
-# ------------------------------------------------------------------
-# Einstellungen der Deployment-Seite
-# ------------------------------------------------------------------
-
-class DeploySettings(BaseModel):
-    html: str | None = None
-    public: bool | None = None
-    title: str | None = None
-
-
-@router.get("/api/storage/deployment")
-def get_deployment(user: dict = Depends(get_current_user)):
-    require_perm(user, "manage_settings")
-    return {
-        "html": db.get_setting(SETTING_HTML) or "",
-        "title": db.get_setting(SETTING_TITLE) or "Deployment",
-        "public": deployment_public(),
-    }
-
-
-@router.post("/api/storage/deployment")
-def set_deployment(body: DeploySettings,
-                         user: dict = Depends(get_current_user)):
-    require_perm(user, "manage_settings")
-    if body.html is not None:
-        db.set_setting(SETTING_HTML, body.html)
-    if body.title is not None:
-        db.set_setting(SETTING_TITLE, body.title.strip() or "Deployment")
-    if body.public is not None:
-        db.set_setting(SETTING_PUBLIC, "1" if body.public else "0")
-        db.add_audit_entry(user["username"], "deployment.public",
-                           details="an" if body.public else "aus")
-    return {"ok": True, "public": deployment_public()}
-
-
-# ==================================================================
-# Oeffentliche Seite: /deployment  und  /deployment/<datei>
-# ==================================================================
-# KEIN Login. Deshalb haengt alles am Schalter 'deployment_public'.
-
-_OFF = PlainTextResponse("Die Deployment-Seite ist nicht freigegeben.",
-                         status_code=404)
-
-
-def _default_page(title: str) -> str:
-    """Einfache Dateiliste, solange kein eigener HTML-Code hinterlegt ist."""
-    try:
-        entries = rs.listdir("Deployment", "")
-    except Exception:
-        entries = []
-    import xml.sax.saxutils as _x
-    rows = "".join(
-        f'<li><a href="/deployment/{_up.quote(e["name"])}">'
-        f'{"📁" if e["is_dir"] else "📄"} {_x.escape(e["name"])}</a></li>'
-        for e in entries)
-    return (f"<!doctype html><meta charset=utf-8><title>{_x.escape(title)}</title>"
-            "<body style=\"font-family:system-ui,sans-serif;max-width:720px;"
-            "margin:40px auto;padding:0 16px\">"
-            f"<h1>{_x.escape(title)}</h1>"
-            f"<ul>{rows or '<li>(noch nichts abgelegt)</li>'}</ul></body>")
-
-
-@router.get("/deployment", include_in_schema=False)
-@router.get("/deployment/", include_in_schema=False)
-def deployment_index():
-    if not deployment_public():
-        return _OFF
-    html = (db.get_setting(SETTING_HTML) or "").strip()
-    title = db.get_setting(SETTING_TITLE) or "Deployment"
-    if not html:
-        html = _default_page(title)
-    return HTMLResponse(content=html)
-
-
-@router.get("/deployment/{full_path:path}", include_in_schema=False)
-def deployment_file(full_path: str, request: Request):
-    if not deployment_public():
-        return _OFF
-    parts = [p for p in full_path.split("/") if p]
-    if not parts:
-        # deployment_index() ist jetzt synchron - kein 'await' mehr.
-        return deployment_index()
-    try:
-        entry = rs.stat_entry("Deployment", parts)
-    except PermissionError:
-        return PlainTextResponse("Nicht erlaubt", status_code=403)
-    if not entry:
-        return PlainTextResponse("Nicht gefunden", status_code=404)
-    if entry["is_dir"]:
-        # Unterordner ebenfalls als Liste anzeigen.
-        import xml.sax.saxutils as _x
-        base = "/deployment/" + "/".join(_up.quote(p) for p in parts)
-        rows = "".join(
-            f'<li><a href="{base}/{_up.quote(e["name"])}">'
-            f'{"📁" if e["is_dir"] else "📄"} {_x.escape(e["name"])}</a></li>'
-            for e in rs.listdir("Deployment", parts))
-        return HTMLResponse(
-            f"<!doctype html><meta charset=utf-8><title>{_x.escape(parts[-1])}</title>"
-            "<body style=\"font-family:system-ui,sans-serif;max-width:720px;"
-            f"margin:40px auto\"><h1>{_x.escape(parts[-1])}</h1><ul>{rows}</ul></body>")
-    data = rs.read("Deployment", parts)
-    ctype = mimetypes.guess_type(parts[-1])[0] or "application/octet-stream"
-    # Bilder/Text direkt anzeigen, alles andere laden lassen.
-    return Response(content=data, media_type=ctype)

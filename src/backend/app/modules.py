@@ -958,6 +958,14 @@ def _adopt_former_core_features() -> None:
         rules = d._conn.execute("SELECT COUNT(*) FROM notification_rules").fetchone()[0]
         return bool(rules) or bool(d.list_webhooks())
 
+    def _deployment_used():
+        if not en.get("relay"):
+            return False
+        from app.paths import STORAGE_DIR
+        d = STORAGE_DIR / "deployment"
+        public = str(_db().get_setting("deployment_public") or "0").lower() in ("1", "true", "yes", "on")
+        return public or (d.is_dir() and any(d.iterdir()))
+
     def _tickets_used():
         # Tickets steckten frueher im Modul "collab" (Teilfunktion "tickets").
         return bool(en.get("collab")) and _state.get("features", {}).get("collab", {}).get("tickets", True) is not False
@@ -969,6 +977,9 @@ def _adopt_former_core_features() -> None:
         "tickets": _tickets_used,
         # "collab" (Notizheft) braucht seit Version 1.2 das Modul "spaces".
         "spaces": lambda: bool(en.get("collab")),
+        # Deployment steckte frueher im Relay-Modul: aktivieren, wenn das Relay
+        # an ist und die Seite freigeschaltet war oder im Ordner etwas liegt.
+        "deployment": _deployment_used,
     }
     for mid, used in checks.items():
         if mid in en or mid not in _registry:

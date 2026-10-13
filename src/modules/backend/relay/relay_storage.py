@@ -14,7 +14,7 @@ Zwei Ordner, die dem SERVER gehoeren und nicht einem Client:
                gewohnten Editor statt ueber die Weboberflaeche. Sichtbar nur
                mit 'see_source', schreibbar nur mit 'edit_source'.
 
-  Deployment   Dasselbe, aber zusaetzlich oeffentlich abrufbar unter
+  Deployment   (nur mit Modul "deployment") Ablage, zusaetzlich oeffentlich abrufbar unter
                /deployment/<datei>. Damit laesst sich ein Bild, eine Datei
                oder ein Skript per Link weitergeben, ohne dafuer erst einen
                Webserver aufzusetzen. Genau dafuer ist der Ordner gedacht -
@@ -122,13 +122,30 @@ def section_of(name: str) -> str | None:
     n = (name or "").strip().rstrip("/")
     for display in SECTIONS:
         if n.lower() == display.lower():
-            return display
+            # Modulgebundene Sektion bei abgeschaltetem Modul = gibt es nicht
+            # (gilt so fuer WebDAV, FTP, SFTP und den Explorer gleichermassen).
+            return display if _module_ok(display) else None
     return None
 
 
+# Sektionen, die ein eigenes Modul brauchen (sonst unsichtbar und gesperrt).
+_NEEDS_MODULE = {"Deployment": "deployment"}
+
+
+def _module_ok(section: str) -> bool:
+    mid = _NEEDS_MODULE.get(section)
+    if not mid:
+        return True
+    try:
+        from app import modules
+        return modules.is_enabled(mid)
+    except Exception:
+        return False
+
+
 def display_names() -> list[str]:
-    """Sichtbare Sektionen - virtuelle nur, wenn ihr Modul aktiv ist."""
-    return [n for n in SECTIONS if not is_virtual(n) or _vfs(n) is not None]
+    """Sichtbare Sektionen - virtuelle/modulgebundene nur, wenn ihr Modul aktiv ist."""
+    return [n for n in SECTIONS if (not is_virtual(n) or _vfs(n) is not None) and _module_ok(n)]
 
 
 def read_perm(section: str) -> str:
@@ -256,6 +273,8 @@ def move(section: str, src: list[str] | str, dst: list[str] | str, user=None) ->
 def may_write(user, section: str) -> bool:
     """Darf dieser Benutzer in dieser Sektion schreiben?"""
     from app.auth import user_has_permission, is_super_admin
+    if not _module_ok(section):
+        return False
     if is_virtual(section):
         # Feinere Rechte prueft das Modul selbst (PermissionError je Pfad).
         return _vfs(section) is not None and (is_super_admin(user) or user_has_permission(user, "use_relay"))
@@ -278,6 +297,8 @@ def may_read(user, section: str | None = None) -> bool:
     Relay-Benutzer den Quellcode des Servers herunterladen.
     """
     from app.auth import user_has_permission, is_super_admin
+    if section is not None and not _module_ok(section):
+        return False
     if is_super_admin(user):
         return True
     if not user_has_permission(user, "use_relay"):

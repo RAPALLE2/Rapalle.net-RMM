@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "deployment",
+  "name": "Deployment-Server",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "deployment",
+      "label": "Deployment",
+      "icon": "🚀",
+      "title": "Deployment-Server",
+      "entry": "settings.js",
+      "export": "renderDeploymentApp",
+      "w": 820,
+      "h": 620,
+      "perm": "manage_settings"
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderDeploymentSettings"
+  }
+}

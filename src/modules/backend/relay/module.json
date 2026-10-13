@@ -3,7 +3,7 @@
   "id": "relay",
   "name": "Explorer-Relay",
   "version": "1.0.0",
-  "description": "Gibt Dateien von Clients per Relay frei (FTP/SFTP/WebDAV) und stellt Storage und Deployment bereit.",
+  "description": "Gibt Dateien von Clients per Relay frei (FTP/SFTP/WebDAV) und zeigt dort die Spaces (Modul „Spaces“) und den Deployment-Ordner (Modul „Deployment-Server“).",
   "author": "RAPALLE.net",
   "category": "Fernzugriff",
   "icon": "🔌",

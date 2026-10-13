@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "deployment",
+  "name": "Deployment-Server",
+  "version": "1.0.0",
+  "description": "Veröffentlicht den Ordner „Deployment“ als kleine Webseite unter /deployment (Installer, Skripte, Logos per Link weitergeben - auf Wunsch ohne Anmeldung). Mit eigener Dateiverwaltung; bei aktivem Relay-Modul zusätzlich als Bereich im Relay/Netzlaufwerk.",
+  "author": "RAPALLE.net",
+  "category": "Verteilung",
+  "icon": "🚀",
+  "requires": [],
+  "pip": [],
+  "routers": ["deployment_routes"]
+}
