@@ -1,6 +1,6 @@
 # router/modules_routes.py
 # ------------------------
-# API der Modul-App (Core). Verwaltung nur fuer Administratoren.
+# API der Modul-App (Core). Verwaltung mit dem globalen Recht "manage_modules".
 #
 #   GET    /api/modules                       Liste aller Module (Status, Funktionen, Einstellungen)
 #   GET    /api/modules/frontend              aktive Module mit Frontend-Teil (alle angemeldeten Benutzer)
@@ -21,13 +21,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app import db, modules
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_perm
 
 router = APIRouter()
 
 
 def _admin(user: dict) -> None:
-    require_admin(user)
+    # Globales Recht "manage_modules" (Rechte-Verwaltung -> Allgemein).
+    # Administratoren haben es automatisch.
+    require_perm(user, "manage_modules")
 
 
 def _wrap(exc: modules.ModuleError) -> HTTPException:

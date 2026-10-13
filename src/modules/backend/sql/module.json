@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "sql",
+  "name": "SQL-Datenbank",
+  "version": "1.0.0",
+  "description": "Verwaltet die Datenbank des RMM: lokale SQLite-Datei, externe Datenbank (MySQL/MariaDB, PostgreSQL, SQLite-Datei auf einer Freigabe) und - wenn das Backend im Docker-Container laeuft - einen MariaDB-Container. Dazu Sicherungen in backend/data/backup. Beim Deaktivieren wird eine externe Datenbank automatisch in die lokale Datei zurueckkopiert.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🗄️",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": ["sql_routes"],
+  "hooks": {
+    "disable": "on_disable"
+  }
+}

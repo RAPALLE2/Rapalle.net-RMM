@@ -2715,6 +2715,9 @@ GLOBAL_PERM_KEYS = [
     # (IP/Port, Server-Update von GitHub, Datenbank, Neustart/Stop, guacd).
     "see_settings", "manage_settings", "admin_settings",
     "see_permissions", "manage_permissions",
+    # Module verwalten: Modul-App (aktivieren/deaktivieren, Einstellungen,
+    # Teilfunktionen, Crashberichte). Frueher nur fuer Administratoren.
+    "manage_modules",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",
@@ -2779,7 +2782,11 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_taskmanager_view", "c_taskmanager_kill",
     "c_relay", "c_relay_unlimited",
     "c_vpn", "c_vpn_unlimited",     # VPN-Tunnel auf diesen Client ausstellen
-    "c_nodeproxy",                  # Reverse Proxy dieser Node benutzen
+    # Node dieses Clients verwalten: installieren/entfernen/aktualisieren,
+    # Docker installieren, Node-Module bereitstellen/entfernen/steuern.
+    # Wer es auf mindestens einem Client hat, sieht die Node-Uebersicht
+    # (nur mit diesen Clients) und den Katalog der Node-Module.
+    "manage_nodes",
     "c_portforward",                # Port-Weiterleitung auf diesen Client
     "c_notes_view", "c_notes_edit",
     "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
@@ -2795,6 +2802,8 @@ LEGACY_PERM_KEYS = [
     # Zusammengefuehrt mit 'admin' (siehe oben) - wird nicht mehr angeboten,
     # loest aber weiterhin auf.
     "super_admin",
+    # Altes Node-Proxy-Recht (Node-System neu gebaut) - nur noch Aufloesung.
+    "c_nodeproxy",
 ]
 
 # Master-Liste gültiger Keys (für set_grants-Validierung + Resolver).

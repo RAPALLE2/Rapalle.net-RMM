@@ -1,7 +1,9 @@
 """
 dbsync.py
 ---------
-Externe SQL-Datenbank als persistenter Speicher (Settings -> Datenbank).
+Externe SQL-Datenbank als persistenter Speicher. Bedienung: Modul "sql"
+(src/modules/*/sql). Diese Technik bleibt im Core, damit das Backend auch
+ohne das Modul sauber startet und abgleicht.
 
 Architektur ("Working-Copy"-Modell):
   - Die Anwendung arbeitet IMMER mit der lokalen SQLite (schnell, kein

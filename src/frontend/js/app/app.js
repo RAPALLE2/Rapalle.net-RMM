@@ -9,7 +9,7 @@
 //      Fensters rendert (renderWindowContent)
 
 import { state } from "./state.js";
-import { hasGlobalPerm, isAdmin } from "./state.js";
+import { hasAnyClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { api, saveToken, clearToken } from "./api.js";
 import { dashboardSocket } from "./socket.js";
 import { applyTheme, applyAccent } from "./theme.js";
@@ -126,13 +126,13 @@ function _appAllowed(appKey) {
   // sehen/bearbeiten darf (Einstellungen ansehen, SSO, Branding, Source oder
   // Benutzer erstellen). Die einzelnen Tabs werden in der App zusätzlich gegated.
   if (appKey === "settings") {
-    return hasGlobalPerm("see_settings") || hasGlobalPerm("manage_sso") ||
+    return hasGlobalPerm("see_settings") ||        // SSO: eigenes Modul "sso"
            hasGlobalPerm("manage_branding") || hasGlobalPerm("see_source") ||
            hasGlobalPerm("create_users");
   }
   if (appKey.startsWith("webapp:")) return true;          // gespeicherte Web-Apps (Modul 'browser')
-  if (appKey === "modules") return false;                  // Modul-App: nur Administratoren
-  if (appKey === "nodes") return hasGlobalPerm("manage_nodes");   // Node-Uebersicht
+  if (appKey === "modules") return hasGlobalPerm("manage_modules");   // Modul-App: globales Recht
+  if (appKey === "nodes") return hasAnyClientPerm("manage_nodes");    // Node-Uebersicht: Client-Recht auf mind. einem Client
   const mperm = moduleAppPerm(appKey);                     // App eines Moduls: Recht aus der module.json
   if (mperm !== undefined) return !mperm || hasGlobalPerm(mperm);
   const perm = APP_REQUIRED_PERM[appKey];

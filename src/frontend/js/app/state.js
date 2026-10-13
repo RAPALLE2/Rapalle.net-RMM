@@ -43,6 +43,14 @@ export function hasClientPerm(clientId, perm) {
   return !!(c && c[perm]);
 }
 
+// Hat der Benutzer ein Client-Recht auf MINDESTENS einem Client?
+// (z.B. "manage_nodes" -> Node-Übersicht sichtbar)
+export function hasAnyClientPerm(perm) {
+  if (isAdmin()) return true;
+  const clients = (state.perms && state.perms.clients) || {};
+  return Object.values(clients).some((c) => c && c[perm]);
+}
+
 // Ist der Client für den Benutzer überhaupt sichtbar?
 export function clientVisible(clientId) {
   if (isAdmin()) return true;

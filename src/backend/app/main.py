@@ -44,7 +44,6 @@ from router import (
     admin_routes,
     agent_update_routes,
     update_routes,
-    database_routes,
     source_routes,
     notify_routes,
     notes_routes,
@@ -244,7 +243,7 @@ _mount("audit_routes", audit_routes)
 _mount("admin_routes", admin_routes)
 _mount("agent_update_routes", agent_update_routes)
 _mount("update_routes", update_routes)
-_mount("database_routes", database_routes)
+# Datenbank-Verwaltung (lokal/extern/Docker-DB): Modul "sql" (src/modules/backend/sql)
 _mount("source_routes", source_routes)
 _mount("notify_routes", notify_routes)      # Benachrichtigungs-Regeln + SMTP
 _mount("notes_routes", notes_routes)       # Client-Notizen (Sichtbarkeit + Protokoll)

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "sql",
+  "name": "SQL-Datenbank",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "sql-database",
+      "label": "Datenbank",
+      "icon": "🗄️",
+      "title": "Datenbank",
+      "entry": "settings.js",
+      "export": "renderDatabaseApp",
+      "w": 760,
+      "h": 640,
+      "perm": "admin_settings"
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}

@@ -22,14 +22,34 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response
 
 from app import db, modules, node_manager
-from app.auth import get_current_user, require_perm
+from app.auth import get_current_user, is_super_admin, require_perm, user_has_permission
 from app.config import AGENT_TOKEN
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
 
-def _perm(user: dict) -> None:
-    require_perm(user, "manage_nodes")
+# Recht "manage_nodes" ist ein CLIENT-Recht: Es gilt pro Client (bzw. ueber den
+# Standard-Client "*" oder global fuer alle). Wer es auf mindestens einem
+# Client hat, sieht die Uebersicht - aber nur mit diesen Clients - und den
+# Katalog der Node-Module.
+
+def _perm(user: dict, client_id: str) -> None:
+    require_perm(user, "manage_nodes", client_id)
+
+
+def _allowed_ids(user: dict) -> set[str] | None:
+    """Clients, deren Node der Benutzer verwalten darf. None = alle (Super-Admin)."""
+    if is_super_admin(user):
+        return None
+    return {c["id"] for c in db.list_clients()
+            if user_has_permission(user, "manage_nodes", c["id"])}
+
+
+def _perm_any(user: dict) -> set[str] | None:
+    ids = _allowed_ids(user)
+    if ids is not None and not ids:
+        raise HTTPException(status_code=403, detail="Fehlendes Recht: manage_nodes")
+    return ids
 
 
 def _wrap(exc: Exception) -> HTTPException:
@@ -38,8 +58,11 @@ def _wrap(exc: Exception) -> HTTPException:
 
 @router.get("")
 async def list_nodes(user: dict = Depends(get_current_user)):
-    _perm(user)
-    return {"nodes": await node_manager.list_states(), "package_hash": node_manager.package_hash(),
+    ids = await db.call(_perm_any, user)
+    nodes = await node_manager.list_states()
+    if ids is not None:
+        nodes = [n for n in nodes if n.get("client_id") in ids]
+    return {"nodes": nodes, "package_hash": node_manager.package_hash(),
             "version": node_manager.node_version()}
 
 
@@ -54,19 +77,19 @@ def package(x_agent_token: str | None = Header(default=None)):
 
 @router.get("/modules")
 def node_modules(user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm_any(user)
     return {"modules": modules.node_modules()}
 
 
 @router.get("/{client_id}")
 async def get_node(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     return await node_manager.get_state(client_id)
 
 
 @router.post("/{client_id}/enable")
 async def enable_node(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     try:
         res = await node_manager.enable(client_id)
     except node_manager.NodeError as exc:
@@ -77,7 +100,7 @@ async def enable_node(client_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{client_id}/disable")
 async def disable_node(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     res = await node_manager.disable(client_id)
     db.add_audit_entry(user["username"], "node.disable", target=client_id)
     return res
@@ -85,7 +108,7 @@ async def disable_node(client_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{client_id}/update")
 async def update_node(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     try:
         res = await node_manager.update(client_id)
     except node_manager.NodeError as exc:
@@ -96,7 +119,7 @@ async def update_node(client_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{client_id}/refresh")
 async def refresh_node(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     try:
         return await node_manager.refresh(client_id)
     except node_manager.NodeError as exc:
@@ -105,7 +128,7 @@ async def refresh_node(client_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{client_id}/docker-install")
 async def docker_install(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     try:
         data = await node_manager.docker_install(client_id)
     except node_manager.NodeError as exc:
@@ -116,14 +139,14 @@ async def docker_install(client_id: str, user: dict = Depends(get_current_user))
 
 @router.get("/{client_id}/logs")
 def node_logs(client_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     return {"lines": node_manager.logs(client_id)}
 
 
 @router.post("/{client_id}/modules/{module_id}")
 async def deploy_module(client_id: str, module_id: str, body: dict | None = None,
                         user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     try:
         data = await node_manager.deploy_module(client_id, module_id, (body or {}).get("params") or {})
     except (node_manager.NodeError, modules.ModuleError) as exc:
@@ -134,7 +157,7 @@ async def deploy_module(client_id: str, module_id: str, body: dict | None = None
 
 @router.delete("/{client_id}/modules/{module_id}")
 async def remove_module(client_id: str, module_id: str, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     try:
         data = await node_manager.remove_module(client_id, module_id)
     except node_manager.NodeError as exc:
@@ -145,7 +168,7 @@ async def remove_module(client_id: str, module_id: str, user: dict = Depends(get
 
 @router.post("/{client_id}/modules/{module_id}/action")
 async def module_action(client_id: str, module_id: str, body: dict, user: dict = Depends(get_current_user)):
-    _perm(user)
+    _perm(user, client_id)
     action = str(body.get("action") or "")
     if not action:
         raise HTTPException(status_code=400, detail="action fehlt")

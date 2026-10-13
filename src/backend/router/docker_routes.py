@@ -1,8 +1,9 @@
 """
 routers/docker_routes.py
 ------------------------
-Zusatzdienste im Container-Betrieb dazuschalten (Settings -> Allgemein ->
-Container-Dienste). Siehe app/docker_services.py für die Technik dahinter.
+Zusatzdienste im Container-Betrieb dazuschalten. Die Oberflaeche dazu steckt in
+den Modulen: "db" -> Modul "sql", "guacd" -> Modul "guacamole".
+Siehe app/docker_services.py für die Technik dahinter.
 
 Endpunkte (nur Admin):
   GET  /api/admin/docker/services              -> Zustand aller Dienste
@@ -19,10 +20,21 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app import db
 from app import docker_services
+from app import modules
 from app.auth import get_current_user
 from router.admin_routes import require_admin
 
 router = APIRouter(prefix="/api/admin/docker", tags=["docker"])
+
+# Welcher Dienst gehoert zu welchem Modul? Ist das Modul aus, laesst sich der
+# Dienst nicht starten/neu starten (Stoppen bleibt erlaubt - zum Aufraeumen).
+_SERVICE_MODULE = {"db": "sql", "guacd": "guacamole"}
+
+
+def _require_module(key: str) -> None:
+    mid = _SERVICE_MODULE.get(key)
+    if mid and not modules.is_enabled(mid):
+        raise HTTPException(400, f"Dieser Dienst gehoert zum Modul '{mid}' - bitte erst das Modul aktivieren.")
 
 
 @router.get("/services")
@@ -34,6 +46,7 @@ def list_services(user: dict = Depends(get_current_user)):
 @router.post("/services/{key}/enable")
 def enable_service(key: str, user: dict = Depends(get_current_user)):
     require_admin(user)
+    _require_module(key)
     try:
         result = docker_services.enable(key)
     except docker_services.DockerError as e:
@@ -69,6 +82,7 @@ def disable_service(key: str, user: dict = Depends(get_current_user)):
 @router.post("/services/{key}/restart")
 def restart_service(key: str, user: dict = Depends(get_current_user)):
     require_admin(user)
+    _require_module(key)
     try:
         result = docker_services.restart(key)
     except docker_services.DockerError as e:

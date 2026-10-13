@@ -70,6 +70,33 @@ export function buildSubTabs(root, opts = {}) {
     sections.push({ box, title: title || `Abschnitt ${i + 1}` });
   });
 
+  // --- 1b) Leere oder versteckte Abschnitte verwerfen -----------------------
+  // Ein Unterpunkt ohne Inhalt (nur die Ueberschrift) oder in einem per
+  // display:none ausgeblendeten Bereich ergibt einen Knopf, hinter dem nichts
+  // ist - z.B. wenn ein Bereich in ein Modul umgezogen ist. Solche Abschnitte
+  // fliegen raus, statt als leerer Reiter stehen zu bleiben.
+  const isHiddenInRoot = (el) => {
+    for (let n = el; n && n !== root; n = n.parentElement) {
+      if (n.style && n.style.display === "none") return true;
+    }
+    return false;
+  };
+  const hasContent = (box) => [...box.childNodes].some((n, idx) => {
+    if (idx === 0) return false;                                  // die Ueberschrift
+    if (n.nodeType === 3) return !!n.textContent.trim();
+    if (n.nodeType !== 1) return false;
+    if (n.style && n.style.display === "none") return false;
+    return true;
+  });
+  for (let i = sections.length - 1; i >= 0; i--) {
+    const { box } = sections[i];
+    if (isHiddenInRoot(box) || !hasContent(box)) {
+      box.remove();
+      sections.splice(i, 1);
+    }
+  }
+  sections.forEach((s, i) => { s.box.dataset.subIndex = String(i); });
+
   if (!sections.length) return;
   root.dataset.subtabbed = "1";
 

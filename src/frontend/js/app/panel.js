@@ -222,8 +222,9 @@ export function renderStatusPart(target, client) {
       ${hasClientPerm(client.id, "c_power") ? `
       <button class="btn" data-quick="reboot" ${client.online ? "" : "disabled"}>🔄 ${t("reboot")}</button>
       <button class="btn" data-quick="shutdown" ${client.online ? "" : "disabled"}>📴 ${t("shutdown")}</button>` : ""}
+      ${hasClientPerm(client.id, "manage_agent") || hasClientPerm(client.id, "manage_nodes") ? `
+      <button class="btn" data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>` : ""}
       ${hasClientPerm(client.id, "manage_agent") ? `
-      <button class="btn" data-quick="update" ${client.online ? "" : "disabled"}>⬆️ ${t("update_agent")}</button>
       <button class="btn btn-danger" data-quick="uninstall" ${client.online ? "" : "disabled"} title="${t("uninstall_agent")}">🗑️ ${t("uninstall_agent")}</button>` : ""}
       ${hasClientPerm(client.id, "c_portforward") ? `
       <button class="btn" data-quick="forward" title="Einen Dienst dieses Geräts über den Server erreichbar machen – ohne VPN und ohne offene Ports beim Kunden">🔀 Port</button>` : ""}
@@ -1081,10 +1082,13 @@ export async function handleQuickAction(action, client) {
   if (action === "update") {
     // Der Update-Knopf bietet zwei Wege: das gewoehnliche Agent-Update und die
     // Verwaltung der NODE (eigener Prozess auf dem Client, siehe feature/node.js).
-    const choice = await uiChoice(`${client.hostname}`, [
-      { label: `⬆️ ${t("update_agent")}`, value: "agent" },
-      { label: "🧱 Node verwalten …", value: "node" },
-    ], {
+    // Angeboten wird nur, wofuer der Benutzer auf DIESEM Client das Recht hat:
+    // Agent-Update -> "manage_agent", Node -> "manage_nodes" (Client-Recht).
+    const opts = [];
+    if (hasClientPerm(client.id, "manage_agent")) opts.push({ label: `⬆️ ${t("update_agent")}`, value: "agent" });
+    if (hasClientPerm(client.id, "manage_nodes")) opts.push({ label: "🧱 Node verwalten …", value: "node" });
+    if (!opts.length) return;
+    const choice = opts.length === 1 ? opts[0].value : await uiChoice(`${client.hostname}`, opts, {
       description: "Eine Node ist ein eigener Prozess neben dem Agenten: Er prüft Docker und führt "
         + "Node-Module aus (z.B. VPN, Proxy, Netzlaufwerke). Ein gewöhnlicher Client braucht keine.",
     });

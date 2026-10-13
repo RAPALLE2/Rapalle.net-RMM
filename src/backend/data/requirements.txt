@@ -24,8 +24,8 @@ pydantic>=2.9.0          # Datenvalidierung für die API
 psutil>=6.0.0            # Laufwerksauflistung für "dieser Server" im Datei-Explorer
 cryptography>=42.0.0    # Verschlüsselt das Konto-Passwort für den Explorer-Relay (Digest/WebDAV)
 Pillow>=10.0.0         # Bildverarbeitung für die (optionale) serverseitige Screen-Aufnahme
-ldap3>=2.9.0            # LDAP/Active-Directory-Anmeldung (Realms). Optional: ohne
-                        # dieses Paket funktioniert nur die lokale Anmeldung.
+# ldap3 (LDAP/Active Directory) gehoert jetzt zum Modul "sso" und wird beim
+# Aktivieren des Moduls installiert (src/modules/backend/sso/module.json).
 
 # --- Optional, EXPERIMENTELL ---
 # pyrdp aktiviert das eingebettete RDP-Streaming für headless VMs (Button

@@ -125,6 +125,10 @@ async def on_startup(ctx):            # bei jedem Laden (Backend-Start UND Aktiv
 async def on_shutdown(ctx): ...       # beim Deaktivieren und beim Beenden
 def on_enable(ctx): ...               # NUR wenn der Benutzer das Modul einschaltet
 def on_disable(ctx): ...              # NUR wenn der Benutzer es ausschaltet
+def can_disable(ctx):                 # Hook "before_disable": VOR dem Abschalten gefragt
+    return "Grund"                    #   Text = Abschalten verweigern (auch nach einem Absturz),
+                                      #   None = erlaubt. Beispiel: Modul "sso" verlangt einen
+                                      #   lokalen Admin, damit sich danach noch jemand anmelden kann.
 async def on_client_online(ctx, data): ...   # Ereignis-Hooks: ctx + Daten
 ```
 

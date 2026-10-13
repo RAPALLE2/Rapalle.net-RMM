@@ -79,7 +79,8 @@ const _PERM_KEY = {
   c_delete: "perm_c_delete",
   use_relay: "perm_use_relay",
   c_vpn: "perm_c_vpn",
-  c_nodeproxy: "perm_c_nodeproxy",
+  manage_nodes: "perm_manage_nodes",
+  manage_modules: "perm_manage_modules",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",
@@ -840,6 +841,7 @@ export const api = {
   testDatabase: (cfg) => request("/api/admin/database/test", { method: "POST", body: JSON.stringify(cfg) }),
   switchDatabase: (cfg) => request("/api/admin/database/switch", { method: "POST", body: JSON.stringify(cfg) }),
   databaseProgress: () => request("/api/admin/database/progress"),
+  databaseDocker: () => request("/api/admin/database/docker"),     // Modul "sql"
   databaseBackups: () => request("/api/admin/database/backups"),
   databaseBackup: () => request("/api/admin/database/backup", { method: "POST", body: "{}" }),
   databaseRestoreBackup: (path) => request("/api/admin/database/restore-backup", {
@@ -855,7 +857,9 @@ export const api = {
   setUserGroups: (uid, group_ids) => request(`/api/admin/users/${uid}/groups`, { method: "PUT", body: JSON.stringify({ group_ids }) }),
 
   // --- Realms (Verzeichnis / AD) ---
+  // --- SSO / Realms: Modul "sso" (Routen nur, wenn das Modul aktiv ist) ---
   getRealms: () => request("/api/admin/realms"),
+  ssoLocalAdmins: () => request("/api/admin/sso/local-admins"),
   createRealm: (data) => request("/api/admin/realms", { method: "POST", body: JSON.stringify(data) }),
   updateRealm: (id, data) => request(`/api/admin/realms/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   testRealm: (id) => request(`/api/admin/realms/${id}/test`, { method: "POST" }),

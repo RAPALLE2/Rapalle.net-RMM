@@ -12,8 +12,9 @@ Alles rund um Login-Sicherheit:
    die Anfrage stellt, ohne bei jeder Anfrage erneut das Passwort zu prüfen.
 
 SSO / Verzeichnis-Anmeldung (Active Directory via LDAP/LDAPS):
-   Neben der lokalen Anmeldung (authenticate_local) gibt es die voll
-   funktionsfähige Verzeichnis-Anmeldung (authenticate_realm). Beide liefern
+   Neben der lokalen Anmeldung (authenticate_local) gibt es die Verzeichnis-
+   Anmeldung (authenticate_realm) im MODUL "sso". Ist es aus, koennen sich
+   AD-Benutzer nicht anmelden und ihre Sitzungen werden abgewiesen. Beide liefern
    am Ende dasselbe: ein fertiges User-Dict. Ab da läuft alles (JWT erzeugen,
    Berechtigungen prüfen) über denselben Code - egal ob lokal oder per AD
    angemeldet. AD-Benutzer bekommen ihre Rechte über RMM-Gruppen, die genauso
@@ -68,226 +69,25 @@ def authenticate_local(username: str, password: str) -> dict | None:
     return user
 
 
-def _import_ldap3():
-    """Importiert ldap3 oder liefert eine klare Fehlermeldung, falls es fehlt."""
+# Verzeichnis-Anmeldung (LDAP/AD): Modul "sso" (src/modules/backend/sso/ldap_auth.py).
+
+def sso_enabled() -> bool:
+    """Ist das Modul "sso" aktiv? (lazy import - modules.py importiert selbst app.*)"""
     try:
-        import ldap3
-        from ldap3.utils.conv import escape_filter_chars
-        return ldap3, escape_filter_chars
-    except ImportError:
-        raise HTTPException(
-            501,
-            "AD-Anmeldung nicht verfügbar: das Paket 'ldap3' ist nicht installiert. "
-            "Bitte auf dem Server 'pip install ldap3' ausführen.",
-        )
-
-
-def _build_ldap_server(realm: dict):
-    """Baut ein ldap3.Server-Objekt aus der Realm-Konfiguration (inkl. Port/SSL)."""
-    ldap3, _ = _import_ldap3()
-    use_ssl = bool(realm.get("use_ssl"))
-    port = realm.get("port")
-    try:
-        port = int(port) if port not in (None, "") else None
-    except (TypeError, ValueError):
-        port = None
-
-    host = realm["server"]
-    # Falls jemand eine komplette URL einträgt (ldaps://host), respektieren wir das.
-    if host.startswith("ldaps://"):
-        use_ssl = True
-        host = host[len("ldaps://"):]
-    elif host.startswith("ldap://"):
-        host = host[len("ldap://"):]
-
-    return ldap3.Server(
-        host,
-        port=port,
-        use_ssl=use_ssl,
-        get_info=ldap3.ALL,
-        connect_timeout=8,
-    )
-
-
-def _extract_group_names(member_of: list[str]) -> list[str]:
-    """Wandelt AD-memberOf-DNs in reine Gruppennamen um (CN=Gruppe,... -> Gruppe)."""
-    names = []
-    for dn in member_of:
-        first = dn.split(",")[0].strip()
-        if first.upper().startswith("CN="):
-            names.append(first[3:])
-    return names
-
-
-def test_realm_connection(realm: dict) -> dict:
-    """
-    Prüft die Realm-Konfiguration, ohne einen Benutzer anzumelden: verbindet
-    sich mit dem Bind-/Service-Account und macht eine kleine Suche im Base DN.
-    Gibt ein Ergebnis-Dict zurück (wird vom Test-Button im Frontend genutzt).
-    """
-    ldap3, _ = _import_ldap3()
-    server = _build_ldap_server(realm)
-    try:
-        conn = ldap3.Connection(
-            server,
-            user=realm.get("bind_user") or None,
-            password=realm.get("bind_password") or None,
-            auto_bind=True,
-        )
-    except Exception as e:
-        raise HTTPException(502, f"Verbindung/Anmeldung fehlgeschlagen: {e}")
-
-    base_dn = realm.get("base_dn") or ""
-    try:
-        conn.search(base_dn, "(objectClass=*)", search_scope=ldap3.BASE, attributes=["distinguishedName"])
-        info = {
-            "ok": True,
-            "server": str(server.host),
-            "ssl": bool(realm.get("use_ssl")),
-            "base_dn_ok": bool(base_dn) and len(conn.entries) >= 0,
-        }
-    except Exception as e:
-        conn.unbind()
-        raise HTTPException(502, f"Base DN nicht durchsuchbar: {e}")
-    conn.unbind()
-    return info
-
-
-def list_realm_groups(realm: dict) -> list[str]:
-    """
-    Listet die Gruppennamen (CN) eines AD/LDAP-Verzeichnisses auf. Wird benutzt,
-    um AD-Gruppen ins RMM zu importieren, damit man ihnen VORAB Rechte geben kann
-    (ohne dass sich erst ein Mitglied anmelden muss).
-    """
-    ldap3, _ = _import_ldap3()
-    server = _build_ldap_server(realm)
-    base_dn = realm.get("base_dn") or ""
-    try:
-        conn = ldap3.Connection(
-            server,
-            user=realm.get("bind_user") or None,
-            password=realm.get("bind_password") or None,
-            auto_bind=True,
-        )
-    except Exception as e:
-        raise HTTPException(502, f"AD-Verbindung fehlgeschlagen: {e}")
-    try:
-        names: set[str] = set()
-        # Paginiert suchen, damit auch große Verzeichnisse vollständig geladen werden.
-        conn.search(
-            base_dn, "(objectClass=group)", search_scope=ldap3.SUBTREE,
-            attributes=["cn"], paged_size=500,
-        )
-        for e in conn.entries:
-            if "cn" in e and str(e.cn):
-                names.add(str(e.cn))
-        # Weitere Seiten holen, falls vorhanden.
-        while True:
-            cookie = (conn.result.get("controls", {})
-                      .get("1.2.840.113556.1.4.319", {})
-                      .get("value", {}).get("cookie"))
-            if not cookie:
-                break
-            conn.search(
-                base_dn, "(objectClass=group)", search_scope=ldap3.SUBTREE,
-                attributes=["cn"], paged_size=500, paged_cookie=cookie,
-            )
-            for e in conn.entries:
-                if "cn" in e and str(e.cn):
-                    names.add(str(e.cn))
-    except Exception as e:
-        conn.unbind()
-        raise HTTPException(502, f"Gruppensuche fehlgeschlagen: {e}")
-    conn.unbind()
-    return sorted(names)
+        from app import modules
+        return modules.is_enabled("sso")
+    except Exception:
+        return False
 
 
 def authenticate_realm(username: str, password: str, realm_id: str) -> dict | None:
-    """
-    Authentifiziert einen Benutzer gegen ein konfiguriertes Verzeichnis (LDAP/AD).
-
-    Ablauf:
-      1. Realm-Konfiguration laden (Server, Port, SSL, Base DN, Bind-User).
-      2. Mit dem Bind-User am LDAP anmelden und den Benutzer suchen
-         (sAMAccountName ODER userPrincipalName, Filter-Zeichen werden escaped).
-      3. Ein zweites Mal mit dem gefundenen DN + eingegebenem Passwort binden
-         - klappt das, ist das Passwort korrekt.
-      4. Die AD-Gruppen des Benutzers auslesen (inkl. verschachtelter Gruppen,
-         soweit das Verzeichnis das unterstützt).
-      5. Benutzer lokal anlegen/aktualisieren (ohne Passwort-Hash) und den
-         gleichnamigen RMM-Gruppen zuordnen.
-
-    Gibt das lokale User-Dict zurück oder None bei Fehlschlag.
-    """
-    ldap3, escape_filter_chars = _import_ldap3()
-
-    realm = db.get_realm(realm_id)
-    if not realm:
-        return None
-    if not realm.get("enabled", 1):
-        raise HTTPException(403, "Dieses Verzeichnis ist deaktiviert.")
-
-    base_dn = realm.get("base_dn") or ""
-    bind_user = realm.get("bind_user")
-    bind_password = realm.get("bind_password")
-    extra_filter = (realm.get("user_filter") or "").strip()
-
-    safe_username = escape_filter_chars(username)
-    user_filter = f"(|(sAMAccountName={safe_username})(userPrincipalName={safe_username}))"
-    search_filter = f"(&(objectClass=user){user_filter}{extra_filter})"
-
-    server = _build_ldap_server(realm)
-    try:
-        # 1. Mit dem Service-/Bind-Account anmelden, um den Benutzer zu finden
-        conn = ldap3.Connection(
-            server, user=bind_user or None, password=bind_password or None, auto_bind=True
-        )
-
-        conn.search(
-            base_dn, search_filter, search_scope=ldap3.SUBTREE,
-            attributes=["memberOf", "displayName", "sAMAccountName"],
-        )
-        if not conn.entries:
-            conn.unbind()
-            return None
-
-        entry = conn.entries[0]
-        user_dn = entry.entry_dn
-        display_name = str(entry.displayName) if "displayName" in entry else username
-        member_of = [str(g) for g in entry.memberOf] if "memberOf" in entry else []
-
-        # 4b. Verschachtelte Gruppen (AD): Gruppen, in denen der User indirekt
-        #     Mitglied ist. Schlägt das fehl (z.B. nicht-AD-LDAP), ignorieren wir es.
-        try:
-            nested_filter = f"(member:1.2.840.113556.1.4.1943:={escape_filter_chars(user_dn)})"
-            conn.search(base_dn, nested_filter, search_scope=ldap3.SUBTREE, attributes=["cn"])
-            for g in conn.entries:
-                member_of.append(g.entry_dn)
-        except Exception:
-            pass
-        conn.unbind()
-
-        # 2. Mit dem gefundenen DN + eingegebenem Passwort binden (= Passwortprüfung)
-        if not password:
-            return None  # leeres Passwort niemals als "anonym gültig" durchwinken
-        user_conn = ldap3.Connection(server, user=user_dn, password=password)
-        if not user_conn.bind():
-            return None  # falsches Passwort
-        user_conn.unbind()
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        # Netzwerkfehler, falscher Bind-User etc.
-        raise HTTPException(502, f"AD-Anmeldung fehlgeschlagen: {e}")
-
-    # 3. AD-Gruppennamen aus den memberOf-DNs extrahieren (dedupliziert)
-    ad_group_names = sorted(set(_extract_group_names(member_of)))
-
-    # 5. Benutzer lokal anlegen/aktualisieren und AD-Gruppen zuordnen
-    user = db.upsert_ad_user(username, display_name, realm_id)
-    db.sync_ad_user_groups(user["id"], ad_group_names)
-    return db.get_user_by_id(user["id"])
+    """Anmeldung gegen ein Verzeichnis - nur mit aktivem Modul "sso"."""
+    from app import modules
+    ldap = modules.use("sso", "ldap_auth") if sso_enabled() else None
+    if ldap is None:
+        raise HTTPException(403, "Die Verzeichnis-Anmeldung (SSO) ist deaktiviert. "
+                                 "Bitte mit einem lokalen Konto anmelden.")
+    return ldap.authenticate_realm(username, password, realm_id)
 
 
 def create_access_token(user: dict) -> str:
@@ -332,6 +132,14 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict:
     user = db.get_user_by_id(payload["sub"])
     if not user:
         raise HTTPException(401, "Benutzer existiert nicht mehr")
+    # Verzeichnis-Konten (AD) brauchen das Modul "sso". Ist es aus, gelten auch
+    # bereits ausgestellte Sitzungen nicht mehr - das Konto selbst bleibt bestehen.
+    try:
+        realm = user["auth_realm"] if "auth_realm" in user.keys() else None
+    except Exception:
+        realm = None
+    if realm and not sso_enabled():
+        raise HTTPException(401, "Die Verzeichnis-Anmeldung (SSO) ist deaktiviert.")
     return user
 
 

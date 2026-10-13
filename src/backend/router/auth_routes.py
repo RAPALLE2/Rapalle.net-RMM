@@ -85,7 +85,11 @@ def public_realms():
     """
     Öffentliche Liste der Anmelde-Realms für das Dropdown im Login-Fenster.
     Enthält nur id + name (keine Geheimnisse). "local" wird im Frontend ergänzt.
+    Ohne aktives Modul "sso" gibt es keine Verzeichnis-Anmeldung -> leere Liste.
     """
+    from app.auth import sso_enabled
+    if not sso_enabled():
+        return []
     return db.get_public_realms()
 
 

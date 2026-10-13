@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "sso",
+  "name": "SSO / Verzeichnis-Anmeldung",
+  "version": "1.0.0",
+  "description": "Anmeldung über LDAP / Active Directory (Realms) inkl. Import von AD-Gruppen. Deaktivierbar nur, wenn mindestens ein lokaler, aktiver Admin-Account existiert. Danach bleiben AD-Benutzer bestehen, können sich aber nicht anmelden.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🔐",
+  "requires": [],
+  "pip": ["ldap3>=2.9.0"],
+  "entry": "module",
+  "routers": ["sso_routes"],
+  "hooks": {
+    "before_disable": "can_disable",
+    "disable": "on_disable"
+  }
+}

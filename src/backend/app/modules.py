@@ -53,6 +53,7 @@ CORE_EVENTS = (
     # Lebenszyklus des Moduls selbst (Hook-Funktion bekommt nur ctx)
     "startup", "shutdown",                          # Modul wird geladen / entladen
     "enable", "disable",                            # Benutzer schaltet das Modul ein / aus
+    "before_disable",                               # Veto: Text zurueckgeben = Abschalten verweigern
     # Meldung, dass ein ANDERES Modul geschaltet wurde (data = {"module": id})
     "module.enabled", "module.disabled",
     # Dieselben Trigger wie bei Webhook-/Mail-Benachrichtigungen (notifier.TRIGGERS).
@@ -394,7 +395,38 @@ def _schedule_deactivate(mid: str, *, crash: bool) -> None:
         pass
 
 
+async def _disable_veto(mid: str) -> str | None:
+    """
+    Fragt den Hook "before_disable" eines aktiven Moduls. Gibt er einen Text
+    zurueck (oder wirft er), darf das Modul NICHT abgeschaltet werden - der Text
+    ist die Begruendung. So schuetzt sich z.B. "sso" davor, dass sich niemand
+    mehr anmelden kann. Ein Fehler im Hook gilt bewusst als Veto: lieber ein
+    Modul zu lange aktiv als ein ausgesperrter Administrator.
+    """
+    ld = _loaded.get(mid)
+    if ld is None or ld.entry is None:
+        return None
+    name = ld.hooks.get("before_disable")
+    fn = getattr(ld.entry, name, None) if name else None
+    if not callable(fn):
+        return None
+    try:
+        res = fn(ld.ctx)
+        if asyncio.iscoroutine(res):
+            res = await res
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        report_crash(mid, exc, "Hook 'before_disable'", disable=False)
+        return f"Prüfung vor dem Abschalten fehlgeschlagen: {exc}"
+    return str(res) if res else None
+
+
 async def _deactivate_safely(mid: str, *, crash: bool) -> None:
+    veto = await _disable_veto(mid)
+    if veto:
+        print(f"[module] '{mid}' bleibt trotz Absturz aktiv - Abschalten verweigert: {veto}")
+        return
     try:
         await _deactivate(mid, run_hooks=True)
         with _lock:
@@ -864,6 +896,10 @@ async def disable(mid: str, *, cascade: bool = False) -> dict:
     if deps and not cascade:
         names = ", ".join(get(d).meta("name", d) for d in deps)
         raise ModuleError(f"Wird noch benoetigt von: {names}")
+    for m in deps + [mid]:                                   # Veto VOR jeder Aenderung pruefen
+        veto = await _disable_veto(m)
+        if veto:
+            raise ModuleError(f"'{get(m).meta('name', m)}' kann nicht deaktiviert werden: {veto}")
     done: list[str] = []
     for d in deps:
         await _deactivate(d, run_hooks=True, user_disable=True)
@@ -904,11 +940,36 @@ def init(api, sio) -> None:
     MODULES_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _adopt_former_core_features() -> None:
+    """
+    Funktionen, die frueher fest im Core steckten und jetzt Module sind: Wurden
+    sie schon benutzt, wird das Modul beim ERSTEN Start nach dem Update
+    automatisch eingeschaltet. Sonst waeren z.B. AD-Benutzer ploetzlich
+    ausgesperrt. Hat der Administrator ein Modul schon einmal selbst geschaltet
+    (Eintrag in modules.json vorhanden), wird nichts veraendert.
+    """
+    en = _state.setdefault("enabled", {})
+    checks = {
+        "sso": lambda: bool(__import__("app.db", fromlist=["db"]).list_realms()),
+        "sql": lambda: __import__("app.dbsync", fromlist=["dbsync"]).load_config().get("mode") == "external",
+    }
+    for mid, used in checks.items():
+        if mid in en or mid not in _registry:
+            continue
+        try:
+            if used():
+                en[mid] = True
+                print(f"[module] '{mid}' wurde bisher genutzt - automatisch aktiviert (Update-Uebernahme)")
+        except Exception as exc:
+            print(f"[module] Update-Uebernahme fuer '{mid}' fehlgeschlagen: {exc}")
+
+
 async def load_enabled() -> None:
     """Laedt alle aktivierten Module. Ein Fehler betrifft NUR das jeweilige Modul."""
     global _loop
     _loop = asyncio.get_running_loop()
     _load_state()
+    _adopt_former_core_features()
     wanted = [m for m, on in _state.get("enabled", {}).items() if on and m in _registry]
     ordered: list[str] = []
     for m in wanted:

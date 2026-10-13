@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "sso",
+  "name": "SSO / Verzeichnis-Anmeldung",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "sso-realms",
+      "label": "SSO / Verzeichnis",
+      "icon": "🔐",
+      "title": "SSO / Verzeichnis-Anmeldung",
+      "entry": "settings.js",
+      "export": "renderSsoApp",
+      "w": 760,
+      "h": 640,
+      "perm": "manage_sso"
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSsoSettings"
+  }
+}

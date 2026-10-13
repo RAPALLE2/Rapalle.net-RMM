@@ -3,7 +3,7 @@
 // Einstellungen mit Reitern:
 //   - Benutzer:        Benutzer anlegen/löschen, Gruppen zuweisen
 //   - Gruppen & Rollen: Gruppen mit Rechten anlegen, an User/AD-Gruppen binden
-//   - SSO / Verzeichnis: Active-Directory-Realm konfigurieren (noch nicht live)
+//   - SSO / Verzeichnis: jetzt Modul "sso" (src/modules/frontend/sso)
 //   - Benachrichtigungen: Verweis auf die Webhook-Verwaltung
 //
 // Das Rechte-System: Admins haben immer alle Rechte. Andere Benutzer erhalten
@@ -12,7 +12,7 @@
 import { api } from "../app/api.js";
 import { esc, uiConfirm } from "../app/utils.js";
 import { condenseHints } from "../app/help.js";
-import { buildSubTabs, removeSubSection } from "../app/subtabs.js";
+import { buildSubTabs } from "../app/subtabs.js";
 import { t } from "../app/i18n.js";
 import { isAdmin, hasGlobalPerm } from "../app/state.js";
 import { renderSource } from "./source.js";
@@ -39,16 +39,15 @@ export function renderSettings(body, win) {
     const canTab = {
       general: admin || hasGlobalPerm("see_settings"),
       users: admin || hasGlobalPerm("create_users"),
-      sso: admin || hasGlobalPerm("manage_sso"),
       branding: admin || hasGlobalPerm("manage_branding"),
       notifications: admin || hasGlobalPerm("manage_settings"),
       source: admin || hasGlobalPerm("see_source"),
     };
-    const order = ["general", "users", "sso", "branding", "notifications", "source"];
+    const order = ["general", "users", "branding", "notifications", "source"];
     const allowed = order.filter((k) => canTab[k]);
-    if (!allowed.includes(activeTab)) activeTab = allowed[0] || "sso";
+    if (!allowed.includes(activeTab)) activeTab = allowed[0] || "general";
     const tabLabel = { general: t("tab_general"), users: t("tab_users"),
-      sso: t("tab_sso"), branding: "Branding",
+      branding: "Branding",
       notifications: t("tab_notifications"), source: "Source" };
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
@@ -64,7 +63,6 @@ export function renderSettings(body, win) {
     const content = body.querySelector("#set-content");
     if (activeTab === "general") renderGeneralTab(content);
     else if (activeTab === "users") renderUsersTab(content);
-    else if (activeTab === "sso") renderSsoTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
     else if (activeTab === "notifications") renderNotifTab(content);
     else if (activeTab === "source") sourceCleanup = renderSource(content);
@@ -305,78 +303,6 @@ export function renderSettings(body, win) {
         </div>
         </div>
 
-        <div data-adminsec>
-        <h3 style="margin-top:24px">${t("set_db")}</h3>
-        <p style="color:var(--subtext);font-size:13px">
-          ${t("set_db_hint")}
-        </p>
-        <div id="dbx-loading" style="color:var(--subtext);font-size:13px">${t("set_db_loading")}</div>
-        <div id="dbx-content" class="hidden">
-          <div style="font-size:13px;margin-bottom:8px">${t("set_db_current_mode")}: <b id="dbx-mode"></b></div>
-          <div class="form-row">
-            <label>${t("set_db_type")}</label>
-            <select id="dbx-type">
-              <option value="mysql">MySQL / MariaDB</option>
-              <option value="postgres">PostgreSQL</option>
-              <option value="sqlite">${t("set_db_sqlite_file")}</option>
-            </select>
-          </div>
-          <div style="display:flex;gap:12px" id="dbx-hostrow">
-            <div class="form-row" style="flex:2">
-              <label>Host</label>
-              <input type="text" id="dbx-host" placeholder="192.168.1.50" />
-            </div>
-            <div class="form-row" style="flex:1">
-              <label>Port</label>
-              <input type="number" id="dbx-port" min="1" max="65535" />
-            </div>
-          </div>
-          <div style="display:flex;gap:12px" id="dbx-userrow">
-            <div class="form-row" style="flex:1">
-              <label>${t("username")}</label>
-              <input type="text" id="dbx-user" />
-            </div>
-            <div class="form-row" style="flex:1">
-              <label>${t("password")}</label>
-              <input type="password" id="dbx-pass" placeholder="${t("u_unverandert_lassen_leer")}" />
-            </div>
-          </div>
-          <div class="form-row">
-            <label id="dbx-dblabel">${t("set_db_name")}</label>
-            <input type="text" id="dbx-name" placeholder="rapalle_rmm" />
-          </div>
-          <div id="dbx-error" class="form-error hidden"></div>
-          <div id="dbx-progress" style="display:none;margin:10px 0;border:1px solid var(--border);
-                                        border-radius:8px;padding:10px;font-size:12.5px">
-            <div style="display:flex;justify-content:space-between;gap:10px">
-              <span id="dbx-pg-phase" style="color:var(--text)"></span>
-              <span id="dbx-pg-count" style="color:var(--subtext)"></span>
-            </div>
-            <div style="height:8px;background:var(--panel-2);border-radius:5px;margin:8px 0;overflow:hidden">
-              <div id="dbx-pg-bar" style="height:100%;width:0%;background:var(--accent,#4da6ff);
-                                          transition:width .25s"></div>
-            </div>
-            <div id="dbx-pg-log" style="max-height:150px;overflow:auto;font-family:ui-monospace,monospace;
-                                        font-size:11.5px;color:var(--subtext);white-space:pre-wrap"></div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-            <button class="btn" id="dbx-test">${t("set_test_conn")}</button>
-            <button class="btn-primary" id="dbx-to-external">→ ${t("set_db_to_external")}</button>
-            <button class="btn-primary" id="dbx-to-local">→ ${t("set_db_to_local")}</button>
-          </div>
-
-          <h4 style="margin:18px 0 4px;font-size:13px">${t("set_db_backups")}</h4>
-          <p style="color:var(--subtext);font-size:12px;margin:0 0 8px">
-            ${t("set_db_backup_hint")}
-          </p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-            <button class="btn" id="dbx-backup">${t("set_db_backup_now")}</button>
-            <button class="btn" id="dbx-backups-refresh">⟳</button>
-          </div>
-          <div id="dbx-backups" style="font-size:12px;color:var(--subtext)">${t("loading")}</div>
-        </div>
-        </div>
-
         <h3 style="margin-top:24px">${t("set_agent_autoupd")}</h3>
         <p style="color:var(--subtext);font-size:13px">
           ${t("set_agent_autoupd_hint")}
@@ -415,14 +341,6 @@ export function renderSettings(body, win) {
         <button class="btn-primary" id="ge-save" style="margin-top:8px">${t("save")}</button>
 
 
-
-        <div data-adminsec id="ge-docker-box" style="display:none">
-        <h3 style="margin-top:24px">${t("set_docker_title")}</h3>
-        <p style="color:var(--subtext);font-size:13px">
-          ${t("set_docker_hint")}
-        </p>
-        <div id="ge-docker-list" style="font-size:13px;color:var(--subtext)">${t("loading")}</div>
-        </div>
 
       </div>
     `;
@@ -513,7 +431,7 @@ export function renderSettings(body, win) {
       }
     });
 
-    // ---- Admin-only Verkabelung (Server-Update, Datenbank, guacd): nur wenn
+    // ---- Admin-only Verkabelung (Server-Update): nur wenn
     // die Sektionen (mit 'admin_settings') überhaupt im DOM sind. ----
     if (mayAdminSet) {
     // ---- Server-Update (Settings -> Update) ----
@@ -581,314 +499,8 @@ export function renderSettings(body, win) {
       }
     });
 
-    // ---- Externe Datenbank (Settings -> Datenbank) ----
-    function dbxConfig() {
-      return {
-        type: root.querySelector("#dbx-type").value,
-        host: root.querySelector("#dbx-host").value.trim(),
-        port: parseInt(root.querySelector("#dbx-port").value, 10) || 0,
-        user: root.querySelector("#dbx-user").value.trim(),
-        password: root.querySelector("#dbx-pass").value,
-        database: root.querySelector("#dbx-name").value.trim(),
-      };
-    }
-
-    function dbxAdaptForm() {
-      const type = root.querySelector("#dbx-type").value;
-      const isFile = type === "sqlite";
-      root.querySelector("#dbx-hostrow").style.display = isFile ? "none" : "flex";
-      root.querySelector("#dbx-userrow").style.display = isFile ? "none" : "flex";
-      root.querySelector("#dbx-dblabel").textContent = isFile ? "Dateipfad (z.B. /mnt/share/rmm.sqlite)" : "Datenbank-Name";
-      const port = root.querySelector("#dbx-port");
-      if (!isFile && (!port.value || port.value === "0")) port.value = type === "postgres" ? "5432" : "3306";
-    }
-    root.querySelector("#dbx-type").addEventListener("change", dbxAdaptForm);
-
-    (async () => {
-      const loading = root.querySelector("#dbx-loading");
-      try {
-        const info = await api.getDatabaseInfo();
-        const c = info.config || {};
-        root.querySelector("#dbx-mode").textContent =
-          c.mode === "external" ? `Extern (${c.type})` : "Lokal (SQLite)";
-        root.querySelector("#dbx-type").value = c.type || "mysql";
-        root.querySelector("#dbx-host").value = c.host || "";
-        root.querySelector("#dbx-port").value = c.port || "";
-        root.querySelector("#dbx-user").value = c.user || "";
-        root.querySelector("#dbx-name").value = c.database || "";
-        dbxAdaptForm();
-        loading.classList.add("hidden");
-        root.querySelector("#dbx-content").classList.remove("hidden");
-        // Beide Knöpfe bleiben immer sichtbar - vorher verschwand jeweils
-        // einer, was aussah, als gäbe es den Weg zurück gar nicht. Der Knopf
-        // für den AKTUELLEN Modus ist stattdessen deaktiviert und beschriftet.
-        const toExt = root.querySelector("#dbx-to-external");
-        const toLoc = root.querySelector("#dbx-to-local");
-        const isExt = c.mode === "external";
-        toExt.style.display = ""; toLoc.style.display = "";
-        toExt.disabled = isExt;  toLoc.disabled = !isExt;
-        toExt.className = isExt ? "btn" : "btn-primary";
-        toLoc.className = isExt ? "btn-primary" : "btn";
-        toExt.textContent = isExt ? "✓ " + t("set_db_external_active")
-                                  : "→ " + t("set_db_to_external");
-        toLoc.textContent = isExt ? "→ " + t("set_db_back_to_local")
-                                  : "✓ " + t("set_db_local_active");
-        for (const b of [toExt, toLoc]) {
-          b.style.opacity = b.disabled ? ".6" : "";
-          b.style.cursor = b.disabled ? "default" : "pointer";
-        }
-      } catch (e) {
-        loading.textContent = `${t("error")}: ${e.message}`;
-      }
-    })();
-
-    root.querySelector("#dbx-test").addEventListener("click", async () => {
-      const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
-      try {
-        await api.testDatabase(dbxConfig());
-        window.notify?.(t("u_verbindung_erfolgreich"), "success");
-      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
-    });
-
-    // --- Fortschritt des Datenbank-Wechsels -----------------------------
-    const pgBox = root.querySelector("#dbx-progress");
-    const pgPhase = root.querySelector("#dbx-pg-phase");
-    const pgCount = root.querySelector("#dbx-pg-count");
-    const pgBar = root.querySelector("#dbx-pg-bar");
-    const pgLog = root.querySelector("#dbx-pg-log");
-    let pgTimer = null;
-
-    const PHASE_TEXT = {
-      backup: t("set_db_phase_backup"),
-      dump: t("set_db_phase_dump"),
-      restore: t("set_db_phase_restore"),
-      fertig: t("set_db_phase_done"),
-    };
-
-    function drawProgress(p) {
-      pgBox.style.display = "";
-      pgPhase.textContent = PHASE_TEXT[p.phase] || p.phase || "…";
-      pgCount.textContent = p.total
-        ? `${p.done}/${p.total} ${t("set_db_tables")} · ${p.rows} ${t("set_db_rows")}`
-        : (p.rows ? `${p.rows} ${t("set_db_rows")}` : "");
-      pgBar.style.width = p.total ? `${Math.round((p.done / p.total) * 100)}%` : "0%";
-      const lines = [...(p.log || [])];
-      // Fehler zusätzlich gesammelt ans Ende - sie sind das Wichtigste.
-      if (p.errors?.length) {
-        lines.push("", `── ${p.errors.length} ${t("errors")} ──`);
-        for (const e of p.errors) lines.push(`  ${e.table}: ${e.error}`);
-      }
-      pgLog.textContent = lines.join("\n");
-      pgLog.scrollTop = pgLog.scrollHeight;
-      pgBar.style.background = p.ok === false ? "var(--danger,#f66)" : "var(--accent,#4da6ff)";
-    }
-
-    let pgMisses = 0;
-    async function pollProgress() {
-      try {
-        const p = await api.databaseProgress();
-        pgMisses = 0;
-        drawProgress(p);
-        if (p.running) return;                 // weiter pollen
-        clearInterval(pgTimer); pgTimer = null;
-        if (p.ok) {
-          window.notify?.(`${p.detail} — ${t("set_backend_restarting")}`,
-                          "success", 10000);
-          setTimeout(() => location.reload(), 9000);
-        } else {
-          const err = root.querySelector("#dbx-error");
-          err.textContent = p.detail || t("set_db_switch_failed");
-          err.classList.remove("hidden");
-          window.notify?.(
-            p.restored
-              ? t("set_db_failed_restored")
-              : t("set_db_failed_unchanged"),
-            "error", 14000);
-          loadBackups();
-        }
-      } catch (e) {
-        // Einzelne Aussetzer sind normal: Beim Neustart bricht die Verbindung
-        // ab, und ein Rate-Limiter davor kann eine Abfrage mit 429 abweisen.
-        // Deshalb erst nach mehreren Fehlversuchen hintereinander aufgeben -
-        // sonst verliert man die Anzeige mitten im laufenden Wechsel.
-        pgMisses++;
-        pgLog.textContent += `\n(${t("set_db_poll_failed")}: ${e.message})`;
-        if (pgMisses >= 5) {
-          clearInterval(pgTimer); pgTimer = null;
-          pgPhase.textContent = t("set_db_progress_lost");
-          window.notify?.(t("set_db_progress_lost_hint"), "warn", 14000);
-        }
-      }
-    }
-
-    function startPolling() {
-      pgMisses = 0;
-      drawProgress({ phase: "backup", done: 0, total: 0, rows: 0, log: [] });
-      clearInterval(pgTimer);
-      // Bewusst nur alle 2 s: Das Dashboard laedt ohnehin viele Dateien, und
-      // ein Proxy mit Rate-Limit soll durch das Polling nicht zusaetzlich
-      // gereizt werden.
-      pgTimer = setInterval(pollProgress, 2000);
-      pollProgress();
-    }
-
-    // --- Sicherungen ----------------------------------------------------
-    async function loadBackups() {
-      const box = root.querySelector("#dbx-backups");
-      if (!box) return;
-      try {
-        const res = await api.databaseBackups();
-        const list = res.backups || [];
-        if (!list.length) { box.textContent = t("set_db_no_backups"); return; }
-        box.innerHTML = list.map((b) => `
-          <div style="display:flex;gap:10px;align-items:center;padding:4px 0;
-                      border-bottom:1px solid var(--border)">
-            <span style="flex:1">${esc(b.name)}</span>
-            <span>${(b.size / 1048576).toFixed(1)} MB</span>
-            <span>${new Date(b.at).toLocaleString()}</span>
-            <button class="btn btn-sm" 
-                    data-restore="${esc(b.path)}">${t("set_db_restore")}</button>
-          </div>`).join("");
-        box.querySelectorAll("[data-restore]").forEach((btn) =>
-          btn.addEventListener("click", async () => {
-            const ok = await uiConfirm(t("set_db_restore_q"), {
-              description: t("set_db_restore_desc") });
-            if (!ok) return;
-            try {
-              await api.databaseRestoreBackup(btn.dataset.restore);
-              window.notify?.(t("set_db_restoring"), "success", 10000);
-              setTimeout(() => location.reload(), 9000);
-            } catch (e) { window.notify?.(e.message, "error", 9000); }
-          }));
-      } catch (e) {
-        box.textContent = t("set_db_backups_unavailable") + ": " + e.message;
-      }
-    }
-    loadBackups();
-
-    root.querySelector("#dbx-backups-refresh")?.addEventListener("click", loadBackups);
-    root.querySelector("#dbx-backup")?.addEventListener("click", async (e) => {
-      const btn = e.currentTarget; const orig = btn.textContent;
-      btn.disabled = true; btn.textContent = "…";
-      try {
-        await api.databaseBackup();
-        window.notify?.(t("set_db_backup_done"), "success", 4000);
-        loadBackups();
-      } catch (err) { window.notify?.(err.message, "error", 9000); }
-      btn.disabled = false; btn.textContent = orig;
-    });
-
-    async function dbxSwitch(mode) {
-      const err = root.querySelector("#dbx-error"); err.classList.add("hidden");
-      const ok = await uiConfirm(
-        mode === "external" ? t("set_db_to_external_q") : t("set_db_to_local_q"),
-        mode === "external"
-          ? t("u_alle_daten_werden_von_der_lokalen_")
-          : t("u_der_stand_der_externen_datenbank_w"));
-      if (!ok) return;
-      try {
-        // Der Wechsel läuft jetzt im Hintergrund; der Fortschritt wird
-        // abgefragt, damit man sieht, wo es hakt, statt minutenlang auf eine
-        // einzige Antwort zu warten.
-        await api.switchDatabase({ ...dbxConfig(), mode });
-        startPolling();
-      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
-    }
-    root.querySelector("#dbx-to-external").addEventListener("click", () => dbxSwitch("external"));
-    root.querySelector("#dbx-to-local").addEventListener("click", () => dbxSwitch("local"));
-
-    // ---------------- Container-Dienste (nur im Docker-Betrieb) -----------
-    // Der Bereich bleibt versteckt, solange nicht sicher ist, dass wir in
-    // einem Container laufen - nativ waere er sinnlos.
-    const dockerBox = root.querySelector("#ge-docker-box");
-    const dockerList = root.querySelector("#ge-docker-list");
-
-    /** Guacamole- und Datenbank-Felder mit den Werten des Dienstes füllen. */
-    function prefillFromDocker(data) {
-      if (data && data.guacd && data.guacd.host) {
-        const h = root.querySelector("#ge-guacd-host");
-        const p = root.querySelector("#ge-guacd-port");
-        if (h) h.value = data.guacd.host;
-        if (p) p.value = String(data.guacd.port || 4822);
-      }
-      const c = data && data.db;
-      if (c && c.host) {
-        const set = (id, v) => { const el = root.querySelector(id); if (el && v != null) el.value = String(v); };
-        set("#dbx-type", c.type || "mysql");
-        set("#dbx-host", c.host);
-        set("#dbx-port", c.port);
-        set("#dbx-user", c.user);
-        set("#dbx-pass", c.password);
-        set("#dbx-name", c.database);
-        root.querySelector("#dbx-type")?.dispatchEvent(new Event("change"));
-      }
-    }
-
-    function drawDocker(info) {
-      // Nativ installiert gibt es hier nichts zu tun -> Unterpunkt komplett
-      // entfernen, damit kein leerer Knopf in der Leiste stehen bleibt.
-      if (!info || !info.is_docker) { removeSubSection(dockerBox); return; }
-      dockerBox.style.display = "";
-
-      if (!info.socket) {
-        dockerList.innerHTML = `
-          <div style="border:1px solid var(--warn,#f5a524);border-radius:8px;padding:10px">
-            ⚠ ${t("set_docker_no_socket")}
-          </div>`;
-        return;
-      }
-
-      dockerList.innerHTML = info.services.filter((sv) => sv.key !== "guacd").map((sv) => {   // guacd: siehe Modul "guacamole"
-        const on = sv.running;
-        const state = on ? t("set_dk_running") : (sv.state === "absent" ? t("set_dk_absent") : sv.state);
-        return `
-          <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-            <span style="font-size:16px">${on ? "🟢" : "⚪"}</span>
-            <div style="flex:1;min-width:0">
-              <div style="color:var(--text)">${esc(sv.label)}</div>
-              <div style="font-size:11px">${esc(sv.purpose)} · ${esc(sv.image)} · ${esc(state)}</div>
-            </div>
-            <button class="btn" data-dk="${esc(sv.key)}" data-on="${on ? "1" : "0"}">
-              ${on ? t("set_dk_off") : t("set_dk_on")}
-            </button>
-          </div>`;
-      }).join("");
-
-      dockerList.querySelectorAll("[data-dk]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          const key = btn.dataset.dk;
-          const turnOff = btn.dataset.on === "1";
-          const orig = btn.textContent;
-          btn.disabled = true;
-          btn.textContent = turnOff ? "…" : t("set_dk_starting");
-          try {
-            const r = turnOff ? await api.dockerDisable(key) : await api.dockerEnable(key);
-            if (!turnOff) prefillFromDocker(r);
-            drawDocker(r.status);
-            window.notify?.(turnOff ? t("set_dk_stopped") : t("set_dk_running"), "success");
-          } catch (e) {
-            btn.disabled = false;
-            btn.textContent = orig;
-            window.notify?.(e.message, "error", 9000);
-          }
-        })
-      );
-    }
-
-    (async () => {
-      try {
-        const info = await api.dockerServices();
-        drawDocker(info);
-        // Bereits vorhandene Zugangsdaten gleich eintragen, damit das
-        // Datenbank-Formular nach einem Neuladen nicht wieder leer ist.
-        if (info.is_docker && info.socket) {
-          const creds = await api.dockerDbCredentials().catch(() => ({}));
-          if (creds && creds.host) prefillFromDocker({ db: creds });
-        }
-      } catch {
-        removeSubSection(dockerBox);
-      }
-    })();
+    // Datenbank (lokal/extern/Docker-DB) und Sicherungen: Modul "sql"
+    // (src/modules/frontend/sql/settings.js)
     } // Ende Admin-only Verkabelung (mayAdminSet)
 
     // Zum Schluss die Seite aufraeumen:
@@ -1171,125 +783,7 @@ export function renderSettings(body, win) {
   }
 
   // ---------------- SSO / REALMS ----------------
-  async function renderSsoTab(root) {
-    let editingId = null;   // null = neues Realm anlegen, sonst wird bearbeitet
-
-    async function draw() {
-      let realms = [];
-      try { realms = await api.getRealms(); }
-      catch (e) { root.innerHTML = `<div class="settings-section"><div style="color:var(--danger)">${esc(e.message)}</div></div>`; return; }
-
-      const editing = editingId ? realms.find((r) => r.id === editingId) : null;
-
-      root.innerHTML = `
-        <div class="settings-section">
-          <p style="color:var(--subtext);font-size:13px">${t("sso_intro")}</p>
-          <div style="background: rgba(var(--accent-2-rgb), 0.08);border:1px solid var(--accent);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--subtext);margin-bottom:14px">
-            ${t("sso_group_hint")}
-          </div>
-
-          <h3>${editing ? t("sso_edit_realm") : t("sso_add_realm")}</h3>
-          <div class="form-row"><label>${t("sso_realm_name")}</label><input type="text" id="rl-name" placeholder="z.B. Firma AD" value="${esc(editing?.name || "")}" /></div>
-          <div class="form-row"><label>${t("sso_server")}</label><input type="text" id="rl-server" placeholder="dc01.firma.local" value="${esc(editing?.server || "")}" /></div>
-          <div style="display:flex;gap:12px">
-            <div class="form-row" style="flex:1"><label>${t("sso_port")}</label><input type="number" id="rl-port" placeholder="389 / 636" value="${editing?.port ?? ""}" /></div>
-            <div class="form-row" style="flex:1;justify-content:flex-end">
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:20px">
-                <input type="checkbox" id="rl-ssl" ${editing?.use_ssl ? "checked" : ""} /> ${t("sso_use_ssl")}
-              </label>
-            </div>
-          </div>
-          <div class="form-row"><label>${t("sso_base_dn")}</label><input type="text" id="rl-basedn" placeholder="DC=firma,DC=local" value="${esc(editing?.base_dn || "")}" /></div>
-          <div class="form-row"><label>${t("sso_bind_user")}</label><input type="text" id="rl-binduser" placeholder="CN=svc,OU=...,DC=firma,DC=local" value="${esc(editing?.bind_user || "")}" /></div>
-          <div class="form-row"><label>${t("sso_bind_pw")}</label><input type="password" id="rl-bindpw" placeholder="${editing ? t("sso_pw_unchanged") : ""}" /></div>
-          <div class="form-row"><label>${t("sso_user_filter")}</label><input type="text" id="rl-filter" placeholder="(memberOf=CN=RMM-Users,...)" value="${esc(editing?.user_filter || "")}" /></div>
-          <p style="color:var(--subtext);font-size:11px;margin:2px 0 8px">${t("sso_filter_hint")}</p>
-
-          <div style="display:flex;gap:8px">
-            <button class="btn-primary" id="rl-save">${editing ? t("save") : "+ " + t("sso_add_realm")}</button>
-            ${editing ? `<button class="btn" id="rl-cancel">${t("cancel")}</button>` : ""}
-          </div>
-
-          <h3 style="margin-top:24px">${t("sso_connected")}</h3>
-          <div id="rl-list"></div>
-        </div>
-      `;
-
-      // --- Speichern / Aktualisieren ---
-      root.querySelector("#rl-save").addEventListener("click", async () => {
-        const payload = {
-          name: root.querySelector("#rl-name").value.trim(),
-          server: root.querySelector("#rl-server").value.trim(),
-          base_dn: root.querySelector("#rl-basedn").value.trim(),
-          bind_user: root.querySelector("#rl-binduser").value.trim(),
-          bind_password: root.querySelector("#rl-bindpw").value,
-          port: root.querySelector("#rl-port").value ? parseInt(root.querySelector("#rl-port").value, 10) : null,
-          use_ssl: root.querySelector("#rl-ssl").checked,
-          user_filter: root.querySelector("#rl-filter").value.trim(),
-          enabled: editing ? !!editing.enabled : true,
-        };
-        if (!payload.name || !payload.server) { window.notify?.(t("u_name_und_server_erforderlich"), "warn"); return; }
-        try {
-          if (editing) { await api.updateRealm(editing.id, payload); window.notify?.(t("general_saved"), "success"); }
-          else { await api.createRealm(payload); window.notify?.("Realm gespeichert", "success"); }
-          editingId = null; draw();
-        } catch (e) { window.notify?.(e.message, "error"); }
-      });
-      if (editing) root.querySelector("#rl-cancel").addEventListener("click", () => { editingId = null; draw(); });
-
-      // --- Liste ---
-      const listEl = root.querySelector("#rl-list");
-      if (!realms.length) { listEl.innerHTML = `<div style="color:var(--subtext);font-size:13px">${t("sso_none")}</div>`; return; }
-      listEl.innerHTML = realms.map((r) => {
-        const proto = r.use_ssl ? "LDAPS" : "LDAP";
-        const port = r.port ? ":" + r.port : "";
-        const badge = r.enabled
-          ? `<span style="font-size:11px;color:#3ecf8e">● ${t("status_online").toLowerCase()}</span>`
-          : `<span style="font-size:11px;color:var(--subtext)">○ ${t("disabled")}</span>`;
-        return `
-        <div class="panel" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <div>
-            <strong>${esc(r.name)}</strong> ${badge}
-            <div style="font-size:11px;color:var(--subtext)">${proto} · ${esc(r.server)}${port}${r.base_dn ? " · " + esc(r.base_dn) : ""}</div>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-            <button class="btn" data-test="${r.id}">${t("test")}</button>
-            <button class="btn" data-toggle="${r.id}">${r.enabled ? t("sso_disable") : t("sso_enable")}</button>
-            <button class="btn" data-edit="${r.id}">${t("edit")}</button>
-            <button class="btn btn-danger" data-del="${r.id}">${t("delete")}</button>
-          </div>
-        </div>`;
-      }).join("");
-
-      listEl.querySelectorAll("[data-test]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          btn.textContent = "…";
-          try { await api.testRealm(btn.dataset.test); window.notify?.(t("sso_test_ok"), "success"); }
-          catch (e) { window.notify?.(t("sso_test_fail") + " " + e.message, "error"); }
-          btn.textContent = t("test");
-        })
-      );
-      listEl.querySelectorAll("[data-toggle]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          const r = realms.find((x) => x.id === btn.dataset.toggle);
-          try { await api.updateRealm(r.id, { name: r.name, server: r.server, enabled: !r.enabled }); draw(); }
-          catch (e) { window.notify?.(e.message, "error"); }
-        })
-      );
-      listEl.querySelectorAll("[data-edit]").forEach((btn) =>
-        btn.addEventListener("click", () => { editingId = btn.dataset.edit; draw(); })
-      );
-      listEl.querySelectorAll("[data-del]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          if (!(await uiConfirm(t("sso_delete_confirm"), { okText: t("delete"), danger: true }))) return;
-          await api.deleteRealm(btn.dataset.del); if (editingId === btn.dataset.del) editingId = null; draw();
-        })
-      );
-    }
-
-    await draw();
-    condenseHints(root);
-  }
+  // SSO / Verzeichnis-Anmeldung (Realms): Modul "sso" (src/modules/frontend/sso/settings.js)
 
   // ---------------- NOTIFICATIONS (Webhook-Verwaltung) ----------------
   // Benachrichtigungen: kompletter Bereich (Regeln, Webhooks, SMTP) liegt
