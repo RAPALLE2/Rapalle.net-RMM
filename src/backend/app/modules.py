@@ -62,6 +62,7 @@ CORE_EVENTS = (
     "cpu_high", "ram_high", "disk_high", "temp_high",
     "warranty_expiring", "warranty_expired",
     "website_up", "website_down", "user_login", "login_failed",
+    "user_deleted",                                 # Benutzer geloescht (data: user_id, username)
     # Nodes (data = {"client_id"})
     "node_online", "node_offline", "node_removed",
 )

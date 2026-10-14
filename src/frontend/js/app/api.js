@@ -8,6 +8,19 @@
 import { BACKEND_URL } from "./config.js";
 import { t } from "./i18n.js";
 
+// Client-App (Modul "client"): Die App öffnet das Dashboard mit
+// "#client-token=<Sitzung>". Der Token wird hier SOFORT übernommen und aus der
+// Adresszeile entfernt (taucht weder im Verlauf noch in Logs auf).
+(function adoptClientToken() {
+  try {
+    const m = /(?:^#|&)client-token=([A-Za-z0-9._-]+)/.exec(location.hash || "");
+    if (!m) return;
+    localStorage.setItem("rmm_token", m[1]);
+    const rest = (location.hash || "").replace(/(^#|&)client-token=[A-Za-z0-9._-]+/, "$1").replace(/^#&/, "#");
+    history.replaceState(null, "", location.pathname + location.search + (rest === "#" ? "" : rest));
+  } catch { /* egal */ }
+})();
+
 export function getToken() {
   return localStorage.getItem("rmm_token");
 }
@@ -83,6 +96,7 @@ const _PERM_KEY = {
   manage_modules: "perm_manage_modules",
   get_user_space: "perm_get_user_space", use_public_space: "perm_use_public_space",
   see_all_spaces: "perm_see_all_spaces", edit_all_spaces: "perm_edit_all_spaces",
+  manage_deployment: "perm_manage_deployment",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",

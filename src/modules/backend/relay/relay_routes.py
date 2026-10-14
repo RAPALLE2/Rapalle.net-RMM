@@ -248,11 +248,29 @@ def _check_basic(header: str) -> tuple[dict | None, str]:
             return user, "ok (basic/lokal)"
     except Exception:
         pass
+    from rmm_mod_relay import relay_storage as _rs
+    user = _rs.device_user(username, password)          # Client-App: Geraetetoken statt Passwort
+    if user:
+        return user, "ok (basic/geraet)"
     return None, "Benutzername/Passwort abgelehnt"
+
+
+def _check_bearer(header: str) -> tuple[dict | None, str]:
+    """Dashboard-Sitzung (JWT) - fuer den Relay-Explorer im Dashboard.
+    Gleiche Pruefung wie die REST-API (inkl. abgemeldeter Client-App-Geraete)."""
+    try:
+        from app.auth import decode_access_token
+        payload = decode_access_token(header.split(" ", 1)[1].strip())
+        user = db.get_user_by_id(payload.get("sub"))
+        return (user, "ok (bearer)") if user else (None, "Benutzer unbekannt")
+    except Exception as e:      # noqa: BLE001
+        return None, f"Sitzung ungueltig: {getattr(e, 'detail', e)}"
 
 
 def _authenticate(request: Request, method: str) -> tuple[dict | None, str]:
     header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return _check_bearer(header)
     if header.lower().startswith("digest "):
         return _check_digest(header, method)
     if header.lower().startswith("basic "):
@@ -664,8 +682,11 @@ def dav_root_probe(request: Request):
 async def dav(request: Request, full_path: str = ""):
     method = request.method.upper()
 
-    # WebDAV ist abschaltbar (Einstellungen -> Allgemein -> Relay).
-    if not webdav_enabled():
+    # WebDAV ist abschaltbar (Einstellungen -> Allgemein -> Relay). Der Schalter
+    # gilt fuer Netzlaufwerke von aussen; der Relay-Explorer IM Dashboard
+    # (Anmeldung per Sitzung/Bearer) funktioniert trotzdem.
+    _bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+    if not webdav_enabled() and not _bearer:
         return PlainTextResponse(
             "Das WebDAV-Relay ist deaktiviert.", status_code=503)
 

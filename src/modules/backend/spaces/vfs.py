@@ -284,7 +284,33 @@ def write(user, parts: list[str], data: bytes) -> None:
     p.write_bytes(data or b"")
 
 
+def _space_folder(parts: list[str]) -> str | None:
+    """["Teams", "X"] -> "team", ["Öffentlich", "X"] -> "public" (Ordner = ganzer Space)."""
+    clean = [p for p in parts if p not in ("", ".")]
+    if len(clean) == 2 and clean[0] in (TEAMS, PUBLIC):
+        return "team" if clean[0] == TEAMS else "public"
+    return None
+
+
 def mkdir(user, parts: list[str]) -> None:
+    # Neuer Ordner direkt unter Teams/ bzw. Öffentlich/ = neuer Teamspace / Public Space
+    # (so geht das Anlegen auch im Relay-Explorer und per Netzlaufwerk).
+    kind = _space_folder(parts)
+    if kind:
+        name = [p for p in parts if p not in ("", ".")][1]
+        try:
+            resolve(user, parts)
+            return                                   # gibt es schon (und ist sichtbar)
+        except FileNotFoundError:
+            pass
+        if not access.may_create(user, kind):
+            raise PermissionError("Keine Berechtigung, hier einen " +
+                                  ("Teamspace" if kind == "team" else "Public Space") + " anzulegen")
+        try:
+            store.create_space(kind, store.safe_segment(name), user["id"])
+        except ValueError as e:
+            raise FileExistsError(str(e))
+        return
     t = resolve(user, parts)
     _need(t, access.WRITE)
     t.path.mkdir(parents=True, exist_ok=True)
@@ -306,6 +332,17 @@ def delete(user, parts: list[str]) -> None:
 
 
 def move(user, src: list[str], dst: list[str]) -> None:
+    # Teamspace/Public Space umbenennen: Teams/A -> Teams/B (nur Space-Admins)
+    if _space_folder(src) and _space_folder(src) == _space_folder(dst):
+        t = resolve(user, src)
+        if t.level < access.ADMIN:
+            raise PermissionError("Nur Space-Admins dürfen umbenennen")
+        new = [p for p in dst if p not in ("", ".")][1]
+        try:
+            store.update_space(t.space_id, {"name": store.safe_segment(new)})
+        except ValueError as e:
+            raise FileExistsError(str(e))
+        return
     a, b = resolve(user, src), resolve(user, dst)
     _need(a, access.WRITE)
     _need(b, access.WRITE)

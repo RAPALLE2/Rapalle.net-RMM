@@ -1,0 +1,39 @@
+# Baut ALLE Pakete der Client-App neu (src/client/build_installers.py):
+#   Windows .exe/.msi/.zip (PyInstaller unter Wine), Linux .deb/.tar/.tar.gz, Android .apk
+# Ausloeser: manuell (Actions -> "Client-App bauen" -> "Run workflow") oder Tag "client-v*".
+# Die fertigen Pakete stehen danach als Artefakt bereit; ins Repository
+# (src/client/release) uebernimmt man sie per Commit - von dort bietet das RMM sie an.
+name: Client-App bauen
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["client-v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Werkzeuge
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wixl openjdk-17-jdk-headless \
+               android-sdk-platform-23 aapt apksigner zipalign dalvik-exchange python3-pytest
+      - name: Windows-Python + PyInstaller (unter Wine)
+        run: |
+          mkdir -p /opt/winpy && cd /opt/winpy
+          TAG=20261013; VER=3.12.15
+          curl -sL -o py.tgz "https://github.com/astral-sh/python-build-standalone/releases/download/${TAG}/cpython-${VER}+${TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
+          tar xzf py.tgz
+          export WINEDEBUG=-all PATH=$PATH:/usr/lib/wine
+          wine64 /opt/winpy/python/python.exe -m pip install -q pyinstaller 2>&1 | cat
+      - name: Pakete bauen
+        run: PATH=$PATH:/usr/lib/wine python3 src/client/build_installers.py
+      - name: Tests
+        run: cd src/client && python3 -m pytest -q tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rapalle-client-pakete
+          path: src/client/release/*

@@ -292,6 +292,12 @@ async function startSession(user) {
   // Der Merker wird dabei verbraucht - der naechste Reload verhaelt sich
   // wieder normal.
   const freshStart = consumeFreshStart();
+  // Einzelfenster-Modus (Client-App, z.B. Remote-Shell im eigenen Fenster):
+  //   /?solo=terminal&client=<id>   (auch explorer, vnc)
+  // Zeigt nur dieses eine Fenster, stellt NICHTS wieder her und SPEICHERT
+  // nichts - die normale Fensteranordnung des Benutzers bleibt unberührt.
+  const soloParams = new URLSearchParams(location.search);
+  const solo = SOLO_APPS.includes(soloParams.get("solo")) ? soloParams.get("solo") : null;
   const savedPrefs = (saved && saved.restorePrefs) || { client: true, folder: true, apps: true };
   let restorePrefs;
   if (!mayRestore) {
@@ -367,15 +373,22 @@ async function startSession(user) {
   // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
   // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern) – nur wenn
   // der Benutzer „offene Apps wiederherstellen" aktiviert hat.
+  if (solo) restorePrefs = { client: false, folder: false, apps: false };
   try { if (saved && restorePrefs.apps) restoreWindows(saved); }
   catch (e) { try { console.error("[startSession] restoreWindows fehlgeschlagen:", e); } catch {} }
 
   // Ab jetzt jede Fenster-/Baum-Änderung speichern.
   try {
-    setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
-    setOnTreeStateChanged(() => scheduleSave(state));
+    if (solo) {
+      setOnWindowsChanged(() => renderTaskbar());          // Einzelfenster: nichts speichern
+      setOnTreeStateChanged(() => {});
+    } else {
+      setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
+      setOnTreeStateChanged(() => scheduleSave(state));
+    }
     renderTaskbar();
   } catch (e) { try { console.error(e); } catch {} }
+  if (solo) { openSolo(solo, soloParams); return; }
 
   // Ungelesene Chat-Nachrichten beim Login als Notification anzeigen
   // (nur mit Recht 'use_chat'; Fehler hier sind unkritisch).
@@ -397,6 +410,24 @@ async function startSession(user) {
 
 // Öffnet die zuletzt offenen Fenster in ihrer gespeicherten Reihenfolge,
 // Geometrie und mit ihrem Status (minimiert/maximiert) erneut.
+// Apps, die im Einzelfenster-Modus geöffnet werden dürfen (alle brauchen einen Client).
+const SOLO_APPS = ["terminal", "explorer", "vnc"];
+
+function openSolo(appId, params) {
+  const cid = params.get("client") || "";
+  const client = (state.clients || []).find((c) => c.id === cid);
+  document.body.classList.add("solo-mode");
+  if (!client) {
+    window.notify?.("Gerät nicht gefunden oder kein Zugriff.", "error", 10000);
+    return;
+  }
+  const names = { terminal: t("terminal"), explorer: t("file_explorer"), vnc: t("remote_screen") };
+  const title = `${names[appId]} — ${client.hostname}`;
+  document.title = title;
+  openWindow({ key: `solo-${appId}-${client.id}`, appId, title, maximized: true, clientColor: client.color,
+               props: { clientId: client.id, clientName: client.hostname, platform: client.platform } });
+}
+
 function restoreWindows(saved) {
   const wins = saved.windows || [];
   if (!wins.length) return;

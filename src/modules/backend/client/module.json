@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "client",
+  "name": "Client-App",
+  "version": "1.0.0",
+  "description": "Desktop- und Android-App (Windows 10/11, Linux, Android): das Dashboard als eigene App mit gespeicherter Anmeldung, Relay als Laufwerk im Datei-Explorer, Remote-Shell im eigenen Fenster und Fernbild per RDP-/VNC-App. Unter Profil: Download und „Meine Geräte“ mit Abmelden.",
+  "author": "RAPALLE.net",
+  "category": "Fernzugriff",
+  "icon": "💻",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "client_routes",
+    "dist_routes"
+  ],
+  "hooks": {
+    "user_deleted": "on_user_deleted"
+  }
+}

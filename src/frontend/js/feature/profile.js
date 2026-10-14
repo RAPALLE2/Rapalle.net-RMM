@@ -14,8 +14,11 @@ import { renderMainContent } from "../app/panel.js";
 import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePrefs } from "../app/persist.js";
 import { t } from "../app/i18n.js";
 import { condenseHints } from "../app/help.js";
+import { getModuleApi } from "../app/modules.js";
 
 export function renderProfile(body, win) {
+  // Modul "client": Download der App + "Meine Geräte" (null, wenn das Modul aus ist)
+  const clientApi = getModuleApi("client");
   // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
   // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
   setTimeout(() => condenseHints(body), 0);
@@ -165,6 +168,9 @@ export function renderProfile(body, win) {
       <button class="btn-primary" id="pr-changepw" style="margin-top:6px">${t("pr_change_pw")}</button>
       `}
 
+      ${clientApi ? `<h3 style="margin-top:26px">💻 Client-App &amp; Geräte</h3>
+      <div id="pr-client"></div>` : ""}
+
       <h3 style="margin-top:26px">${t("pr_2fa")}</h3>
       <p style="color:var(--subtext);font-size:13px;max-width:560px">
         ${t("pr_2fa_hint")}
@@ -174,6 +180,7 @@ export function renderProfile(body, win) {
   `;
 
   render2fa(body.querySelector("#pr-2fa"));
+  if (clientApi) clientApi.renderProfileSection(body.querySelector("#pr-client")).catch?.(() => {});
 
   // ---- Terminal: Rechtsklick-Verhalten (sofort wirksam, serverseitig gesynct) ----
   const termRc = body.querySelector("#pr-term-rc");

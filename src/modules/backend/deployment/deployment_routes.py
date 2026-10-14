@@ -5,9 +5,9 @@
 #   Oeffentliche Seite (OHNE Anmeldung, nur wenn freigeschaltet):
 #     GET /deployment                 eigene HTML-Seite oder automatische Dateiliste
 #     GET /deployment/<pfad>          Datei/Unterordner
-#   Einstellungen (Recht manage_settings; URLs unveraendert fuer api.js):
+#   Einstellungen (Recht manage_deployment; URLs unveraendert fuer api.js):
 #     GET/POST /api/storage/deployment    {html, title, public}
-#   Dateien verwalten (Recht manage_settings) - geht auch ohne Relay-Modul:
+#   Dateien verwalten (Recht manage_deployment) - geht auch ohne Relay-Modul:
 #     GET  /api/deployment/files?path=     Liste
 #     POST /api/deployment/upload          multipart: path, files[]
 #     POST /api/deployment/mkdir           {path}
@@ -35,9 +35,8 @@ router = APIRouter(tags=["deployment"])
 
 
 def _manage(user) -> None:
-    if user_has_permission(user, "admin_settings"):
-        return
-    require_perm(user, "manage_settings")
+    # Recht "Deployment-Server verwalten" (Rechteverwaltung -> Allgemein)
+    require_perm(user, "manage_deployment")
 
 
 def _err(e: Exception):

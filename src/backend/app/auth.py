@@ -104,11 +104,24 @@ def create_access_token(user: dict) -> str:
 def decode_access_token(token: str) -> dict:
     """Prüft ein JWT auf Gültigkeit und gibt seinen Inhalt zurück."""
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Sitzung abgelaufen, bitte erneut anmelden")
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Ungültiges Token")
+    # Sitzung einer Client-App (Modul "client"): Das Geraet muss noch registriert
+    # sein. "Entfernen" unter Profil -> Meine Geraete wirkt dadurch sofort -
+    # fuer REST UND die Live-Verbindung (beide pruefen hier).
+    dev = payload.get("dev")
+    if dev:
+        try:
+            from app import modules
+            devices = modules.use("client", "devices") if modules.is_enabled("client") else None
+        except Exception:
+            devices = None
+        if devices is None or not devices.is_active(dev, payload.get("sub")):
+            raise HTTPException(401, "Dieses Gerät wurde abgemeldet")
+    return payload
 
 
 def get_current_user(authorization: str | None = Header(default=None)) -> dict:

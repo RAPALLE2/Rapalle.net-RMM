@@ -13,7 +13,7 @@
       "export": "renderDeploymentApp",
       "w": 820,
       "h": 620,
-      "perm": "manage_settings"
+      "perm": "manage_deployment"
     }
   ],
   "settings_ui": {

@@ -104,6 +104,13 @@ def remove_user(user_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "create_users")
     if user_id == user["id"]:
         raise HTTPException(400, "Du kannst dich nicht selbst löschen")
+    gone = db.get_user_by_id(user_id) or {}
     db.delete_user(user_id)
     db.add_audit_entry(user["username"], "user.deleted", target=user_id)
+    # Module aufraeumen lassen (z.B. "client": Geraete abmelden)
+    try:
+        from app import modules
+        modules.emit_nowait("user_deleted", user_id=user_id, username=gone.get("username", ""))
+    except Exception:
+        pass
     return {"ok": True}

@@ -155,6 +155,10 @@ def _authenticate(username: str, password: str):
     (AD/LDAP) werden dort geprüft - lokal haben sie kein Passwort.
     """
     from rmm_mod_relay.relay_routes import _resolve_user
+    from rmm_mod_relay import relay_storage as _rs_dev
+    dev_user = _rs_dev.device_user(username, password)   # Client-App: Geraetetoken statt Passwort
+    if dev_user:
+        return dev_user
     user = _resolve_user(username)
     if not user:
         return None

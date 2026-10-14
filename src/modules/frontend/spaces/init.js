@@ -5,10 +5,11 @@
 // Musik im Audioplayer. Öffnet außerdem Freigabe-Links (#space-share=<token>).
 
 import { registerModuleApi } from "/js/app/modules.js";
-import { renderSpacesBrowser, uploadAttachment, blobUrl, openShareLink, sreq } from "./spaces.js";
+import { renderSpacesBrowser, uploadAttachment, blobUrl, openShareLink, sreq, openSpaceSettings, createSpace } from "./spaces.js";
 
 export function init() {
-  registerModuleApi("spaces", { renderSpacesBrowser, uploadAttachment, blobUrl, openShareLink, request: sreq });
+  registerModuleApi("spaces", { renderSpacesBrowser, uploadAttachment, blobUrl, openShareLink, request: sreq,
+                                openSpaceSettings, createSpace });
   const check = () => {
     const m = /space-share=([A-Za-z0-9_-]+)/.exec(location.hash || "");
     if (!m) return;

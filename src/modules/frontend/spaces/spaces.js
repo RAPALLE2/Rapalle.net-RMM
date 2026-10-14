@@ -209,6 +209,20 @@ async function spaceDialog(kind, existing, onDone) {
   });
 }
 
+/** Von außen (z.B. Relay-Explorer): Space-Dialog für "Teams/<name>" bzw. "Öffentlich/<name>" öffnen. */
+export async function openSpaceSettings(kind, name, onDone) {
+  const meta = await sreq("");
+  const sp = meta.spaces.find((x) => x.kind === kind && x.name === name);
+  if (!sp) { window.notify?.("Space nicht gefunden", "error"); return; }
+  if (sp.level < 3) { window.notify?.("Nur Space-Admins können Mitglieder und Einstellungen ändern.", "warn"); return; }
+  return spaceDialog(kind, sp, onDone);
+}
+
+/** Von außen: Dialog "Neuer Teamspace / Public Space". */
+export function createSpace(kind, onDone) {
+  return spaceDialog(kind, null, onDone);
+}
+
 // ------------------------------------------------------------------ Git
 async function gitDialog(path, refresh) {
   const m = modal(`Git · ${path.split("/").pop() || path}`, `<div data-git>Lade …</div>`, { wide: true });

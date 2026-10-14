@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "client",
+  "name": "Client-App",
+  "version": "1.0.0",
+  "settings_ui": {
+    "entry": "client.js",
+    "export": "renderSettings"
+  },
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  }
+}

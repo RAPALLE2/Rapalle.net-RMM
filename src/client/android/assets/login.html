@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RAPALLE.net RMM</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --sub:#94a3b8; --accent:#2dd4bf; --border:#334155; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px system-ui, sans-serif; }
+  main { max-width:460px; margin:0 auto; padding:28px 20px 40px; }
+  h1 { font-size:22px; margin:0 0 4px; } h1 span { color:var(--accent); }
+  p.sub { color:var(--sub); font-size:13px; margin:0 0 18px; }
+  label { display:block; color:var(--sub); font-size:12.5px; margin:12px 0 4px; }
+  input, select { width:100%; height:44px; padding:0 12px; border-radius:8px; border:1px solid var(--border);
+    background:var(--panel); color:var(--text); font-size:15px; }
+  .chk { display:flex; gap:10px; align-items:center; margin-top:14px; color:var(--text); font-size:13.5px; }
+  .chk input { width:20px; height:20px; }
+  button { width:100%; height:48px; margin-top:20px; border:0; border-radius:8px; background:var(--accent);
+    color:#0c1420; font-weight:700; font-size:16px; }
+  button:disabled { opacity:.6; }
+  #msg { margin-top:14px; font-size:13.5px; min-height:20px; white-space:pre-wrap; }
+  .err { color:#f87171; } .hint { color:var(--sub); }
+  #codeRow { display:none; }
+</style></head>
+<body><main>
+  <h1>RAPALLE<span>.net</span> RMM</h1>
+  <p class="sub">Einmal anmelden – danach bleibt die Anmeldung auf diesem Gerät gespeichert.</p>
+  <label>Server-Adresse</label><input id="server" placeholder="https://rmm.firma.de" inputmode="url" autocapitalize="off">
+  <label>Benutzername</label><input id="user" autocapitalize="off" autocomplete="username">
+  <label>Passwort</label><input id="pass" type="password" autocomplete="current-password">
+  <label>Anmelden über</label><select id="realm"><option value="local">Lokales Konto</option></select>
+  <div id="codeRow"><label>Einmalcode (2FA)</label><input id="code" inputmode="numeric" autocomplete="one-time-code"></div>
+  <label>Name dieses Geräts</label><input id="name">
+  <div class="chk"><input type="checkbox" id="insecure"><span>Zertifikat nicht prüfen (selbst signiert)</span></div>
+  <button id="go">Anmelden</button>
+  <div id="msg"></div>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const pre = JSON.parse(RMM.prefill() || "{}");
+  $("server").value = pre.server || ""; $("user").value = pre.username || "";
+  $("name").value = pre.device_name || ""; $("insecure").checked = !!pre.insecure;
+  if (pre.message) { $("msg").textContent = pre.message; $("msg").className = "hint"; }
+  function loadRealms() {
+    const s = $("server").value.trim(); if (!s) return;
+    const list = JSON.parse(RMM.realms(s, $("insecure").checked) || "[]");
+    $("realm").innerHTML = '<option value="local">Lokales Konto</option>' +
+      list.map((r) => `<option value="${r.id}">${r.name.replace(/</g, "&lt;")}</option>`).join("");
+  }
+  $("server").addEventListener("change", loadRealms);
+  if (pre.server) loadRealms();
+  $("go").addEventListener("click", () => {
+    $("go").disabled = true; $("msg").className = "hint"; $("msg").textContent = "Melde an …";
+    setTimeout(() => {
+      const r = JSON.parse(RMM.login($("server").value.trim(), $("user").value.trim(), $("pass").value,
+        $("realm").value, $("code").value.trim(), $("name").value.trim(), $("insecure").checked));
+      $("go").disabled = false;
+      if (r.ok) return;                       // die App lädt jetzt das Dashboard
+      if (r.error === "2fa_required") {
+        $("codeRow").style.display = "block"; $("code").focus();
+        $("msg").className = "hint"; $("msg").textContent = "Bitte den Einmalcode aus der Authenticator-App eingeben.";
+      } else { $("msg").className = "err"; $("msg").textContent = "❌ " + r.error; }
+    }, 30);
+  });
+  $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });
+</script></body></html>

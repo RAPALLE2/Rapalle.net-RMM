@@ -1496,3 +1496,12 @@ button > .svgicon:only-child { vertical-align: middle; }
   padding: 10px 14px 0;
 }
 /* .sub-nav button: siehe ui.css (identisch zu .tab-btn) */
+
+/* Einzelfenster-Modus (Client-App: /?solo=terminal&client=...): nur das eine Fenster */
+body.solo-mode .topbar, body.solo-mode .sidebar, body.solo-mode .sidebar-backdrop,
+body.solo-mode .taskbar, body.solo-mode .sidebar-resizer, body.solo-mode .main-content { display: none !important; }
+body.solo-mode .window-layer { inset: 0 !important; top: 0 !important; bottom: 0 !important; }
+body.solo-mode .rmm-window { inset: 0 !important; width: 100% !important; height: 100% !important;
+  border-radius: 0 !important; border: 0 !important; }
+/* Fensterknöpfe aus: geschlossen wird das Fenster der Client-App selbst */
+body.solo-mode .rmm-window-titlebar .win-controls { display: none !important; }

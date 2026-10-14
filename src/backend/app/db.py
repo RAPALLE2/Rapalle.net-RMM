@@ -2733,6 +2733,8 @@ GLOBAL_PERM_KEYS = [
     "manage_modules",
     # Modul "spaces": eigener Space, Public Spaces, alle Spaces sehen/bearbeiten
     "get_user_space", "use_public_space", "see_all_spaces", "edit_all_spaces",
+    # Modul "deployment": Deployment-Server (Seite + Dateien, Relay-Bereich "Deployment")
+    "manage_deployment",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",

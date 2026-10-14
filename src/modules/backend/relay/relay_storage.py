@@ -69,14 +69,17 @@ _SPECIAL_BASE = {
 # dieselbe Berechtigung wie fuer die Source-App im Dashboard.
 READ_PERM = {
     "Source": "see_source",
+    # Deployment-Ordner nur fuer Leute mit dem Recht "Deployment-Server verwalten"
+    # (Modul "deployment"); Super-Admins sehen ihn immer.
+    "Deployment": "manage_deployment",
 }
 
 # Wer darf schreiben?
 #   Storage    -> 'use_relay' (wer das Relay benutzen darf)
-#   Deployment -> zusaetzlich 'manage_settings', denn was hier liegt, kann
+#   Deployment -> 'manage_deployment' (Modul "deployment"), denn was hier liegt, kann
 #                 oeffentlich abrufbar sein. Lesen darf jeder mit 'use_relay'.
 WRITE_PERM = {
-    "Deployment": "manage_settings",
+    "Deployment": "manage_deployment",
     "Source": "edit_source",
 }
 
@@ -308,3 +311,35 @@ def may_read(user, section: str | None = None) -> bool:
     if is_virtual(section):
         return _vfs(section) is not None
     return user_has_permission(user, read_perm(section))
+
+
+# ------------------------------------------------------------------
+# Anmeldung per Geraetetoken (Modul "client")
+# ------------------------------------------------------------------
+# Die Client-App speichert kein Passwort, sondern einen Geraetetoken
+# ("<id>.<geheim>"). Damit sie das Relay als Laufwerk verbinden kann, gilt
+# dieser Token beim Relay (WebDAV/FTP/SFTP) als Passwort - aber NUR zusammen
+# mit dem passenden Benutzernamen. "Abmelden" unter Profil -> Meine Geraete
+# sperrt damit auch das Laufwerk sofort.
+def device_user(username: str, password: str):
+    import re as _re
+    if not _re.fullmatch(r"[0-9a-f]{16}\.[A-Za-z0-9_-]{20,}", password or ""):
+        return None
+    try:
+        from app import db, modules
+        if not modules.is_enabled("client"):
+            return None
+        dev = modules.use("client", "devices").check_token(password)
+        if not dev:
+            return None
+        user = db.get_user_by_id(dev["user_id"])
+        name = (username or "").split("\\")[-1].split("@")[0].strip().lower()
+        if not user or user["username"].lower() != name:
+            return None
+        if user.get("auth_realm"):
+            from app.auth import sso_enabled
+            if not sso_enabled():
+                return None
+        return user
+    except Exception:
+        return None

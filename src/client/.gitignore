@@ -1,0 +1,6 @@
+# Lokale Umgebung / Zwischenstaende - die fertigen Pakete in release/ gehoeren INS Repository
+.venv/
+build/
+dist/
+__pycache__/
+*.idsig
