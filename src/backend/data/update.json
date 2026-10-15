@@ -1,0 +1,106 @@
+{
+  "rmm_layout": true,
+  "schema": 1,
+  "_doc": "Beschreibt, wo in DIESEM Release welche Daten liegen. Der Updater (src/backend/app/updater.py) sichert beim Update alle Daten von ihrem aktuellen Ort (installierte update.json bzw. 'legacy'-Pfade), raeumt den alten Code komplett weg, setzt das neue Release ein und legt die Daten an die hier genannten Orte. Alle Pfade relativ zum Projekt-Root. Siehe docs/UPDATE.md.",
+
+  "main_py_backend_location": "src/backend/main.py",
+
+  "keep": [".git", ".env", "venv", ".venv", "env", "docker-compose.override.yml"],
+
+  "managed_legacy": [
+    "src", "backend", "frontend", "agent", "tools", "node", "docs", ".github",
+    "Dockerfile", "docker-compose.yml", "docker-entrypoint.sh", ".dockerignore",
+    ".gitignore", ".env.example", "README.md", "LICENSE", "Credits.md",
+    "requirements.txt", "run.py", "main.py"
+  ],
+  "legacy_code": ["backend", "frontend", "agent", "tools", "node"],
+  "legacy_shims": ["backend/main.py", "backend/run.py"],
+
+  "items": {
+    "db_file_location": {
+      "path": "src/backend/data/data.sqlite", "kind": "file", "backup": true,
+      "companions": ["-wal", "-shm", "-journal"],
+      "legacy": ["backend/data/data.sqlite", "backend/data.sqlite"]
+    },
+    "db_backup_location": {
+      "path": "src/backend/data/backup", "kind": "dir",
+      "legacy": ["backend/data/backup", "backend/backup"]
+    },
+    "env_file_location": {
+      "path": "src/backend/data/.env", "kind": "file", "backup": true,
+      "legacy": ["backend/data/.env", "backend/.env"]
+    },
+    "repo_file_location": {
+      "path": "src/backend/data/repo.txt", "kind": "file", "backup": true,
+      "legacy": ["backend/data/repo.txt", "backend/repo.txt"]
+    },
+    "dbconfig_location": {
+      "path": "src/backend/data/dbconfig.json", "kind": "file", "backup": true,
+      "legacy": ["backend/data/dbconfig.json", "backend/dbconfig.json"]
+    },
+    "modules_state_location": {
+      "path": "src/backend/data/modules.json", "kind": "file", "backup": true,
+      "legacy": ["backend/data/modules.json", "backend/modules.json"]
+    },
+    "modules_data_location": {
+      "path": "src/backend/data/modules", "kind": "dir",
+      "legacy": ["backend/data/modules"]
+    },
+    "data_dir_location": {
+      "path": "src/backend/data", "kind": "dir",
+      "release_owned": ["version.txt", "requirements.txt", "update.json"],
+      "legacy": ["backend/data"]
+    },
+
+    "recordings_location": {
+      "path": "src/backend/media/recordings", "kind": "dir",
+      "legacy": ["backend/media/recordings", "backend/recordings"]
+    },
+    "audio_location": {
+      "path": "src/backend/media/audio", "kind": "dir",
+      "legacy": ["backend/media/audio", "backend/media_files"]
+    },
+    "ticket_files_location": {
+      "path": "src/backend/media/tickets", "kind": "dir",
+      "legacy": ["backend/media/tickets", "backend/ticket_files"]
+    },
+    "media_images_location": {
+      "path": "src/backend/media/images", "kind": "dir",
+      "legacy": ["backend/media/images"]
+    },
+    "media_location": {
+      "path": "src/backend/media", "kind": "dir",
+      "legacy": ["backend/media"]
+    },
+
+    "spaces_location": {
+      "path": "src/backend/storage/spaces", "kind": "dir",
+      "legacy": ["backend/storage/spaces"]
+    },
+    "deployment_location": {
+      "path": "src/backend/storage/deployment", "kind": "dir",
+      "legacy": ["backend/storage/deployment", "backend/deployment"]
+    },
+    "storage_location": {
+      "path": "src/backend/storage", "kind": "dir",
+      "legacy": ["backend/storage"]
+    },
+
+    "logs_location": {
+      "path": "src/backend/logs", "kind": "dir",
+      "legacy": ["backend/logs"]
+    },
+    "branding_location": {
+      "path": "src/frontend/image", "kind": "dir",
+      "legacy": ["backend/branding"]
+    },
+    "files_location": {
+      "path": "src/files", "kind": "dir",
+      "legacy": []
+    },
+    "agent_env_location": {
+      "path": "src/agent/.env", "kind": "file", "backup": true,
+      "legacy": ["agent/.env"]
+    }
+  }
+}

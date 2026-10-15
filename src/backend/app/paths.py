@@ -56,6 +56,8 @@ ENV_FILE = DATA_DIR / ".env"
 BACKEND_VERSION_FILE = DATA_DIR / "version.txt"
 BACKEND_REQUIREMENTS_FILE = DATA_DIR / "requirements.txt"
 REPO_FILE = DATA_DIR / "repo.txt"
+UPDATE_LAYOUT_FILE = DATA_DIR / "update.json"            # Daten-Orte dieses Release + installierter Stand (Updater)
+UPDATE_WORK_DIR = PROJECT_ROOT / ".rmm_update"          # Arbeits-/Sicherungsordner des Updaters
 
 STORAGE_DIR = BACKEND_DIR / "storage"
 DEPLOYMENT_DIR = STORAGE_DIR / "deployment"            # Relay-Sektion "Deployment"

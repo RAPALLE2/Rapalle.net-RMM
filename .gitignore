@@ -34,3 +34,7 @@ src/agent/restart_count.txt
 # Modul-System: aktivierte Module, Einstellungen, Crash-Zusammenfassung und Modul-Daten
 src/backend/data/modules.json
 src/backend/data/modules/
+
+# Arbeits-/Sicherungsordner des Server-Updaters (src/backend/app/updater.py)
+.rmm_update/
+src/.rmm_update/

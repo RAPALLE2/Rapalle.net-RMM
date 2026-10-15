@@ -253,8 +253,9 @@ export function renderSettings(body, win) {
             <div style="font-size:13px;margin-bottom:10px">
               ${t("set_installed_version")}: <b id="up-current"></b>
             </div>
+            <div id="up-last" class="hidden" style="font-size:12px;margin:-4px 0 10px;color:var(--subtext)"></div>
             <div class="form-row">
-              <label>GitHub-Repo (backend/repo.txt)</label>
+              <label>GitHub-Repo (src/backend/data/repo.txt)</label>
               <div style="display:flex;gap:8px">
                 <input type="text" id="up-repo" style="flex:1" />
                 <button class="btn" id="up-repo-save">${t("save")}</button>
@@ -445,6 +446,23 @@ export function renderSettings(body, win) {
         root.querySelector("#up-current").textContent =
           info.current_version + (info.current_commit ? ` (${t("set_as_of")}: ${String(info.current_commit).slice(0, 10)})` : "");
         root.querySelector("#up-repo").value = info.repo_url || "";
+        // Ergebnis des letzten Updates (Updater: .rmm_update/last_result.json)
+        const lu = info.last_update || {};
+        const luEl = root.querySelector("#up-last");
+        if (lu.status) {
+          const when = lu.finished ? new Date(lu.finished * 1000).toLocaleString() : "";
+          const txt = {
+            ok: `✓ Letztes Update erfolgreich: ${lu.desc || lu.ref || ""} ${when ? `(${when})` : ""}`,
+            applied: `… Letztes Update eingespielt, Bestaetigung nach Neustart ausstehend: ${lu.desc || ""}`,
+            rolled_back: `⚠ Letztes Update fehlgeschlagen und zurueckgerollt (${lu.phase || "?"}): ${lu.error || ""}`,
+            running: `… Update laeuft (${lu.desc || ""})`,
+          }[lu.status] || `Letztes Update: ${lu.status}`;
+          luEl.textContent = txt;
+          luEl.style.color = lu.status === "rolled_back" ? "var(--danger, #e5534b)" : "var(--subtext)";
+          luEl.classList.remove("hidden");
+        } else {
+          luEl.classList.add("hidden");
+        }
         const c = info.latest_commit || {};
         root.querySelector("#up-lbl-commit").textContent =
           `${t("set_latest_commit")}${c.sha ? ` — ${c.sha.slice(0, 10)}` : ""}${c.message ? `: ${c.message}` : ""}`;
@@ -488,9 +506,22 @@ export function renderSettings(body, win) {
       btn.disabled = true; btn.textContent = t("u_update_lauft");
       try {
         const res = await api.runServerUpdate(target, tag);
-        btn.textContent = "✓ Update eingespielt — Backend startet neu…";
-        window.notify?.(`${res.applied} eingespielt — Backend startet neu. Seite gleich neu laden.`, "success");
-        setTimeout(() => location.reload(), 8000);
+        btn.textContent = "✓ Geladen — Backend wird aktualisiert und neu gestartet…";
+        window.notify?.(`${res.applied} geladen — Backend wird aktualisiert und startet neu. Die Seite laedt automatisch neu.`, "success");
+        // Der Updater raeumt erst den alten Code weg und setzt das Release ein -
+        // das dauert je nach Datenmenge unterschiedlich lange. Darum warten wir,
+        // bis das Backend erst WEG und dann WIEDER da ist (max. 10 Minuten).
+        const t0 = Date.now();
+        let wentDown = false;
+        const poll = async () => {
+          let up = false;
+          try { up = (await fetch("/api/health", { cache: "no-store" })).ok; } catch { up = false; }
+          if (!up) wentDown = true;
+          if ((up && wentDown) || Date.now() - t0 > 600000) { location.reload(); return; }
+          if (up && Date.now() - t0 > 60000) { location.reload(); return; }
+          setTimeout(poll, 2000);
+        };
+        setTimeout(poll, 2500);
       } catch (e) {
         btn.disabled = false; btn.textContent = "⬇️ Update installieren";
         err.textContent = e.message; err.classList.remove("hidden");
