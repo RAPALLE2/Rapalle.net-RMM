@@ -65,8 +65,25 @@ def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
     if db.get_user_by_username(body.username):
         raise HTTPException(400, "Benutzername existiert bereits")
 
-    if body.role not in ("admin", "support", "viewer"):
+    # "api" = Vorlage "API-Benutzer" (Modul "api" legt die passende Gruppe an)
+    if body.role not in ("admin", "support", "viewer", "api"):
         raise HTTPException(400, "Unbekannte Rolle (erlaubt: admin, support, viewer)")
+
+    # API-Konto (Vorlage "API-Benutzer", Modul "api"): KEIN Passwort, KEINE
+    # Erstanmeldung - stattdessen ein JWT-signierter API-Schluessel, der genau
+    # einmal angezeigt wird. Ein Passwort gibt es nur intern (zufaellig, unbekannt);
+    # eine Passwort-Anmeldung ist fuer API-Konten ohnehin gesperrt (auth.authenticate_local).
+    if body.role == "api":
+        from app import modules
+        apikeys = modules.use("api", "apikeys") if modules.is_enabled("api") else None
+        if apikeys is None:
+            raise HTTPException(409, "API-Konten brauchen das Modul „REST-API“")
+        import secrets as _secrets
+        new_user = db.create_user(username=body.username, password_hash=hash_password(_secrets.token_urlsafe(48)),
+                                  display_name=body.display_name, role="api", must_change_pw=False)
+        key = apikeys.generate(new_user)
+        db.add_audit_entry(user["username"], "user.created", target=body.username, details="API-Konto")
+        return {"id": new_user["id"], "username": new_user["username"], "generated_password": None, "api_key": key}
 
     # Entweder das vom Admin vorgegebene Passwort nehmen, oder eins generieren
     plain_password = body.password or _generate_one_time_password()

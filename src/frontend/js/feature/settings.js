@@ -17,6 +17,7 @@ import { t } from "../app/i18n.js";
 import { isAdmin, hasGlobalPerm } from "../app/state.js";
 import { renderSource } from "./source.js";
 import { registerCleanup } from "../app/windowmanager.js";
+import { getModuleApi } from "../app/modules.js";
 
 export function renderSettings(body, win) {
   // Direkt auf einem bestimmten Reiter oeffnen (z.B. angehefteter Favorit
@@ -522,6 +523,9 @@ export function renderSettings(body, win) {
     // Support: Rechte kommen aus der Standard-Gruppe "Alle Support", die beim
     // Anlegen automatisch zugewiesen wird - deshalb hier keine eigenen Grants.
     if (preset === "support") return { role: "support", grants: null };
+    // API-Benutzer (Modul "api"): Rechte kommen aus der Standard-Gruppe "API-Benutzer"
+    // (Recht "API benutzen"); weitere Rechte je nach Einsatzzweck dazugeben.
+    if (preset === "api") return { role: "api", grants: null };
     if (preset === "view_only") {
       return { role: "viewer",
         grants: VIEW_ONLY_ALLOW.map((p) => ({ scope: "global", perm: p, effect: "allow" })) };
@@ -591,9 +595,10 @@ export function renderSettings(body, win) {
             <option value="support">${t("set_role_support")}</option>
             <option value="view_only">${t("set_role_view")}</option>
             <option value="login_only">${t("set_role_login")}</option>
+            ${getModuleApi("api") ? `<option value="api">API-Benutzer (nur REST-API)</option>` : ""}
           </select>
         </div>
-        <div class="form-row">
+        <div class="form-row" id="su-pwmode-row">
           <label>${t("set_pw_mode")}</label>
           <select id="su-pwmode">
             <option value="otp">${t("set_pw_otp")}</option>
@@ -653,7 +658,8 @@ export function renderSettings(body, win) {
             <td>${esc(u.display_name)}</td>
             <td>${esc(u.role)}${(u.is_admin && u.admin_via === "permission")
                 ? ` <span style="color:var(--warn);font-size:10px" title="${t("set_admin_via_perm")}">ADMIN*</span>` : ""}${
-                u.must_change_pw ? ` <span style="color:var(--warn)">(${t("set_pw_change_pending")})</span>` : ""}</td>
+                u.role === "api" ? ` <span style="color:var(--subtext)">(API-Konto, Schlüssel statt Passwort)</span>`
+                : u.must_change_pw ? ` <span style="color:var(--warn)">(${t("set_pw_change_pending")})</span>` : ""}</td>
             <td><button class="btn" data-groups="${u.id}">${t("pm_groups")}…</button></td>
             <td><button class="btn btn-danger" data-del="${u.id}">${t("delete")}</button></td>`;
           list.appendChild(tr);
@@ -683,6 +689,16 @@ export function renderSettings(body, win) {
       window.notify?.("Gruppen aktualisiert", "success");
     }
 
+    // API-Benutzer: kein Passwort, keine Erstanmeldung - der Server erzeugt einen API-Schlüssel.
+    const roleSel = root.querySelector("#su-role");
+    const syncApiRole = () => {
+      const isApi = roleSel.value === "api";
+      root.querySelector("#su-pwmode-row").classList.toggle("hidden", isApi);
+      if (isApi) root.querySelector("#su-pw-row").classList.add("hidden");
+      else root.querySelector("#su-pw-row").classList.toggle("hidden", pwMode.value !== "fixed");
+    };
+    roleSel.addEventListener("change", syncApiRole);
+
     root.querySelector("#su-create").addEventListener("click", async () => {
       const err = root.querySelector("#su-error");
       const result = root.querySelector("#su-result");
@@ -707,7 +723,18 @@ export function renderSettings(body, win) {
           if (grants) { try { await api.setGrants("user", newId, grants); } catch {} }
           if (pendingGroups.length) { try { await api.setUserGroups(newId, pendingGroups); } catch {} }
         }
-        if (res.generated_password) {
+        if (res.api_key) {
+          result.innerHTML = `<div style="background:rgba(45,212,191,0.1);border:1px solid var(--accent);padding:10px;border-radius:6px">
+            API-Schlüssel für <b>${esc(res.username)}</b> – <b>wird nur jetzt angezeigt</b>:
+            <div style="display:flex;gap:6px;margin:8px 0"><code id="su-apikey" style="flex:1;min-width:0;overflow-x:auto;white-space:nowrap;
+              background:var(--panel-2);padding:6px 8px;border-radius:6px;color:var(--accent)">${esc(res.api_key)}</code>
+              <button class="btn btn-sm" id="su-apikey-copy">Kopieren</button></div>
+            <span style="color:var(--subtext);font-size:12px">Anmeldung an der REST-API: Benutzername + API-Schlüssel
+              (POST /api/v1/auth/login {"username", "api_key"}). Neuer Schlüssel: Modul-App → REST-API → API-Konten.</span></div>`;
+          result.querySelector("#su-apikey-copy").addEventListener("click", () => {
+            navigator.clipboard?.writeText(res.api_key); window.notify?.("API-Schlüssel kopiert", "success");
+          });
+        } else if (res.generated_password) {
           result.innerHTML = `<div style="background:rgba(45,212,191,0.1);border:1px solid var(--accent);padding:10px;border-radius:6px">
             ${t("set_otp_for")} <b>${esc(res.username)}</b>: <code style="color:var(--accent)">${esc(res.generated_password)}</code><br/>
             <span style="color:var(--subtext);font-size:12px">${t("set_otp_note")}</span></div>`;

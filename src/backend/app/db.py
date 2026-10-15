@@ -1502,8 +1502,9 @@ def auto_assign_groups(user_id: str, role: str) -> None:
         return
     for r in rows:
         kind = (r["auto_assign"] or "").strip()
-        # "user" gilt fuer ALLE Rollen, "admin"/"support" nur fuer die jeweilige.
-        if kind == "user" or (kind == role and role in ("admin", "support")):
+        # "user" gilt fuer ALLE Rollen, "admin"/"support"/"api" nur fuer die jeweilige
+        # ("api" = Vorlage "API-Benutzer", Gruppe legt das Modul "api" an).
+        if kind == "user" or (kind == role and role in ("admin", "support", "api")):
             _conn.execute(
                 "INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)",
                 (user_id, r["id"]))
@@ -2735,6 +2736,9 @@ GLOBAL_PERM_KEYS = [
     "get_user_space", "use_public_space", "see_all_spaces", "edit_all_spaces",
     # Modul "deployment": Deployment-Server (Seite + Dateien, Relay-Bereich "Deployment")
     "manage_deployment",
+    # Modul "api": die REST-API (/api/v1) benutzen - zusaetzlich gilt pro Aufruf
+    # dasselbe Recht wie im Dashboard (z.B. Client loeschen -> c_delete).
+    "use_api",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",

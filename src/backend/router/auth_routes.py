@@ -213,6 +213,9 @@ def change_password(body: ChangePasswordBody, user: dict = Depends(get_current_u
     # zum Login taugt. Deshalb hart blocken; geändert wird im AD/LDAP selbst.
     if _auth_realm_of(user):
         raise HTTPException(403, "Passwort wird zentral im Verzeichnis (AD/LDAP/SSO) verwaltet und kann hier nicht geändert werden")
+    # API-Konten (Modul "api") haben kein Passwort, sondern einen API-Schluessel.
+    if user.get("role") == "api":
+        raise HTTPException(403, "API-Konten haben kein Passwort – stattdessen einen API-Schlüssel (Modul „REST-API“)")
     # Beim allerersten Pflicht-Passwortwechsel ist current_password="admin" (o.ä.) zu prüfen
     if not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(400, "Aktuelles Passwort ist falsch")

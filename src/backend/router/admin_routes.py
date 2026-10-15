@@ -149,6 +149,7 @@ PERM_LABELS = {
     "see_all_spaces": "Alle Spaces sehen (lesen)",
     "edit_all_spaces": "Alle Spaces bearbeiten und verwalten",
     "manage_deployment": "Deployment-Server verwalten (Seite, Dateien, Relay-Bereich „Deployment“)",
+    "use_api": "REST-API benutzen (/api/v1) – je Aufruf zusätzlich das passende Recht",
     "create_users": "Benutzer erstellen",
     "network_scan": "Netzwerk-Scan",
     "port_scan": "Port-Scan",

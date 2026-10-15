@@ -64,6 +64,10 @@ def authenticate_local(username: str, password: str) -> dict | None:
     user = db.get_user_by_username(username)
     if not user:
         return None
+    # API-Konten (Modul "api") melden sich NUR mit API-Schluessel an der REST-API an -
+    # nie mit Passwort, nie im Dashboard. Allgemeine Meldung (kein Ausforschen).
+    if user.get("role") == "api":
+        return None
     if not verify_password(password, user["password_hash"]):
         return None
     return user

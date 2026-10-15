@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "id": "api",
+  "name": "REST-API",
+  "version": "1.0.0",
+  "description": "Steuert alles, was das Web-Dashboard kann, per REST-API (/api/v1): Benutzer, Rechte, Clients/Agenten, Module, Apps, Einstellungen, Nodes … Zugang nur für Konten mit dem Recht „API benutzen“ (Vorlage „API-Benutzer“), je Aufruf zusätzlich das passende Recht wie im Dashboard. Betriebsarten: ohne Benutzer, mit Benutzer, mit Benutzer (secure, langer Code mit einstellbarer Laufzeit). Mit Aufrufprotokoll.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🔌",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "api_v1",
+    "api_admin"
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "enable": "on_enable"
+  },
+  "settings": [
+    {
+      "key": "mode",
+      "label": "Betriebsart",
+      "type": "select",
+      "default": "secure",
+      "options": [
+        {
+          "value": "open",
+          "label": "Ohne Benutzer (keine Anmeldung, läuft als API-Benutzer)"
+        },
+        {
+          "value": "user",
+          "label": "Mit Benutzer (Anmeldung, Sitzung)"
+        },
+        {
+          "value": "secure",
+          "label": "Mit Benutzer (secure) – langer Code bei jeder Anfrage"
+        }
+      ]
+    },
+    {
+      "key": "token_lifetime",
+      "label": "Gültigkeit des Codes (secure)",
+      "type": "select",
+      "default": "8h",
+      "options": [
+        {
+          "value": "1h",
+          "label": "1 Stunde"
+        },
+        {
+          "value": "8h",
+          "label": "8 Stunden"
+        },
+        {
+          "value": "24h",
+          "label": "24 Stunden"
+        },
+        {
+          "value": "7d",
+          "label": "7 Tage"
+        },
+        {
+          "value": "35d",
+          "label": "35 Tage"
+        },
+        {
+          "value": "1y",
+          "label": "1 Jahr"
+        },
+        {
+          "value": "never",
+          "label": "Unbegrenzt"
+        }
+      ]
+    },
+    {
+      "key": "key_rotation",
+      "label": "API-Schlüssel automatisch rotieren nach (API-Konten)",
+      "type": "select",
+      "default": "never",
+      "options": [
+        {
+          "value": "never",
+          "label": "Nie"
+        },
+        {
+          "value": "1h",
+          "label": "1 Stunde"
+        },
+        {
+          "value": "8h",
+          "label": "8 Stunden"
+        },
+        {
+          "value": "24h",
+          "label": "24 Stunden"
+        },
+        {
+          "value": "7d",
+          "label": "7 Tage"
+        },
+        {
+          "value": "35d",
+          "label": "35 Tage"
+        },
+        {
+          "value": "1y",
+          "label": "1 Jahr"
+        }
+      ]
+    },
+    {
+      "key": "key_grace_minutes",
+      "label": "Alter Schlüssel gilt nach einer Rotation noch … Minuten",
+      "type": "number",
+      "default": 60,
+      "min": 0,
+      "max": 10080
+    },
+    {
+      "key": "session_minutes",
+      "label": "Sitzung läuft ab nach … Minuten ohne Aufruf (Modus „mit Benutzer“)",
+      "type": "number",
+      "default": 60,
+      "min": 5,
+      "max": 1440
+    },
+    {
+      "key": "service_user",
+      "label": "API-Benutzer für „ohne Benutzer“ (Benutzername)",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "allow_ips",
+      "label": "Erlaubte IP-Adressen/Netze (leer = alle), z. B. 10.0.0.0/8, 192.168.1.5",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "log_days",
+      "label": "Aufrufprotokoll aufbewahren (Tage)",
+      "type": "number",
+      "default": 30,
+      "min": 1,
+      "max": 3650
+    }
+  ]
+}
