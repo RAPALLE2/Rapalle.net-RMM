@@ -553,12 +553,6 @@ async def _start_background_tasks():
             db.set_setting("backend_crash_pending", "0")
     except Exception as e:
         print(f"[startup] Crash-Recovery-Audit fehlgeschlagen: {e}")
-    # Ergebnis eines gerade eingespielten Server-Updates protokollieren und
-    # alte Update-Ordner (.rmm_update/<job>) aufraeumen.
-    try:
-        update_routes.finish_after_start()
-    except Exception as e:
-        print(f"[startup] Update-Abschluss fehlgeschlagen: {e}")
     # Diagnose einhängen und den Wartungsmodus fortsetzen, falls er vor
     # einem Neustart aktiv war. Das steht bewusst GANZ VORN: Alles, was
     # danach schiefgeht, soll bereits im Log landen.

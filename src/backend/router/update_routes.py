@@ -14,16 +14,12 @@ Endpunkte (nur Admin):
   POST /api/admin/update/run    -> Update ausführen
         body: { "target": "commit" | "full" | "any" | "custom", "tag": "..."? }
 
-Ablauf eines Updates (app/updater.py, Details: docs/UPDATE.md):
+Ablauf eines Updates:
   1. Ziel-Ref bestimmen (Commit-SHA des Default-Branches oder Release-Tag)
-  2. ZIP von codeload.github.com nach <root>/.rmm_update/<job>/release.zip
-     laden und pruefen (noch im laufenden Backend -> Fehler sieht der Admin)
-  3. Backend-Prozess wird per os.execv durch den Updater ersetzt (RMM aus):
-     wichtige Dateien sichern, Daten laut update.json wegsichern, alten Code
-     KOMPLETT wegraeumen, ZIP einsetzen, Daten an die Orte der NEUEN
-     update.json legen
-  4. Updater startet die Startdatei des neuen Release (main_py_backend_location)
-     - bei einem Fehler wird alles zurueckgerollt und der alte Stand gestartet
+  2. ZIP von codeload.github.com laden und nach /tmp entpacken
+  3. Dateien über das Projektverzeichnis kopieren - AUSGENOMMEN lokale Daten
+     (data.sqlite, .env, repo.txt, recordings/, branding/)
+  4. Backend startet sich selbst neu (os.execv) -> läuft mit neuem Code weiter
 
 Auto-Update: main.py ruft periodisch auto_update_tick() auf. Je nach Kanal
 ("commit" | "full" | "any") wird geprüft, ob es etwas Neueres gibt, und das
@@ -32,12 +28,13 @@ verhindert Endlos-Schleifen, falls ein Update nicht greift.
 """
 
 import asyncio
+import io
 import json
 import os
 import re
 import shutil
 import sys
-import time
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -45,22 +42,26 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import db, updater
+from app import db
 from app.auth import get_current_user, require_perm
 from router.admin_routes import require_admin
 
 router = APIRouter(prefix="/api/admin/update", tags=["update"])
 
 # …/backend/app/routers/update_routes.py -> Projekt-Root (…/rmm)
-from app.paths import (
-    PROJECT_ROOT as _PROJECT_ROOT, REPO_FILE as _REPO_FILE, BACKEND_VERSION_FILE as _VERSION_FILE,
-    UPDATE_LAYOUT_FILE as _LAYOUT_FILE, UPDATE_WORK_DIR as _WORK_DIR, DB_FILE as _DB_FILE,
-)
+from app.paths import PROJECT_ROOT as _PROJECT_ROOT, REPO_FILE as _REPO_FILE, BACKEND_VERSION_FILE as _VERSION_FILE
 _DEFAULT_REPO = "https://github.com/RAPALLE2/Rapalle.net-RMM.git"
 
-# Welche Daten erhalten bleiben und wohin sie wandern, steht NICHT mehr hier,
-# sondern in src/backend/data/update.json (Layout des jeweiligen Release).
-_update_lock = asyncio.Lock()
+# Diese Pfade (relativ zum Projekt-Root) werden beim Update NIE überschrieben
+# bzw. gelöscht - hier stecken lokale Daten und Konfiguration drin.
+_PRESERVE = (
+    "src/backend/data",
+    "src/backend/media",
+    "src/backend/storage",
+    "src/frontend/image",
+    "src/backend/logs",
+    "src/files",
+)
 
 
 def _read_repo_url() -> str:
@@ -103,6 +104,12 @@ def _http_json(url: str):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _http_bytes(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "rapalle-rmm-updater"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return resp.read()
+
+
 def _is_alpha(release: dict) -> bool:
     tag = (release.get("tag_name") or "").lower()
     return bool(release.get("prerelease")) or "alpha" in tag or "beta" in tag or "rc" in tag
@@ -141,66 +148,53 @@ def _fetch_github_state() -> dict:
 # Update ausführen
 # ------------------------------------------------------------------
 
-def _download_release(ref: str, owner: str, repo: str) -> Path:
-    """Laedt das ZIP des Refs in einen neuen Job-Ordner und prueft es."""
-    job_dir = _WORK_DIR / updater.new_job_id()
-    zp = updater.download(f"https://codeload.github.com/{owner}/{repo}/zip/{ref}",
-                          job_dir / "release.zip")
-    # Gueltiges Release? (update.json mit rmm_layout + Startdatei muessen drin sein)
+def _apply_zip(ref: str, owner: str, repo: str) -> None:
+    """Lädt das ZIP des Refs und kopiert es über das Projektverzeichnis."""
+    data = _http_bytes(f"https://codeload.github.com/{owner}/{repo}/zip/{ref}")
+    tmpdir = Path(tempfile.mkdtemp(prefix="rmm_update_"))
     try:
-        with zipfile.ZipFile(zp) as z:
-            names = {n.replace("\\", "/") for n in z.namelist()}
-            top = ""
-            firsts = {n.split("/", 1)[0] for n in names if "/" in n}
-            if len(firsts) == 1:
-                top = next(iter(firsts)) + "/"
-            lay = None
-            for n in sorted(names, key=len):
-                if not n.endswith("update.json"):
-                    continue
-                try:
-                    d = json.loads(z.read(n).decode("utf-8"))
-                except Exception:
-                    continue
-                if isinstance(d, dict) and d.get(updater.LAYOUT_MARK) is True:
-                    lay = d
-                    break
-    except zipfile.BadZipFile as e:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(502, f"Update-ZIP ungueltig: {e}")
-    if lay is None:
-        # Alter Stand ohne update.json: wuerde Daten an falsche Orte legen.
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(409, "Dieser Stand enthaelt keine update.json (zu alt fuer den "
-                                 "neuen Updater) - abgebrochen, nichts veraendert.")
-    main_rel = (lay.get("main_py_backend_location") or "src/backend/main.py").strip("/")
-    if (top + main_rel) not in names:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(409, f"Startdatei {main_rel} fehlt im Release - abgebrochen.")
-    return zp
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            z.extractall(tmpdir)
+        roots = [p for p in tmpdir.iterdir() if p.is_dir()]
+        if not roots:
+            raise RuntimeError("Update-ZIP war leer")
+        src_root = roots[0]
+
+        preserve_abs = [(_PROJECT_ROOT / p).resolve() for p in _PRESERVE]
+
+        def _preserved(dst: Path) -> bool:
+            d = dst.resolve()
+            for p in preserve_abs:
+                if d == p or str(d).startswith(str(p) + os.sep):
+                    return True
+            # .env-Dateien generell nie überschreiben (Konfiguration/Token)
+            return dst.name == ".env"
+
+        for src in src_root.rglob("*"):
+            rel = src.relative_to(src_root)
+            dst = _PROJECT_ROOT / rel
+            if _preserved(dst):
+                continue
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _schedule_handover(zp: Path, ref: str, desc: str, username: str | None,
-                       delay: float = 1.5) -> None:
-    """Uebergibt nach kurzer Pause (Antwort geht noch raus) an den Updater.
-    os.execv ersetzt den Backend-Prozess - das RMM ist danach aus."""
-    def _go():
+def _schedule_restart(delay: float = 1.5) -> None:
+    """Startet den Backend-Prozess neu (ersetzt sich selbst -> neuer Code)."""
+    def _restart():
+        print("[update] Starte Backend mit neuem Code neu (os.execv)...")
         try:
-            updater.start_update(
-                root=_PROJECT_ROOT, zip_path=zp, ref=ref, desc=desc, user=username,
-                installed_layout=_LAYOUT_FILE, db_file=_DB_FILE,
-                current_main=Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0].endswith(".py")
-                else _PROJECT_ROOT / "src" / "backend" / "main.py",
-                args=sys.argv[1:] if sys.argv and sys.argv[0].endswith(".py") else [],
-            )
-        except Exception as e:
-            print(f"[update] Uebergabe an den Updater fehlgeschlagen: {e}")
-            try:
-                db.add_audit_entry(username, "server.update_failed", details=str(e)[:500])
-            except Exception:
-                pass
+            sys.stdout.flush(); sys.stderr.flush()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
     loop = asyncio.get_event_loop()
-    loop.call_later(delay, _go)
+    loop.call_later(delay, _restart)
 
 
 def _resolve_target(gh: dict, target: str, tag: str | None) -> tuple[str, str]:
@@ -228,54 +222,20 @@ def _resolve_target(gh: dict, target: str, tag: str | None) -> tuple[str, str]:
 
 
 async def _run_update(target: str, tag: str | None, username: str | None) -> dict:
-    if _update_lock.locked():
-        raise HTTPException(409, "Es laeuft bereits ein Update")
-    async with _update_lock:
-        loop = asyncio.get_event_loop()
-        gh = await loop.run_in_executor(None, _fetch_github_state)
-        ref, desc = _resolve_target(gh, target, tag)
+    loop = asyncio.get_event_loop()
+    gh = await loop.run_in_executor(None, _fetch_github_state)
+    ref, desc = _resolve_target(gh, target, tag)
 
-        zp = await loop.run_in_executor(None, _download_release, ref, gh["owner"], gh["repo"])
+    await loop.run_in_executor(None, _apply_zip, ref, gh["owner"], gh["repo"])
 
-        # Angewendeten Stand merken (Basis für den Commit-Kanal und gegen Schleifen).
-        # Landet in der DB, die der Updater mitnimmt.
-        db.set_setting("server_current_commit", ref)
-        db.set_setting("server_last_update_target", ref)
-        db.add_audit_entry(username, "server.update_applied", details=desc)
-        print(f"[update] {desc} geladen - Updater uebernimmt gleich (Backend wird beendet).")
-        _schedule_handover(zp, ref, desc, username)
-        return {"ok": True, "applied": desc, "ref": ref,
-                "restart": "Backend wird beendet, aktualisiert und neu gestartet"}
-
-
-def finish_after_start() -> None:
-    """Beim Start des Backends aufrufen: Ergebnis des letzten Updates
-    auswerten (Audit-Log) und alte Update-Ordner aufraeumen."""
-    try:
-        res = updater.read_result(_PROJECT_ROOT)
-    except Exception:
-        res = {}
-    st = res.get("status")
-    try:
-        if st == "applied":
-            res["status"] = "ok"
-            res["confirmed"] = time.time()
-            updater.write_result(_PROJECT_ROOT, res)
-            db.add_audit_entry(res.get("user") or "system", "server.update_completed",
-                               details=res.get("desc") or res.get("ref") or "")
-            print(f"[update] Update erfolgreich abgeschlossen: {res.get('desc')}")
-        elif st == "rolled_back" and not res.get("reported"):
-            res["reported"] = True
-            updater.write_result(_PROJECT_ROOT, res)
-            db.add_audit_entry(res.get("user") or "system", "server.update_rolled_back",
-                               details=f"{res.get('desc')}: {res.get('error')}"[:500])
-            print(f"[update] Letztes Update wurde zurueckgerollt: {res.get('error')}")
-    except Exception as e:
-        print(f"[update] Update-Ergebnis nicht auswertbar: {e}")
-    try:
-        updater.prune_old_jobs(_PROJECT_ROOT)
-    except Exception:
-        pass
+    # Angewendeten Stand merken (Basis für den Commit-Kanal und gegen Schleifen).
+    db.set_setting("server_current_commit", ref)
+    db.set_setting("server_last_update_target", ref)
+    db.add_audit_entry(username, "server.update_applied", details=desc)
+    print(f"[update] {desc} eingespielt - Neustart folgt.")
+    _schedule_restart()
+    return {"ok": True, "applied": desc, "ref": ref,
+            "restart": "Backend startet in wenigen Sekunden neu"}
 
 
 # ------------------------------------------------------------------
@@ -305,32 +265,8 @@ async def update_info(user: dict = Depends(get_current_user)):
         "current_version": _current_version(),
         "current_commit": db.get_setting("server_current_commit", "") or "",
         "repo_url": _read_repo_url(),
-        "last_update": _last_update_summary(),
         **gh,
     }
-
-
-def _last_update_summary() -> dict:
-    r = updater.read_result(_PROJECT_ROOT)
-    if not r:
-        return {}
-    return {k: r.get(k) for k in ("status", "desc", "ref", "error", "phase", "started",
-                                    "finished", "mode", "legacy", "job")}
-
-
-@router.get("/status")
-def update_status(user: dict = Depends(get_current_user)):
-    """Ergebnis + Protokoll-Ende des letzten Updates (fuer die Einstellungen)."""
-    require_perm(user, "admin_settings")
-    r = updater.read_result(_PROJECT_ROOT)
-    tail = ""
-    try:
-        lp = Path(r.get("log") or "")
-        if lp.is_file():
-            tail = "".join(lp.read_text(encoding="utf-8", errors="replace").splitlines(True)[-60:])
-    except Exception:
-        pass
-    return {**_last_update_summary(), "log_tail": tail}
 
 
 @router.put("/repo")
