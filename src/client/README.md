@@ -23,9 +23,45 @@ Server-Adresse gleich ein – man muss sich nur noch anmelden.
 | Relay als Laufwerk | Netzlaufwerk (`net use`, WebDAV) | Dateimanager (`gio mount`) | – (Android erlaubt das nicht; Explorer im Dashboard) |
 | Remote-Shell im eigenen Fenster | ✅ | ✅ | im App-Fenster |
 | Fernbild per Remotedesktop / VNC | mstsc / VNC-Viewer | FreeRDP/Remmina / vncviewer | „Remote Desktop“ / bVNC |
+| Fernbild-Ziel wählbar (Gateway, lokale IP, letzte, eigene + Port) | ✅ | ✅ | ✅ |
 | Autostart | ✅ | ✅ | – |
 | Gerät abmelden (Profil → Meine Geräte) | sofort | sofort | sofort |
 | WireGuard-VPN | später | später | später |
+
+## Updates
+- **Automatisch:** Nach dem Anmelden prüft die App, ob auf dem Server eine neuere Version liegt, und installiert sie
+  (Häkchen „Automatisch aktualisieren“, Standard an). Android fragt nach und lädt die neue APK über den Browser.
+- **Von Hand:** Knopf „Nach Updates suchen“ (Android: Menü).
+- Die App erkennt ihre Installationsart selbst: einzelne `.exe` (Austausch + Neustart), `.msi` unter „Programme“
+  (stilles MSI-Update), `.deb` (Admin-Abfrage per `pkexec`), `.tar.gz` (Dateien ersetzen, ohne Admin).
+  Installierte Pakete enthalten dafür die Datei `.rapalle-install`; ein Start aus dem Quellcode bekommt **keine** Auto-Updates.
+
+## Pakete auf dem Server neu bauen
+*Module → Client-App → Einstellungen → „Client-Pakete neu bauen“* baut alles direkt aus `src/client` neu und legt die Pakete
+nach `backend/storage/client/` (Vorrang vor den mitgelieferten, übersteht Server-Updates). Vorher wählst du:
+**Version beibehalten** (alte Pakete werden ersetzt – installierte Apps aktualisieren sich dann nicht) oder **neue Version**
+(installierte Apps holen sich das Update automatisch). Gebaut wird, wofür Werkzeuge da sind: `.deb/.tar` immer,
+`.exe/.msi/.zip` mit Wine + Windows-Python, `.apk` mit den Android-Werkzeugen. Live-Log und „Stopp“ inklusive.
+
+## Kontrollfenster
+- Jede länger laufende Aktion zeigt unten eine Ladeleiste mit **„■ Stopp“** (bricht Befehle/Downloads ab).
+- **„Fenster schließen, wenn Dashboard aufgeht“:** schließt das Kontrollfenster 4 s nach dem Öffnen des Dashboards –
+  mit Knopf „Offen lassen“.
+
+## Fernbild: wohin verbinden?
+Nach der Gerätewahl fragt die App, wohin verbunden wird – vorgewählt ist die gespeicherte Voreinstellung,
+sonst die **lokale IP des Geräts**:
+
+| Ziel | Port |
+|---|---|
+| **RMM-Gateway** – der Server leitet weiter, erreichbar nur von deiner IP (braucht Modul „Netzwerk“ + laufenden Agenten) | automatisch |
+| **Lokale IP des Geräts** – wie vom Agenten gemeldet (gleiches Netz / VPN ins Firmennetz) | Standard (3389 / 5900) oder eigener |
+| **Letzte Verbindung** – genau wie beim letzten Mal | wie beim letzten Mal |
+| **Eigene Adresse** – IP oder Name (VPN, Portfreigabe, DNS) | Standard oder eigener |
+
+„Als Standard für dieses Gerät merken“ speichert die Wahl **pro Benutzer und Zielgerät** (und getrennt für RDP/VNC) auf
+dem Server – sie gilt damit auf allen Geräten, auf denen du die App nutzt. Für direkte Verbindungen muss der Agent nicht
+online sein, deshalb zeigt die Auswahl beim Fernbild auch Offline-Geräte.
 
 ## Aufbau
 

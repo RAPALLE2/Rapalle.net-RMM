@@ -120,6 +120,17 @@ class Api:
     def screen(self, client_id: str, protocol: str) -> dict:
         return self.request("POST", "/api/client/screen", {"client_id": client_id, "protocol": protocol})
 
+    def target_info(self, client_id: str, protocol: str) -> dict:
+        """Fernbild-Ziel: lokale IP, Voreinstellung, letzte Verbindung (pro Benutzer + Geraet)."""
+        return self.request("GET", f"/api/client/targets/{urllib.parse.quote(client_id)}?protocol={protocol}")
+
+    def connect(self, client_id: str, protocol: str, host_mode: str, host: str = "", port_mode: str = "standard",
+                port: int | None = None, remember: bool = False) -> dict:
+        """-> {host, port, ...}. Nur bei host_mode "gateway" legt der Server eine Weiterleitung an."""
+        return self.request("POST", "/api/client/connect", {
+            "client_id": client_id, "protocol": protocol, "host_mode": host_mode, "host": host,
+            "port_mode": port_mode, "port": port, "remember": remember})
+
     def dashboard_url(self, solo: str | None = None, client_id: str | None = None) -> str:
         """Dashboard-Adresse mit uebergebener Sitzung (#client-token=...)."""
         q = ""

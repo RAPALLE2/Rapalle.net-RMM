@@ -35,7 +35,8 @@ export function renderPermissions(body, win) {
   let subjectKind = "user";      // "user" | "group"
   let subjects = { user: [], group: [] };
   let realms = [];               // AD/LDAP-Realms (für AD-Gruppen-Import)
-  let catalog = { labels: {}, general: [], client: [], implies: {}, default_client_scope: "*" };
+  let catalog = { labels: {}, general: [], client: [], implies: {}, default_client_scope: "*",
+                  default_pve_scope: "pve:*", pve: [], pve_clients: [] };
   let selected = null;           // {type, id, name}
   let activeTab = "general";     // "general" | "clients"
   let clientSearch = "";
@@ -424,7 +425,18 @@ export function renderPermissions(body, win) {
       !q || `${c.hostname} ${c.ip || ""}`.toLowerCase().includes(q));
 
     const DEF = catalog.default_client_scope || "*";
-    const defRows = (catalog.client || []).map((p) => `
+    // Proxmox-Rechte (Modul "proxmox") nur dort zeigen, wo sie wirken:
+    // im Block "Standard-Proxmox" und bei Agenten MIT verbundenem Proxmox.
+    const PVE = new Set(catalog.pve || []);
+    const PVE_SCOPE = catalog.default_pve_scope || "pve:*";
+    const pveClients = new Set(catalog.pve_clients || []);
+    const permsFor = (cid) => (catalog.client || []).filter((p) => !PVE.has(p) || (cid && pveClients.has(cid)));
+    const pveRows = [...PVE].map((p) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:3px 0">
+        <div style="flex:1;font-size:12px;color:var(--text)">${esc(catalog.labels[p] || p)}</div>
+        ${triState(PVE_SCOPE, p)}
+      </div>`).join("");
+    const defRows = permsFor(null).map((p) => `
       <div style="display:flex;align-items:center;gap:10px;padding:3px 0">
         <div style="flex:1;font-size:12px;color:var(--text)">${esc(catalog.labels[p] || p)}</div>
         ${triState(DEF, p)}
@@ -446,6 +458,18 @@ export function renderPermissions(body, win) {
           </p>
           <div>${defRows}</div>
         </details>
+
+        ${PVE.size ? `<details class="panel" style="margin-bottom:12px;padding:8px 12px;border-color:var(--accent)">
+          <summary style="cursor:pointer;font-size:13px;font-weight:700;list-style:none">
+            🖧 Standard-Proxmox <span style="color:var(--subtext);font-weight:400;font-size:11px">
+              — alle Agenten mit verbundenem Proxmox (${pveClients.size})</span>
+          </summary>
+          <p style="color:var(--subtext);font-size:12px;margin:6px 0 8px">
+            Gilt für jeden Agenten, für den eine Proxmox-Verbindung eingerichtet ist. „Verbieten“ beim einzelnen
+            Agenten sticht. Einzelne VMs/LXCs gibst du im Proxmox-Dashboard unter „Freigaben“ frei.
+          </p>
+          <div>${pveRows}</div>
+        </details>` : ""}
 
         <div style="font-size:12.5px;font-weight:600;margin:0 0 6px">${t("pm_single_clients")}</div>
         <input type="text" id="pm-client-search" placeholder="${t("pm_search_client")}" value="${esc(clientSearch)}"
@@ -470,7 +494,7 @@ export function renderPermissions(body, win) {
         return;
       }
       listEl.innerHTML = list.map((c) => {
-        const rows = catalog.client.map((p) => `
+        const rows = permsFor(c.id).map((p) => `
           <div style="display:flex;align-items:center;gap:10px;padding:3px 0">
             <div style="flex:1;font-size:12px;color:var(--text)">${esc(catalog.labels[p] || p)}</div>
             ${triState(c.id, p)}
@@ -479,6 +503,7 @@ export function renderPermissions(body, win) {
           <summary style="cursor:pointer;font-size:13px;font-weight:600;list-style:none">
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.online ? "var(--online)" : "var(--subtext)"};margin-right:6px"></span>
             ${esc(c.hostname)} <span style="color:var(--subtext);font-weight:400;font-size:11px">${esc(c.ip || "")}</span>
+            ${pveClients.has(c.id) ? `<span style="font-size:10.5px;color:var(--accent);margin-left:6px">🖧 Proxmox</span>` : ""}
           </summary>
           <div style="margin-top:8px">${rows}</div>
         </details>`;

@@ -62,6 +62,23 @@ export function registerModuleApi(mid, obj) { apis.set(mid, obj); }
 /** Funktionen eines aktiven Moduls holen - null, wenn das Modul aus ist. */
 export function getModuleApi(mid) { return mods.has(mid) ? (apis.get(mid) || null) : null; }
 
+// ---------------------------------------------------------------- Knöpfe im Agent-Panel
+// Module können eigene Knöpfe im Aktionen-Bereich eines Agenten anbieten:
+//   registerClientAction("proxmox", { label(client) -> "🖧 Proxmox" | null, onClick(client) })
+// label() gibt null zurück, wenn der Knopf für diesen Agenten nicht erscheinen soll
+// (z.B. fehlendes Recht). Ist das Modul aus, erscheinen seine Knöpfe nicht.
+const clientActions = new Map();
+export function registerClientAction(mid, action) {
+  const list = clientActions.get(mid) || [];
+  list.push(action);
+  clientActions.set(mid, list);
+}
+export function getClientActions() {
+  const out = [];
+  for (const [mid, list] of clientActions) if (mods.has(mid)) list.forEach((a) => out.push({ mid, ...a }));
+  return out;
+}
+
 // ---------------------------------------------------------------- Abstuerze
 export async function reportModuleCrash(mid, where, err, fatal = true) {
   try {

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "proxmox",
+  "name": "Proxmox VE",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "proxmox",
+      "label": "Proxmox",
+      "icon": "🖧",
+      "title": "Proxmox",
+      "entry": "dashboard.js",
+      "export": "renderProxmox",
+      "w": 1000,
+      "h": 680
+    },
+    {
+      "id": "proxmox-console",
+      "label": "Proxmox-Konsole",
+      "icon": "🖥",
+      "title": "Proxmox-Konsole",
+      "entry": "console.js",
+      "export": "renderConsole",
+      "w": 1024,
+      "h": 700,
+      "startmenu": false
+    }
+  ],
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  }
+}

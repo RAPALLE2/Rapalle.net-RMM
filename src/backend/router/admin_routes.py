@@ -197,6 +197,19 @@ PERM_LABELS = {
     "c_vpn_unlimited": "VPN-Tunnel ohne Ablaufzeit",
     "c_portforward": "Port-Weiterleitung auf diesen Client einrichten",
     "manage_nodes": "Node verwalten (installieren, Docker, Node-Module)",
+    "pve_access": "Proxmox: Dashboard sehen",
+    "pve_vms_all": "Proxmox: alle VMs",
+    "pve_lxc_all": "Proxmox: alle LXC-Container",
+    "pve_power": "Proxmox: Gäste starten/stoppen",
+    "pve_console": "Proxmox: Konsole öffnen",
+    "pve_snapshot": "Proxmox: Snapshots",
+    "pve_backup": "Proxmox: Backups",
+    "pve_config": "Proxmox: Konfiguration ändern",
+    "pve_storage": "Proxmox: Storage",
+    "pve_users": "Proxmox: Benutzer & Rechte",
+    "pve_nodes": "Proxmox: Nodes & Aufgaben",
+    "pve_api": "Proxmox: beliebige API-Aufrufe (API-Explorer)",
+    "pve_manage": "Proxmox: Verbindung & Gast-Freigaben verwalten",
     "c_notes_view": "Notizen sehen",
     "c_notes_edit": "Notizen bearbeiten",
     "c_websites_view": "Websites sehen",
@@ -209,6 +222,14 @@ PERM_LABELS = {
     "use_taskmanager": "Task-Manager (alt)",
     "manage_users": "Benutzer verwalten (alt)",
 }
+
+
+def _pve_clients() -> list[str]:
+    try:
+        from app import modules
+        return modules.use("proxmox", "pve_store").connected_ids() if modules.is_enabled("proxmox") else []
+    except Exception:
+        return []
 
 
 @router.get("/permission-catalog")
@@ -224,6 +245,10 @@ def permission_catalog(user: dict = Depends(get_current_user)):
         "implies": db.perm_implies_map(),
         # Pseudo-Client-Scope, dessen Client-Rechte für JEDEN Client gelten.
         "default_client_scope": db.DEFAULT_CLIENT_SCOPE,
+        # Modul "proxmox": Bereich "Standard-Proxmox" + Agenten mit verbundenem Proxmox
+        "default_pve_scope": db.DEFAULT_PVE_SCOPE,
+        "pve": [p for p in db.CLIENT_PERM_KEYS if p.startswith("pve_")],
+        "pve_clients": _pve_clients(),
     }
 
 

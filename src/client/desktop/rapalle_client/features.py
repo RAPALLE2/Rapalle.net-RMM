@@ -76,11 +76,37 @@ def free_drive_letter(used: set[str] | None = None) -> str:
     raise FeatureError("Kein freier Laufwerksbuchstabe")
 
 
+_current: subprocess.Popen | None = None      # laufender Befehl (fuer den Stopp-Knopf)
+
+
+def cancel_current() -> None:
+    """Laufenden Befehl abbrechen (Stopp-Knopf im Kontrollfenster)."""
+    p = _current
+    if p is not None and p.poll() is None:
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+
 def _run(cmd: list[str], input_text: str | None = None, timeout: int = 60) -> subprocess.CompletedProcess:
+    global _current
     kw = {}
     if os.name == "nt":
         kw["creationflags"] = 0x08000000   # CREATE_NO_WINDOW
-    return subprocess.run(cmd, input=input_text, capture_output=True, text=True, timeout=timeout, **kw)
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE if input_text is not None else None, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, **kw)
+    _current = p
+    try:
+        out, err = p.communicate(input=input_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        out, err = p.communicate()
+    finally:
+        _current = None
+    if p.returncode is not None and p.returncode < 0:
+        raise FeatureError("Abgebrochen")
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def mount_relay(server: str, username: str, token: str, store) -> str:

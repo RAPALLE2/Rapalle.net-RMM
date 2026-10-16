@@ -14,7 +14,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from . import __version__, autostart, browser, features
+from . import __version__, autostart, browser, features, updater
 from .api import Api, ApiError, default_device_name
 from .store import Store, default_data_dir
 
@@ -39,8 +39,8 @@ class ClientApp:
         self.api: Api | None = None
         self.root = tk.Tk()
         self.root.title("RAPALLE.net RMM")
-        self.root.geometry("440x600")
-        self.root.minsize(400, 520)
+        self.root.geometry("440x740")
+        self.root.minsize(400, 560)
         self.root.configure(bg=BG)
         self._icon()
         self._style()
@@ -49,6 +49,15 @@ class ClientApp:
             self.root.bind_class(cls, "<Control-a>", self._select_all)
             self.root.bind_class(cls, "<Control-A>", self._select_all)
         self.frame = None
+        # Ladeleiste unten: "⏳ … [■ Stopp]" waehrend laengerer Aktionen
+        self.busy_bar = tk.Frame(self.root, bg=PANEL)
+        # Knopf ZUERST packen, damit er bei langem Text nie aus dem Fenster rutscht
+        self.busy_btn = ttk.Button(self.busy_bar, text="■ Stopp", style="Danger.TButton")
+        self.busy_btn.pack(side="right", padx=8, pady=4)
+        self.busy_label = tk.Label(self.busy_bar, text="", bg=PANEL, fg=FG, anchor="w", font=("Segoe UI", 9),
+                                   width=1, wraplength=300, justify="left")
+        self.busy_label.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=6)
+        self._busy_token = None
         if minimized:
             self.root.iconify()
         self.show_busy("Verbinde …")
@@ -80,6 +89,8 @@ class ClientApp:
         st.map("TCombobox", fieldbackground=[("readonly", PANEL)], foreground=[("readonly", FG)])
         st.configure("TCheckbutton", background=BG, foreground=FG)
         st.map("TCheckbutton", background=[("active", BG)])
+        st.configure("TRadiobutton", background=BG, foreground=FG)
+        st.map("TRadiobutton", background=[("active", BG)], foreground=[("disabled", "#475569")])
         st.configure("TButton", background=PANEL, foreground=FG, bordercolor="#334155", padding=(12, 9), relief="flat")
         st.map("TButton", background=[("active", "#334155"), ("disabled", BG)], foreground=[("disabled", "#475569")])
         st.configure("Accent.TButton", background=ACCENT, foreground="#0c1420", font=("Segoe UI", 10, "bold"))
@@ -99,14 +110,56 @@ class ClientApp:
         self.frame.pack(fill="both", expand=True)
         return self.frame
 
-    def bg(self, fn, done, *args):
-        """fn(*args) im Hintergrund; done(result, error) danach im UI-Thread."""
+    # ------------------------------------------------------------- Ladeleiste + Stopp
+    def bar_show(self, text: str, on_stop, button: str = "■ Stopp"):
+        self.busy_label.config(text=text)
+        self.busy_btn.config(text=button, command=on_stop)
+        if not self.busy_bar.winfo_ismapped():
+            self.busy_bar.pack(side="bottom", fill="x", before=self.frame) if self.frame else self.busy_bar.pack(side="bottom", fill="x")
+
+    def bar_hide(self):
+        self._busy_token = None
+        if self.busy_bar.winfo_ismapped():
+            self.busy_bar.pack_forget()
+
+    def bar_text(self, text: str):
+        if self.busy_bar.winfo_ismapped():
+            self.busy_label.config(text=text)
+
+    def bg(self, fn, done, *args, busy: str | None = None):
+        """fn(*args) im Hintergrund; done(result, error) danach im UI-Thread.
+        busy="Text" zeigt die Ladeleiste mit Stopp-Knopf: Stopp bricht laufende Befehle/Downloads ab,
+        das Ergebnis wird dann verworfen."""
+        token = {"cancelled": False}
+        if busy:
+            def stop():
+                token["cancelled"] = True
+                features.cancel_current()
+                updater.cancel()
+                self.bar_hide()
+                self.info("Abgebrochen.")
+                if getattr(self, "btn_login", None) is not None:
+                    try:
+                        self.btn_login.state(["!disabled"])
+                        self.lbl_status.config(text="Abgebrochen.")
+                    except Exception:
+                        pass
+            self._busy_token = token
+            self.bar_show(f"⏳ {busy}", stop)
+
         def run():
             try:
                 res, err = fn(*args), None
             except Exception as e:      # noqa: BLE001 - Meldung geht an den Benutzer
                 res, err = None, e
-            self.root.after(0, lambda: done(res, err))
+
+            def finish():
+                if token["cancelled"]:
+                    return
+                if busy and self._busy_token is token:
+                    self.bar_hide()
+                done(res, err)
+            self.root.after(0, finish)
         threading.Thread(target=run, daemon=True).start()
 
     def show_busy(self, text):
@@ -127,6 +180,7 @@ class ClientApp:
                 self.show_main()
                 if self.store.get("open_on_start", True):
                     self.open_dashboard()
+                self.root.after(3000, lambda: self.check_update(auto=True))
             elif isinstance(err, ApiError) and err.status == 401:
                 self.store.clear_token()
                 self.show_login(f"Bitte neu anmelden: {err}")
@@ -219,7 +273,8 @@ class ClientApp:
             self.api = api
             self.show_main()
             self.open_dashboard()
-        self.bg(work, done)
+            self.root.after(3000, lambda: self.check_update(auto=True))
+        self.bg(work, done, busy="Melde an …")
 
     # ------------------------------------------------------------- Hauptfenster
     def show_main(self):
@@ -237,8 +292,9 @@ class ClientApp:
         mounted = bool(self.store.get("drive_letter") or self.store.get("linux_mount"))
         self.btn_mount = btn("Relay-Laufwerk trennen" if mounted else "Relay als Laufwerk verbinden", self.toggle_mount)
         btn("Remote-Shell …", lambda: self.choose_client("Remote-Shell", self.open_shell))
-        btn("Fernbild (Remotedesktop) …", lambda: self.choose_client("Fernbild per Remotedesktop", lambda c: self.screen(c, "rdp")))
-        btn("Fernbild (VNC) …", lambda: self.choose_client("Fernbild per VNC", lambda c: self.screen(c, "vnc")))
+        # Fernbild: auch Offline-Agenten anbieten - direkte Verbindung (lokale IP/VPN) braucht keinen Agenten
+        btn("Fernbild (Remotedesktop) …", lambda: self.choose_client("Fernbild per Remotedesktop", lambda c: self.screen(c, "rdp"), online_only=False))
+        btn("Fernbild (VNC) …", lambda: self.choose_client("Fernbild per VNC", lambda c: self.screen(c, "vnc"), online_only=False))
         ttk.Separator(f).pack(fill="x", pady=12)
         self.v_auto = tk.BooleanVar(value=autostart.is_enabled())
         ttk.Checkbutton(f, text="Mit der Anmeldung am Computer starten", variable=self.v_auto,
@@ -246,6 +302,13 @@ class ClientApp:
         self.v_open = tk.BooleanVar(value=bool(self.store.get("open_on_start", True)))
         ttk.Checkbutton(f, text="Dashboard beim Start öffnen", variable=self.v_open,
                         command=lambda: self.store.set(open_on_start=bool(self.v_open.get()))).pack(anchor="w", pady=(4, 0))
+        self.v_close = tk.BooleanVar(value=bool(self.store.get("close_after_dashboard", False)))
+        ttk.Checkbutton(f, text="Fenster schließen, wenn Dashboard aufgeht", variable=self.v_close,
+                        command=lambda: self.store.set(close_after_dashboard=bool(self.v_close.get()))).pack(anchor="w", pady=(4, 0))
+        self.v_auto_upd = tk.BooleanVar(value=bool(self.store.get("auto_update", True)))
+        ttk.Checkbutton(f, text="Automatisch aktualisieren", variable=self.v_auto_upd,
+                        command=lambda: self.store.set(auto_update=bool(self.v_auto_upd.get()))).pack(anchor="w", pady=(4, 0))
+        btn(f"Nach Updates suchen  (Version {__version__})", lambda: self.check_update(auto=False)).pack_configure(pady=(10, 0))
         btn("Dieses Gerät abmelden", self.logout, "Danger.TButton").pack_configure(pady=(14, 0))
         self.lbl_info = ttk.Label(f, text="", style="Sub.TLabel", wraplength=390)
         self.lbl_info.pack(anchor="w", pady=(10, 0))
@@ -255,7 +318,7 @@ class ClientApp:
             self.lbl_info.config(text=text)
 
     # ------------------------------------------------------------- Aktionen
-    def _fresh(self, then):
+    def _fresh(self, then, busy: str = "Verbinde …"):
         """Vor jedem Oeffnen eine frische Sitzung holen (Token laeuft so nie ab)."""
         def done(res, err):
             if err:
@@ -264,26 +327,154 @@ class ClientApp:
                     return self.show_login(f"Abgemeldet: {err}")
                 return messagebox.showerror("RAPALLE.net RMM", str(err))
             then()
-        self.bg(self.api.session, done, self.store.load_token())
+        self.bg(self.api.session, done, self.store.load_token(), busy=busy)
 
     def open_dashboard(self):
-        self._fresh(lambda: self.info("Dashboard geöffnet in " + browser.open_app_window(
-            self.api.dashboard_url(), default_data_dir() / "browser")))
+        def opened():
+            self.info("Dashboard geöffnet in " + browser.open_app_window(self.api.dashboard_url(), default_data_dir() / "browser"))
+            if self.store.get("close_after_dashboard", False):
+                self._auto_close(4)
+        self._fresh(opened, busy="Öffne Dashboard …")
+
+    def _auto_close(self, seconds: int):
+        """Kontrollfenster nach dem Oeffnen des Dashboards schliessen - mit "Offen lassen"."""
+        token = {"keep": False}
+        self._busy_token = token
+
+        def keep():
+            token["keep"] = True
+            self.bar_hide()
+            self.info("Kontrollfenster bleibt offen.")
+
+        def tick(n):
+            if token["keep"] or self._busy_token is not token:
+                return
+            if n <= 0:
+                self.root.destroy()
+                return
+            self.bar_show(f"Dashboard offen – Fenster schließt in {n} s", keep, button="Offen lassen")
+            self.root.after(1000, lambda: tick(n - 1))
+        tick(seconds)
 
     def open_shell(self, client):
         self._fresh(lambda: browser.open_app_window(self.api.dashboard_url("terminal", client["id"]),
-                                                    default_data_dir() / "browser", size=(1000, 640)))
+                                                    default_data_dir() / "browser", size=(1000, 640)), busy="Öffne Remote-Shell …")
 
     def screen(self, client, protocol):
-        def done(fw, err):
+        """Fernbild: erst Ziel/Port waehlen (Gateway, lokale IP, eigene, letzte), dann verbinden."""
+        def got(info, err):
             if err:
                 return messagebox.showerror("Fernbild", str(err))
-            try:
-                msg = features.launch_screen(protocol, fw["host"], int(fw["port"]))
-                self.info(f"{msg}  ({fw['host']}:{fw['port']}, nur von diesem Gerät erreichbar)")
-            except features.FeatureError as e:
-                messagebox.showerror("Fernbild", str(e))
-        self.bg(self.api.screen, done, client["id"], protocol)
+            self.connect_dialog(client, protocol, info)
+        self.bg(self.api.target_info, got, client["id"], protocol, busy="Lade Verbindungsoptionen …")
+
+    def connect_dialog(self, client, protocol, info):
+        name = "Remotedesktop" if protocol == "rdp" else "VNC"
+        std = info["standard_port"]
+        d = info.get("default") or {}
+        last = info.get("last")
+        win = tk.Toplevel(self.root)
+        win.title(f"Fernbild per {name} – {client.get('hostname')}")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.resizable(False, False)
+        f = ttk.Frame(win, padding=16)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text=f"{name}: {client.get('hostname')}", style="Title.TLabel").pack(anchor="w", pady=(0, 8))
+
+        host_mode = tk.StringVar(value=d.get("host_mode") or "local")
+        port_mode = tk.StringVar(value=d.get("port_mode") or "standard")
+        v_host = tk.StringVar(value=d.get("host") or "")
+        v_port = tk.StringVar(value=str(d.get("port") or ""))
+        v_remember = tk.BooleanVar(value=False)
+
+        ttk.Label(f, text="Ziel", style="Sub.TLabel").pack(anchor="w")
+        rb = {}
+        rb["gateway"] = ttk.Radiobutton(f, text="RMM-Gateway (Server leitet weiter, nur von diesem Gerät erreichbar)",
+                                        value="gateway", variable=host_mode)
+        rb["local"] = ttk.Radiobutton(f, text=f"Lokale IP des Geräts: {info.get('local_ip') or 'nicht bekannt'}",
+                                      value="local", variable=host_mode)
+        if last:
+            rb["last"] = ttk.Radiobutton(f, text=f"Letzte Verbindung: {last.get('display', '')}", value="last",
+                                         variable=host_mode)
+        for k in ("gateway", "local", "last"):
+            if k in rb:
+                rb[k].pack(anchor="w", pady=1)
+        if not info.get("gateway_available"):
+            rb["gateway"].state(["disabled"])
+            if host_mode.get() == "gateway":
+                host_mode.set("local")
+        if not info.get("local_ip"):
+            rb["local"].state(["disabled"])
+            if host_mode.get() == "local":
+                host_mode.set("gateway" if info.get("gateway_available") else "custom")
+        row = ttk.Frame(f)
+        row.pack(fill="x", pady=(1, 8))
+        ttk.Radiobutton(row, text="Eigene Adresse:", value="custom", variable=host_mode).pack(side="left")
+        e_host = ttk.Entry(row, textvariable=v_host, width=28)
+        e_host.pack(side="left", padx=(6, 0), fill="x", expand=True)
+        e_host.bind("<FocusIn>", lambda e: host_mode.set("custom"))
+
+        ttk.Label(f, text="Port", style="Sub.TLabel").pack(anchor="w")
+        prow = ttk.Frame(f)
+        prow.pack(fill="x", pady=(1, 8))
+        rp_std = ttk.Radiobutton(prow, text=f"Standard ({std})", value="standard", variable=port_mode)
+        rp_gw = ttk.Radiobutton(prow, text="RMM-Gateway", value="gateway", variable=port_mode)
+        rp_cu = ttk.Radiobutton(prow, text="Eigener:", value="custom", variable=port_mode)
+        e_port = ttk.Entry(prow, textvariable=v_port, width=7)
+        for w in (rp_std, rp_gw, rp_cu):
+            w.pack(side="left", padx=(0, 8))
+        e_port.pack(side="left")
+        e_port.bind("<FocusIn>", lambda e: port_mode.set("custom"))
+        ttk.Checkbutton(f, text="Als Standard für dieses Gerät merken", variable=v_remember).pack(anchor="w", pady=(2, 10))
+        status = ttk.Label(f, text="", style="Sub.TLabel", wraplength=420)
+
+        def sync(*_):
+            hm = host_mode.get()
+            fixed = hm in ("gateway", "last")
+            for w in (rp_std, rp_gw, rp_cu, e_port):
+                w.state(["disabled"] if fixed else ["!disabled"])
+            rp_gw.state(["disabled"])                      # Gateway-Port nur zusammen mit Gateway-Ziel
+            if hm == "gateway":
+                port_mode.set("gateway")
+            elif port_mode.get() == "gateway":
+                port_mode.set("standard")
+            e_host.state(["!disabled"])
+        host_mode.trace_add("write", sync)
+        sync()
+
+        def go():
+            hm, pm = host_mode.get(), port_mode.get()
+            port = None
+            if hm not in ("gateway", "last") and pm == "custom":
+                try:
+                    port = int(v_port.get())
+                    assert 1 <= port <= 65535
+                except (ValueError, AssertionError):
+                    status.config(text="Bitte einen Port zwischen 1 und 65535 eingeben.")
+                    return
+            if hm == "custom" and not v_host.get().strip():
+                status.config(text="Bitte eine Adresse eingeben.")
+                return
+            status.config(text="Verbinde …")
+
+            def done(res, err):
+                if err:
+                    status.config(text=f"Fehler: {err}")
+                    return
+                try:
+                    msg = features.launch_screen(protocol, res["host"], int(res["port"]))
+                    hint = " (nur von diesem Gerät erreichbar)" if res.get("host_mode") == "gateway" else ""
+                    self.info(f"{msg}  {res['host']}:{res['port']}{hint}")
+                    win.destroy()
+                except features.FeatureError as e:
+                    status.config(text=str(e))
+            self.bg(self.api.connect, done, client["id"], protocol, hm, v_host.get().strip(), pm, port,
+                    bool(v_remember.get()), busy="Baue Fernbild-Verbindung auf …")
+
+        ttk.Button(f, text="Verbinden", style="Accent.TButton", command=go).pack(fill="x")
+        status.pack(anchor="w", pady=(8, 0))
+        win.bind("<Return>", lambda e: go())
 
     def toggle_mount(self):
         mounted = bool(self.store.get("drive_letter") or self.store.get("linux_mount"))
@@ -298,8 +489,7 @@ class ClientApp:
             self.info(msg)
             now = bool(self.store.get("drive_letter") or self.store.get("linux_mount"))
             self.btn_mount.config(text="Relay-Laufwerk trennen" if now else "Relay als Laufwerk verbinden")
-        self.info("Bitte warten …")
-        self.bg(fn, done, *args)
+        self.bg(fn, done, *args, busy="Trenne Laufwerk …" if mounted else "Verbinde Relay-Laufwerk …")
 
     def toggle_autostart(self):
         try:
@@ -308,13 +498,14 @@ class ClientApp:
             messagebox.showerror("Autostart", str(e))
             self.v_auto.set(autostart.is_enabled())
 
-    def choose_client(self, title, on_choose):
+    def choose_client(self, title, on_choose, online_only: bool = True):
         def done(clients, err):
             if err:
                 return messagebox.showerror(title, str(err))
-            clients = sorted([c for c in clients if c.get("online")], key=lambda c: (c.get("hostname") or "").lower())
+            clients = sorted([c for c in clients if c.get("online") or not online_only],
+                             key=lambda c: (not c.get("online"), (c.get("hostname") or "").lower()))
             if not clients:
-                return messagebox.showinfo(title, "Kein Gerät online.")
+                return messagebox.showinfo(title, "Kein Gerät online." if online_only else "Keine Geräte sichtbar.")
             win = tk.Toplevel(self.root)
             win.title(f"{title} – Gerät wählen")
             win.configure(bg=BG)
@@ -331,7 +522,8 @@ class ClientApp:
                 lb.delete(0, "end")
                 shown.clear()
                 for c in clients:
-                    label = f"{c.get('hostname') or c['id']}   ({c.get('platform') or '?'})"
+                    label = (f"{'●' if c.get('online') else '○'} {c.get('hostname') or c['id']}   ({c.get('platform') or '?'})"
+                             + ("" if c.get("online") else "  – offline"))
                     if q.get().lower() in label.lower():
                         shown.append(c)
                         lb.insert("end", label)
@@ -349,7 +541,7 @@ class ClientApp:
             lb.bind("<Double-Button-1>", ok)
             win.bind("<Return>", ok)
             ttk.Button(win, text="Öffnen", style="Accent.TButton", command=ok).pack(fill="x", padx=12, pady=12)
-        self.bg(self.api.clients, done)
+        self.bg(self.api.clients, done, busy="Lade Geräteliste …")
 
     def logout(self):
         if not messagebox.askyesno("Abmelden", "Dieses Gerät abmelden? Die gespeicherte Anmeldung wird gelöscht."):
@@ -372,6 +564,47 @@ class ClientApp:
             self.api = None
             self.show_login("Abgemeldet.")
         self.bg(work, done)
+
+    # ------------------------------------------------------------- Updates
+    def check_update(self, auto: bool):
+        if not self.api:
+            return
+        if auto and not self.store.get("auto_update", True):
+            return
+
+        def got(res, err):
+            if err:
+                if not auto:
+                    messagebox.showerror("Update", f"Suche fehlgeschlagen: {err}")
+                return
+            if not res["newer"]:
+                if not auto:
+                    messagebox.showinfo("Update", res["reason"] or f"Die App ist aktuell (Version {res['current']}).")
+                return
+            if auto or messagebox.askyesno("Update", f"Version {res['latest']} ist verfügbar (installiert: {res['current']}).\n"
+                                                     "Jetzt installieren? Die App startet danach neu."):
+                self.install_update(res)
+        self.bg(updater.check, got, self.api, busy=None if auto else "Suche nach Updates …")
+
+    def install_update(self, res):
+        def progress(done, total):
+            self.root.after(0, lambda: self.bar_text(f"⏳ Lade Update {res['latest']} … {done * 100 // total} %"))
+
+        def work():
+            pkg = updater.download(self.api, res["file"], progress)
+            return updater.apply(res["kind"], pkg)
+
+        def done(how, err):
+            if err:
+                if not isinstance(err, updater.Cancelled):
+                    messagebox.showerror("Update", str(err))
+                return
+            self.info(f"Update {res['latest']} wird installiert – die App startet neu …")
+            if how == "exit":
+                self.root.after(500, self.root.destroy)
+            else:
+                self.root.after(500, updater.restart)
+        self.bg(work, done, busy=f"Lade Update {res['latest']} …")
 
     def run(self):
         self.root.mainloop()

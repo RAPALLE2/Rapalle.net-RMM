@@ -12,7 +12,9 @@
   "entry": "module",
   "routers": [
     "client_routes",
-    "dist_routes"
+    "dist_routes",
+    "connect_routes",
+    "build_routes"
   ],
   "hooks": {
     "user_deleted": "on_user_deleted"

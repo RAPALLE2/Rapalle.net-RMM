@@ -14,7 +14,7 @@ import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
-import { isModuleOn } from "./modules.js";   // Optionale Modul-Funktionen (z.B. Guacamole-Knopf)
+import { isModuleOn, getClientActions } from "./modules.js";   // Optionale Modul-Funktionen (Guacamole-Knopf, Modul-Knöpfe)
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker } from "./subjectpicker.js";
 import { api } from "./api.js";
 import { renderDashboard } from "../feature/dashboard.js";
@@ -272,6 +272,17 @@ export function renderActionsPart(target, client) {
     ${hasClientPerm(client.id, "c_screen_view") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}${hasClientPerm(client.id, "c_screen") ? "" : " 👁️"}</button>` : ""}
     ${isModuleOn("guacamole") && hasClientPerm(client.id, "c_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
     ${hasClientPerm(client.id, "c_taskmanager_view") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}`;
+  // Knöpfe aktiver Module (registerClientAction in modules.js), z.B. "🖧 Proxmox"
+  getClientActions().forEach((a, i) => {
+    let label = null;
+    try { label = a.label(client); } catch { label = null; }
+    if (!label) return;
+    const btn = document.createElement("button");
+    btn.className = "action-btn";
+    btn.textContent = label;
+    btn.addEventListener("click", () => { try { a.onClick(client); } catch (e) { window.notify?.(e.message, "error"); } });
+    box.appendChild(btn);
+  });
   holder.appendChild(box);
   target.appendChild(holder);
   box.querySelectorAll("[data-action]").forEach((btn) =>

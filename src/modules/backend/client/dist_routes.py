@@ -76,6 +76,19 @@ def files() -> list[dict]:
         out.append({"name": name, "platform": platform_of(name), "ext": ext_of(name), "kind": KIND.get(ext_of(name), "Datei"),
                     "version": m.group(1) if m else "", "size": f.stat().st_size, "mtime": int(f.stat().st_mtime * 1000),
                     "url": f"/client-dist/files/{name}", "source": "upload" if f.parent == UPLOAD_DIR else "release"})
+    # Je Plattform + Format nur die NEUESTE Version anbieten (gleiche Version: gebaut/hochgeladen vor mitgeliefert)
+    def _vt(x):
+        try:
+            return tuple(int(p) for p in (x["version"] or "0").split("."))
+        except ValueError:
+            return (0,)
+    best: dict[tuple, dict] = {}
+    for x in out:
+        k = (x["platform"], x["ext"])
+        cur = best.get(k)
+        if cur is None or (_vt(x), x["source"] == "upload") > (_vt(cur), cur["source"] == "upload"):
+            best[k] = x
+    out = list(best.values())
     # empfohlenes Format zuerst (z.B. Windows: .exe vor .msi vor .zip)
     pref = {p: list(e) for p, e in PLATFORM_EXT.items()}
     rank = lambda x: pref[x["platform"]].index(x["ext"]) if x["ext"] in pref[x["platform"]] else 99   # noqa: E731

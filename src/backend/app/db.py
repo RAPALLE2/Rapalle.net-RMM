@@ -2808,6 +2808,21 @@ CLIENT_ONLY_PERM_KEYS = [
     # Wer es auf mindestens einem Client hat, sieht die Node-Uebersicht
     # (nur mit diesen Clients) und den Katalog der Node-Module.
     "manage_nodes",
+    # Modul "proxmox" (pro Agent mit verbundener Proxmox-Instanz). Zusaetzlicher
+    # Bereich "Standard-Proxmox" (pve:*) = gilt fuer ALLE Agenten mit Proxmox.
+    "pve_access",      # Proxmox-Dashboard sehen
+    "pve_vms_all",     # alle VMs sehen
+    "pve_lxc_all",     # alle LXC-Container sehen
+    "pve_power",       # Gaeste starten/stoppen/neu starten
+    "pve_console",     # Konsole (noVNC / Weboberflaeche)
+    "pve_snapshot",    # Snapshots anlegen/zuruecksetzen/loeschen
+    "pve_backup",      # Backups (vzdump) anlegen/ansehen
+    "pve_config",      # Konfiguration von Gaesten aendern
+    "pve_storage",     # Storage sehen/Inhalte
+    "pve_users",       # Proxmox-Benutzer/Gruppen/ACL
+    "pve_nodes",       # Nodes, Aufgaben, Dienste
+    "pve_api",         # beliebige Proxmox-API-Aufrufe (API-Explorer) - maechtig!
+    "pve_manage",      # Proxmox-Verbindung einrichten + Gast-Freigaben verwalten
     "c_portforward",                # Port-Weiterleitung auf diesen Client
     "c_notes_view", "c_notes_edit",
     "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
@@ -2841,6 +2856,8 @@ PERM_KEYS = GLOBAL_PERM_KEYS + [
 # aus dem Standard-Client.
 # ------------------------------------------------------------------
 DEFAULT_CLIENT_SCOPE = "*"
+# "Standard-Proxmox": Proxmox-Rechte (pve_*) fuer ALLE Agenten mit verbundenem Proxmox
+DEFAULT_PVE_SCOPE = "pve:*"
 
 # Welche Rechte im General-Tab (global) bzw. im Client-Tab angeboten werden.
 GENERAL_PERM_KEYS = list(GLOBAL_PERM_KEYS)

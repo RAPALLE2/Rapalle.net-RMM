@@ -233,6 +233,17 @@ def _aggregate_effect(grants: list[dict], perm: str, scopes: list[str]) -> str |
     return "allow" if found_allow else None
 
 
+def _pve_connected(client_id: str) -> bool:
+    """Hat dieser Agent eine Proxmox-Verbindung? (Modul "proxmox"; schnell, mit Zwischenspeicher)"""
+    try:
+        from app import modules
+        if not modules.is_enabled("proxmox"):
+            return False
+        return bool(modules.use("proxmox", "pve_store").is_connected(client_id))
+    except Exception:
+        return False
+
+
 def _resolve(grants: list[dict], perm: str, client_id: str | None) -> bool:
     # Scopes einer Client-Prüfung:
     #   global                    -> gilt überall
@@ -242,7 +253,11 @@ def _resolve(grants: list[dict], perm: str, client_id: str | None) -> bool:
     # konkreten Client sticht also die Erlaubnis aus dem Standard-Client.
     scopes = ["global"]
     if client_id:
-        scopes += [db.DEFAULT_CLIENT_SCOPE, client_id]
+        scopes += [db.DEFAULT_CLIENT_SCOPE]
+        # "Standard-Proxmox" (pve:*) gilt fuer Proxmox-Rechte eines Agenten MIT verbundenem Proxmox
+        if perm.startswith("pve_") and _pve_connected(client_id):
+            scopes.append(db.DEFAULT_PVE_SCOPE)
+        scopes.append(client_id)
     # 1./3. spezifisches Recht. 'deny' auf 'perm' selbst schlägt alles.
     specific = _aggregate_effect(grants, perm, scopes)
     if specific == "deny":

@@ -24,6 +24,8 @@ Aufruf:
   python3 src/client/build_installers.py                    # alles, was mit den Werkzeugen geht
   python3 src/client/build_installers.py --targets deb,tar,apk
   python3 src/client/build_installers.py --list
+  python3 src/client/build_installers.py --tools            # welche Formate gehen hier? (JSON)
+  python3 src/client/build_installers.py --out DIR --set-version 1.2.1   # Server-Knopf "neu bauen"
 """
 from __future__ import annotations
 
@@ -43,8 +45,31 @@ HERE = Path(__file__).resolve().parent
 DESKTOP = HERE / "desktop"
 ANDROID = HERE / "android"
 RES = HERE / "resources"
-RELEASE = HERE / "release"
+RELEASE = HERE / "release"          # Standard-Ausgabe (mitgelieferte Pakete); mit --out aenderbar
 ALL = ["exe", "msi", "zip", "deb", "tar", "apk"]
+
+
+def set_version(v: str) -> None:
+    """__version__ im Desktop-Client setzen (die Android-App uebernimmt sie beim Bauen)."""
+    import re as _re
+    if not _re.fullmatch(r"\d+\.\d+\.\d+", v):
+        raise SystemExit(f"Ungueltige Version: {v} (Format 1.2.3)")
+    p = DESKTOP / "rapalle_client" / "__init__.py"
+    s = p.read_text(encoding="utf-8")
+    s = _re.sub(r'__version__\s*=\s*"[^"]*"', f'__version__ = "{v}"', s)
+    p.write_text(s, encoding="utf-8")
+
+
+def tools() -> dict:
+    """Welche Formate lassen sich auf DIESEM System bauen?"""
+    winpy = os.environ.get("RMM_WINPYTHON") or "/opt/winpy/python/python.exe"
+    wine = shutil.which("wine64") or shutil.which("wine") or ("/usr/lib/wine/wine64" if Path("/usr/lib/wine/wine64").exists() else None)
+    exe_ok = os.name == "nt" or bool(wine and Path(winpy).exists())
+    apk_tools = all(shutil.which(t) for t in ("aapt", "javac", "dalvik-exchange", "zipalign", "apksigner"))
+    apk_ok = apk_tools and Path("/usr/lib/android-sdk/platforms/android-23/android.jar").exists() \
+        and (ANDROID / "signing" / "release.jks").exists()
+    return {"exe": exe_ok, "zip": exe_ok, "msi": exe_ok and (os.name == "nt" or bool(shutil.which("wixl"))),
+            "deb": True, "tar": True, "apk": apk_ok}
 
 
 def version() -> str:
@@ -234,6 +259,7 @@ def build_tar(v: str) -> list[Path]:
         with tarfile.open(out, mode) as tf:
             for src, rel in desktop_files():
                 _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("rapalle-client.py") else 0o644)
+            _tar_add(tf, f"{base}/app/.rapalle-install", b"tar\n")              # Auto-Update: Installationsart
             _tar_add(tf, f"{base}/install.sh", TAR_INSTALL.encode(), 0o755)
             _tar_add(tf, f"{base}/rapalle-client.desktop", DESKTOP_ENTRY.encode())
             _tar_add(tf, f"{base}/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes())
@@ -251,6 +277,7 @@ def build_deb(v: str) -> Path:
             b = src.read_bytes()
             size += len(b)
             _tar_add(tf, f"./opt/rapalle-client/{rel}", b, 0o755 if rel.endswith("rapalle-client.py") else 0o644)
+        _tar_add(tf, "./opt/rapalle-client/.rapalle-install", b"deb\n")      # Auto-Update: Installationsart
         _tar_add(tf, "./usr/bin/rapalle-client", LINUX_LAUNCHER.encode(), 0o755)
         _tar_add(tf, "./usr/share/applications/rapalle-client.desktop", DESKTOP_ENTRY.encode())
         _tar_add(tf, "./usr/share/icons/hicolor/256x256/apps/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes())
@@ -329,17 +356,42 @@ def main():
     ap.add_argument("--winpython", help="Windows-python.exe (unter Wine) mit PyInstaller")
     ap.add_argument("--list", action="store_true", help="vorhandene Pakete anzeigen")
     ap.add_argument("--keep-old", action="store_true", help="aeltere Versionen in release/ nicht loeschen")
+    ap.add_argument("--out", help="Ausgabeordner statt src/client/release")
+    ap.add_argument("--set-version", help="Version vorher setzen (z. B. 1.2.1)")
+    ap.add_argument("--tools", action="store_true", help="verfuegbare Formate als JSON ausgeben")
+    ap.add_argument("--available", action="store_true", help="nur Formate bauen, fuer die Werkzeuge da sind")
     a = ap.parse_args()
-    RELEASE.mkdir(exist_ok=True)
+    global RELEASE
+    if a.tools:
+        import json as _json
+        print(_json.dumps({"tools": tools(), "version": version()}))
+        return
+    if a.out:
+        RELEASE = Path(a.out).resolve()
+    if a.set_version:
+        set_version(a.set_version)
+    RELEASE.mkdir(parents=True, exist_ok=True)
     if a.list:
         for p in sorted(RELEASE.iterdir()):
             print(f"{p.stat().st_size:>12,}  {p.name}")
         return
     v = version()
     targets = [t.strip() for t in a.targets.split(",") if t.strip()]
+    if a.available:
+        av = tools()
+        skipped = [t for t in targets if not av.get(t)]
+        targets = [t for t in targets if av.get(t)]
+        if skipped:
+            print(f"Übersprungen (Werkzeuge fehlen hier): {', '.join(skipped)}")
     if not a.keep_old:
+        # Alte Versionen nur fuer die Formate entfernen, die jetzt neu gebaut werden
+        exts = {"exe": "-windows.exe", "zip": "-windows.zip", "msi": "-windows.msi", "deb": "_all.deb",
+                "tar": "-linux.tar", "apk": "-android.apk"}
         for p in RELEASE.iterdir():
-            if p.is_file() and v not in p.name:
+            if not p.is_file() or v in p.name:
+                continue
+            if any(t in targets and (p.name.endswith(sfx) or (t == "tar" and p.name.endswith("-linux.tar.gz")))
+                   for t, sfx in exts.items()):
                 p.unlink()
     print(f"RAPALLE.net RMM Client {v} -> {RELEASE}")
     ok, failed, exe = [], [], RELEASE / f"RapalleClient-{v}-windows.exe"

@@ -157,6 +157,8 @@ export async function renderSettings(root) {
     <div style="display:flex;gap:8px;margin-bottom:8px"><button class="btn-primary btn-sm" data-up>⬆ Installer hochladen</button>
       <input type="file" data-file accept=".exe,.msi,.msix,.deb,.rpm,.AppImage,.appimage,.apk,.aab,.flatpak" multiple hidden></div>
     <div data-inst></div>
+    <h3>Pakete neu bauen</h3>
+    <div data-build style="color:var(--subtext)">Lade …</div>
     <h3>Alle Geräte</h3>
     <div data-all style="color:var(--subtext)">Lade …</div>
   </div>`;
@@ -188,9 +190,99 @@ export async function renderSettings(root) {
     fi.value = ""; drawInst();
   });
   drawInst();
+  drawBuild(root.querySelector("[data-build]"), drawInst);
   const all = root.querySelector("[data-all]");
   try {
     const r = await creq("/admin/devices");
     drawDevices(all, r.devices, () => renderSettings(root));
   } catch (e) { all.textContent = e.message.includes("manage_users") ? "Nur mit dem Recht „Benutzer verwalten“." : e.message; }
+}
+
+// ------------------------------------------------------------------ Pakete neu bauen
+const FMT = { exe: "Windows .exe", zip: "Windows .zip", msi: "Windows .msi", deb: "Linux .deb", tar: "Linux .tar/.tar.gz", apk: "Android .apk" };
+let buildTimer = null;
+
+async function drawBuild(box, onDone) {
+  let b;
+  try { b = await creq("/build"); } catch (e) { box.textContent = e.message; return; }
+  if (!b.available) { box.innerHTML = `<div>Der Client-Quellcode (<code>src/client</code>) fehlt auf diesem Server.</div>`; return; }
+  if (b.running) return drawRunning(box, onDone);
+  const t = b.tools || {};
+  box.innerHTML = `
+    <p style="margin:0 0 8px">Baut die Client-Pakete direkt aus dem Quellcode neu (<code>src/client</code>) und legt sie in
+      <code>backend/storage/client/</code> ab – Benutzer bekommen sie sofort unter Profil → „Client-App &amp; Geräte“,
+      die Apps per Auto-Update. Aktuelle Version im Quellcode: <b>${esc(b.version || "?")}</b>.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+      ${Object.entries(FMT).map(([k, l]) => `<span style="font-size:12px;padding:3px 8px;border-radius:12px;border:1px solid var(--border);
+        color:${t[k] ? "var(--accent)" : "var(--subtext)"}">${t[k] ? "✔" : "✖"} ${l}</span>`).join("")}
+    </div>
+    ${Object.values(t).some((v) => !v) ? `<p style="font-size:12px;margin:0 0 8px">✖ = auf diesem Server fehlen die Werkzeuge
+      (Windows: Wine + Windows-Python mit PyInstaller, Android: aapt/javac/dx/apksigner) – dafür bleiben die vorhandenen Pakete gültig.
+      Siehe <code>src/client/README.md</code>.</p>` : ""}
+    ${b.result ? `<p style="font-size:12px;margin:0 0 8px">Letzter Bau (${esc(b.by || "")}, ${b.finished ? new Date(b.finished * 1000).toLocaleString() : ""}):
+      ${b.result.stopped ? "abgebrochen" : b.result.ok ? "erfolgreich" : "fehlgeschlagen"} – ${b.result.built.length} Paket(e)
+      ${b.result.failed.length ? `, Fehler: ${esc(b.result.failed.join("; "))}` : ""}</p>` : ""}
+    <button class="btn-primary btn-sm" data-go>🔨 Client-Pakete neu bauen</button>`;
+  box.querySelector("[data-go]").addEventListener("click", () => askVersion(box, b, onDone));
+}
+
+function askVersion(box, b, onDone) {
+  const ov = document.createElement("div");
+  ov.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px";
+  ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;width:460px;max-width:100%;font-size:13px">
+      <b style="font-size:15px">Client-Pakete neu bauen</b>
+      <p style="color:var(--subtext);margin:6px 0 12px">Welche Version sollen die neuen Pakete bekommen?</p>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;cursor:pointer">
+        <input type="radio" name="bv" value="replace" checked style="width:16px;height:16px;appearance:auto;margin-top:2px">
+        <span><b>Version ${esc(b.version)} beibehalten</b><br><span style="color:var(--subtext)">Die vorhandenen ${esc(b.version)}-Pakete
+          werden ersetzt. Bereits installierte Apps aktualisieren sich NICHT automatisch (gleiche Versionsnummer).</span></span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px;cursor:pointer">
+        <input type="radio" name="bv" value="new" style="width:16px;height:16px;appearance:auto;margin-top:2px">
+        <span><b>Neue Version</b> <input data-ver value="${esc(b.suggested)}" style="width:90px;height:24px;margin-left:4px"><br>
+          <span style="color:var(--subtext)">Ältere Pakete werden entfernt; installierte Apps holen sich das Update automatisch.</span></span></label>
+      <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" data-x>Abbrechen</button>
+        <button class="btn-primary" data-ok>Bauen</button></div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector("[data-ver]").addEventListener("focus", () => { ov.querySelector('input[value="new"]').checked = true; });
+  ov.querySelector("[data-x]").addEventListener("click", () => ov.remove());
+  ov.querySelector("[data-ok]").addEventListener("click", async () => {
+    const mode = ov.querySelector('input[name="bv"]:checked').value;
+    try {
+      await creq("/build", { method: "POST", body: JSON.stringify({ mode, version: ov.querySelector("[data-ver]").value.trim() }) });
+      ov.remove();
+      drawRunning(box, onDone);
+    } catch (e) { window.notify?.(e.message, "error"); }
+  });
+}
+
+function drawRunning(box, onDone) {
+  box.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span data-st style="flex:1">⏳ Baue Pakete …</span>
+      <button class="btn btn-sm btn-danger" data-stop>■ Stopp</button></div>
+    <pre data-log style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px;max-height:260px;
+         overflow:auto;font-size:11.5px;margin:0"></pre>`;
+  const log = box.querySelector("[data-log]");
+  box.querySelector("[data-stop]").addEventListener("click", async (e) => {
+    e.currentTarget.disabled = true;
+    try { await creq("/build/stop", { method: "POST" }); } catch (err) { window.notify?.(err.message, "error"); }
+  });
+  clearInterval(buildTimer);
+  const tick = async () => {
+    if (!box.isConnected) { clearInterval(buildTimer); return; }
+    let b;
+    try { b = await creq("/build"); } catch { return; }
+    log.textContent = (b.log || []).join("\n");
+    log.scrollTop = log.scrollHeight;
+    box.querySelector("[data-st]").textContent = `⏳ Baue Version ${b.building_version || ""} …`;
+    if (!b.running) {
+      clearInterval(buildTimer);
+      const r = b.result || {};
+      window.notify?.(r.stopped ? "Bauvorgang abgebrochen" : r.ok ? `${r.built.length} Paket(e) neu gebaut` : "Bauen fehlgeschlagen",
+                      r.ok ? "success" : "error", 6000);
+      onDone?.();
+      drawBuild(box, onDone);
+    }
+  };
+  buildTimer = setInterval(tick, 1500);
+  tick();
 }

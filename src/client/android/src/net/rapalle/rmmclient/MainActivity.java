@@ -29,8 +29,16 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
@@ -183,6 +191,8 @@ public class MainActivity extends Activity {
                     session = r.getString("access_token");
                     sessionAt = System.currentTimeMillis();
                     ui.post(new Runnable() { public void run() {
+                        if (prefs.getBoolean("auto_update", true)
+                                && System.currentTimeMillis() - prefs.getLong("update_checked", 0) > REFRESH_MS) checkUpdate(false);
                         if (thenShowDashboard) showDashboard(null, null);
                         else web.evaluateJavascript("localStorage.setItem('rmm_token'," + JSONObject.quote(session) + ")", null);
                     }});
@@ -256,7 +266,7 @@ public class MainActivity extends Activity {
     }
 
     // ================================================================ Menue
-    static final int M_HOME = 1, M_SHELL = 2, M_RDP = 3, M_VNC = 4, M_RELAY = 5, M_LOGOUT = 6;
+    static final int M_HOME = 1, M_SHELL = 2, M_RDP = 3, M_VNC = 4, M_RELAY = 5, M_LOGOUT = 6, M_UPDATE = 7, M_AUTOUPD = 8;
 
     @Override
     public boolean onCreateOptionsMenu(Menu m) {
@@ -267,7 +277,10 @@ public class MainActivity extends Activity {
         m.add(0, M_RDP, 2, "Fernbild (Remotedesktop) …");
         m.add(0, M_VNC, 3, "Fernbild (VNC) …");
         m.add(0, M_RELAY, 4, "Relay-Zugang");
-        m.add(0, M_LOGOUT, 5, "Dieses Gerät abmelden");
+        m.add(0, M_UPDATE, 5, "Nach Updates suchen (" + VERSION + ")");
+        m.add(0, M_AUTOUPD, 6, "Automatisch nach Updates suchen").setCheckable(true)
+                .setChecked(prefs.getBoolean("auto_update", true));
+        m.add(0, M_LOGOUT, 7, "Dieses Gerät abmelden");
         return true;
     }
 
@@ -278,33 +291,45 @@ public class MainActivity extends Activity {
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
             case M_HOME: showDashboard(null, null); return true;
-            case M_SHELL: chooseClient("Remote-Shell", new OnClient() { public void chosen(JSONObject c) {
+            case M_SHELL: chooseClient("Remote-Shell", true, new OnClient() { public void chosen(JSONObject c) {
                 showDashboard("terminal", c.optString("id")); }}); return true;
-            case M_RDP: chooseClient("Fernbild per Remotedesktop", new OnClient() { public void chosen(JSONObject c) {
+            // Fernbild: auch Offline-Agenten - direkte Verbindung (lokale IP / VPN) braucht keinen Agenten
+            case M_RDP: chooseClient("Fernbild per Remotedesktop", false, new OnClient() { public void chosen(JSONObject c) {
                 screen(c, "rdp"); }}); return true;
-            case M_VNC: chooseClient("Fernbild per VNC", new OnClient() { public void chosen(JSONObject c) {
+            case M_VNC: chooseClient("Fernbild per VNC", false, new OnClient() { public void chosen(JSONObject c) {
                 screen(c, "vnc"); }}); return true;
             case M_RELAY: relayInfo(); return true;
             case M_LOGOUT: logout(); return true;
+            case M_UPDATE: checkUpdate(true); return true;
+            case M_AUTOUPD:
+                boolean on = !prefs.getBoolean("auto_update", true);
+                prefs.edit().putBoolean("auto_update", on).apply();
+                item.setChecked(on);
+                return true;
         }
         return super.onOptionsItemSelected(item);
     }
 
     interface OnClient { void chosen(JSONObject c); }
 
-    void chooseClient(final String title, final OnClient cb) {
+    void chooseClient(final String title, final boolean onlineOnly, final OnClient cb) {
         new Thread(new Runnable() { public void run() {
             try {
                 JSONArray all = new JSONArray(http("GET", "/api/clients", null, true));
                 final List<JSONObject> online = new ArrayList<JSONObject>();
-                for (int i = 0; i < all.length(); i++) if (all.getJSONObject(i).optBoolean("online")) online.add(all.getJSONObject(i));
+                for (int i = 0; i < all.length(); i++)
+                    if (!onlineOnly || all.getJSONObject(i).optBoolean("online")) online.add(all.getJSONObject(i));
                 Collections.sort(online, new Comparator<JSONObject>() { public int compare(JSONObject a, JSONObject b) {
+                    boolean oa = a.optBoolean("online"), ob = b.optBoolean("online");
+                    if (oa != ob) return oa ? -1 : 1;
                     return a.optString("hostname").compareToIgnoreCase(b.optString("hostname")); }});
                 ui.post(new Runnable() { public void run() {
-                    if (online.isEmpty()) { message(title, "Kein Gerät online."); return; }
+                    if (online.isEmpty()) { message(title, onlineOnly ? "Kein Gerät online." : "Keine Geräte sichtbar."); return; }
                     String[] labels = new String[online.size()];
                     for (int i = 0; i < labels.length; i++)
-                        labels[i] = online.get(i).optString("hostname") + "  (" + online.get(i).optString("platform", "?") + ")";
+                        labels[i] = (online.get(i).optBoolean("online") ? "● " : "○ ") + online.get(i).optString("hostname")
+                                + "  (" + online.get(i).optString("platform", "?") + ")"
+                                + (online.get(i).optBoolean("online") ? "" : " – offline");
                     new AlertDialog.Builder(MainActivity.this).setTitle(title + " – Gerät wählen")
                             .setItems(labels, new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                                 cb.chosen(online.get(w)); }})
@@ -316,17 +341,114 @@ public class MainActivity extends Activity {
         }}).start();
     }
 
+    // Fernbild: Ziel + Port waehlen (RMM-Gateway, lokale IP, letzte, eigene), Voreinstellung pro Benutzer+Geraet
     void screen(final JSONObject client, final String protocol) {
+        new Thread(new Runnable() { public void run() {
+            try {
+                final JSONObject info = new JSONObject(http("GET", "/api/client/targets/"
+                        + URLEncoder.encode(client.optString("id"), "UTF-8") + "?protocol=" + protocol, null, true));
+                ui.post(new Runnable() { public void run() { connectDialog(client, protocol, info); }});
+            } catch (final Exception e) {
+                ui.post(new Runnable() { public void run() { message("Fernbild", e.getMessage()); }});
+            }
+        }}).start();
+    }
+
+    int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
+
+    void connectDialog(final JSONObject client, final String protocol, final JSONObject info) {
+        final int std = info.optInt("standard_port", protocol.equals("rdp") ? 3389 : 5900);
+        final JSONObject def = info.optJSONObject("default") == null ? new JSONObject() : info.optJSONObject("default");
+        final JSONObject last = info.optJSONObject("last");
+        final String localIp = info.optString("local_ip", "");
+        final boolean gw = info.optBoolean("gateway_available");
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        TextView h1 = new TextView(this); h1.setText("Ziel"); box.addView(h1);
+        final RadioGroup hosts = new RadioGroup(this);
+        final RadioButton rGw = new RadioButton(this); rGw.setText("RMM-Gateway (nur von diesem Gerät erreichbar)"); rGw.setEnabled(gw);
+        final RadioButton rLocal = new RadioButton(this); rLocal.setText("Lokale IP: " + (localIp.isEmpty() ? "nicht bekannt" : localIp));
+        rLocal.setEnabled(!localIp.isEmpty());
+        final RadioButton rLast = new RadioButton(this);
+        final RadioButton rCustom = new RadioButton(this); rCustom.setText("Eigene Adresse");
+        rGw.setId(1); rLocal.setId(2); rLast.setId(3); rCustom.setId(4);
+        hosts.addView(rGw); hosts.addView(rLocal);
+        if (last != null) { rLast.setText("Letzte Verbindung: " + last.optString("display")); hosts.addView(rLast); }
+        hosts.addView(rCustom);
+        box.addView(hosts);
+        final EditText eHost = new EditText(this);
+        eHost.setHint("z. B. 10.8.0.25 oder pc.firma.lan");
+        eHost.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        eHost.setText(def.optString("host", ""));
+        box.addView(eHost);
+
+        TextView h2 = new TextView(this); h2.setText("Port"); h2.setPadding(0, dp(10), 0, 0); box.addView(h2);
+        final RadioGroup ports = new RadioGroup(this);
+        ports.setOrientation(RadioGroup.HORIZONTAL);
+        final RadioButton pStd = new RadioButton(this); pStd.setText("Standard (" + std + ")"); pStd.setId(11);
+        final RadioButton pGw = new RadioButton(this); pGw.setText("Gateway"); pGw.setId(12); pGw.setEnabled(false);
+        final RadioButton pCu = new RadioButton(this); pCu.setText("Eigener"); pCu.setId(13);
+        ports.addView(pStd); ports.addView(pGw); ports.addView(pCu);
+        box.addView(ports);
+        final EditText ePort = new EditText(this);
+        ePort.setHint("Port"); ePort.setInputType(InputType.TYPE_CLASS_NUMBER);
+        if (def.optInt("port", 0) > 0) ePort.setText(String.valueOf(def.optInt("port")));
+        box.addView(ePort);
+        final CheckBox remember = new CheckBox(this); remember.setText("Als Standard für dieses Gerät merken");
+        box.addView(remember);
+
+        // Vorbelegung: gespeicherte Voreinstellung, sonst lokale IP (bzw. Gateway, wenn keine IP bekannt)
+        String hm = def.optString("host_mode", localIp.isEmpty() ? "gateway" : "local");
+        if (hm.equals("gateway") && !gw) hm = localIp.isEmpty() ? "custom" : "local";
+        if (hm.equals("local") && localIp.isEmpty()) hm = gw ? "gateway" : "custom";
+        hosts.check(hm.equals("gateway") ? 1 : hm.equals("custom") ? 4 : 2);
+        ports.check(def.optString("port_mode", "standard").equals("custom") ? 13 : 11);
+        final Runnable sync = new Runnable() { public void run() {
+            int h = hosts.getCheckedRadioButtonId();
+            boolean fixed = h == 1 || h == 3;
+            if (h == 1) ports.check(12); else if (ports.getCheckedRadioButtonId() == 12) ports.check(11);
+            pStd.setEnabled(!fixed); pCu.setEnabled(!fixed); ePort.setEnabled(!fixed);
+            eHost.setEnabled(h == 4);
+        }};
+        hosts.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            public void onCheckedChanged(RadioGroup g, int id) { sync.run(); }});
+        sync.run();
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this)
+                .setTitle((protocol.equals("rdp") ? "Remotedesktop: " : "VNC: ") + client.optString("hostname"))
+                .setView(sv)
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Verbinden", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+                    int h = hosts.getCheckedRadioButtonId();
+                    String hostMode = h == 1 ? "gateway" : h == 3 ? "last" : h == 4 ? "custom" : "local";
+                    String portMode = ports.getCheckedRadioButtonId() == 13 ? "custom" : "standard";
+                    doConnect(client, protocol, hostMode, eHost.getText().toString().trim(), portMode,
+                              ePort.getText().toString().trim(), remember.isChecked());
+                }})
+                .show();
+    }
+
+    void doConnect(final JSONObject client, final String protocol, final String hostMode, final String host,
+                   final String portMode, final String portText, final boolean remember) {
         new Thread(new Runnable() { public void run() {
             try {
                 JSONObject b = new JSONObject();
                 b.put("client_id", client.optString("id")); b.put("protocol", protocol);
-                final JSONObject fw = new JSONObject(http("POST", "/api/client/screen", b.toString(), true));
+                b.put("host_mode", hostMode); b.put("host", host); b.put("port_mode", portMode);
+                if (portMode.equals("custom")) {
+                    try { b.put("port", Integer.parseInt(portText)); } catch (NumberFormatException e) { b.put("port", 0); }
+                }
+                b.put("remember", remember);
+                final JSONObject fw = new JSONObject(http("POST", "/api/client/connect", b.toString(), true));
                 ui.post(new Runnable() { public void run() {
-                    String host = fw.optString("host"); int port = fw.optInt("port");
+                    String h = fw.optString("host"); int port = fw.optInt("port");
                     String uri = protocol.equals("rdp")
-                            ? "rdp://full%20address=s:" + host + ":" + port
-                            : "vnc://" + host + ":" + port;
+                            ? "rdp://full%20address=s:" + h + ":" + port
+                            : "vnc://" + h + ":" + port;
                     try {
                         Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
                         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -334,11 +456,61 @@ public class MainActivity extends Activity {
                     } catch (ActivityNotFoundException e) {
                         String app = protocol.equals("rdp") ? "„Remote Desktop“ (Microsoft) bzw. „Windows App“" : "„bVNC“";
                         message("Fernbild", "Keine passende App gefunden. Bitte " + app + " aus dem Play Store installieren.\n\n"
-                                + "Verbindung: " + host + ":" + port + " (nur von diesem Gerät erreichbar)");
+                                + "Verbindung: " + h + ":" + port);
                     }
                 }});
             } catch (final Exception e) {
                 ui.post(new Runnable() { public void run() { message("Fernbild", e.getMessage()); }});
+            }
+        }}).start();
+    }
+
+    // ================================================================ Updates
+    static int[] vt(String v) {
+        String[] p = (v == null ? "0" : v).split("\\.");
+        int[] out = new int[3];
+        for (int i = 0; i < 3 && i < p.length; i++) { try { out[i] = Integer.parseInt(p[i].trim()); } catch (Exception e) { out[i] = 0; } }
+        return out;
+    }
+
+    static boolean newer(String a, String b) {          // a > b ?
+        int[] x = vt(a), y = vt(b);
+        for (int i = 0; i < 3; i++) if (x[i] != y[i]) return x[i] > y[i];
+        return false;
+    }
+
+    /** Neueste APK auf dem Server pruefen; bei neuerer Version anbieten (Download ueber den Browser). */
+    void checkUpdate(final boolean manual) {
+        new Thread(new Runnable() { public void run() {
+            try {
+                JSONObject info = new JSONObject(http("GET", "/client-dist/info", null, false));
+                JSONArray files = info.optJSONArray("files");
+                JSONObject best = null;
+                for (int i = 0; files != null && i < files.length(); i++) {
+                    JSONObject f = files.getJSONObject(i);
+                    if (!"android".equals(f.optString("platform")) || !".apk".equals(f.optString("ext"))) continue;
+                    if (best == null || newer(f.optString("version"), best.optString("version"))) best = f;
+                }
+                prefs.edit().putLong("update_checked", System.currentTimeMillis()).apply();
+                final JSONObject apk = best;
+                ui.post(new Runnable() { public void run() {
+                    if (apk == null || !newer(apk.optString("version"), VERSION)) {
+                        if (manual) message("Update", apk == null ? "Auf dem Server liegt keine Android-App."
+                                : "Die App ist aktuell (Version " + VERSION + ").");
+                        return;
+                    }
+                    final String url = prefs.getString("server", "") + apk.optString("url");
+                    new AlertDialog.Builder(MainActivity.this).setTitle("Update verfügbar")
+                            .setMessage("Version " + apk.optString("version") + " ist verfügbar (installiert: " + VERSION + ").\n\n"
+                                    + "Die neue App wird heruntergeladen; danach die Datei öffnen und „Aktualisieren“ wählen.")
+                            .setPositiveButton("Herunterladen", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+                                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+                                catch (Exception e) { message("Update", "Download konnte nicht gestartet werden: " + url); }
+                            }})
+                            .setNegativeButton("Später", null).show();
+                }});
+            } catch (final Exception e) {
+                if (manual) ui.post(new Runnable() { public void run() { message("Update", "Suche fehlgeschlagen: " + e.getMessage()); }});
             }
         }}).start();
     }
