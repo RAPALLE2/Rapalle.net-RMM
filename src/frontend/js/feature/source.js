@@ -692,10 +692,25 @@ async function renderMigrate(host) {
             <span style="color:var(--subtext)">(${t("mg_files", { n: d.branding?.files || 0 })}, ${mb(d.branding?.size || 0)})</span></span>
         </label>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" id="mg-modules" checked />
+          <span>Module – aktivierte Module, Modul-Einstellungen und Modul-Daten
+            <span style="color:var(--subtext)">(${(info.modules?.enabled || []).length} aktiv, ${t("mg_files", { n: d.module_data?.files || 0 })}, ${mb(d.module_data?.size || 0)})</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+          <input type="checkbox" id="mg-storage" checked />
+          <span>Speicher – Spaces, Deployment-Ordner, Client-Pakete
+            <span style="color:var(--subtext)">(${t("mg_files", { n: d.storage?.files || 0 })}, ${mb(d.storage?.size || 0)})</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
           <input type="checkbox" id="mg-secrets" />
           <span>${t("mg_secrets")}
             ${helpDot(t("mg_secrets_help"))}</span>
         </label>
+        <div id="mg-secret-warn" style="font-size:12px;margin-top:6px;padding:6px 8px;border-radius:6px;background:var(--panel-2);border-left:3px solid var(--warn,#f5a524)">
+          Ohne Geheimnisse: Agenten können sich beim neuen Server nicht anmelden (anderer Agent-Token – beim Umzug
+          unten dann den neuen Token angeben), und verschlüsselte Modul-Daten (Proxmox-Zugänge, API-Codes) sind dort nicht lesbar.
+          ${info.sql_external ? "<br><b>Achtung:</b> Das SQL-Modul nutzt eine externe Datenbank – deren Verbindung wandert nur mit den Geheimnissen mit." : ""}
+        </div>
         <div style="font-size:12px;color:var(--subtext);margin-top:6px">
           ${t("mg_est_size")}: <b id="mg-size">${mb(info.total_size)}</b> (${t("mg_before_zip")})
         </div>
@@ -731,7 +746,16 @@ async function renderMigrate(host) {
       </button>
       <div id="mg-import-msg" style="font-size:12px;color:var(--subtext);margin-top:8px;white-space:pre-wrap"></div>
       <input type="file" id="mg-input" accept=".zip" hidden />
+
+      <h3 style="margin:22px 0 4px;font-size:14px">🚚 Agenten zum neuen Server umziehen</h3>
+      <p style="color:var(--subtext);font-size:13px;margin:0 0 8px">
+        Auf dem <b>alten</b> Server ausführen, nachdem die Migration auf dem neuen eingespielt ist. Jeder Agent bekommt die
+        Adresse des neuen Servers, startet neu und meldet sich dort mit derselben Geräte-ID – <b>ohne Agent-Update vorab</b>.
+        Offline-Agenten folgen automatisch, sobald sie wieder online sind (solange dieser Server läuft).
+      </p>
+      <div id="mg-rd" style="border:1px solid var(--border);border-radius:8px;padding:10px">Lade …</div>
     </div>`;
+  drawRedirect(host.querySelector("#mg-rd"));
 
   // --- Export ---------------------------------------------------------
   const opts = () => ({
@@ -739,6 +763,8 @@ async function renderMigrate(host) {
     media: host.querySelector("#mg-media").checked,
     branding: host.querySelector("#mg-brand").checked,
     secrets: host.querySelector("#mg-secrets").checked,
+    modules: host.querySelector("#mg-modules").checked,
+    storage: host.querySelector("#mg-storage").checked,
   });
 
   // Geschätzte Größe an die Auswahl anpassen.
@@ -748,10 +774,14 @@ async function renderMigrate(host) {
     if (o.recordings) total += d.recordings?.size || 0;
     if (o.media) total += d.media_files?.size || 0;
     if (o.branding) total += d.branding?.size || 0;
+    if (o.modules) total += d.module_data?.size || 0;
+    if (o.storage) total += d.storage?.size || 0;
     host.querySelector("#mg-size").textContent = mb(total);
+    host.querySelector("#mg-secret-warn").style.display = o.secrets ? "none" : "";
   };
-  ["#mg-rec", "#mg-media", "#mg-brand"].forEach((id) =>
+  ["#mg-rec", "#mg-media", "#mg-brand", "#mg-modules", "#mg-storage", "#mg-secrets"].forEach((id) =>
     host.querySelector(id).addEventListener("change", recalc));
+  recalc();
 
   host.querySelector("#mg-export").addEventListener("click", () => {
     const msg = host.querySelector("#mg-export-msg");
@@ -806,6 +836,53 @@ async function renderMigrate(host) {
       msg.textContent = t("mg_failed") + ": " + e.message;
       importBtn.disabled = false;
     }
+  });
+}
+
+
+// Server-Umzug: Agenten zum neuen Backend schicken (Backend: source_routes.py)
+async function drawRedirect(box) {
+  let st;
+  try { st = await api.migrateRedirectState(); } catch (e) { box.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; return; }
+  box.innerHTML = st.active ? `
+      <div style="font-size:13px;margin-bottom:8px">✅ <b>Umzug aktiv</b> → <code>${esc(st.target)}</code>${st.has_token ? " (mit neuem Agent-Token)" : ""}</div>
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:8px">Noch hier verbunden: <b>${st.agents_online}</b> von ${st.agents_total} Agenten.
+        Umgezogene Agenten verschwinden hier und erscheinen auf dem neuen Server. Agenten, die sich hier noch melden, werden automatisch weitergeschickt.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="rd-refresh">⟳ Aktualisieren</button>
+        <button class="btn btn-danger" id="rd-stop">Umzug beenden</button></div>`
+    : `
+      <div class="form-row"><label>Adresse des neuen Servers</label>
+        <input type="text" id="rd-url" placeholder="https://rmm-neu.firma.de oder http://10.0.0.20:4000"></div>
+      <div class="form-row"><label>Agent-Token des neuen Servers <span style="color:var(--subtext)">(nur nötig, wenn die Geheimnisse NICHT mitgenommen wurden)</span></label>
+        <input type="text" id="rd-token" placeholder="leer lassen = gleicher Token" autocomplete="off"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn" id="rd-test">Verbindung testen</button>
+        <button class="btn-primary" id="rd-go">🚚 Alle Agenten umziehen (${st.agents_online} online, ${st.agents_total - st.agents_online} offline)</button>
+        <span id="rd-msg" style="font-size:12px;color:var(--subtext)"></span></div>`;
+  const msg = (t2, bad) => { const m = box.querySelector("#rd-msg"); if (m) { m.textContent = t2; m.style.color = bad ? "var(--danger)" : "var(--subtext)"; } };
+  box.querySelector("#rd-refresh")?.addEventListener("click", () => drawRedirect(box));
+  box.querySelector("#rd-stop")?.addEventListener("click", async () => {
+    if (!(await uiConfirm("Umzug beenden?", { description: "Agenten, die sich hier noch melden, bleiben dann hier. Bereits umgezogene Agenten bleiben beim neuen Server.", okText: "Beenden" }))) return;
+    await api.migrateRedirectStop(); drawRedirect(box);
+  });
+  box.querySelector("#rd-test")?.addEventListener("click", async () => {
+    msg("Teste …");
+    try { const r = await api.migrateRedirectTest(box.querySelector("#rd-url").value); msg((r.ok ? "✅ " : "❌ ") + r.detail, !r.ok); }
+    catch (e) { msg("❌ " + e.message, true); }
+  });
+  box.querySelector("#rd-go")?.addEventListener("click", async () => {
+    const url = box.querySelector("#rd-url").value.trim();
+    if (!url) { msg("Bitte die Adresse des neuen Servers eingeben.", true); return; }
+    if (!(await uiConfirm(`Alle Agenten zu ${url} umziehen?`, {
+      description: "Jeder Agent startet kurz neu und verbindet sich danach mit dem neuen Server. Vorher prüfen: Ist die Migration "
+        + "dort eingespielt und erreichen die Geräte die neue Adresse?", okText: "Umziehen", danger: true }))) return;
+    msg("Starte Umzug …");
+    try {
+      const r = await api.migrateRedirectStart(url, box.querySelector("#rd-token").value.trim());
+      window.notify?.(`Umzug gestartet: ${r.triggered} Agent(en) jetzt, ${r.offline} folgen beim nächsten Verbinden`, "success", 9000);
+      drawRedirect(box);
+    } catch (e) { msg("❌ " + e.message, true); }
   });
 }
 

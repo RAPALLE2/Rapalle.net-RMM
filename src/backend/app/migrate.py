@@ -10,9 +10,16 @@ Was mitgenommen wird:
   * die Aufzeichnungen (recordings/) - die Replays der Fernsitzungen
   * die Medien-Bibliothek (media_files/) des Audio-Players
   * das Branding (branding/) - eigene Logos und Bilder
-  * .env-Dateien NUR auf ausdrücklichen Wunsch (sie enthalten AGENT_TOKEN und
-    JWT_SECRET; ohne sie müssen sich Agenten neu anmelden, mit ihnen bleibt
-    dagegen alles unverändert erreichbar)
+  * die MODULE: welche aktiv sind + ihre Einstellungen (data/modules.json) und
+    ihre Daten (data/modules/: Spaces-Verzeichnis, Client-Geraete, Proxmox-
+    Verbindungen, Notizen, Freigaben ...)
+  * den SPEICHER (storage/): Spaces-Dateien, Deployment-Ordner, gebaute
+    Client-Pakete
+  * Geheimnisse NUR auf ausdrücklichen Wunsch: .env-Dateien (AGENT_TOKEN,
+    JWT_SECRET) und die Verbindung des SQL-Moduls (dbconfig.json). Ohne sie
+    muessen sich Agenten neu anmelden, und mit JWT_SECRET verschluesselte
+    Modul-Daten (z.B. Proxmox-Zugaenge, API-Codes) sind auf dem Ziel nicht lesbar.
+    Mit ihnen bleibt alles unveraendert erreichbar.
 
 Warum eine eigene Datei und nicht einfach "Ordner kopieren":
 Die Datenbank wird im laufenden Betrieb geschrieben. Ein simples cp kann
@@ -39,6 +46,7 @@ from pathlib import Path
 from app.paths import (
     BACKEND_DIR, PROJECT_ROOT, DB_FILE, DATA_DIR, ENV_FILE, AGENT_DIR,
     RECORDINGS_DIR, AUDIO_DIR, BRANDING_DIR, BACKEND_VERSION_FILE,
+    MODULES_STATE_FILE, MODULES_DATA_DIR, STORAGE_DIR, DBCONFIG_FILE,
 )
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_MARK = "rapalle-rmm-migration"
@@ -48,13 +56,39 @@ DATA_DIRS = {
     "recordings": RECORDINGS_DIR,
     "media_files": AUDIO_DIR,
     "branding": BRANDING_DIR,
+    "module_data": MODULES_DATA_DIR,    # Daten der Module (Option "modules")
+    "storage": STORAGE_DIR,             # Spaces, Deployment, Client-Pakete (Option "storage")
 }
+# Einzelne Dateien (Option "modules"): aktivierte Module + Modul-Einstellungen
+DATA_FILES = {
+    "modules_state.json": MODULES_STATE_FILE,
+}
+# Welche Option schaltet welchen Ordner/welche Datei?
+OPTION_OF = {"recordings": "recordings", "media_files": "media_files", "branding": "branding",
+             "module_data": "modules", "storage": "storage", "modules_state.json": "modules"}
 
 # Geheimnisse - nur auf Wunsch, siehe Modul-Beschreibung.
 SECRET_FILES = {
     "backend.env": ENV_FILE,
     "agent.env": AGENT_DIR / ".env",
+    "dbconfig.json": DBCONFIG_FILE,      # Verbindung des SQL-Moduls (enthaelt Zugangsdaten)
 }
+
+
+def _modules_state() -> dict:
+    try:
+        d = json.loads(MODULES_STATE_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sql_external() -> bool:
+    """Nutzt das SQL-Modul eine EXTERNE Datenbank? Dann liegen die Daten dort."""
+    try:
+        return json.loads(DBCONFIG_FILE.read_text(encoding="utf-8")).get("mode") == "external"
+    except Exception:
+        return False
 
 
 # ==========================================================================
@@ -113,7 +147,12 @@ def preview() -> dict:
         n, size = _dir_size(path)
         dirs[name] = {"files": n, "size": size}
         total += size
+    ms = _modules_state()
+    enabled = sorted(k for k, v in (ms.get("enabled") or {}).items() if v)
     return {
+        "modules": {"enabled": enabled, "settings": len(ms.get("settings") or {}),
+                    "state_file": MODULES_STATE_FILE.is_file()},
+        "sql_external": _sql_external(),
         "version": _version(),
         "database": {
             "size": DB_FILE.stat().st_size if DB_FILE.is_file() else 0,
@@ -150,7 +189,8 @@ def _copy_database(dest: Path) -> None:
 
 def build_export(target: Path, include_recordings: bool = True,
                  include_media: bool = True, include_branding: bool = True,
-                 include_secrets: bool = False) -> dict:
+                 include_secrets: bool = False, include_modules: bool = True,
+                 include_storage: bool = True) -> dict:
     """
     Schreibt das Umzugs-Archiv nach `target` und liefert das Manifest zurück.
     """
@@ -158,11 +198,13 @@ def build_export(target: Path, include_recordings: bool = True,
         "recordings": include_recordings,
         "media_files": include_media,
         "branding": include_branding,
+        "modules": include_modules,
+        "storage": include_storage,
     }
 
     manifest = {
         "kind": ARCHIVE_MARK,
-        "format": 1,
+        "format": 2,                       # 2 = mit Modulen + Speicher
         "created_at": int(time.time()),
         "created_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
         "version": _version(),
@@ -170,6 +212,8 @@ def build_export(target: Path, include_recordings: bool = True,
         "includes": {k: bool(v) for k, v in wanted.items()},
         "includes_secrets": bool(include_secrets),
         "counts": _table_counts(),
+        "modules_enabled": sorted(k for k, v in (_modules_state().get("enabled") or {}).items() if v)
+                           if include_modules else [],
     }
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -184,11 +228,14 @@ def build_export(target: Path, include_recordings: bool = True,
             zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
             zf.write(tmp_db, "data.sqlite")
             for name, path in DATA_DIRS.items():
-                if not wanted.get(name) or not path.is_dir():
+                if not wanted.get(OPTION_OF[name]) or not path.is_dir():
                     continue
                 for f in sorted(path.rglob("*")):
-                    if f.is_file():
+                    if f.is_file() and not f.name.endswith((".tmp", ".part")):
                         zf.write(f, f"{name}/{f.relative_to(path)}")
+            for arc, path in DATA_FILES.items():
+                if wanted.get(OPTION_OF[arc]) and path.is_file():
+                    zf.write(path, f"files/{arc}")
             if include_secrets:
                 for arc, path in SECRET_FILES.items():
                     if path.is_file():
@@ -270,6 +317,9 @@ def apply_import(archive: Path, restore_secrets: bool = False,
             backup_dir.mkdir(parents=True, exist_ok=True)
             if DB_FILE.is_file():
                 shutil.copy2(DB_FILE, backup_dir / "data.sqlite")
+            for arc, path in DATA_FILES.items():
+                if path.is_file():
+                    shutil.copy2(path, backup_dir / arc)
             for name, path in DATA_DIRS.items():
                 if path.is_dir() and any(path.iterdir()):
                     shutil.copytree(path, backup_dir / name, dirs_exist_ok=True)
@@ -313,6 +363,13 @@ def apply_import(archive: Path, restore_secrets: bool = False,
                     (path / rel).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(f, path / rel)
             report["restored"].append(name)
+
+        for arc, path in DATA_FILES.items():
+            src = staging / "files" / arc
+            if src.is_file():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, path)
+                report["restored"].append(arc)
 
         if restore_secrets:
             for arc, path in SECRET_FILES.items():

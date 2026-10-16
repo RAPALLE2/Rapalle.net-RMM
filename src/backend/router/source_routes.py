@@ -667,6 +667,8 @@ def migrate_export(request: Request,
                          media: bool = True,
                          branding: bool = True,
                          secrets: bool = False,
+                         modules: bool = True,
+                         storage: bool = True,
                          token: str | None = None):
     """
     Baut das Archiv und liefert es aus.
@@ -690,7 +692,8 @@ def migrate_export(request: Request,
     try:
         manifest = migrate.build_export(
             archive, include_recordings=recordings, include_media=media,
-            include_branding=branding, include_secrets=secrets)
+            include_branding=branding, include_secrets=secrets,
+            include_modules=modules, include_storage=storage)
     except Exception as e:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(500, f"Export fehlgeschlagen: {e}")
@@ -777,3 +780,112 @@ def _schedule_restart_after_migration(delay: float = 2.0) -> None:
         asyncio.get_event_loop().call_later(delay, _restart)
     except Exception:
         _restart()
+
+
+# ==========================================================================
+# Server-Umzug: Agenten zum NEUEN Backend schicken
+# ==========================================================================
+# Ablauf: 1. Auf dem alten Server exportieren, auf dem neuen einspielen (mit
+# Geheimnissen -> gleicher AGENT_TOKEN). 2. Auf dem ALTEN Server hier die
+# Adresse des neuen eintragen und "Alle Agenten umziehen".
+# Technik (ohne Agent-Update vorab): Jeder Agent bekommt "update-agent". Er holt
+# sein Update-Skript vom alten Server; das Skript schreibt waehrend des Umzugs
+# die NEUE Adresse (und optional den neuen AGENT_TOKEN) in seine .env und startet
+# den Agenten neu -> er meldet sich beim neuen Server, mit gleicher Geraete-ID.
+# Offline-Agenten folgen automatisch, sobald sie sich (beim alten Server) melden.
+#
+#   GET    /api/source/migrate/redirect          Stand (Ziel, Agenten online/gesamt)
+#   POST   /api/source/migrate/redirect/test     {url} Neuen Server pruefen
+#   POST   /api/source/migrate/redirect          {url, agent_token?} Umzug starten
+#   DELETE /api/source/migrate/redirect          Umzug beenden (Agenten bleiben hier)
+
+class RedirectBody(BaseModel):
+    url: str
+    agent_token: str = ""
+
+
+def _norm_target(url: str) -> str:
+    from router.enrollment_routes import _ensure_scheme
+    from urllib.parse import urlsplit
+    u = _ensure_scheme((url or "").strip()).rstrip("/")
+    p = urlsplit(u)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        raise HTTPException(400, "Bitte die vollständige Adresse des neuen Servers angeben, z. B. https://rmm-neu.firma.de")
+    return u
+
+
+def _probe(url: str) -> dict:
+    """Ist das ein erreichbares RAPALLE.net RMM? (vom ALTEN Server aus gesehen)"""
+    import ssl
+    import urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE           # nur Erreichbarkeit pruefen (selbst signiert erlaubt)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url + "/agent-dist/update.sh"), timeout=10, context=ctx) as r:
+            body = r.read(4000).decode("utf-8", "replace")
+        ok = "RAPALLE.net RMM" in body
+        return {"ok": ok, "detail": "Neuer Server erreichbar." if ok else
+                "Erreichbar, aber das ist offenbar kein RAPALLE.net RMM (Agent-Update-Skript fehlt)."}
+    except Exception as e:      # noqa: BLE001
+        return {"ok": False, "detail": f"Nicht erreichbar: {getattr(e, 'reason', e)}"}
+
+
+@router.get("/migrate/redirect")
+def redirect_state(user: dict = Depends(get_current_user)):
+    require_admin(user)
+    from app.sockets import state
+    clients = db.list_clients()
+    online = sum(1 for c in clients if state.is_online(c["id"]))
+    return {"target": db.get_setting("migration_target_url") or "",
+            "has_token": bool((db.get_setting("migration_agent_token") or "").strip()),
+            "active": bool((db.get_setting("migration_target_url") or "").strip()),
+            "agents_total": len(clients), "agents_online": online}
+
+
+@router.post("/migrate/redirect/test")
+def redirect_test(body: RedirectBody, user: dict = Depends(get_current_user)):
+    require_admin(user)
+    return _probe(_norm_target(body.url))
+
+
+@router.post("/migrate/redirect")
+async def redirect_start(body: RedirectBody, user: dict = Depends(get_current_user)):
+    require_admin(user)
+    import asyncio
+    url = _norm_target(body.url)
+    tok = body.agent_token.strip()
+    if tok and not all(c.isalnum() or c in "-_.~" for c in tok):
+        raise HTTPException(400, "Der Agent-Token enthält ungültige Zeichen")
+    probe = await asyncio.get_running_loop().run_in_executor(None, _probe, url)
+    if not probe["ok"]:
+        raise HTTPException(409, f"Umzug nicht gestartet – {probe['detail']}")
+    db.set_setting("migration_target_url", url)
+    db.set_setting("migration_agent_token", tok)
+    db.add_audit_entry(user["username"], "migration.redirect_started", details=f"-> {url}"
+                       + (" (mit neuem Agent-Token)" if tok else ""))
+
+    from app.sockets import _migration_last, send_to_agent, state
+    online = [c for c in db.list_clients() if state.is_online(c["id"])]
+
+    async def rollout():
+        for i, c in enumerate(online):
+            _migration_last[c["id"]] = __import__("time").time()
+            try:
+                await send_to_agent(c["id"], "update-agent", {})
+            except Exception:
+                pass
+            if i % 10 == 9:
+                await asyncio.sleep(2)          # gestaffelt, damit nicht alle gleichzeitig laden
+    asyncio.create_task(rollout())
+    return {"ok": True, "target": url, "triggered": len(online),
+            "offline": len(db.list_clients()) - len(online)}
+
+
+@router.delete("/migrate/redirect")
+def redirect_stop(user: dict = Depends(get_current_user)):
+    require_admin(user)
+    db.set_setting("migration_target_url", "")
+    db.set_setting("migration_agent_token", "")
+    db.add_audit_entry(user["username"], "migration.redirect_stopped")
+    return {"ok": True}

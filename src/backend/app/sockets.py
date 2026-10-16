@@ -911,6 +911,27 @@ def _agent_outdated(agent_v: str, latest_v: str, client_id: str | None = None) -
     return _agent_code_hashes.get(client_id, "") != latest_hash
 
 
+_migration_last: dict[str, float] = {}
+
+
+async def _migration_redirect(client_id: str, hostname: str = "") -> bool:
+    """Umzug aktiv? -> Agent per Update zum neuen Server schicken (hoechstens alle 15 min je Agent,
+    damit ein fehlschlagendes Update keine Schleife erzeugt). True = ausgeloest."""
+    target = (await db.call(db.get_setting, "migration_target_url", "") or "").strip()
+    if not target:
+        return False
+    now = time.time()
+    if now - _migration_last.get(client_id, 0.0) < 900:
+        return False
+    _migration_last[client_id] = now
+    await asyncio.sleep(3)                       # Anmeldung erst sauber abschliessen lassen
+    if await send_to_agent(client_id, "update-agent", {}):
+        await db.call(db.add_audit_entry, None, "migration.agent_redirected", target=client_id,
+                      details=f"{hostname or client_id} -> {target}")
+        return True
+    return False
+
+
 async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
     """Stößt bei veralteter Version das Selbst-Update an, falls Auto-Update greift."""
     latest = _latest_agent_version()
@@ -1171,6 +1192,12 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
                 client=host, service="Agent-Update", level="success"))
 
     async def _auto_update():
+        # Server-Umzug aktiv (Source -> Migration -> "Agenten umziehen"): jeder Agent,
+        # der sich HIER noch meldet, bekommt das Update-Kommando. Das Update-Skript
+        # traegt die neue Server-Adresse ein -> der Agent verbindet sich danach mit dem
+        # neuen Backend. Gilt unabhaengig von der Agent-Version.
+        if await _migration_redirect(client_id, hostname):
+            return
         pending = await db.call(db.get_client, client_id)
         if pending and pending.get("pending_agent_update"):
             await db.call(db.set_pending_agent_update, client_id, False)

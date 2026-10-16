@@ -721,12 +721,19 @@ export const api = {
   sourceClearDist: () => request("/api/source/dist/clear", { method: "POST" }),
   // --- Migration: komplette Instanz umziehen ---
   migrateInfo: () => request("/api/source/migrate/info"),
+  // Server-Umzug: Agenten zum neuen Backend schicken
+  migrateRedirectState: () => request("/api/source/migrate/redirect"),
+  migrateRedirectTest: (url) => request("/api/source/migrate/redirect/test", { method: "POST", body: JSON.stringify({ url }) }),
+  migrateRedirectStart: (url, agent_token) => request("/api/source/migrate/redirect", { method: "POST", body: JSON.stringify({ url, agent_token }) }),
+  migrateRedirectStop: () => request("/api/source/migrate/redirect", { method: "DELETE" }),
   migrateExportUrl: (opts = {}) => {
     const q = new URLSearchParams({
       recordings: opts.recordings !== false,
       media: opts.media !== false,
       branding: opts.branding !== false,
       secrets: !!opts.secrets,
+      modules: opts.modules !== false,
+      storage: opts.storage !== false,
       token: localStorage.getItem("rmm_token") || "",
     });
     return `/api/source/migrate/export?${q}`;

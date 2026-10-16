@@ -24,6 +24,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import re as _re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -125,6 +126,27 @@ def _forwarded_scheme(request: Request) -> str:
         return fproto
     scheme = (request.url.scheme or "").strip()
     return scheme if scheme in ("http", "https") else "https"
+
+
+def _update_target(request: Request) -> str:
+    """Adresse, die die Agent-UPDATE-Skripte in die .env schreiben.
+
+    Normalerweise die eigene Adresse. Waehrend eines Server-Umzugs (Einstellung
+    "migration_target_url", gesetzt unter Source -> Migration -> "Agenten umziehen")
+    die Adresse des NEUEN Servers: Jeder Agent, der sich aktualisiert, verbindet
+    sich danach automatisch mit dem neuen Backend - ohne Agent-Update vorab.
+    """
+    target = (db.get_setting("migration_target_url") or "").strip()
+    return _ensure_scheme(target).rstrip("/") if target else _backend_url(request)
+
+
+def _migration_token() -> str:
+    """Optional: AGENT_TOKEN des neuen Servers (nur noetig, wenn die Geheimnisse
+    beim Umzug NICHT mitgenommen wurden)."""
+    if not (db.get_setting("migration_target_url") or "").strip():
+        return ""
+    tok = (db.get_setting("migration_agent_token") or "").strip()
+    return tok if all(c.isalnum() or c in "-_.~" for c in tok) else ""
 
 
 def _backend_url(request: Request) -> str:
@@ -729,8 +751,10 @@ def agent_update_sh(request: Request, lang: str = ""):
     Die systemd-Unit wird sicherheitshalber neu geschrieben, damit der Neustart
     auch dann klappt, wenn die Unit fehlte/veraltet war. Bestehende .device-id
     bleibt erhalten -> gleiche Client-Identität.
+    Waehrend eines Server-Umzugs: neue Adresse (+ ggf. neuer Token), siehe _update_target.
     """
-    backend_url = _backend_url(request)
+    backend_url = _update_target(request)
+    new_token = _migration_token()
     # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
     _L = _lang(lang) if lang else server_lang()
     def L(key, **kw):
@@ -789,6 +813,7 @@ for f in .env .device-id; do
 done
 if [ -f "$INSTALL_DIR/.env" ]; then
   sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
+{('  sudo sed -i "s#AGENT_TOKEN=.*#AGENT_TOKEN=' + new_token + '#" "$INSTALL_DIR/.env"') if new_token else ''}
 fi
 
 cd "$INSTALL_DIR"
@@ -848,8 +873,11 @@ echo "Update fertig - Agent neu gestartet."
 @router.get("/agent-dist/update.ps1", response_class=PlainTextResponse)
 def agent_update_ps1(request: Request, lang: str = ""):
     """Aktualisiert den Agenten (Windows) und startet den Autostart-Task NEU
-    (Task wird bei Bedarf neu registriert)."""
-    backend_url = _backend_url(request)
+    (Task wird bei Bedarf neu registriert). Waehrend eines Server-Umzugs:
+    neue Adresse (+ ggf. neuer Token), siehe _update_target."""
+    backend_url = _update_target(request)
+    self_url = _backend_url(request)          # UAC-Neustart holt das Skript wieder von HIER
+    new_token = _migration_token()
     # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
     _L = _lang(lang) if lang else server_lang()
     def L(key, **kw):
@@ -862,7 +890,7 @@ $InstallDir = "C:\\Program Files\\RapalleRmmAgent"
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
-    $cmd = "iwr '{backend_url}/agent-dist/update.ps1' -UseBasicParsing | iex"
+    $cmd = "iwr '{self_url}/agent-dist/update.ps1' -UseBasicParsing | iex"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
     $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -PassThru -Wait `
          -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $enc)
@@ -994,6 +1022,13 @@ Start-ScheduledTask -TaskName "RapalleRmmAgent"
 Write-Host "=== {L('ins_done')} ==="
 try {{ Stop-Transcript | Out-Null }} catch {{}}
 """
+    # Waehrend eines Umzugs mit neuem Token: exakt dieselbe Zeile wie fuer BACKEND_URL, nur fuer AGENT_TOKEN
+    if new_token:
+        def _add_token(m):
+            line = m.group(0)
+            return line + "\n" + line.replace("BACKEND_URL=.*", "AGENT_TOKEN=.*").replace(
+                "BACKEND_URL=" + backend_url, "AGENT_TOKEN=" + new_token)
+        script = _re.sub(r"^.*-replace 'BACKEND_URL=\.\*'.*$", _add_token, script, count=1, flags=_re.M)
     return PlainTextResponse(script, media_type="text/plain")
 
 
