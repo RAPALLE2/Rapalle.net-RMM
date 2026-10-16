@@ -165,22 +165,14 @@ _OFF = PlainTextResponse("Die Deployment-Seite ist nicht freigegeben.",
                          status_code=404)
 
 
-def _default_page(title: str) -> str:
-    """Einfache Dateiliste, solange kein eigener HTML-Code hinterlegt ist."""
-    try:
-        entries = store.listdir("")
-    except Exception:
-        entries = []
-    import xml.sax.saxutils as _x
-    rows = "".join(
-        f'<li><a href="/deployment/{_up.quote(e["name"])}">'
-        f'{"📁" if e["is_dir"] else "📄"} {_x.escape(e["name"])}</a></li>'
-        for e in entries)
-    return (f"<!doctype html><meta charset=utf-8><title>{_x.escape(title)}</title>"
-            "<body style=\"font-family:system-ui,sans-serif;max-width:720px;"
-            "margin:40px auto;padding:0 16px\">"
-            f"<h1>{_x.escape(title)}</h1>"
-            f"<ul>{rows or '<li>(noch nichts abgelegt)</li>'}</ul></body>")
+def _serve(parts: list[str]):
+    """Ausliefern ueber den Hosting-Kern des Moduls "webserver" (gleicher Code wie fuer Websites):
+    eigene HTML-Startseite (Einstellung), sonst index.html, sonst automatische Dateiliste."""
+    from app import modules
+    wh = modules.use("webserver", "webhost")
+    return wh.serve(store.base(), parts, "/deployment",
+                    title=db.get_setting(store.SETTING_TITLE) or "Deployment",
+                    custom_html=db.get_setting(store.SETTING_HTML) or "", listing=True)
 
 
 @router.get("/deployment", include_in_schema=False)
@@ -188,39 +180,11 @@ def _default_page(title: str) -> str:
 def deployment_index():
     if not store.is_public():
         return _OFF
-    html = (db.get_setting(store.SETTING_HTML) or "").strip()
-    title = db.get_setting(store.SETTING_TITLE) or "Deployment"
-    if not html:
-        html = _default_page(title)
-    return HTMLResponse(content=html)
+    return _serve([])
 
 
 @router.get("/deployment/{full_path:path}", include_in_schema=False)
 def deployment_file(full_path: str, request: Request):
     if not store.is_public():
         return _OFF
-    parts = [p for p in full_path.split("/") if p]
-    if not parts:
-        # deployment_index() ist jetzt synchron - kein 'await' mehr.
-        return deployment_index()
-    try:
-        p = store.resolve(parts)
-    except PermissionError:
-        return PlainTextResponse("Nicht erlaubt", status_code=403)
-    if not p.exists():
-        return PlainTextResponse("Nicht gefunden", status_code=404)
-    if p.is_dir():
-        # Unterordner ebenfalls als Liste anzeigen.
-        import xml.sax.saxutils as _x
-        base = "/deployment/" + "/".join(_up.quote(p) for p in parts)
-        rows = "".join(
-            f'<li><a href="{base}/{_up.quote(e["name"])}">'
-            f'{"📁" if e["is_dir"] else "📄"} {_x.escape(e["name"])}</a></li>'
-            for e in store.listdir(parts))
-        return HTMLResponse(
-            f"<!doctype html><meta charset=utf-8><title>{_x.escape(parts[-1])}</title>"
-            "<body style=\"font-family:system-ui,sans-serif;max-width:720px;"
-            f"margin:40px auto\"><h1>{_x.escape(parts[-1])}</h1><ul>{rows}</ul></body>")
-    ctype = mimetypes.guess_type(parts[-1])[0] or "application/octet-stream"
-    # Bilder/Text direkt anzeigen, alles andere laden lassen (FileResponse: Range/Streaming).
-    return FileResponse(p, media_type=ctype)
+    return _serve([p for p in full_path.split("/") if p])

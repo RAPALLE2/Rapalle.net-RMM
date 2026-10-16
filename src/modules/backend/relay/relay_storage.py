@@ -51,6 +51,8 @@ ROOT = _STORAGE_DIR
 SECTIONS = {
     # Virtuell und benutzerabhaengig - wird an das Modul "spaces" weitergereicht.
     "Spaces": None,
+    # Virtuell: Websites des Moduls "webserver", an denen der Benutzer mitarbeitet
+    "Websites": None,
     "Deployment": "deployment",
     # Source liegt NICHT unter backend/relay/, sondern ist die Projekt-Wurzel
     # selbst (siehe _SPECIAL_BASE). Der Wert hier ist deshalb nur ein Platz-
@@ -85,7 +87,7 @@ WRITE_PERM = {
 
 
 # Sektionen, die ein Modul pro Benutzer bereitstellt: Name -> (Modul, Datei).
-_VIRTUAL = {"Spaces": ("spaces", "vfs")}
+_VIRTUAL = {"Spaces": ("spaces", "vfs"), "Websites": ("webserver", "site_vfs")}
 
 
 def _vfs(section: str):

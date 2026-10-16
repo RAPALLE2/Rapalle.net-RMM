@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "webserver",
+  "name": "Webserver",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "webserver",
+      "label": "Webserver",
+      "icon": "🌍",
+      "title": "Webserver",
+      "entry": "app.js",
+      "export": "renderWebserver",
+      "w": 980,
+      "h": 640
+    }
+  ]
+}

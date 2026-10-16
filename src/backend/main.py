@@ -85,7 +85,7 @@ except Exception as _e:
 ensure_dependencies()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Ab hier sind alle Bibliotheken garantiert vorhanden.
+# Ab hier sind alle Bibliotheken garantiert vorhanden.w
 # ─────────────────────────────────────────────────────────────────────────────
 import uvicorn
 

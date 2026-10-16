@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from app import db
@@ -38,72 +37,37 @@ def settings() -> dict:
             "public": is_public()}
 
 
+# ------------------------------------------------------------------ Dateien
+# Die eigentliche Datei-Logik liegt im Hosting-Kern des Moduls "webserver"
+# (webhost.py) - der Deployment-Server benutzt sie nur mit seinem Ordner.
+def _wh():
+    from app import modules
+    return modules.use("webserver", "webhost")
+
+
 def resolve(sub: list[str] | str) -> Path:
-    """Pfad im Deployment-Ordner - kann ihn nie verlassen."""
-    if isinstance(sub, str):
-        sub = sub.replace("\\", "/").split("/")
-    root = base().resolve()
-    parts = []
-    for seg in sub:
-        seg = (seg or "").strip()
-        if seg in ("", "."):
-            continue
-        if seg == ".." or "/" in seg or "\\" in seg or seg.startswith("~") or "\x00" in seg:
-            raise PermissionError("Ungültiger Name")
-        parts.append(seg)
-    p = (root / Path(*parts)).resolve() if parts else root
-    try:
-        p.relative_to(root)
-    except ValueError:
-        raise PermissionError("Pfad außerhalb des Ordners")
-    return p
+    return _wh().resolve(base(), sub)
 
 
 def entry(p: Path) -> dict:
-    try:
-        st = p.stat()
-        d = p.is_dir()
-        return {"name": p.name, "is_dir": d, "size": 0 if d else int(st.st_size), "mtime": int(st.st_mtime * 1000)}
-    except OSError:
-        return {"name": p.name, "is_dir": False, "size": 0, "mtime": 0}
+    return _wh().entry(p)
 
 
 def listdir(sub) -> list[dict]:
-    p = resolve(sub)
-    if not p.is_dir():
-        raise FileNotFoundError(p.name)
-    return [entry(c) for c in sorted(p.iterdir(), key=lambda c: (not c.is_dir(), c.name.lower()))]
+    return _wh().listdir(base(), sub)
 
 
 def write(sub, data: bytes) -> None:
-    p = resolve(sub)
-    if p == base().resolve():
-        raise PermissionError("Ungültiges Ziel")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(data or b"")
+    _wh().write(base(), sub, data)
 
 
 def mkdir(sub) -> None:
-    resolve(sub).mkdir(parents=True, exist_ok=True)
+    _wh().mkdir(base(), sub)
 
 
 def delete(sub) -> None:
-    p = resolve(sub)
-    if p == base().resolve():
-        raise PermissionError("Der Hauptordner kann nicht gelöscht werden")
-    if p.is_dir():
-        shutil.rmtree(p)
-    elif p.exists():
-        p.unlink()
-    else:
-        raise FileNotFoundError(p.name)
+    _wh().delete(base(), sub)
 
 
 def move(src, dst) -> None:
-    a, b = resolve(src), resolve(dst)
-    if a == base().resolve():
-        raise PermissionError("Der Hauptordner kann nicht verschoben werden")
-    if b.exists():
-        raise FileExistsError(b.name)
-    b.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(a), str(b))
+    _wh().move(base(), src, dst)

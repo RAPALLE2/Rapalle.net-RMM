@@ -98,6 +98,7 @@ const _PERM_KEY = {
   see_all_spaces: "perm_see_all_spaces", edit_all_spaces: "perm_edit_all_spaces",
   manage_deployment: "perm_manage_deployment",
   use_api: "perm_use_api",
+  manage_websites: "perm_manage_websites",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",

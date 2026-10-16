@@ -101,7 +101,7 @@ export function renderRelayExplorer(body, win) {
     tabsEl.innerHTML = sections.map((s) => `
       <button class="tab-btn${s.name === section ? " active" : ""}"
               data-sec="${esc(s.name)}">
-        ${s.name === CLIENTS ? "🔌" : s.name === "Spaces" ? "☁️" : s.name === "Deployment" ? "🌐" : "📦"} ${esc(s.name)}
+        ${s.name === CLIENTS ? "🔌" : s.name === "Spaces" ? "☁️" : s.name === "Websites" ? "🌍" : s.name === "Deployment" ? "🌐" : "📦"} ${esc(s.name)}
       </button>`).join("");
     tabsEl.querySelectorAll("[data-sec]").forEach((b) =>
       b.addEventListener("click", () => {
@@ -172,6 +172,11 @@ export function renderRelayExplorer(body, win) {
   // Spaces: Sammelebenen ("Spaces", "Teams", "Öffentlich", "Mit mir geteilt", "Alle Spaces")
   // enthalten nur Spaces - dort nichts hochladen/loeschen (Teamspaces anlegen per "＋ Teamspace"/"＋ Ordner").
   function spacesLevel() {
+    // Websites: in der Wurzel liegen nur die Websites selbst (anlegen/loeschen in der App "Webserver")
+    if (section === "Websites") {
+      const top = path.split("/").filter(Boolean).length === 0;
+      return { collection: top, spaceRows: top };
+    }
     if (section !== "Spaces") return { collection: false, spaceRows: false };
     const parts = path.split("/").filter(Boolean);
     const groups = ["Teams", "Öffentlich", "Mit mir geteilt", "Alle Spaces"];

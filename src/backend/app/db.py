@@ -2739,6 +2739,8 @@ GLOBAL_PERM_KEYS = [
     # Modul "api": die REST-API (/api/v1) benutzen - zusaetzlich gilt pro Aufruf
     # dasselbe Recht wie im Dashboard (z.B. Client loeschen -> c_delete).
     "use_api",
+    # Modul "webserver": Websites anlegen/loeschen und ALLE Websites bearbeiten
+    "manage_websites",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",

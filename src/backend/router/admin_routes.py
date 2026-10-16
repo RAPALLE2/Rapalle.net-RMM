@@ -150,6 +150,7 @@ PERM_LABELS = {
     "edit_all_spaces": "Alle Spaces bearbeiten und verwalten",
     "manage_deployment": "Deployment-Server verwalten (Seite, Dateien, Relay-Bereich „Deployment“)",
     "use_api": "REST-API benutzen (/api/v1) – je Aufruf zusätzlich das passende Recht",
+    "manage_websites": "Websites verwalten (anlegen, löschen, alle bearbeiten – Modul „Webserver“)",
     "create_users": "Benutzer erstellen",
     "network_scan": "Netzwerk-Scan",
     "port_scan": "Port-Scan",

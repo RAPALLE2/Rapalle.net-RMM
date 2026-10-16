@@ -1011,7 +1011,14 @@ async def load_enabled() -> None:
             _state["enabled"][m] = False
     for m in ordered:
         if not _state["enabled"].get(m) and m not in wanted:
-            continue
+            # Abhaengigkeit eines aktiven Moduls, selbst aber aus (z.B. nach einem Update, das
+            # eine neue Abhaengigkeit einfuehrt): automatisch mit einschalten - sonst liefe das
+            # abhaengige Modul ohne seine Grundlage.
+            users = [w for w in wanted if m in _dep_order(w)]
+            if not users:
+                continue
+            _state["enabled"][m] = True
+            print(f"[module] '{m}' automatisch mit aktiviert (gebraucht von: {', '.join(users)})")
         try:
             await _ensure_pip(get(m))
             await _activate(m, user_enable=False)
