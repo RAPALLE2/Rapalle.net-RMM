@@ -152,6 +152,7 @@ PERM_LABELS = {
     "use_api": "REST-API benutzen (/api/v1) – je Aufruf zusätzlich das passende Recht",
     "manage_websites": "Websites verwalten (anlegen, löschen, alle bearbeiten – Modul „Webserver“)",
     "manage_docker": "Docker verwalten (Stacks anlegen, alle Container, Images, Volumes, Netzwerke – Modul „Docker“)",
+    "manage_cloudflare": "Cloudflare Tunnel verwalten (Zugang, Tunnel, Routen, Freigaben – Modul „Cloudflare Tunnel“)",
     "use_console": "RMM-Konsole benutzen (SSH, Dashboard, Client-App) – je Befehl zusätzlich das passende Recht",
     "create_users": "Benutzer erstellen",
     "network_scan": "Netzwerk-Scan",

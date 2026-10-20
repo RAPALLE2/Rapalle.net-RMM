@@ -1,0 +1,12 @@
+# Cloudflare-Connector auf einer Node (Modul "cloudflare").
+# Das Modul legt fuer jede Node einen eigenen Tunnel an und setzt TUNNEL_TOKEN selbst.
+# network_mode host: cloudflared erreicht so RDP/SSH/VNC der Geraete im lokalen Netz der Node.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: rmm-cloudflared
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    network_mode: host
+    restart: unless-stopped

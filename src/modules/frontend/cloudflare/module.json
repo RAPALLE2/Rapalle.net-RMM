@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "cloudflare",
+  "name": "Cloudflare Tunnel",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "cloudflare",
+      "label": "Cloudflare Tunnel",
+      "icon": "☁️",
+      "title": "Cloudflare Tunnel",
+      "entry": "app.js",
+      "export": "renderCloudflare",
+      "perm": "manage_cloudflare",
+      "w": 1060,
+      "h": 700
+    }
+  ]
+}

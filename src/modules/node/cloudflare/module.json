@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "cloudflare",
+  "name": "Cloudflare Tunnel",
+  "version": "1.0.0",
+  "node": {
+    "kind": "compose",
+    "compose": "docker-compose.yml",
+    "requires_docker": true,
+    "autostart": true,
+    "actions": ["up", "down", "restart", "status", "logs"],
+    "params": [
+      { "key": "tunnel_token", "label": "Tunnel-Token (setzt das Modul selbst)", "type": "secret", "default": "" }
+    ]
+  }
+}
