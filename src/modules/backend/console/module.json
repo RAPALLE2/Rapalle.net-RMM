@@ -3,19 +3,51 @@
   "id": "console",
   "name": "RMM-Konsole",
   "version": "1.0.0",
-  "description": "Kommandozeile für das ganze RMM mit Tab-Vervollständigung – per SSH (das Backend wird zum SSH-Server), im Dashboard und in der Client-App: Geräte, Live-Metriken (btop-ähnlich), Terminal auf Geräten, Befehle, Prozesse, Neustart/Herunterfahren, Agent neu starten, Dateien, Docker-Stacks.",
+  "description": "Kommandozeile für das ganze RMM – wie die Shell auf einem Proxmox-Node: per SSH (das Backend wird zum SSH-Server), im Dashboard und in der Client-App, mit Tab-Vervollständigung. Geräte, Live-Metriken (btop-ähnlich), Terminal auf Geräten, Befehle, Prozesse, Neustart/Herunterfahren, Agent, Dateien; Proxmox-Gäste steuern und betreten (pct enter), Docker-Container betreten, Storage, Port-Weiterleitungen, Benutzer, Gruppen, Module, Einstellungen, Websites – und mit „api“ (wie pvesh) jede Dashboard-Funktion.",
   "author": "RAPALLE.net",
   "category": "Werkzeuge",
   "icon": "⌨️",
   "requires": [],
-  "pip": ["asyncssh>=2.14"],
+  "pip": [
+    "asyncssh>=2.14"
+  ],
   "entry": "module",
-  "routers": ["console_routes"],
-  "hooks": {"startup": "on_startup", "shutdown": "on_shutdown", "disable": "on_disable"},
+  "routers": [
+    "console_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "shutdown": "on_shutdown",
+    "disable": "on_disable"
+  },
   "settings": [
-    {"key": "ssh_enabled", "label": "SSH-Zugang (Backend als SSH-Server)", "type": "select", "default": "no",
-     "options": [{"value": "no", "label": "Aus"}, {"value": "yes", "label": "An"}]},
-    {"key": "ssh_port", "label": "SSH-Port (in Docker zusätzlich in docker-compose.yml freigeben)", "type": "number", "default": 2222},
-    {"key": "ssh_allow_ips", "label": "SSH nur von diesen IPs/Netzen (leer = alle), z. B. 10.0.0.0/8, 203.0.113.5", "type": "string", "default": ""}
+    {
+      "key": "ssh_enabled",
+      "label": "SSH-Zugang (Backend als SSH-Server)",
+      "type": "select",
+      "default": "no",
+      "options": [
+        {
+          "value": "no",
+          "label": "Aus"
+        },
+        {
+          "value": "yes",
+          "label": "An"
+        }
+      ]
+    },
+    {
+      "key": "ssh_port",
+      "label": "SSH-Port (in Docker zusätzlich in docker-compose.yml freigeben)",
+      "type": "number",
+      "default": 2222
+    },
+    {
+      "key": "ssh_allow_ips",
+      "label": "SSH nur von diesen IPs/Netzen (leer = alle), z. B. 10.0.0.0/8, 203.0.113.5",
+      "type": "string",
+      "default": ""
+    }
   ]
 }

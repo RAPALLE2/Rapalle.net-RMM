@@ -591,3 +591,8 @@ async def _docker(con, argv):
         db.add_audit_entry(con.user["username"], f"console.docker_{sub}", details=s["project"])
     else:
         raise UsageError(f"Unbekannt: {sub}")
+
+
+# Verwaltungsbefehle wie in der Proxmox-Shell (api, pve, storage, net, user, group, module, settings, web,
+# docker enter/logs/deploy) - am Ende importieren, damit REGISTRY und Hilfen schon stehen.
+from . import admin_cmds  # noqa: E402,F401
