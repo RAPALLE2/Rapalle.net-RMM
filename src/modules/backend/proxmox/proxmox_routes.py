@@ -182,6 +182,8 @@ def delete_connection(cid: str, user: dict = Depends(get_current_user)):
     _conn_check(user, cid)
     pve_store.remove(cid)
     pve_client.forget(cid)
+    from . import match
+    match.forget_host(cid)                       # Zuordnungen/Vorschlaege dieses Hosts entfernen
     _audit(user, cid, "connection_removed")
     return {"ok": True}
 

@@ -10,7 +10,14 @@
   "requires": [],
   "pip": [],
   "routers": [
+    "match_routes",
     "proxmox_routes",
     "console_routes"
-  ]
+  ],
+  "entry": "module",
+  "hooks": {
+    "startup": "on_startup",
+    "shutdown": "on_shutdown",
+    "disable": "on_disable"
+  }
 }

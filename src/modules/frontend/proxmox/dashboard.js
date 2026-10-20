@@ -14,7 +14,7 @@ export function renderProxmox(body, win) {
   body.innerHTML = `<div class="pve" style="height:100%;display:flex;flex-direction:column;font-size:13px;min-height:0"></div>`;
   const root = body.firstElementChild;
   if (!cid) return renderPicker(root);
-  return renderDashboard(root, cid);
+  return renderDashboard(root, cid, win?.props?.guest || null);
 }
 
 // ------------------------------------------------------------------ Agent waehlen (Startmenue)
@@ -40,7 +40,7 @@ async function renderPicker(root) {
 }
 
 // ------------------------------------------------------------------ Dashboard
-async function renderDashboard(root, cid) {
+async function renderDashboard(root, cid, initialGuest = null) {
   const C = encodeURIComponent(cid);
   const client = (state.clients || []).find((c) => c.id === cid) || { id: cid, hostname: cid };
   root.innerHTML = `
@@ -75,15 +75,22 @@ async function renderDashboard(root, cid) {
     root.querySelector("[data-conn]").style.display = P.pve_manage ? "" : "none";
     const tabs = [["overview", "Übersicht"], ["qemu", `VMs (${ov.counts.vms})`], ["lxc", `LXC (${ov.counts.lxc})`],
       P.pve_storage && ["storage", "Storage"], P.pve_users && ["users", "Benutzer"], P.pve_nodes && ["tasks", "Aufgaben"],
-      P.pve_manage && ["acl", "Freigaben"], P.pve_api && ["api", "API-Explorer"]].filter(Boolean);
+      P.pve_manage && ["acl", "Freigaben"], P.pve_manage && ["match", "Zuordnung"], P.pve_api && ["api", "API-Explorer"]].filter(Boolean);
     tabsEl.innerHTML = tabs.map(([k, l]) => `<button class="tab-btn ${k === tab ? "active" : ""}" data-t="${k}">${esc(l)}</button>`).join("");
     tabsEl.querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.t; show(); }));
+    if (initialGuest) {                          // aus dem Agent-Panel "In Proxmox öffnen": direkt zum Gast
+      const g = initialGuest; initialGuest = null;
+      tab = g.type === "lxc" ? "lxc" : "qemu";
+      tabsEl.querySelectorAll("[data-t]").forEach((b) => b.classList.toggle("active", b.dataset.t === tab));
+      drawGuest(g);
+      return;
+    }
     show();
   }
   function show() {
     tabsEl.querySelectorAll("[data-t]").forEach((b) => b.classList.toggle("active", b.dataset.t === tab));
     ({ overview: drawOverview, qemu: () => drawGuests("qemu"), lxc: () => drawGuests("lxc"), storage: drawStorage,
-       users: drawUsers, tasks: drawTasks, acl: drawAcl, api: drawApi })[tab]?.();
+       users: drawUsers, tasks: drawTasks, acl: drawAcl, match: drawMatch, api: drawApi })[tab]?.();
   }
   root.querySelector("[data-reload]").addEventListener("click", load);
   root.querySelector("[data-conn]").addEventListener("click", () => openConnectionDialog(client, (ch) => ch && load()));
@@ -136,19 +143,24 @@ async function renderDashboard(root, cid) {
   let search = "";
   async function drawGuests(type) {
     pane.innerHTML = "Lade …";
-    let r;
+    let r, agents = {};
     try { r = await preq(`/${C}/guests?type=${type}`); } catch (e) { pane.innerHTML = err(e); return; }
+    try {                                         // welcher Agent laeuft in welchem Gast?
+      const gm = await preq("/guest-map");
+      for (const [acid, m] of Object.entries(gm.map || {})) if (m.host === cid) agents[m.vmid] = (state.clients || []).find((c) => c.id === acid)?.hostname || acid;
+    } catch { /* egal */ }
     const P = ov.perms;
     const render = () => {
       const q = search.toLowerCase();
       const list = r.guests.filter((g) => !q || `${g.vmid} ${g.name} ${g.node} ${g.tags || ""}`.toLowerCase().includes(q));
       pane.querySelector("[data-list]").innerHTML = list.length ? `<table class="data-table" style="width:100%"><thead><tr>
-          <th></th><th style="text-align:left">ID</th><th style="text-align:left">Name</th><th>Node</th><th>CPU</th><th>RAM</th><th>Laufzeit</th>
+          <th></th><th style="text-align:left">ID</th><th style="text-align:left">Name</th><th>Node</th><th>Agent</th><th>CPU</th><th>RAM</th><th>Laufzeit</th>
           ${P.pve_power ? "<th></th>" : ""}</tr></thead><tbody>
         ${list.map((g) => `<tr data-g="${g.vmid}" style="cursor:pointer">
           <td>${dot(g.status)}</td><td>${g.vmid}</td><td><b>${esc(g.name || "")}</b>${g.template ? ` <span style="font-size:10.5px;color:var(--subtext)">Vorlage</span>` : ""}
             ${g.lock ? ` <span style="font-size:10.5px;color:var(--warn)">🔒 ${esc(g.lock)}</span>` : ""}</td>
-          <td>${esc(g.node)}</td><td>${g.status === "running" ? Math.round((g.cpu || 0) * 100) + " %" : "–"}</td>
+          <td>${esc(g.node)}</td><td>${agents[g.vmid] ? `🔗 ${esc(agents[g.vmid])}` : `<span style="color:var(--subtext)">–</span>`}</td>
+          <td>${g.status === "running" ? Math.round((g.cpu || 0) * 100) + " %" : "–"}</td>
           <td>${g.status === "running" ? `${fmtBytes(g.mem)} / ${fmtBytes(g.maxmem)}` : fmtBytes(g.maxmem)}</td><td>${fmtUptime(g.uptime)}</td>
           ${P.pve_power ? `<td style="white-space:nowrap;text-align:right">${g.status === "running"
             ? `<button class="btn-tool" data-a="shutdown" title="Herunterfahren">⏻</button><button class="btn-tool" data-a="reboot" title="Neu starten">⟲</button><button class="btn-tool" data-a="stop" title="Sofort stoppen">■</button>`
@@ -377,6 +389,53 @@ async function renderDashboard(root, cid) {
       try { const r = await preq(`/${C}/acl`, { method: "PUT", body: { subject, vmids } }); a.acl = r.acl; window.notify?.("Freigaben gespeichert", "success"); }
       catch (e) { window.notify?.(e.message, "error"); }
     });
+  }
+
+  // -------------------------------------------------------------- Zuordnung Agenten <-> Gaeste
+  async function drawMatch() {
+    pane.innerHTML = "Lade …";
+    let gm;
+    try { gm = await preq("/guest-map"); } catch (e) { pane.innerHTML = err(e); return; }
+    const linked = Object.entries(gm.map || {}).filter(([, m]) => m.host === cid);
+    const sug = (gm.suggestions || []).filter((x) => x.host === cid);
+    const name = (acid) => (state.clients || []).find((c) => c.id === acid)?.hostname || acid;
+    const when = gm.scanned?.[cid];
+    pane.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <p style="color:var(--subtext);margin:0;flex:1">Agenten, die in VMs/Containern dieses Proxmox laufen – erkannt über MAC-Adresse bzw. Hostname.
+          Abgleich automatisch alle 10 Minuten${when ? `, zuletzt ${new Date(when * 1000).toLocaleTimeString()}` : ""}.</p>
+        <button class="btn-primary btn-sm" data-scan>🔍 Jetzt abgleichen</button></div>
+      ${sug.length ? `<h4 style="margin:6px 0">Vorschläge (${sug.length})</h4>${sug.map((x) => `
+        <div data-s="${esc(x.client_id)}" style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span>${x.type === "qemu" ? "🖥" : "📦"}</span><span style="flex:1"><b>${esc(x.client_name)}</b> → ${x.type === "qemu" ? "VM" : "CT"} ${x.vmid} „${esc(x.name)}“
+          <span style="color:var(--subtext);font-size:12px">(${esc(x.reason)})</span></span>
+          <button class="btn btn-sm" data-ign>Nein</button><button class="btn-primary btn-sm" data-acc>Übernehmen</button></div>`).join("")}` : ""}
+      <h4 style="margin:14px 0 6px">Zugeordnet (${linked.length})</h4>
+      ${linked.length ? `<table class="data-table" style="width:100%"><thead><tr><th style="text-align:left">Agent</th><th style="text-align:left">Gast</th><th>Node</th><th></th></tr></thead><tbody>
+        ${linked.map(([acid, m]) => `<tr><td>🔗 <b>${esc(name(acid))}</b></td><td>${m.type === "qemu" ? "VM" : "CT"} ${m.vmid} „${esc(m.name || "")}“</td><td>${esc(m.node)}</td>
+          <td style="text-align:right"><button class="btn-tool" data-unlink="${esc(acid)}" title="Zuordnung aufheben">✕</button></td></tr>`).join("")}</tbody></table>`
+        : `<div style="color:var(--subtext)">Noch keine Agenten zugeordnet.</div>`}`;
+    pane.querySelector("[data-scan]").addEventListener("click", async (e) => {
+      e.target.disabled = true; e.target.textContent = "⏳ Gleiche ab …";
+      try { const r = await preq("/scan", { method: "POST", body: { host: cid } });
+        const x = Object.values(r.results)[0] || {};
+        window.notify?.(x.error ? `Abgleich: ${x.error}` : `${x.found} Agent(en) erkannt, ${x.new} neu`, x.error ? "error" : "success");
+      } catch (err2) { window.notify?.(err2.message, "error"); }
+      drawMatch(); window.RMM_PVE_REFRESH?.();
+    });
+    pane.querySelectorAll("[data-s]").forEach((row) => {
+      const go = async (what) => {
+        try { const r = await preq(`/suggestions/${encodeURIComponent(row.dataset.s)}/${what}`, { method: "POST" });
+          if (r.client) window.dispatchEvent(new CustomEvent("rmm-client-updated", { detail: r.client })); drawMatch(); }
+        catch (e2) { window.notify?.(e2.message, "error"); }
+      };
+      row.querySelector("[data-acc]").onclick = () => go("accept");
+      row.querySelector("[data-ign]").onclick = () => go("ignore");
+    });
+    pane.querySelectorAll("[data-unlink]").forEach((b) => b.addEventListener("click", async () => {
+      try { await preq(`/guest-map/${encodeURIComponent(b.dataset.unlink)}`, { method: "DELETE" }); drawMatch(); }
+      catch (e3) { window.notify?.(e3.message, "error"); }
+    }));
   }
 
   // -------------------------------------------------------------- API-Explorer
