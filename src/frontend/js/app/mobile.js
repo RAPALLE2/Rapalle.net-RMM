@@ -126,8 +126,12 @@ function init() {
   // App fokussiert ist, Topbar/Taskbar/Sidebar ausblenden (html.kbd-open,
   // Rest macht mobile.css). Beim Verlassen wieder einblenden.
   // ----------------------------------------------------------
+  // Nur Felder, die wirklich die Bildschirmtastatur oeffnen - Haekchen, Radios,
+  // Schieberegler usw. NICHT (sonst verschwanden die Leisten beim Antippen).
+  const NO_KBD = new Set(["checkbox", "radio", "range", "color", "file", "button", "submit", "reset", "image"]);
   const isEditable = (el) => el && (
-    el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable ||
+    (el.tagName === "INPUT" && !NO_KBD.has((el.type || "").toLowerCase())) ||
+    el.tagName === "TEXTAREA" || el.isContentEditable ||
     el.closest?.(".xterm")   // xterm.js-Terminals fangen Tastatur ueber ein Hidden-Textarea
   );
   document.addEventListener("focusin", (e) => {

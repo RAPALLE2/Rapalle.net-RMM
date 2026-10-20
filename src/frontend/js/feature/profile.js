@@ -15,6 +15,7 @@ import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePref
 import { t } from "../app/i18n.js";
 import { condenseHints } from "../app/help.js";
 import { getModuleApi } from "../app/modules.js";
+import { getBarPrefs, setBarPrefs } from "../app/bars.js";
 
 export function renderProfile(body, win) {
   // Modul "client": Download der App + "Meine Geräte" (null, wenn das Modul aus ist)
@@ -26,6 +27,14 @@ export function renderProfile(body, win) {
 
   const u = state.user;
   const _rp = getRestorePrefs();
+  const _bp = getBarPrefs();
+  const _barRow = (id, checked, label) => `
+      <div class="form-row" style="align-items:center">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--subtext);font-size:13px">
+          <input type="checkbox" id="${id}" ${checked ? "checked" : ""} />
+          ${label}
+        </label>
+      </div>`;
   const mayEditName = hasGlobalPerm("edit_profile_name");
   const mayCustomizeDash = hasGlobalPerm("customize_dashboard");
   const mayRestore = hasGlobalPerm("restore_session");
@@ -88,6 +97,17 @@ export function renderProfile(body, win) {
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${mayCustomizeDash ? "" : 'hidden'}>
         ${t("pr_layout_edit_hint")}
       </p>
+
+      <h3 style="margin-top:26px">${t("pr_bars")}</h3>
+      <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px">
+        ${t("pr_bars_hint")}
+      </p>
+      <div style="font-weight:600;font-size:12.5px;margin:6px 0 2px">🖥️ ${t("pr_bars_desktop")}</div>
+      ${_barRow("pr-bars-d-top", _bp.desktop.top, t("pr_bars_top"))}
+      ${_barRow("pr-bars-d-task", _bp.desktop.task, t("pr_bars_task"))}
+      <div style="font-weight:600;font-size:12.5px;margin:10px 0 2px">📱 ${t("pr_bars_mobile")}</div>
+      ${_barRow("pr-bars-m-top", _bp.mobile.top, t("pr_bars_top"))}
+      ${_barRow("pr-bars-m-task", _bp.mobile.task, t("pr_bars_task"))}
 
       <h3 style="margin-top:26px" ${mayRestore ? "" : "hidden"}>${t("pr_after_login")}</h3>
       <p style="color:var(--subtext);font-size:12px;max-width:520px;margin-top:2px" ${mayRestore ? "" : "hidden"}>
@@ -339,6 +359,17 @@ export function renderProfile(body, win) {
   _wireRestore("#pr-restore-client", "client");
   _wireRestore("#pr-restore-folder", "folder");
   _wireRestore("#pr-restore-apps", "apps");
+
+  // Leisten automatisch ausblenden: sofort anwenden + speichern (pro Benutzer, Server-Sync)
+  const _wireBar = (id, mode, bar) => {
+    body.querySelector(id)?.addEventListener("change", (e) => {
+      setBarPrefs({ [mode]: { [bar]: e.target.checked } });
+    });
+  };
+  _wireBar("#pr-bars-d-top", "desktop", "top");
+  _wireBar("#pr-bars-d-task", "desktop", "task");
+  _wireBar("#pr-bars-m-top", "mobile", "top");
+  _wireBar("#pr-bars-m-task", "mobile", "task");
 
   body.querySelector("#pr-save").addEventListener("click", async () => {
     const updated = await api.updateProfile({

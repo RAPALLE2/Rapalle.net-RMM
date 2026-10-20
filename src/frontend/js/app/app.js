@@ -23,6 +23,7 @@ import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll, close
 import { recordMetrics } from "./metricshistory.js";
 import { notify, notifyError } from "./notify.js";
 import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, setOrgDefaults, setOrgProfilePresets, hydrateFromServer } from "./persist.js";
+import { initBars } from "./bars.js";
 import { initCrashGuard } from "./crashguard.js";
 
 // notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
@@ -258,6 +259,8 @@ async function startSession(user) {
   // übernehmen (Server gewinnt) - VOR initFavorites()/loadState(), damit
   // Favoriten, Layouts & Co. in jedem Browser identisch sind.
   await hydrateFromServer();
+  // Kopf-/Taskleiste automatisch ausblenden (pro Benutzer, rmm_bars:<user> wurde hydriert)
+  try { initBars(user.username); } catch (e) { try { console.error(e); } catch {} }
   // Sprache ggf. auf den Server-Stand umschalten (rmm_lang wurde hydriert).
   try {
     const lang = localStorage.getItem("rmm_lang");

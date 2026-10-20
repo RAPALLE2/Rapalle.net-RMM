@@ -381,3 +381,92 @@ html.is-mobile { -webkit-text-size-adjust: 100%; }
   /* Terminal-Statuszeile eindampfen */
   html.kbd-open [id^="term-status-"] { display: none; }
 }
+
+/* ============================================================
+   AUTO-AUSBLENDEN von Kopf- und Taskleiste (js/app/bars.js)
+   ------------------------------------------------------------
+   Pro Benutzer einstellbar (Profil -> "Leisten"), PC und Handy
+   getrennt. html.bars-hide-<top|task> = Leiste im Auto-Modus
+   (aus dem Fluss, Fenster/Inhalt bekommen den Platz),
+   html.bars-show-<top|task> = gerade eingeblendet.
+   PC: unsichtbare Randzone (4 px) blendet per Hover ein.
+   Handy: Knopfgruppe oben links (☰ / Kopfleiste / Taskleiste).
+   ============================================================ */
+.bars-hot { display: none; }
+.bars-fab { display: none; }
+
+html.bars-hide-top .bars-hot-top,
+html.bars-hide-task .bars-hot-task {
+  display: block; position: fixed; left: 0; right: 0; height: 4px; z-index: 2040;
+}
+html.bars-hide-top .bars-hot-top { top: 0; }
+html.bars-hide-task .bars-hot-task { bottom: 0; }
+
+html.bars-hide-top .topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2050;
+  transform: translateY(-100%); visibility: hidden;
+  transition: transform .18s ease, box-shadow .18s ease, visibility 0s linear .18s;
+}
+html.bars-hide-task .taskbar {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 2050;
+  transform: translateY(100%); visibility: hidden;
+  transition: transform .18s ease, box-shadow .18s ease, visibility 0s linear .18s;
+}
+html.bars-show-top .topbar {
+  transform: none; visibility: visible; transition-delay: 0s;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .38);
+}
+html.bars-show-task .taskbar {
+  transform: none; visibility: visible; transition-delay: 0s;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, .38);
+}
+html.bars-hide-top .window-layer { top: 0; }
+html.bars-hide-task .window-layer { bottom: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  html.bars-hide-top .topbar, html.bars-hide-task .taskbar { transition: none; }
+}
+
+@media (max-width: 900px), ((pointer: coarse) and (orientation: portrait)) {
+  /* Fenster/Drawer nutzen den frei gewordenen Platz (Safe-Area bleibt frei) */
+  html.bars-hide-top .window-layer { top: var(--safe-top); }
+  html.bars-hide-task .window-layer { bottom: var(--safe-bottom); }
+  html.bars-hide-task .sidebar { bottom: 0; padding-bottom: var(--safe-bottom); }
+  html.bars-hide-top .sidebar { top: calc(var(--safe-top) + 40px); }
+  html.bars-hide-top .start-menu-panel,
+  html.bars-hide-task .start-menu-panel { max-height: calc(100dvh - 24px - var(--safe-top) - var(--safe-bottom)); }
+
+  /* Knopfgruppe oben links: ☰ Seitenleiste / ▔ Kopfleiste / ▁ Taskleiste */
+  html.bars-fab-on .bars-fab {
+    display: flex; gap: 4px; align-items: center;
+    position: fixed; z-index: 2060;
+    top: calc(var(--safe-top) + 3px); left: calc(var(--safe-left) + 6px);
+    padding: 0; background: transparent;
+  }
+  .bars-fab button {
+    width: 34px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: color-mix(in srgb, var(--panel-2) 88%, transparent);
+    color: var(--accent); font-size: 17px; line-height: 1; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Kopfleiste sichtbar: Knoepfe mittig in der Kopfleiste */
+  html.bars-fab-on:not(.bars-hide-top) .bars-fab,
+  html.bars-show-top .bars-fab { top: calc(var(--safe-top) + (var(--mob-topbar-h) - var(--safe-top) - 30px) / 2); }
+  .bars-fab button:active { background: rgba(255, 255, 255, .16); }
+  .bars-fab button.active { background: var(--accent); color: var(--bg, #0b1220); border-color: var(--accent); }
+
+  /* Platz fuer die Knopfgruppe: eigener ☰ der Kopfleiste weg, Logo/Titel/Fenstertitel nach rechts */
+  html.bars-fab-on .mobile-sidebar-btn { display: none; }
+  html.bars-fab-on .topbar-left { padding-left: var(--bars-fab-w, 80px); }
+  html.bars-fab-on.bars-hide-top:not(.kbd-open) .rmm-window-titlebar { padding-left: calc(var(--bars-fab-w, 80px) + 6px); }
+  html.bars-fab-on.bars-hide-top .main-content { padding-top: calc(var(--safe-top) + 40px); }
+  html.bars-fab-on.bars-hide-top .topbar { padding-top: var(--safe-top); }
+
+  /* Bildschirmtastatur offen: Knopfgruppe stoert nur */
+  html.kbd-open .bars-fab { display: none !important; }
+}
+/* Einzelfenster-Modus (Client-App) kennt keine Leisten */
+body.solo-mode .bars-fab, body.solo-mode .bars-hot { display: none !important; }

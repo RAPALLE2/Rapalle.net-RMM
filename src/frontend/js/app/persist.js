@@ -131,6 +131,7 @@ const SYNC_PREFIXES = [
   "rmm_lang",          // Sprache
   "rmm_term_",         // Terminal-Einstellungen
   "rmm_notifications", // Benachrichtigungs-Center
+  "rmm_bars:",         // Kopf-/Taskleiste automatisch ausblenden (bars.js)
 ];
 // Diese bleiben bewusst NUR im Browser (Sicherheit / gerätegebunden).
 const NEVER_SYNC = new Set([
