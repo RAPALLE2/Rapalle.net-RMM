@@ -47,7 +47,7 @@ export function renderWebserver(body) {
       <div data-s="${esc(s.name)}" style="padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:2px;
            ${s.name === (select || current) ? "background:var(--panel-2);" : ""}">
         <div style="display:flex;gap:6px;align-items:center"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(s.title || s.name)}</b>
-          <span title="${s.public ? "öffentlich" : "nicht freigegeben"}">${s.public ? "🌐" : "🔒"}</span></div>
+          <span title="${s.kind === "proxy" ? "Weiterleitung" : s.public ? "öffentlich" : "nicht freigegeben"}">${s.kind === "proxy" ? "↪" : ""}${s.public ? "🌐" : "🔒"}</span></div>
         <div style="font-size:11.5px;color:var(--subtext)">/${esc(s.name)}</div></div>`).join("")
       : `<div style="color:var(--subtext);padding:8px">${data.manage ? "Noch keine Website – „＋ Neu“." : "Du bist noch keiner Website zugeordnet."}</div>`;
     listEl.querySelectorAll("[data-s]").forEach((el) => el.addEventListener("click", () => openSite(el.dataset.s)));
@@ -76,7 +76,12 @@ export function renderWebserver(body) {
     main.querySelector("[data-copy]").addEventListener("click", () => { navigator.clipboard?.writeText(url); window.notify?.("Adresse kopiert", "success"); });
     main.querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => openSite(name, b.dataset.t)));
     const pane = main.querySelector("[data-pane]");
-    if (tab === "files") renderFileManager(pane, { api: `/api/webserver/sites/${encodeURIComponent(name)}`, publicBase: `/${name}` });
+    if (tab === "files" && s.kind === "proxy") {
+      const up = s.upstream || {};
+      pane.innerHTML = `<div style="border:1px solid var(--border);border-radius:8px;padding:12px">↪ <b>Weiterleitung</b> – diese Website hat keine Dateien,
+        sie leitet jeden Abruf weiter an ${up.provider === "docker" ? `den Docker-Dienst <b>${esc(up.ref?.service || "")}</b> (Port ${esc(String(up.ref?.port || ""))})
+        – verwaltet in der App „Docker“ unter „Veröffentlichen“` : `<code>${esc(up.url || "")}</code>`}.</div>`;
+    } else if (tab === "files") renderFileManager(pane, { api: `/api/webserver/sites/${encodeURIComponent(name)}`, publicBase: `/${name}` });
     else drawSettings(pane, s);
   }
 

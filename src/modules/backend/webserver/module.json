@@ -3,14 +3,18 @@
   "id": "webserver",
   "name": "Webserver",
   "version": "1.0.0",
-  "description": "Mehrere Websites direkt aus dem RMM ausliefern: jede unter rmm.url.de/<name>, mit eigenem Ordner (bearbeitbar in der App, im Explorer/Relay unter „Websites“ und per Netzlaufwerk) und eigenen Rechten für Benutzer und Gruppen. Dient auch dem Deployment-Server als Hosting-Grundlage.",
+  "description": "Mehrere Websites direkt aus dem RMM ausliefern: jede unter rmm.url.de/<name>, mit eigenem Ordner (bearbeitbar in der App, im Explorer/Relay unter „Websites“ und per Netzlaufwerk) und eigenen Rechten für Benutzer und Gruppen. Dient auch dem Deployment-Server als Hosting-Grundlage. Websites können auch Weiterleitungen sein (Reverse-Proxy, z. B. für Docker-Container).",
   "author": "RAPALLE.net",
   "category": "Verteilung",
   "icon": "🌍",
   "requires": [],
-  "pip": [],
+  "pip": [
+    "httpx>=0.27"
+  ],
   "entry": "module",
-  "routers": ["webserver_routes"],
+  "routers": [
+    "webserver_routes"
+  ],
   "hooks": {
     "startup": "on_startup",
     "enable": "on_enable",

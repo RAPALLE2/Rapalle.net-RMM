@@ -21,7 +21,7 @@ def _split(user, parts: list[str]) -> tuple[dict, Path, list[str]]:
     if not clean:
         raise IsADirectoryError("Wurzel")
     s = sites.get(clean[0])
-    if not s or not sites.level(user, s):
+    if not s or not sites.level(user, s) or s.get("kind") == "proxy":
         raise FileNotFoundError(clean[0])
     return s, sites.folder(s["name"]), clean[1:]
 
@@ -29,7 +29,7 @@ def _split(user, parts: list[str]) -> tuple[dict, Path, list[str]]:
 def listdir(user, parts: list[str]) -> list[dict]:
     clean = [p for p in parts if p not in ("", ".")]
     if not clean:
-        return [_vdir(s["name"]) for s in sites.visible(user)]
+        return [_vdir(s["name"]) for s in sites.visible(user) if s.get("kind") != "proxy"]
     s, root, rest = _split(user, parts)
     return [e for e in webhost.listdir(root, rest)]
 

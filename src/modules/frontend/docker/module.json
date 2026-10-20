@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "docker",
+  "name": "Docker",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "docker",
+      "label": "Docker",
+      "icon": "🐳",
+      "title": "Docker",
+      "entry": "app.js",
+      "export": "renderDocker",
+      "w": 1100,
+      "h": 700
+    }
+  ]
+}

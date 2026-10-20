@@ -24,6 +24,8 @@ import threading
 import time
 from pathlib import Path
 
+from starlette.requests import Request   # auf Modulebene: FastAPI muss die Typangabe aufloesen koennen
+
 from app import db
 from app.auth import is_super_admin, user_has_permission
 from app.paths import MODULES_DATA_DIR, STORAGE_DIR
@@ -135,15 +137,24 @@ def visible(user) -> list[dict]:
 
 
 # ------------------------------------------------------------------ Aendern
-def create(name: str, title: str, user: dict) -> dict:
+def create(name: str, title: str, user: dict, kind: str = "static", upstream: dict | None = None,
+           public: bool = False) -> dict:
+    """kind "static" = Ordner ausliefern, "proxy" = Weiterleitung an upstream (siehe proxy.py)."""
     name = check_name(name)
+    if kind not in ("static", "proxy") or (kind == "proxy" and not upstream):
+        raise ValueError("Ungültige Website-Art")
     with _lock:
         d = _load()
         if name in d:
             raise ValueError(f"„{name}“ gibt es schon")
-        d[name] = {"title": (title or name).strip()[:80], "public": False, "listing": True, "members": [],
-                   "created": int(time.time()), "created_by": user["username"]}
+        d[name] = {"title": (title or name).strip()[:80], "public": bool(public), "listing": True, "members": [],
+                   "created": int(time.time()), "created_by": user["username"], "kind": kind}
+        if kind == "proxy":
+            d[name]["upstream"] = upstream
         _save(d)
+    if kind == "proxy":
+        sync_routes()
+        return get(name)
     f = folder(name)
     if not any(f.iterdir()):
         (f / "index.html").write_text(
@@ -199,14 +210,30 @@ _site_routes: list = []
 
 
 def _handler(name: str):
-    async def handler(path: str = ""):
+    async def handler(request: Request, path: str = ""):
         s = get(name)
         if not s or not s.get("public"):
             from starlette.responses import PlainTextResponse
             return PlainTextResponse("Diese Website ist nicht freigegeben.", status_code=404)
+        if s.get("kind") == "proxy":
+            from . import proxy
+            return await proxy.http(request, name, s, path)
         return webhost.serve(folder(name), [p for p in path.split("/") if p], f"/{name}",
                              title=s.get("title") or name, listing=bool(s.get("listing", True)))
     return handler
+
+
+def _ws_handler(name: str):
+    from starlette.websockets import WebSocket
+
+    async def ws_handler(websocket: WebSocket):
+        s = get(name)
+        if not s or not s.get("public") or s.get("kind") != "proxy":
+            await websocket.close(code=1008)
+            return
+        from . import proxy
+        await proxy.websocket(websocket, name, s, websocket.path_params.get("path", ""))
+    return ws_handler
 
 
 def sync_routes() -> None:
@@ -220,6 +247,7 @@ def sync_routes() -> None:
         return
     from fastapi.routing import APIRoute
     from starlette.responses import RedirectResponse
+    from starlette.routing import WebSocketRoute
     routes = api.router.routes
     for r in list(_site_routes):
         if r in routes:
@@ -232,7 +260,11 @@ def sync_routes() -> None:
         async def to_slash(_n=name):
             return RedirectResponse(f"/{_n}/", status_code=308)
         new.append(APIRoute(f"/{name}", endpoint=to_slash, methods=["GET", "HEAD"], include_in_schema=False))
-        new.append(APIRoute(f"/{name}/{{path:path}}", endpoint=h, methods=["GET", "HEAD"], include_in_schema=False))
+        site = _load().get(name) or {}
+        methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] if site.get("kind") == "proxy" else ["GET", "HEAD"]
+        new.append(APIRoute(f"/{name}/{{path:path}}", endpoint=h, methods=methods, include_in_schema=False))
+        if site.get("kind") == "proxy":
+            new.append(WebSocketRoute(f"/{name}/{{path:path}}", endpoint=_ws_handler(name)))
     if new:
         modules._place_before_static(new)
     else:

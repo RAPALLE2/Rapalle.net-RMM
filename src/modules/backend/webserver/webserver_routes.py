@@ -48,6 +48,7 @@ def _site(user, name: str, need: int = sites.EDIT) -> dict:
 
 def _public(s: dict, user) -> dict:
     return {"name": s["name"], "title": s.get("title"), "public": bool(s.get("public")), "listing": bool(s.get("listing", True)),
+            "kind": s.get("kind") or "static", "upstream": s.get("upstream"),
             "members": s.get("members") or [], "created": s.get("created"), "created_by": s.get("created_by"),
             "level": sites.level(user, s), "url": f"/{s['name']}/"}
 
@@ -135,6 +136,8 @@ class MoveBody(BaseModel):
 
 def _root(user, name) -> Path:
     s = _site(user, name)
+    if s.get("kind") == "proxy":
+        raise HTTPException(409, "Diese Website ist eine Weiterleitung – sie hat keine Dateien")
     return sites.folder(s["name"])
 
 

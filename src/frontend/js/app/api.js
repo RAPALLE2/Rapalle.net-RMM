@@ -99,6 +99,7 @@ const _PERM_KEY = {
   manage_deployment: "perm_manage_deployment",
   use_api: "perm_use_api",
   manage_websites: "perm_manage_websites",
+  manage_docker: "perm_manage_docker",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",

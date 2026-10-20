@@ -2741,6 +2741,8 @@ GLOBAL_PERM_KEYS = [
     "use_api",
     # Modul "webserver": Websites anlegen/loeschen und ALLE Websites bearbeiten
     "manage_websites",
+    # Modul "docker": Stacks anlegen, ALLE Container/Images/Volumes/Netzwerke steuern
+    "manage_docker",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",

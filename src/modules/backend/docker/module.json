@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "docker",
+  "name": "Docker",
+  "version": "1.0.0",
+  "description": "Container verwalten – auf dem RMM-Server (Docker-Socket) oder auf Nodes: Stacks per docker-compose oder aus dem Container-Browser (Katalog + Docker Hub), volle Kontrolle (Start/Stopp, Logs, Statistik, Konsole, Images, Volumes, Netzwerke), Rechte pro Stack für Benutzer und Gruppen, Veröffentlichen über den Webserver.",
+  "author": "RAPALLE.net",
+  "category": "Virtualisierung",
+  "icon": "🐳",
+  "requires": [
+    "webserver"
+  ],
+  "pip": [
+    "PyYAML>=6.0"
+  ],
+  "routers": [
+    "docker_routes"
+  ]
+}

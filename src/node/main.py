@@ -433,6 +433,42 @@ async def _full_report() -> dict:
     }
 
 
+# -------------------------------------------------------------------------
+# Docker-Engine-API durchreichen (Modul "docker" im RMM steuert damit die
+# Container dieses Nodes: Stacks, Start/Stopp, Logs, Statistik, Images ...)
+# -------------------------------------------------------------------------
+DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
+
+
+def _docker_api_sync(method: str, path: str, body, raw: bool, timeout: float) -> dict:
+    import http.client
+
+    class _Conn(http.client.HTTPConnection):
+        def connect(self):
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(DOCKER_SOCK)
+            self.sock = s
+
+    if not path.startswith("/") or ".." in path:
+        raise RuntimeError("Ungültiger Docker-Pfad")
+    conn = _Conn("localhost", timeout=timeout)
+    try:
+        payload = json.dumps(body).encode() if body is not None else None
+        conn.request(method, path, body=payload, headers={"Content-Type": "application/json"} if payload else {})
+        r = conn.getresponse()
+        data = r.read()
+        return {"status": r.status, "body": base64.b64encode(data).decode()}
+    finally:
+        conn.close()
+
+
+async def docker_api(data: dict) -> dict:
+    return await asyncio.get_running_loop().run_in_executor(
+        None, _docker_api_sync, str(data.get("method") or "GET").upper(), str(data.get("path") or ""),
+        data.get("body"), bool(data.get("raw")), float(data.get("timeout") or 60))
+
+
 async def handle(op: str, data: dict):
     if op == "ping":
         return {"pong": True, "time": int(time.time())}
@@ -450,6 +486,8 @@ async def handle(op: str, data: dict):
         return await module_action(data)
     if op == "module-list":
         return await module_list()
+    if op == "docker-api":
+        return await docker_api(data)
     if op == "logs":
         try:
             return {"log": LOG_FILE.read_text(encoding="utf-8")[-20000:]}
