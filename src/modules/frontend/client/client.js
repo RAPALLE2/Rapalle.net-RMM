@@ -150,14 +150,13 @@ function drawDevices(box, list, reload) {
 export async function renderSettings(root) {
   root.innerHTML = `<div style="font-size:13px">
     <h3 style="margin-top:0">Installer</h3>
-    <p style="color:var(--subtext)">Mitgeliefert sind fertige Pakete für Windows (<code>.exe</code>, <code>.msi</code>, <code>.zip</code>),
-      Linux (<code>.deb</code>, <code>.tar</code>, <code>.tar.gz</code>) und Android (<code>.apk</code>) aus <code>src/client/release</code>.
-      Eigene Builds (<code>python3 src/client/build_installers.py</code>) oder neuere Versionen hier hochladen –
-      hochgeladene Dateien haben Vorrang. Benutzer finden alles unter Profil → „Client-App &amp; Geräte“.</p>
+    <p style="color:var(--subtext)">Mitgeliefert sind fertige Pakete aus <code>src/client/release</code>. Selbst gebaute (unten,
+      „Pakete bauen“) und hochgeladene Pakete liegen in <code>backend/storage/client/</code> und haben Vorrang.
+      Benutzer finden alles unter Profil → „Client-App &amp; Geräte“.</p>
     <div style="display:flex;gap:8px;margin-bottom:8px"><button class="btn-primary btn-sm" data-up>⬆ Installer hochladen</button>
-      <input type="file" data-file accept=".exe,.msi,.msix,.deb,.rpm,.AppImage,.appimage,.apk,.aab,.flatpak" multiple hidden></div>
+      <input type="file" data-file accept=".exe,.msi,.msix,.zip,.deb,.rpm,.xz,.gz,.tgz,.tar,.AppImage,.appimage,.apk,.aab,.flatpak" multiple hidden></div>
     <div data-inst></div>
-    <h3>Pakete neu bauen</h3>
+    <h3>Pakete bauen</h3>
     <div data-build style="color:var(--subtext)">Lade …</div>
     <h3>Alle Geräte</h3>
     <div data-all style="color:var(--subtext)">Lade …</div>
@@ -199,8 +198,38 @@ export async function renderSettings(root) {
 }
 
 // ------------------------------------------------------------------ Pakete neu bauen
-const FMT = { exe: "Windows .exe", zip: "Windows .zip", msi: "Windows .msi", deb: "Linux .deb", tar: "Linux .tar/.tar.gz", apk: "Android .apk" };
+const FMT = {
+  exe: "Windows .exe", zip: "Windows .zip", msi: "Windows .msi",
+  deb: "Linux .deb", rpm: "Linux .rpm", pkg: "Arch .pkg.tar.xz", tar: "Linux .tar/.tar.gz", tgz: "Linux .tgz",
+  apk: "Android .apk",
+};
 let buildTimer = null;
+
+function envBox(env, b) {
+  const fmtMB = (n) => (n ? ` · ${(n / 1048576).toFixed(0)} MB` : "");
+  if (env.mode === "docker") {
+    if (env.preparing) return `<div data-envlog-wrap style="margin-bottom:8px">
+        <div>⏳ <b>Bau-Umgebung wird vorbereitet</b> – Docker-Image <code>${esc(env.image)}</code> mit allen Werkzeugen
+          (Wine, Windows-Python + PyInstaller, wixl, rpm, JDK, Android). Das passiert einmalig beim Aktivieren des Moduls und
+          dauert je nach Leitung einige Minuten.</div>
+        <pre data-envlog style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px;max-height:200px;
+             overflow:auto;font-size:11.5px;margin:6px 0 0">${esc((env.log || []).join("\n"))}</pre></div>`;
+    if (env.ready) return `<p style="margin:0 0 8px">🐳 Bau-Umgebung bereit: <code>${esc(env.image)}</code>${fmtMB(env.size)} – alle Formate.
+        <button class="btn btn-sm" data-prep="1" style="margin-left:6px">Neu vorbereiten</button></p>`;
+    return `<div style="margin:0 0 8px">⚠ Bau-Umgebung fehlt${env.error ? ` – letzter Versuch: <span style="color:var(--danger)">${esc(env.error)}</span>` : ""}.
+        <button class="btn-primary btn-sm" data-prep="0" style="margin-left:6px">Bau-Umgebung vorbereiten</button>
+        ${env.log?.length ? `<pre style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px;max-height:160px;
+             overflow:auto;font-size:11.5px;margin:6px 0 0">${esc(env.log.slice(-40).join("\n"))}</pre>` : ""}</div>`;
+  }
+  const why = env.docker && !env.socket
+    ? "Das RMM läuft in Docker, aber ohne Docker-Socket (in docker-compose.yml unter „volumes“: <code>/var/run/docker.sock:/var/run/docker.sock</code>)."
+    : "Das RMM läuft nicht in Docker.";
+  if (env.mode === "native-windows" && env.preparing)
+    return `<p style="margin:0 0 8px">⏳ Lade PyInstaller und WiX für die Windows-Pakete …</p>`;
+  return `<p style="font-size:12px;margin:0 0 8px">ℹ ${why} Gebaut wird direkt auf dem Server mit den vorhandenen Werkzeugen
+      (✖ = hier nicht möglich). <b>Alle Formate</b> gibt es im Docker-Betrieb: dort lädt das Modul beim Aktivieren ein Bau-Image.
+      ${env.mode === "native-windows" && env.error ? `<br><span style="color:var(--danger)">${esc(env.error)}</span>` : ""}</p>`;
+}
 
 async function drawBuild(box, onDone) {
   let b;
@@ -208,29 +237,59 @@ async function drawBuild(box, onDone) {
   if (!b.available) { box.innerHTML = `<div>Der Client-Quellcode (<code>src/client</code>) fehlt auf diesem Server.</div>`; return; }
   if (b.running) return drawRunning(box, onDone);
   const t = b.tools || {};
+  const env = b.env || {};
+  const canBuild = Object.values(t).some(Boolean) && !env.preparing;
   box.innerHTML = `
-    <p style="margin:0 0 8px">Baut die Client-Pakete direkt aus dem Quellcode neu (<code>src/client</code>) und legt sie in
-      <code>backend/storage/client/</code> ab – Benutzer bekommen sie sofort unter Profil → „Client-App &amp; Geräte“,
+    <p style="margin:0 0 8px">Baut die Client-Pakete direkt aus dem Quellcode neu (<code>src/client</code>) – wie die Agent-Pakete per
+      Knopfdruck – und legt sie in <code>backend/storage/client/</code> ab. Benutzer bekommen sie sofort unter Profil → „Client-App &amp; Geräte“,
       die Apps per Auto-Update. Aktuelle Version im Quellcode: <b>${esc(b.version || "?")}</b>.</p>
+    ${envBox(env, b)}
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
       ${Object.entries(FMT).map(([k, l]) => `<span style="font-size:12px;padding:3px 8px;border-radius:12px;border:1px solid var(--border);
         color:${t[k] ? "var(--accent)" : "var(--subtext)"}">${t[k] ? "✔" : "✖"} ${l}</span>`).join("")}
     </div>
-    ${Object.values(t).some((v) => !v) ? `<p style="font-size:12px;margin:0 0 8px">✖ = auf diesem Server fehlen die Werkzeuge
-      (Windows: Wine + Windows-Python mit PyInstaller, Android: aapt/javac/dx/apksigner) – dafür bleiben die vorhandenen Pakete gültig.
-      Siehe <code>src/client/README.md</code>.</p>` : ""}
-    ${b.result ? `<p style="font-size:12px;margin:0 0 8px">Letzter Bau (${esc(b.by || "")}, ${b.finished ? new Date(b.finished * 1000).toLocaleString() : ""}):
+    ${b.result ? `<p style="font-size:12px;margin:0 0 8px">Letzter Bau (${esc(b.by || "")}${b.where ? ", " + esc(b.where) : ""}, ${b.finished ? new Date(b.finished * 1000).toLocaleString() : ""}):
       ${b.result.stopped ? "abgebrochen" : b.result.ok ? "erfolgreich" : "fehlgeschlagen"} – ${b.result.built.length} Paket(e)
       ${b.result.failed.length ? `, Fehler: ${esc(b.result.failed.join("; "))}` : ""}</p>` : ""}
-    <button class="btn-primary btn-sm" data-go>🔨 Client-Pakete neu bauen</button>`;
+    <button class="btn-primary btn-sm" data-go ${canBuild ? "" : "disabled"}>🔨 Client-Pakete bauen</button>`;
   box.querySelector("[data-go]").addEventListener("click", () => askVersion(box, b, onDone));
+  box.querySelectorAll("[data-prep]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (btn.dataset.prep === "1" && !(await uiConfirm("Bau-Umgebung neu vorbereiten?", {
+      description: "Das Bau-Image wird neu angelegt (lädt alle Werkzeuge erneut herunter, einige Minuten).", okText: "Neu vorbereiten" }))) return;
+    try { await creq("/build/prepare", { method: "POST", body: JSON.stringify({ force: btn.dataset.prep === "1" }) }); }
+    catch (e) { window.notify?.(e.message, "error"); }
+    drawBuild(box, onDone);
+  }));
+  // Waehrend der Vorbereitung regelmaessig auffrischen (Protokoll + Ende)
+  clearInterval(buildTimer);
+  if (env.preparing) {
+    buildTimer = setInterval(async () => {
+      if (!box.isConnected) { clearInterval(buildTimer); return; }
+      let nb;
+      try { nb = await creq("/build"); } catch { return; }
+      const pre = box.querySelector("[data-envlog]");
+      if (nb.env?.preparing && pre) {
+        const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+        pre.textContent = (nb.env.log || []).join("\n");
+        if (atEnd) pre.scrollTop = pre.scrollHeight;
+        return;
+      }
+      clearInterval(buildTimer);
+      if (nb.env && !nb.env.preparing)
+        window.notify?.(nb.env.ready || nb.env.mode !== "docker" ? "Bau-Umgebung bereit" : "Bau-Umgebung fehlgeschlagen",
+                        nb.env.ready || nb.env.mode !== "docker" ? "success" : "error", 6000);
+      drawBuild(box, onDone);
+    }, 2000);
+    const pre = box.querySelector("[data-envlog]");
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  }
 }
 
 function askVersion(box, b, onDone) {
   const ov = document.createElement("div");
   ov.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px";
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;width:460px;max-width:100%;font-size:13px">
-      <b style="font-size:15px">Client-Pakete neu bauen</b>
+      <b style="font-size:15px">Client-Pakete bauen</b>
       <p style="color:var(--subtext);margin:6px 0 12px">Welche Version sollen die neuen Pakete bekommen?</p>
       <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;cursor:pointer">
         <input type="radio" name="bv" value="replace" checked style="width:16px;height:16px;appearance:auto;margin-top:2px">

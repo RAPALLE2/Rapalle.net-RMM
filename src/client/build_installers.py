@@ -11,13 +11,21 @@ Profil -> Client-App & Geraete und per Einzeiler zum Download an):
            RapalleClient-<v>-windows.msi   Installer (Programme + Startmenue/Desktop), per GPO/Intune verteilbar
            RapalleClient-<v>-windows.zip   die .exe zum Entpacken (ohne Installation)
   Linux    rapalle-client_<v>_all.deb      Debian/Ubuntu/Mint (Python 3 + Tk vom System)
-           rapalle-client-<v>-linux.tar.gz / .tar   fuer alle Distributionen (install.sh liegt bei)
+           rapalle-client-<v>-1.noarch.rpm Fedora/RHEL/openSUSE
+           rapalle-client-<v>-1-any.pkg.tar.xz   Arch/Manjaro
+           rapalle-client-<v>-linux.tar.gz / .tgz / .tar   fuer alle Distributionen (install.sh liegt bei)
   Android  RapalleClient-<v>-android.apk   native App (Android 6+), dauerhaft signiert
 
-Werkzeuge (Linux-Bausystem, z.B. Ubuntu 24.04):
+Werkzeuge:
+  Am einfachsten: Modul "Client-App" im Docker-Betrieb aktivieren - das Modul laedt dann ein
+  Bau-Image (rapalle/rmm-client-builder) mit ALLEN Werkzeugen und baut darin (wie die Agent-Pakete
+  per Knopfdruck, aber fuer alle Formate).
+  Von Hand (Linux, z.B. Ubuntu 24.04):
   exe   wine64 + Windows-Python mit PyInstaller  (--winpython C:\\pfad\\python.exe unter Wine)
         oder direkt auf Windows: python build_installers.py --targets exe,zip,msi
-  msi   wixl (Paket "wixl"/msitools)            deb/tar  nur Python
+        (PyInstaller per pip und WiX als Download holt sich das Skript dort selbst, wie beim Agenten)
+  msi   wixl (Paket "wixl"/msitools), auf Windows WiX 3   deb/tar/tgz/pkg  nur Python
+  rpm   rpmbuild (Paket "rpm")
   apk   aapt, javac, dalvik-exchange (dx), zipalign, apksigner, android-sdk-platform-23
 
 Aufruf:
@@ -26,6 +34,7 @@ Aufruf:
   python3 src/client/build_installers.py --list
   python3 src/client/build_installers.py --tools            # welche Formate gehen hier? (JSON)
   python3 src/client/build_installers.py --out DIR --set-version 1.2.1   # Server-Knopf "neu bauen"
+  python build_installers.py --prepare                      # Windows: PyInstaller + WiX vorab holen
 """
 from __future__ import annotations
 
@@ -38,6 +47,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -46,7 +56,10 @@ DESKTOP = HERE / "desktop"
 ANDROID = HERE / "android"
 RES = HERE / "resources"
 RELEASE = HERE / "release"          # Standard-Ausgabe (mitgelieferte Pakete); mit --out aenderbar
-ALL = ["exe", "msi", "zip", "deb", "tar", "apk"]
+ALL = ["exe", "msi", "zip", "deb", "rpm", "pkg", "tar", "tgz", "apk"]
+# Werkzeug-Ablage fuer Windows (PyInstaller/WiX); das Modul setzt sie auf data/modules/client/buildtools
+TOOLS_DIR = Path(os.environ.get("RMM_CLIENT_TOOLS") or (HERE / ".buildtools"))
+WIX_URL = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"
 
 
 def set_version(v: str) -> None:
@@ -62,14 +75,69 @@ def set_version(v: str) -> None:
 
 def tools() -> dict:
     """Welche Formate lassen sich auf DIESEM System bauen?"""
+    if os.name == "nt":
+        # Wie beim Agenten: PyInstaller (pip) und WiX (Download) holt sich das Skript selbst.
+        return {"exe": True, "zip": True, "msi": True, "deb": True, "rpm": bool(shutil.which("rpmbuild")),
+                "pkg": True, "tar": True, "tgz": True, "apk": _apk_ok()}
     winpy = os.environ.get("RMM_WINPYTHON") or "/opt/winpy/python/python.exe"
-    wine = shutil.which("wine64") or shutil.which("wine") or ("/usr/lib/wine/wine64" if Path("/usr/lib/wine/wine64").exists() else None)
-    exe_ok = os.name == "nt" or bool(wine and Path(winpy).exists())
+    exe_ok = bool(_wine() and Path(winpy).exists())
+    return {"exe": exe_ok, "zip": exe_ok, "msi": exe_ok and bool(shutil.which("wixl")),
+            "deb": True, "rpm": bool(shutil.which("rpmbuild")), "pkg": True, "tar": True, "tgz": True,
+            "apk": _apk_ok()}
+
+
+def _wine() -> str | None:
+    return shutil.which("wine64") or shutil.which("wine") or \
+        ("/usr/lib/wine/wine64" if Path("/usr/lib/wine/wine64").exists() else None)
+
+
+def _apk_ok() -> bool:
     apk_tools = all(shutil.which(t) for t in ("aapt", "javac", "dalvik-exchange", "zipalign", "apksigner"))
-    apk_ok = apk_tools and Path("/usr/lib/android-sdk/platforms/android-23/android.jar").exists() \
+    return apk_tools and Path("/usr/lib/android-sdk/platforms/android-23/android.jar").exists() \
         and (ANDROID / "signing" / "release.jks").exists()
-    return {"exe": exe_ok, "zip": exe_ok, "msi": exe_ok and (os.name == "nt" or bool(shutil.which("wixl"))),
-            "deb": True, "tar": True, "apk": apk_ok}
+
+
+# ------------------------------------------------------------ Windows-Werkzeuge (wie beim Agenten)
+def ensure_pyinstaller() -> None:
+    """PyInstaller vorhanden? Sonst per pip nachziehen (nur Windows)."""
+    try:
+        import PyInstaller  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("  PyInstaller fehlt - installiere per pip ...")
+    for extra in ([], ["--user"]):
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", *extra, "pyinstaller>=6.0,<7"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+    raise RuntimeError("PyInstaller konnte nicht per pip installiert werden:\n" + (r.stdout + r.stderr)[-1500:])
+
+
+def ensure_wix() -> tuple[Path, Path]:
+    """WiX 3 (candle/light) im Werkzeug-Ordner - bei Bedarf herunterladen (nur Windows)."""
+    for d in [TOOLS_DIR / "wix314"] + [Path(p) for p in (os.environ.get("WIX", ""),) if p]:
+        for base in (d, d / "bin"):
+            if (base / "candle.exe").exists() and (base / "light.exe").exists():
+                return base / "candle.exe", base / "light.exe"
+    wix = TOOLS_DIR / "wix314"
+    print(f"  Lade WiX 3.14 nach {wix} ...")
+    wix.mkdir(parents=True, exist_ok=True)
+    archive = wix / "wix-binaries.zip"
+    urllib.request.urlretrieve(WIX_URL, archive)
+    with zipfile.ZipFile(archive) as zf:
+        zf.extractall(wix)
+    archive.unlink()
+    return wix / "candle.exe", wix / "light.exe"
+
+
+def prepare() -> None:
+    """Werkzeuge vorab holen (das Modul ruft das beim Aktivieren auf)."""
+    if os.name == "nt":
+        ensure_pyinstaller()
+        print(f"PyInstaller bereit")
+        print(f"WiX bereit: {ensure_wix()[0].parent}")
+    print("Formate: " + ", ".join(k for k, v in tools().items() if v))
 
 
 def version() -> str:
@@ -106,9 +174,10 @@ def build_exe(v: str, winpython: str | None) -> Path:
         work = Path(td) / "src"
         shutil.copytree(DESKTOP, work, ignore=shutil.ignore_patterns("__pycache__"))
         if os.name == "nt":
+            ensure_pyinstaller()
             run([sys.executable, *args], cwd=work)
         else:
-            wine = shutil.which("wine64") or shutil.which("wine") or "/usr/lib/wine/wine64"
+            wine = _wine() or "/usr/lib/wine/wine64"
             py = winpython or os.environ.get("RMM_WINPYTHON") or "/opt/winpy/python/python.exe"
             if not Path(wine).exists() or not Path(py).exists():
                 raise RuntimeError("Fuer die .exe unter Linux werden wine64 und ein Windows-Python mit PyInstaller "
@@ -139,6 +208,7 @@ def build_msi(v: str, exe: Path) -> Path:
     wixl = shutil.which("wixl")
     if not wixl and os.name != "nt":
         raise RuntimeError("wixl fehlt (apt install wixl)")
+    wix = ensure_wix() if os.name == "nt" and not wixl else None
     out = RELEASE / f"RapalleClient-{v}-windows.msi"
     ver4 = ".".join((v.split(".") + ["0", "0", "0"])[:3])
     wxs = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -187,7 +257,11 @@ def build_msi(v: str, exe: Path) -> Path:
         shutil.copy2(exe, t / "RapalleClient.exe")
         shutil.copy2(RES / "rmmclient.ico", t / "rmmclient.ico")
         (t / "client.wxs").write_text(wxs, encoding="utf-8")
-        run([wixl or "wixl", "-a", "x64", "-o", str(out), "client.wxs"], cwd=t)
+        if wix:     # Windows: WiX 3 (candle + light)
+            run([str(wix[0]), "-nologo", "-arch", "x64", "-out", "client.wixobj", "client.wxs"], cwd=t)
+            run([str(wix[1]), "-nologo", "-sval", "-out", str(out), "client.wixobj"], cwd=t)
+        else:
+            run([wixl or "wixl", "-a", "x64", "-o", str(out), "client.wxs"], cwd=t)
     return out
 
 
@@ -267,20 +341,120 @@ def build_tar(v: str) -> list[Path]:
     return outs
 
 
+def build_tgz(v: str) -> Path:
+    """Wie .tar.gz, nur mit der Endung .tgz (manche Werkzeuge erwarten sie)."""
+    base = f"rapalle-client-{v}"
+    out = RELEASE / f"rapalle-client-{v}-linux.tgz"
+    with tarfile.open(out, "w:gz") as tf:
+        for src, rel in desktop_files():
+            _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("rapalle-client.py") else 0o644)
+        _tar_add(tf, f"{base}/app/.rapalle-install", b"tar\n")
+        _tar_add(tf, f"{base}/install.sh", TAR_INSTALL.encode(), 0o755)
+        _tar_add(tf, f"{base}/rapalle-client.desktop", DESKTOP_ENTRY.encode())
+        _tar_add(tf, f"{base}/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes())
+    return out
+
+
+def _system_tree(kind: str) -> list[tuple[str, bytes, int]]:
+    """Dateien einer systemweiten Installation (/opt + /usr) - fuer .deb, .rpm und .pkg gleich."""
+    files = []
+    for src, rel in desktop_files():
+        files.append((f"opt/rapalle-client/{rel}", src.read_bytes(), 0o755 if rel.endswith("rapalle-client.py") else 0o644))
+    files.append(("opt/rapalle-client/.rapalle-install", f"{kind}\n".encode(), 0o644))   # Auto-Update: Installationsart
+    files.append(("usr/bin/rapalle-client", LINUX_LAUNCHER.encode(), 0o755))
+    files.append(("usr/share/applications/rapalle-client.desktop", DESKTOP_ENTRY.encode(), 0o644))
+    files.append(("usr/share/icons/hicolor/256x256/apps/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes(), 0o644))
+    return files
+
+
+def build_rpm(v: str) -> Path:
+    """.rpm (noarch) per rpmbuild - Fedora, RHEL/Alma/Rocky, openSUSE."""
+    if not shutil.which("rpmbuild"):
+        raise RuntimeError("rpmbuild fehlt (apt install rpm / dnf install rpm-build)")
+    out_name = f"rapalle-client-{v}-1.noarch.rpm"
+    with tempfile.TemporaryDirectory() as td:
+        top = Path(td) / "rpmbuild"
+        for d in ("SPECS", "SOURCES", "BUILD", "RPMS", "SRPMS", "BUILDROOT"):
+            (top / d).mkdir(parents=True)
+        root = Path(td) / "root"
+        for rel, data, mode in _system_tree("rpm"):
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+            p.chmod(mode)
+        spec = f"""Name:           rapalle-client
+Version:        {v}
+Release:        1
+Summary:        RAPALLE.net RMM Client
+License:        MIT
+BuildArch:      noarch
+Requires:       python3
+Requires:       (python3-tkinter or python3-tk)
+Recommends:     (chromium or google-chrome-stable or microsoft-edge-stable or firefox)
+Recommends:     libsecret
+AutoReqProv:    no
+
+%description
+Das RMM-Dashboard als App: gespeicherte Anmeldung, Relay als Laufwerk im
+Dateimanager, Remote-Shell im eigenen Fenster und Fernbild per RDP/VNC.
+
+%install
+mkdir -p %{{buildroot}}
+cp -a {root}/. %{{buildroot}}/
+
+%post
+command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
+
+%files
+%defattr(-,root,root,-)
+/opt/rapalle-client
+/usr/bin/rapalle-client
+/usr/share/applications/rapalle-client.desktop
+/usr/share/icons/hicolor/256x256/apps/rapalle-client.png
+"""
+        specfile = top / "SPECS" / "rapalle-client.spec"
+        specfile.write_text(spec, encoding="utf-8")
+        run(["rpmbuild", "-bb", "--define", f"_topdir {top}", "--define", "__os_install_post %{nil}",
+             "--define", "_build_id_links none", str(specfile)])
+        built = next((top / "RPMS").rglob("*.rpm"), None)
+        if not built:
+            raise RuntimeError("rpmbuild hat kein Paket erzeugt")
+        out = RELEASE / out_name
+        shutil.copy2(built, out)
+    return out
+
+
+def build_pkg(v: str) -> Path:
+    """Arch-/Manjaro-Paket (.pkg.tar.xz) - selbst gebaut, ohne makepkg (wie beim Agenten)."""
+    pv = v.replace("-", "_")
+    out = RELEASE / f"rapalle-client-{pv}-1-any.pkg.tar.xz"
+    tree = _system_tree("pkg")
+    size = sum(len(d) for _, d, _ in tree)
+    pkginfo = (f"pkgname = rapalle-client\npkgver = {pv}-1\npkgdesc = RAPALLE.net RMM Client\n"
+               f"url = https://rapalle.net\nbuilddate = {int(time.time())}\npackager = RAPALLE.net\n"
+               f"size = {size}\narch = any\nlicense = MIT\ndepend = python\ndepend = tk\n"
+               f"optdepend = chromium: Dashboard als App-Fenster\noptdepend = libsecret: Anmeldung im Schluesselbund\n"
+               f"optdepend = freerdp: Fernbild per RDP\noptdepend = tigervnc: Fernbild per VNC\n")
+    install = ("post_install() {\n  command -v update-desktop-database >/dev/null && "
+               "update-desktop-database -q /usr/share/applications || true\n}\n\n"
+               "post_upgrade() {\n  post_install\n}\n")
+    with tarfile.open(out, "w:xz") as tf:
+        _tar_add(tf, ".PKGINFO", pkginfo.encode())          # muss der ERSTE Eintrag sein
+        _tar_add(tf, ".INSTALL", install.encode())
+        for rel, data, mode in tree:
+            _tar_add(tf, rel, data, mode)
+    return out
+
+
 def build_deb(v: str) -> Path:
     """.deb ohne dpkg-deb (ar + tar), laeuft also auf jedem Bausystem."""
     out = RELEASE / f"rapalle-client_{v}_all.deb"
     data = io.BytesIO()
     size = 0
     with tarfile.open(fileobj=data, mode="w:gz") as tf:
-        for src, rel in desktop_files():
-            b = src.read_bytes()
+        for rel, b, mode in _system_tree("deb"):
             size += len(b)
-            _tar_add(tf, f"./opt/rapalle-client/{rel}", b, 0o755 if rel.endswith("rapalle-client.py") else 0o644)
-        _tar_add(tf, "./opt/rapalle-client/.rapalle-install", b"deb\n")      # Auto-Update: Installationsart
-        _tar_add(tf, "./usr/bin/rapalle-client", LINUX_LAUNCHER.encode(), 0o755)
-        _tar_add(tf, "./usr/share/applications/rapalle-client.desktop", DESKTOP_ENTRY.encode())
-        _tar_add(tf, "./usr/share/icons/hicolor/256x256/apps/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes())
+            _tar_add(tf, f"./{rel}", b, mode)
     control = (f"Package: rapalle-client\nVersion: {v}\nSection: net\nPriority: optional\nArchitecture: all\n"
                f"Depends: python3 (>= 3.8), python3-tk\n"
                f"Recommends: chromium | chromium-browser | google-chrome-stable | microsoft-edge-stable | firefox | firefox-esr, "
@@ -360,16 +534,20 @@ def main():
     ap.add_argument("--set-version", help="Version vorher setzen (z. B. 1.2.1)")
     ap.add_argument("--tools", action="store_true", help="verfuegbare Formate als JSON ausgeben")
     ap.add_argument("--available", action="store_true", help="nur Formate bauen, fuer die Werkzeuge da sind")
+    ap.add_argument("--prepare", action="store_true", help="Werkzeuge vorab holen (Windows: PyInstaller + WiX)")
     a = ap.parse_args()
     global RELEASE
+    if a.set_version:                       # vor --tools: "--set-version X --tools" setzt und meldet
+        set_version(a.set_version)
+    if a.prepare:
+        prepare()
+        return
     if a.tools:
         import json as _json
         print(_json.dumps({"tools": tools(), "version": version()}))
         return
     if a.out:
         RELEASE = Path(a.out).resolve()
-    if a.set_version:
-        set_version(a.set_version)
     RELEASE.mkdir(parents=True, exist_ok=True)
     if a.list:
         for p in sorted(RELEASE.iterdir()):
@@ -386,9 +564,10 @@ def main():
     if not a.keep_old:
         # Alte Versionen nur fuer die Formate entfernen, die jetzt neu gebaut werden
         exts = {"exe": "-windows.exe", "zip": "-windows.zip", "msi": "-windows.msi", "deb": "_all.deb",
-                "tar": "-linux.tar", "apk": "-android.apk"}
+                "rpm": ".noarch.rpm", "pkg": "-any.pkg.tar.xz", "tar": "-linux.tar", "tgz": "-linux.tgz",
+                "apk": "-android.apk"}
         for p in RELEASE.iterdir():
-            if not p.is_file() or v in p.name:
+            if not p.is_file() or v in p.name or not p.name.lower().startswith("rapalle"):
                 continue
             if any(t in targets and (p.name.endswith(sfx) or (t == "tar" and p.name.endswith("-linux.tar.gz")))
                    for t, sfx in exts.items()):
@@ -396,7 +575,8 @@ def main():
     print(f"RAPALLE.net RMM Client {v} -> {RELEASE}")
     ok, failed, exe = [], [], RELEASE / f"RapalleClient-{v}-windows.exe"
     steps = [("exe", lambda: build_exe(v, a.winpython)), ("zip", lambda: build_zip(v, exe)),
-             ("msi", lambda: build_msi(v, exe)), ("deb", lambda: build_deb(v)), ("tar", lambda: build_tar(v)),
+             ("msi", lambda: build_msi(v, exe)), ("deb", lambda: build_deb(v)), ("rpm", lambda: build_rpm(v)),
+             ("pkg", lambda: build_pkg(v)), ("tar", lambda: build_tar(v)), ("tgz", lambda: build_tgz(v)),
              ("apk", lambda: build_apk(v))]
     for name, fn in steps:
         if name not in targets:

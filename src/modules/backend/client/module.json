@@ -2,8 +2,8 @@
   "schema": 1,
   "id": "client",
   "name": "Client-App",
-  "version": "1.0.0",
-  "description": "Desktop- und Android-App (Windows 10/11, Linux, Android): das Dashboard als eigene App mit gespeicherter Anmeldung, Relay als Laufwerk im Datei-Explorer, Remote-Shell im eigenen Fenster und Fernbild per RDP-/VNC-App. Unter Profil: Download und „Meine Geräte“ mit Abmelden.",
+  "version": "1.1.0",
+  "description": "Desktop- und Android-App (Windows 10/11, Linux, Android): das Dashboard als eigene App mit gespeicherter Anmeldung, Relay als Laufwerk im Datei-Explorer, Remote-Shell im eigenen Fenster und Fernbild per RDP-/VNC-App. Unter Profil: Download und „Meine Geräte“ mit Abmelden. Pakete (exe, msi, zip, deb, rpm, pkg, tar, tgz, apk) per Knopfdruck neu bauen – im Docker-Betrieb lädt das Modul dafür beim Aktivieren ein Bau-Image mit allen Werkzeugen.",
   "author": "RAPALLE.net",
   "category": "Fernzugriff",
   "icon": "💻",
@@ -17,6 +17,8 @@
     "build_routes"
   ],
   "hooks": {
+    "startup": "on_startup",
+    "disable": "on_disable",
     "user_deleted": "on_user_deleted"
   }
 }

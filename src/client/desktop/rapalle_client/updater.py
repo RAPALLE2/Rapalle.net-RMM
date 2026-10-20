@@ -7,6 +7,8 @@
 #   msi   Windows, installiert unter "Programme" (.msi)
 #         -> neues MSI still installieren (MajorUpgrade), danach neu starten
 #   deb   Linux, /opt/rapalle-client (.deb) -> pkexec apt-get install (Admin-Abfrage)
+#   rpm   Linux, /opt/rapalle-client (.rpm) -> pkexec dnf/zypper/yum/rpm (Admin-Abfrage)
+#   pkg   Linux, /opt/rapalle-client (.pkg.tar.xz, Arch) -> pkexec pacman -U (Admin-Abfrage)
 #   tar   Linux, ~/.local/share/rapalle-client (.tar.gz) -> Dateien ersetzen, neu starten
 # Downloads lassen sich abbrechen (cancel()).
 
@@ -26,7 +28,7 @@ from . import __version__
 from .features import FeatureError
 
 _cancel = threading.Event()
-EXT = {"exe": ".exe", "msi": ".msi", "deb": ".deb", "tar": ".tar.gz"}
+EXT = {"exe": ".exe", "msi": ".msi", "deb": ".deb", "rpm": ".rpm", "pkg": ".pkg.tar.xz", "tar": ".tar.gz"}
 
 
 class Cancelled(Exception):
@@ -48,7 +50,7 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-MARKER = ".rapalle-install"      # liegt NUR in installierten Paketen (.deb/.tar) - Inhalt: deb | tar
+MARKER = ".rapalle-install"      # liegt NUR in installierten Paketen (.deb/.rpm/.pkg/.tar) - Inhalt: deb | rpm | pkg | tar
 
 
 def install_kind() -> str | None:
@@ -64,7 +66,7 @@ def install_kind() -> str | None:
         kind = (app_dir() / MARKER).read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    return kind if kind in ("deb", "tar") else None
+    return kind if kind in ("deb", "rpm", "pkg", "tar") else None
 
 
 def check(api) -> dict:
@@ -148,11 +150,28 @@ def apply(kind: str, pkg: Path) -> str:
         if r.returncode != 0:
             raise FeatureError(f"Installation abgebrochen oder fehlgeschlagen:\n{(r.stderr or r.stdout)[-500:]}")
         return "restart"
+    if kind in ("rpm", "pkg"):
+        if kind == "pkg":
+            cmd, hint = ["pacman", "-U", "--noconfirm", str(pkg)], f"sudo pacman -U {pkg}"
+        elif shutil.which("dnf"):
+            cmd, hint = ["dnf", "install", "-y", str(pkg)], f"sudo dnf install {pkg}"
+        elif shutil.which("zypper"):
+            cmd, hint = ["zypper", "--non-interactive", "install", "--allow-unsigned-rpm", str(pkg)], f"sudo zypper install {pkg}"
+        elif shutil.which("yum"):
+            cmd, hint = ["yum", "install", "-y", str(pkg)], f"sudo yum install {pkg}"
+        else:
+            cmd, hint = ["rpm", "-U", "--replacepkgs", str(pkg)], f"sudo rpm -U {pkg}"
+        if not shutil.which("pkexec"):
+            raise FeatureError(f"Bitte das Update als Administrator installieren:\n{hint}")
+        r = subprocess.run(["pkexec", *cmd], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise FeatureError(f"Installation abgebrochen oder fehlgeschlagen:\n{(r.stderr or r.stdout)[-500:]}")
+        return "restart"
     raise FeatureError("Unbekannte Installationsart")
 
 
 def restart() -> None:
     """App neu starten (Linux)."""
-    launcher = "/usr/bin/rapalle-client" if install_kind() == "deb" else str(app_dir() / "rapalle-client.py")
+    launcher = "/usr/bin/rapalle-client" if install_kind() in ("deb", "rpm", "pkg") else str(app_dir() / "rapalle-client.py")
     args = [launcher] if launcher.startswith("/usr/bin") else [sys.executable, launcher]
     os.execv(args[0], args)

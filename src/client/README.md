@@ -7,8 +7,8 @@ Die fertigen Pakete liegen in `release/` und werden vom Modul **„Client-App“
 | Weg | Windows 10/11 | Linux | Android 6+ |
 |---|---|---|---|
 | **Befehl** | `irm <server>/client-dist/install.ps1 \| iex` (PowerShell) oder `install.cmd` (CMD) | `curl -fsSL <server>/client-dist/install.sh \| sh` | – |
-| **Paket** | `.zip` (exe zum Entpacken) | `.tar.gz`, `.tar` (mit `install.sh`) | – |
-| **Datei** | `.exe` (startet direkt), `.msi` (Installation, GPO/Intune) | `.deb` | `.apk` |
+| **Paket** | `.zip` (exe zum Entpacken) | `.tar.gz`, `.tgz`, `.tar` (mit `install.sh`) | – |
+| **Datei** | `.exe` (startet direkt), `.msi` (Installation, GPO/Intune) | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL/openSUSE), `.pkg.tar.xz` (Arch) | `.apk` |
 
 Die Befehle laden das passende Paket, legen Startmenü-/Desktop-Verknüpfungen an und tragen die
 Server-Adresse gleich ein – man muss sich nur noch anmelden.
@@ -33,15 +33,27 @@ Server-Adresse gleich ein – man muss sich nur noch anmelden.
   (Häkchen „Automatisch aktualisieren“, Standard an). Android fragt nach und lädt die neue APK über den Browser.
 - **Von Hand:** Knopf „Nach Updates suchen“ (Android: Menü).
 - Die App erkennt ihre Installationsart selbst: einzelne `.exe` (Austausch + Neustart), `.msi` unter „Programme“
-  (stilles MSI-Update), `.deb` (Admin-Abfrage per `pkexec`), `.tar.gz` (Dateien ersetzen, ohne Admin).
+  (stilles MSI-Update), `.deb`/`.rpm`/`.pkg.tar.xz` (Admin-Abfrage per `pkexec`: apt / dnf·zypper·yum / pacman),
+  `.tar.gz` (Dateien ersetzen, ohne Admin).
   Installierte Pakete enthalten dafür die Datei `.rapalle-install`; ein Start aus dem Quellcode bekommt **keine** Auto-Updates.
 
-## Pakete auf dem Server neu bauen
-*Module → Client-App → Einstellungen → „Client-Pakete neu bauen“* baut alles direkt aus `src/client` neu und legt die Pakete
+## Pakete auf dem Server bauen (wie die Agent-Pakete)
+*Module → Client-App → Einstellungen → „Client-Pakete bauen“* baut alles direkt aus `src/client` und legt die Pakete
 nach `backend/storage/client/` (Vorrang vor den mitgelieferten, übersteht Server-Updates). Vorher wählst du:
-**Version beibehalten** (alte Pakete werden ersetzt – installierte Apps aktualisieren sich dann nicht) oder **neue Version**
-(installierte Apps holen sich das Update automatisch). Gebaut wird, wofür Werkzeuge da sind: `.deb/.tar` immer,
-`.exe/.msi/.zip` mit Wine + Windows-Python, `.apk` mit den Android-Werkzeugen. Live-Log und „Stopp“ inklusive.
+**Version beibehalten** (vorhandene Pakete dieser Version werden überschrieben – installierte Apps aktualisieren sich dann nicht)
+oder **neue Version** (ältere Pakete werden entfernt, installierte Apps holen sich das Update automatisch). Live-Log und „Stopp“ inklusive.
+
+**Docker-Betrieb (alle Formate):** Beim Aktivieren des Moduls legt das RMM einmalig das Bau-Image
+`rapalle/rmm-client-builder:<kennung>` an (Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl + rpmbuild + JDK 17 +
+Android-Werkzeugen, ca. 1,5–2 GB; Fortschritt in den Modul-Einstellungen). Gebaut wird je Knopfdruck in einem Wegwerf-Container
+ohne Netzwerk. Das RMM-Image selbst bleibt klein; Modul aus → Bau-Image wird entfernt. Fehlt das Image (z. B. nach
+`docker image prune`), legt das Modul es beim nächsten Start neu an; „Neu vorbereiten“ erzwingt es.
+Voraussetzung: Docker-Socket im RMM-Container (`/var/run/docker.sock`, steht so in `docker-compose.yml`).
+
+**Ohne Docker (nativ):** Linux baut `.deb/.tar/.tar.gz/.tgz/.pkg.tar.xz` (+ `.rpm`, `.exe/.msi`, `.apk`, wenn die Werkzeuge
+installiert sind), Windows zusätzlich `.exe/.zip/.msi` (PyInstaller per pip und WiX als Download holt das Modul beim Aktivieren).
+
+Von Hand: `python3 src/client/build_installers.py [--targets exe,msi,…] [--out DIR] [--set-version 1.2.3]`.
 
 ## RMM-Konsole
 Knopf **„RMM-Konsole“** (Android: Menü) öffnet die Kommandozeile des RMM (Modul „RMM-Konsole“, Recht „RMM-Konsole benutzen“):
@@ -73,7 +85,7 @@ online sein, deshalb zeigt die Auswahl beim Fernbild auch Offline-Geräte.
 
 ```
 src/client/
-├── build_installers.py   baut ALLE Pakete nach release/ (wie src/backend/app/build_installers.py beim Agenten)
+├── build_installers.py   baut ALLE Pakete (exe, zip, msi, deb, rpm, pkg, tar, tgz, apk) – wie src/backend/app/build_installers.py beim Agenten
 ├── desktop/              Windows + Linux: reines Python (nur Standardbibliothek, Oberfläche tkinter)
 │   ├── rapalle-client.py         Startdatei
 │   └── rapalle_client/           api.py, store.py, secrets_store.py, browser.py, features.py, autostart.py, gui.py

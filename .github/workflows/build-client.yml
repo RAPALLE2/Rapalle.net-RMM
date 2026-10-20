@@ -1,5 +1,6 @@
 # Baut ALLE Pakete der Client-App neu (src/client/build_installers.py):
-#   Windows .exe/.msi/.zip (PyInstaller unter Wine), Linux .deb/.tar/.tar.gz, Android .apk
+#   Windows .exe/.msi/.zip (PyInstaller unter Wine), Linux .deb/.rpm/.pkg.tar.xz/.tar/.tar.gz/.tgz, Android .apk
+#   (dieselben Werkzeuge wie im Bau-Image des Moduls, siehe src/modules/backend/client/buildenv.py)
 # Ausloeser: manuell (Actions -> "Client-App bauen" -> "Run workflow") oder Tag "client-v*".
 # Die fertigen Pakete stehen danach als Artefakt bereit; ins Repository
 # (src/client/release) uebernimmt man sie per Commit - von dort bietet das RMM sie an.
@@ -19,7 +20,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends wine64 wixl openjdk-17-jdk-headless \
+          sudo apt-get install -y --no-install-recommends wine64 wixl rpm openjdk-17-jdk-headless \
                android-sdk-platform-23 aapt apksigner zipalign dalvik-exchange python3-pytest
       - name: Windows-Python + PyInstaller (unter Wine)
         run: |

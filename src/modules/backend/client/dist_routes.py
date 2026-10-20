@@ -6,8 +6,8 @@
 #        PowerShell  irm <server>/client-dist/install.ps1 | iex
 #        CMD         curl -fsSLo %TEMP%\rmmc.cmd <server>/client-dist/install.cmd && %TEMP%\rmmc.cmd
 #        Linux       curl -fsSL <server>/client-dist/install.sh | sh
-#   2) Paket:  .zip (Windows), .tar / .tar.gz (Linux)
-#   3) Datei:  .exe, .msi (Windows), .deb (Linux), .apk (Android)
+#   2) Paket:  .zip (Windows), .tar / .tar.gz / .tgz (Linux)
+#   3) Datei:  .exe, .msi (Windows), .deb, .rpm, .pkg.tar.xz (Linux), .apk (Android)
 #
 # Alle Wege tragen die Server-Adresse gleich in die App ein (settings.json),
 # damit man sich nur noch anmelden muss. Die Dateien enthalten KEINE
@@ -35,17 +35,18 @@ UPLOAD_DIR = STORAGE_DIR / "client"
 
 PLATFORM_EXT = {
     "windows": (".exe", ".msi", ".msix", ".zip"),
-    "linux": (".deb", ".tar.gz", ".tgz", ".tar", ".rpm", ".appimage", ".flatpak", ".run"),
+    "linux": (".deb", ".rpm", ".pkg.tar.xz", ".tar.gz", ".tgz", ".tar", ".appimage", ".flatpak", ".run"),
     "android": (".apk", ".aab"),
 }
-KIND = {".exe": "Datei", ".msi": "Datei", ".msix": "Datei", ".deb": "Datei", ".rpm": "Datei", ".appimage": "Datei",
+KIND = {".exe": "Datei", ".msi": "Datei", ".msix": "Datei", ".deb": "Datei", ".rpm": "Datei", ".pkg.tar.xz": "Datei",
+        ".appimage": "Datei",
         ".apk": "Datei", ".aab": "Datei", ".zip": "Paket", ".tar": "Paket", ".tar.gz": "Paket", ".tgz": "Paket",
         ".run": "Paket", ".flatpak": "Paket"}
 
 
 def ext_of(name: str) -> str:
     low = name.lower()
-    for e in (".tar.gz",):
+    for e in (".pkg.tar.xz", ".tar.gz"):
         if low.endswith(e):
             return e
     return Path(low).suffix
@@ -178,30 +179,47 @@ def install_cmd(request: Request):
 def install_sh(request: Request):
     base = _base(request)
     deb = newest("linux", (".deb",))
-    tgz = newest("linux", (".tar.gz", ".tar"))
-    if not (deb or tgz):
+    rpm = newest("linux", (".rpm",))
+    pkg = newest("linux", (".pkg.tar.xz",))
+    tgz = newest("linux", (".tar.gz", ".tgz", ".tar"))
+    if not (deb or rpm or pkg or tgz):
         return PlainTextResponse('echo "Auf dem Server liegt noch kein Linux-Paket."; exit 1\n')
     settings = json.dumps({"server": base})
+    u = lambda f: f"{base}{f['url']}" if f else ""          # noqa: E731
+    n = lambda f: f["name"] if f else ""                     # noqa: E731
     return PlainTextResponse(f"""#!/bin/sh
 # RAPALLE.net RMM Client - Installation (Linux)
 #   curl -fsSL {base}/client-dist/install.sh | sh
-# Debian/Ubuntu mit sudo: .deb inkl. Abhaengigkeiten (python3-tk).
+# Mit root/sudo: Paket der Distribution inkl. Abhaengigkeiten (python3-tk):
+#   Debian/Ubuntu .deb (apt) | Fedora/RHEL .rpm (dnf/yum) | openSUSE .rpm (zypper) | Arch .pkg.tar.xz (pacman)
 # Sonst: .tar.gz fuer den aktuellen Benutzer (~/.local, ohne root).
 set -e
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 dl() {{ if command -v curl >/dev/null; then curl -fsSL "$1" -o "$2"; else wget -qO "$2" "$1"; fi; }}
 SUDO=""; [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null && SUDO="sudo"
-if [ -n "{deb['url'] if deb else ''}" ] && command -v apt-get >/dev/null && {{ [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ]; }}; then
-  echo "Lade {deb['name'] if deb else ''} ..."
-  dl "{base}{deb['url'] if deb else ''}" "$TMP/rapalle-client.deb"
-  $SUDO apt-get install -y "$TMP/rapalle-client.deb"
-else
-  echo "Lade {tgz['name'] if tgz else ''} ..."
-  dl "{base}{tgz['url'] if tgz else ''}" "$TMP/client.tar.gz"
+ROOT=0; {{ [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ]; }} && ROOT=1
+DEB_URL="{u(deb)}"; RPM_URL="{u(rpm)}"; PKG_URL="{u(pkg)}"; TGZ_URL="{u(tgz)}"
+DONE=0
+if [ $ROOT = 1 ] && [ -n "$DEB_URL" ] && command -v apt-get >/dev/null; then
+  echo "Lade {n(deb)} ..."; dl "$DEB_URL" "$TMP/rapalle-client.deb"
+  $SUDO apt-get install -y "$TMP/rapalle-client.deb" && DONE=1
+elif [ $ROOT = 1 ] && [ -n "$RPM_URL" ] && {{ command -v dnf >/dev/null || command -v yum >/dev/null || command -v zypper >/dev/null; }}; then
+  echo "Lade {n(rpm)} ..."; dl "$RPM_URL" "$TMP/rapalle-client.rpm"
+  if command -v dnf >/dev/null; then $SUDO dnf install -y "$TMP/rapalle-client.rpm" && DONE=1
+  elif command -v zypper >/dev/null; then $SUDO zypper --non-interactive install --allow-unsigned-rpm "$TMP/rapalle-client.rpm" && DONE=1
+  else $SUDO yum install -y "$TMP/rapalle-client.rpm" && DONE=1; fi
+elif [ $ROOT = 1 ] && [ -n "$PKG_URL" ] && command -v pacman >/dev/null; then
+  echo "Lade {n(pkg)} ..."; dl "$PKG_URL" "$TMP/rapalle-client.pkg.tar.xz"
+  $SUDO pacman -U --noconfirm "$TMP/rapalle-client.pkg.tar.xz" && DONE=1
+fi
+if [ $DONE = 0 ]; then
+  [ -n "$TGZ_URL" ] || {{ echo "Kein passendes Paket fuer dieses System auf dem Server."; exit 1; }}
+  echo "Lade {n(tgz)} ..."
+  dl "$TGZ_URL" "$TMP/client.tar.gz"
   tar xf "$TMP/client.tar.gz" -C "$TMP"
   sh "$TMP"/rapalle-client-*/install.sh
   command -v python3 >/dev/null && python3 -c "import tkinter" 2>/dev/null || \\
-    echo "Bitte noch Python-Tk installieren: sudo apt install python3-tk  |  sudo dnf install python3-tkinter"
+    echo "Bitte noch Python-Tk installieren: sudo apt install python3-tk  |  sudo dnf install python3-tkinter  |  sudo pacman -S tk"
 fi
 CFG="${{XDG_CONFIG_HOME:-$HOME/.config}}/rapalle-client"
 if [ ! -f "$CFG/settings.json" ]; then mkdir -p "$CFG"; printf '%s' '{settings}' > "$CFG/settings.json"; fi
