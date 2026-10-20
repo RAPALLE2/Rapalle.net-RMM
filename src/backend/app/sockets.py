@@ -1617,11 +1617,23 @@ async def on_screen_mode(sid, payload):
 _term_sessions: dict = {}
 
 
+# Terminal-Sitzungen, deren Ausgabe NICHT an die Dashboards geht, sondern gezielt an
+# einen Empfaenger (z.B. die RMM-Konsole per SSH/Web): session -> {"output": async fn(str), "exit": async fn()}
+term_listeners: dict[str, dict] = {}
+
+
 @sio.on("term-output", namespace="/agent")
 async def on_term_output(sid, payload):
     """Shell-Ausgabe an alle Dashboards weiterreichen + in die laufende
     Terminal-Aufzeichnung schreiben (Replay statt Einzel-Befehls-Log)."""
     session = payload.get("session")
+    listener = term_listeners.get(session)
+    if listener:                                  # gezielte Sitzung (Konsole) - nicht an alle Dashboards
+        try:
+            await listener["output"](payload.get("data", ""))
+        except Exception:
+            pass
+        return
     if session in _term_sessions:
         recording.record_term_data(session, payload.get("data", ""))
     await sio.emit("term-output", payload, namespace="/dashboard")
@@ -1629,6 +1641,13 @@ async def on_term_output(sid, payload):
 
 @sio.on("term-exit", namespace="/agent")
 async def on_term_exit(sid, payload):
+    listener = term_listeners.pop(payload.get("session"), None)
+    if listener:
+        try:
+            await listener["exit"]()
+        except Exception:
+            pass
+        return
     await sio.emit("term-exit", payload, namespace="/dashboard")
     await _finalize_term_session(payload.get("session"))
 

@@ -43,6 +43,12 @@ nach `backend/storage/client/` (Vorrang vor den mitgelieferten, übersteht Serve
 (installierte Apps holen sich das Update automatisch). Gebaut wird, wofür Werkzeuge da sind: `.deb/.tar` immer,
 `.exe/.msi/.zip` mit Wine + Windows-Python, `.apk` mit den Android-Werkzeugen. Live-Log und „Stopp“ inklusive.
 
+## RMM-Konsole
+Knopf **„RMM-Konsole“** (Android: Menü) öffnet die Kommandozeile des RMM (Modul „RMM-Konsole“, Recht „RMM-Konsole benutzen“):
+Geräte, Live-Metriken (`top`, btop-ähnlich), Terminal auf Geräten (`shell`), Befehle (`exec`), Prozesse, Neustart/Herunterfahren,
+Agent neu starten, Dateien, Docker – mit Tab-Vervollständigung. Dieselbe Konsole gibt es per SSH (`ssh <benutzer>@<server> -p 2222`)
+und im Dashboard.
+
 ## Kontrollfenster
 - Jede länger laufende Aktion zeigt unten eine Ladeleiste mit **„■ Stopp“** (bricht Befehle/Downloads ab).
 - **„Fenster schließen, wenn Dashboard aufgeht“:** schließt das Kontrollfenster 4 s nach dem Öffnen des Dashboards –

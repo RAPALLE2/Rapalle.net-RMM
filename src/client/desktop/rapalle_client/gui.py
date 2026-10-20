@@ -292,6 +292,7 @@ class ClientApp:
         mounted = bool(self.store.get("drive_letter") or self.store.get("linux_mount"))
         self.btn_mount = btn("Relay-Laufwerk trennen" if mounted else "Relay als Laufwerk verbinden", self.toggle_mount)
         btn("Remote-Shell …", lambda: self.choose_client("Remote-Shell", self.open_shell))
+        btn("RMM-Konsole", self.open_console)
         # Fernbild: auch Offline-Agenten anbieten - direkte Verbindung (lokale IP/VPN) braucht keinen Agenten
         btn("Fernbild (Remotedesktop) …", lambda: self.choose_client("Fernbild per Remotedesktop", lambda c: self.screen(c, "rdp"), online_only=False))
         btn("Fernbild (VNC) …", lambda: self.choose_client("Fernbild per VNC", lambda c: self.screen(c, "vnc"), online_only=False))
@@ -335,6 +336,11 @@ class ClientApp:
             if self.store.get("close_after_dashboard", False):
                 self._auto_close(4)
         self._fresh(opened, busy="Öffne Dashboard …")
+
+    def open_console(self):
+        """RMM-Konsole (Modul "console"): Geraete, Live-Metriken, Terminal, Befehle - mit Tab-Vervollstaendigung."""
+        self._fresh(lambda: browser.open_app_window(self.api.dashboard_url("console"), default_data_dir() / "browser",
+                                                    size=(1100, 680)), busy="Öffne RMM-Konsole …")
 
     def _auto_close(self, seconds: int):
         """Kontrollfenster nach dem Oeffnen des Dashboards schliessen - mit "Offen lassen"."""

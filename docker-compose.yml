@@ -63,6 +63,12 @@ services:
       # sitzen. Ohne diesen Port laeuft alles ueber die Agent-Verbindung -
       # das funktioniert auch, ist aber deutlich langsamer.
       - "${VPN_RELAY_PORT:-51821}:${VPN_RELAY_PORT:-51821}/udp"
+      # RMM-Konsole per SSH (Modul "RMM-Konsole", Einstellung "SSH-Zugang"):
+      #   ssh <benutzer>@<server> -p 2222
+      # Links = Port auf dem Host (frei waehlbar ueber SSH_PORT), rechts = Port im
+      # Container = Modul-Einstellung "SSH-Port" (Standard 2222). Solange SSH im
+      # Modul aus ist, lauscht hier nichts.
+      - "${SSH_PORT:-2222}:2222"
 
     volumes:
       # Der komplette Projektcode liegt als Bind-Mount im Container.

@@ -173,7 +173,8 @@ public class MainActivity extends Activity {
         String server = prefs.getString("server", "");
         String q = "";
         try {
-            if (solo != null) q = "?solo=" + URLEncoder.encode(solo, "UTF-8") + "&client=" + URLEncoder.encode(clientId, "UTF-8");
+            if ("console".equals(solo)) q = "?solo=console&via=client";      // RMM-Konsole, ohne Geraet
+            else if (solo != null) q = "?solo=" + URLEncoder.encode(solo, "UTF-8") + "&client=" + URLEncoder.encode(clientId, "UTF-8");
         } catch (Exception ignored) { }
         web.loadUrl(server + "/" + q + "#client-token=" + session);
         invalidateOptionsMenu();
@@ -266,7 +267,7 @@ public class MainActivity extends Activity {
     }
 
     // ================================================================ Menue
-    static final int M_HOME = 1, M_SHELL = 2, M_RDP = 3, M_VNC = 4, M_RELAY = 5, M_LOGOUT = 6, M_UPDATE = 7, M_AUTOUPD = 8;
+    static final int M_HOME = 1, M_SHELL = 2, M_RDP = 3, M_VNC = 4, M_RELAY = 5, M_LOGOUT = 6, M_UPDATE = 7, M_AUTOUPD = 8, M_CONSOLE = 9;
 
     @Override
     public boolean onCreateOptionsMenu(Menu m) {
@@ -274,6 +275,7 @@ public class MainActivity extends Activity {
         if (session.isEmpty()) return true;
         m.add(0, M_HOME, 0, "Dashboard");
         m.add(0, M_SHELL, 1, "Remote-Shell …");
+        m.add(0, M_CONSOLE, 1, "RMM-Konsole");
         m.add(0, M_RDP, 2, "Fernbild (Remotedesktop) …");
         m.add(0, M_VNC, 3, "Fernbild (VNC) …");
         m.add(0, M_RELAY, 4, "Relay-Zugang");
@@ -291,6 +293,7 @@ public class MainActivity extends Activity {
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
             case M_HOME: showDashboard(null, null); return true;
+            case M_CONSOLE: showDashboard("console", ""); return true;
             case M_SHELL: chooseClient("Remote-Shell", true, new OnClient() { public void chosen(JSONObject c) {
                 showDashboard("terminal", c.optString("id")); }}); return true;
             // Fernbild: auch Offline-Agenten - direkte Verbindung (lokale IP / VPN) braucht keinen Agenten

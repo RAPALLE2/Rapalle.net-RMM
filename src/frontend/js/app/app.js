@@ -294,6 +294,7 @@ async function startSession(user) {
   const freshStart = consumeFreshStart();
   // Einzelfenster-Modus (Client-App, z.B. Remote-Shell im eigenen Fenster):
   //   /?solo=terminal&client=<id>   (auch explorer, vnc)
+  //   /?solo=console[&via=client]    RMM-Konsole (Modul "console", ohne Geraet)
   // Zeigt nur dieses eine Fenster, stellt NICHTS wieder her und SPEICHERT
   // nichts - die normale Fensteranordnung des Benutzers bleibt unberührt.
   const soloParams = new URLSearchParams(location.search);
@@ -411,9 +412,16 @@ async function startSession(user) {
 // Öffnet die zuletzt offenen Fenster in ihrer gespeicherten Reihenfolge,
 // Geometrie und mit ihrem Status (minimiert/maximiert) erneut.
 // Apps, die im Einzelfenster-Modus geöffnet werden dürfen (alle brauchen einen Client).
-const SOLO_APPS = ["terminal", "explorer", "vnc"];
+const SOLO_APPS = ["terminal", "explorer", "vnc", "console"];
 
 function openSolo(appId, params) {
+  if (appId === "console") {                 // RMM-Konsole (Modul) - braucht kein Geraet
+    document.body.classList.add("solo-mode");
+    document.title = "RMM-Konsole";
+    openWindow({ key: "solo-console", appId: "console", title: "RMM-Konsole", maximized: true,
+                 props: { via: params.get("via") || "" } });
+    return;
+  }
   const cid = params.get("client") || "";
   const client = (state.clients || []).find((c) => c.id === cid);
   document.body.classList.add("solo-mode");

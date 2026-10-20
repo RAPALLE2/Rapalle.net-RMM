@@ -2743,6 +2743,8 @@ GLOBAL_PERM_KEYS = [
     "manage_websites",
     # Modul "docker": Stacks anlegen, ALLE Container/Images/Volumes/Netzwerke steuern
     "manage_docker",
+    # Modul "console": RMM-Konsole benutzen (SSH, Dashboard, Client-App) - je Befehl zusaetzlich das passende Recht
+    "use_console",
     "create_users",
     "network_scan", "port_scan",
     "bulk_shell",

@@ -134,7 +134,9 @@ class Api:
     def dashboard_url(self, solo: str | None = None, client_id: str | None = None) -> str:
         """Dashboard-Adresse mit uebergebener Sitzung (#client-token=...)."""
         q = ""
-        if solo:
+        if solo == "console":                         # RMM-Konsole (Modul "console"), ohne Geraet
+            q = "?" + urllib.parse.urlencode({"solo": "console", "via": "client"})
+        elif solo:
             q = "?" + urllib.parse.urlencode({"solo": solo, "client": client_id or ""})
         return f"{self.server}/{q}#client-token={self.token}"
 

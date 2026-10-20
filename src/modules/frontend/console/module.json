@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "console",
+  "name": "RMM-Konsole",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "console",
+      "label": "Konsole",
+      "icon": "⌨️",
+      "title": "RMM-Konsole",
+      "entry": "console.js",
+      "export": "renderConsole",
+      "w": 980,
+      "h": 620
+    }
+  ]
+}
