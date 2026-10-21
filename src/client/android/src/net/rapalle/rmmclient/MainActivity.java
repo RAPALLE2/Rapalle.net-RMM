@@ -213,6 +213,33 @@ public class MainActivity extends Activity {
 
     // ================================================================ JavaScript-Bruecke (Anmeldeseite)
     class Bridge {
+        /** Dashboard (Modul "client"): Startschein einloesen und RDP/VNC/SSH extern oeffnen
+         *  bzw. das RMM-Terminal anzeigen. Der Schein gehoert zum angemeldeten Benutzer. */
+        @JavascriptInterface
+        public void launch(final String ticket) {
+            new Thread(new Runnable() { public void run() {
+                try {
+                    final JSONObject p = new JSONObject(http("POST", "/api/client/launch/" + URLEncoder.encode(ticket, "UTF-8"), "{}", true));
+                    final String proto = p.optString("protocol");
+                    if (proto.equals("shell")) {
+                        ui.post(new Runnable() { public void run() { showDashboard("terminal", p.optString("client_id")); }});
+                        return;
+                    }
+                    if (p.optString("host_mode").equals("tunnel")) {
+                        ui.post(new Runnable() { public void run() { message("Fernzugriff",
+                            "„Über RMM (Tunnel)“ geht nur in der Desktop-App (Windows/Linux). Bitte lokale IP, eigene Adresse oder das RMM-Gateway wählen."); }});
+                        return;
+                    }
+                    final JSONObject fw = new JSONObject(http("POST", "/api/client/connect", p.toString(), true));
+                    ui.post(new Runnable() { public void run() {
+                        openRemote(proto, fw.optString("host"), fw.optInt("port"), fw.optString("user", p.optString("user")));
+                    }});
+                } catch (final Exception e) {
+                    ui.post(new Runnable() { public void run() { message("Fernzugriff", e.getMessage()); }});
+                }
+            }}).start();
+        }
+
         @JavascriptInterface
         public String prefill() {
             try {
@@ -435,6 +462,23 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** RDP / VNC / SSH in der passenden App oeffnen (Intent mit URI). */
+    void openRemote(String protocol, String h, int port, String user) {
+        String uri = protocol.equals("rdp") ? "rdp://full%20address=s:" + h + ":" + port
+                : protocol.equals("ssh") ? "ssh://" + (user == null || user.isEmpty() ? "" : Uri.encode(user) + "@") + h + ":" + port
+                : "vnc://" + h + ":" + port;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (ActivityNotFoundException e) {
+            String app = protocol.equals("rdp") ? "„Remote Desktop“ (Microsoft) bzw. „Windows App“"
+                    : protocol.equals("ssh") ? "einen SSH-Client (z. B. „Termius“ oder „JuiceSSH“)" : "„bVNC“";
+            message("Fernzugriff", "Keine passende App gefunden. Bitte " + app + " aus dem Play Store installieren.\n\n"
+                    + "Verbindung: " + h + ":" + port);
+        }
+    }
+
     void doConnect(final JSONObject client, final String protocol, final String hostMode, final String host,
                    final String portMode, final String portText, final boolean remember) {
         new Thread(new Runnable() { public void run() {
@@ -448,19 +492,7 @@ public class MainActivity extends Activity {
                 b.put("remember", remember);
                 final JSONObject fw = new JSONObject(http("POST", "/api/client/connect", b.toString(), true));
                 ui.post(new Runnable() { public void run() {
-                    String h = fw.optString("host"); int port = fw.optInt("port");
-                    String uri = protocol.equals("rdp")
-                            ? "rdp://full%20address=s:" + h + ":" + port
-                            : "vnc://" + h + ":" + port;
-                    try {
-                        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
-                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(i);
-                    } catch (ActivityNotFoundException e) {
-                        String app = protocol.equals("rdp") ? "„Remote Desktop“ (Microsoft) bzw. „Windows App“" : "„bVNC“";
-                        message("Fernbild", "Keine passende App gefunden. Bitte " + app + " aus dem Play Store installieren.\n\n"
-                                + "Verbindung: " + h + ":" + port);
-                    }
+                    openRemote(protocol, fw.optString("host"), fw.optInt("port"), "");
                 }});
             } catch (final Exception e) {
                 ui.post(new Runnable() { public void run() { message("Fernbild", e.getMessage()); }});

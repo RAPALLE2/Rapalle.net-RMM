@@ -79,6 +79,26 @@ export function getClientActions() {
   return out;
 }
 
+// Module koennen Knoepfe des Agent-Panels uebernehmen (z.B. Modul "client": in der
+// Client-App RDP/VNC/SSH extern oeffnen statt im Browser-Fenster):
+//   registerActionHandler("client", (action, client, ev) => true|false)
+// true = erledigt (Standard-Fenster wird NICHT geoeffnet). Nur aktive Module zaehlen.
+const actionHandlers = new Map();
+export function registerActionHandler(mid, fn) {
+  const list = actionHandlers.get(mid) || [];
+  list.push(fn);
+  actionHandlers.set(mid, list);
+}
+export function runActionHandlers(action, client, ev) {
+  for (const [mid, list] of actionHandlers) {
+    if (!mods.has(mid)) continue;
+    for (const fn of list) {
+      try { if (fn(action, client, ev)) return true; } catch (e) { console.error(e); }
+    }
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------- Abstuerze
 export async function reportModuleCrash(mid, where, err, fatal = true) {
   try {

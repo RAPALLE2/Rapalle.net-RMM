@@ -618,4 +618,13 @@ class ClientApp:
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    link = next((a for a in argv if a.lower().startswith("rapalle-rmm:")), None)
+    if link:                                    # aus dem Dashboard: RDP/VNC/SSH/Terminal extern oeffnen
+        from .launcher import handle
+        return handle(link)
+    try:
+        from . import urlscheme
+        urlscheme.register()                    # rapalle-rmm:// fuer diesen Benutzer (Pfad kann sich aendern)
+    except Exception:
+        pass
     ClientApp(minimized="--minimized" in argv).run()

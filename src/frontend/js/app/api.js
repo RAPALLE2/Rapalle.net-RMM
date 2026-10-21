@@ -16,7 +16,13 @@ import { t } from "./i18n.js";
     const m = /(?:^#|&)client-token=([A-Za-z0-9._-]+)/.exec(location.hash || "");
     if (!m) return;
     localStorage.setItem("rmm_token", m[1]);
-    const rest = (location.hash || "").replace(/(^#|&)client-token=[A-Za-z0-9._-]+/, "$1").replace(/^#&/, "#");
+    // Ab Client-App 1.4: "&client-app=<version>" -> RDP/VNC/SSH koennen extern (lokal) geoeffnet
+    // werden (Modul "client", rapalle-rmm://). Die App nutzt ein eigenes Browser-Profil,
+    // die Markierung gilt also nur in ihren Fenstern.
+    const ca = /(?:^#|&)client-app=([A-Za-z0-9._-]+)/.exec(location.hash || "");
+    if (ca) localStorage.setItem("rmm_client_app", ca[1]); else localStorage.removeItem("rmm_client_app");
+    const rest = (location.hash || "").replace(/(^#|&)client-token=[A-Za-z0-9._-]+/, "$1")
+      .replace(/(^#|&)client-app=[A-Za-z0-9._-]+/, "$1").replace(/^#&+/, "#").replace(/&&+/g, "&");
     history.replaceState(null, "", location.pathname + location.search + (rest === "#" ? "" : rest));
   } catch { /* egal */ }
 })();

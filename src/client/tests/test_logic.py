@@ -63,9 +63,21 @@ def test_store_token_file(tmp_path, monkeypatch):
 
 
 def test_dashboard_url():
+    from rapalle_client import __version__
     a = Api("https://rmm.firma.de", token="T.O.K")
-    assert a.dashboard_url() == "https://rmm.firma.de/#client-token=T.O.K"
-    assert a.dashboard_url("terminal", "c1") == "https://rmm.firma.de/?solo=terminal&client=c1#client-token=T.O.K"
+    assert a.dashboard_url() == f"https://rmm.firma.de/#client-token=T.O.K&client-app={__version__}"
+    assert a.dashboard_url("terminal", "c1") == \
+        f"https://rmm.firma.de/?solo=terminal&client=c1#client-token=T.O.K&client-app={__version__}"
+
+
+def test_launch_link_and_ssh():
+    from rapalle_client import features, launcher
+    assert launcher.parse("rapalle-rmm://launch?s=https%3A%2F%2Frmm.firma.de&t=abc") == ("https://rmm.firma.de", "abc")
+    for bad in ("rapalle-rmm://evil?s=x&t=y", "https://rmm.firma.de", "rapalle-rmm://launch?s=x"):
+        with pytest.raises(ValueError):
+            launcher.parse(bad)
+    assert features.build_ssh_command("127.0.0.1", 4022, "root", "rmm-ssh-a.firma.de") == \
+        ["ssh", "-p", "4022", "-o", "HostKeyAlias=rmm-ssh-a.firma.de", "root@127.0.0.1"]
 
 
 @pytest.mark.skipif(not os.environ.get("RMM_TEST_SERVER"), reason="kein Test-Backend angegeben")

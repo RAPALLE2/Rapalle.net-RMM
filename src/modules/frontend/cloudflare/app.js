@@ -32,7 +32,9 @@ const MODE = {
   client: "Mit cloudflared auf dem PC", warp: "Privates Netz (WARP-Client)",
 };
 const ACCESS = { none: "Offen (ohne Cloudflare-Login)", rmm: "RMM-Login (lokal / AD, mit 2FA)", otp: "Einmal-PIN per E-Mail" };
-const ACC_SHORT = { none: "offen", rmm: "RMM-Login", otp: "E-Mail-PIN" };
+const ACC_SHORT = { none: "offen", rmm: "RMM-Login", otp: "E-Mail-PIN", service: "Service-Token" };
+const lifeText = (rm) => !rm ? "" : rm.lifetime === 0 ? "dauerhaft" : rm.lifetime === "session" ? `bis Nutzungsende${rm.leases && Object.keys(rm.leases).length ? " · aktiv" : ""}`
+  : `bis ${new Date((rm.expires || 0) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 const clientName = (id) => state.clients?.find((c) => c.id === id)?.hostname || id?.slice(0, 8) || "?";
 const box = (html) => `<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px">${html}</div>`;
 const fmtTime = (s) => (s ? new Date(s * 1000).toLocaleString() : "–");
@@ -123,12 +125,12 @@ function routeTable(routes, actions) {
       <td style="font-size:11.5px;color:var(--subtext)"><code>${esc(r.state?.service || "–")}</code></td>
       <td style="font-size:12px">${r.mode === "warp" ? `WARP: <code>${esc(r.state?.warp_address || "…")}</code>`
         : r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(r.url.replace("https://", ""))}</a>` : "–"}
-        <div style="font-size:11px;color:var(--subtext)">${esc(MODE[r.mode] || r.mode || "")}</div></td>
+        <div style="font-size:11px;color:var(--subtext)">${esc(MODE[r.mode] || r.mode || "")}${r.remote ? ` · Client-App, ${esc(lifeText(r.remote))}` : ""}</div></td>
       <td style="text-align:center;font-size:12px">${r.mode === "warp" ? "Zero Trust" : esc(ACC_SHORT[r.access] || r.access)}</td>
       <td style="text-align:center" title="${esc(r.state?.error || "")}">${r.state?.error ? "⚠️" : r.state?.synced ? "✅" : "…"}</td>
       ${actions ? `<td style="white-space:nowrap;text-align:right">
         ${r.mode === "client" || r.mode === "warp" ? `<button class="btn btn-sm" data-how="${esc(r.id)}">Verbinden</button>` : ""}
-        <button class="btn-tool" data-edit="${esc(r.id)}" title="Bearbeiten">✏️</button>
+        ${r.remote ? "" : `<button class="btn-tool" data-edit="${esc(r.id)}" title="Bearbeiten">✏️</button>`}
         <button class="btn btn-sm btn-danger" data-del="${esc(r.id)}">Entfernen</button></td>` : ""}
     </tr>${r.state?.error ? `<tr><td colspan="${actions ? 6 : 5}" style="color:var(--danger);font-size:11.5px;padding-top:0">⚠ ${esc(r.state.error)}</td></tr>` : ""}`).join("")}</tbody></table>`;
 }
@@ -162,6 +164,13 @@ function drawConnect(pane, S, redraw) {
         (<code>/cf-oidc/…</code>). Am einfachsten legst du dafür eine Route „RMM-Dashboard“ an und trägst deren Adresse hier ein.</p>
       <div style="margin-top:8px;font-size:12px">Zonen: ${S.zones.length ? S.zones.map((z) => `<code>${esc(z.name)}</code>`).join(" ") : "–"}
         · Zero-Trust-Team: ${S.team_domain ? `<code>${esc(S.team_domain)}</code>` : `<span style="color:var(--warning, #f59e0b)">nicht eingerichtet – für Access/Login in Cloudflare „Zero Trust“ einmal öffnen</span>`}</div>`)}
+    ${box(`<b>3. Fernzugriff der Client-App</b>
+      <p style="color:var(--subtext);font-size:12px;margin:4px 0 8px">Öffnet jemand in der Client-App RDP, VNC oder SSH „über RMM“, legt das Modul dafür selbst eine Tunnel-Adresse
+        <code>rmm-&lt;protokoll&gt;-&lt;agent&gt;.&lt;zone&gt;</code> an – geschützt mit einem eigenen Service-Token je Agent. Wie lange sie bleibt
+        (bis Nutzungsende, Minuten, dauerhaft) wählt man beim Verbinden.</p>
+      <div style="display:flex;gap:8px;align-items:center"><select data-rzone style="min-width:220px">
+        ${S.zones.map((z) => `<option value="${esc(z.name)}" ${z.name === (S.remote?.zone || S.zones[0]?.name) ? "selected" : ""}>${esc(z.name)}</option>`).join("") || "<option value=''>– keine Zone –</option>"}
+      </select><button class="btn btn-sm" data-rsave ${S.zones.length ? "" : "disabled"}>Speichern</button></div>`)}
     ${box(`<b>Alles entfernen</b>
       <p style="color:var(--subtext);font-size:12px;margin:4px 0 8px">Löscht alle Routen, DNS-Einträge, Access-Anwendungen, Logins, Tunnel (auch auf den Nodes) und den gespeicherten Zugang.</p>
       <button class="btn btn-sm btn-danger" data-reset ${a.configured ? "" : "disabled"}>Alles entfernen</button>`)}`;
@@ -191,6 +200,10 @@ function drawConnect(pane, S, redraw) {
       window.notify?.(`Konto übernommen – ${r.zones.length} Zone(n)`, "success");
       redraw();
     } catch (e) { window.notify?.(e.message, "error", 7000); }
+  });
+  pane.querySelector("[data-rsave]").addEventListener("click", async () => {
+    try { await cq("/remote", { method: "POST", body: { zone: pane.querySelector("[data-rzone]").value } }); window.notify?.("Gespeichert", "success"); redraw(); }
+    catch (e) { window.notify?.(e.message, "error"); }
   });
   pane.querySelector("[data-refresh]").addEventListener("click", async () => {
     try { await cq("/refresh", { method: "POST" }); redraw(); } catch (e) { window.notify?.(e.message, "error"); }

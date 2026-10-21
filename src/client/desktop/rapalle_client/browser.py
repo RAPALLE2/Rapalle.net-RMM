@@ -10,9 +10,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -56,9 +58,28 @@ def build_command(browser: tuple[str, str], url: str, profile_dir: Path, size=(1
     return [path, "--new-window", url]
 
 
+def allow_protocol(profile_dir: Path, url: str, scheme: str = "rapalle-rmm") -> None:
+    """Im EIGENEN Profil der App erlauben, dass das Dashboard rapalle-rmm:// ohne
+    Rueckfrage oeffnet (Chromium: protocol_handler.allowed_origin_protocol_pairs)."""
+    try:
+        p = urllib.parse.urlparse(url)
+        origin = f"{p.scheme}://{p.netloc}"
+        f = profile_dir / "Default" / "Preferences"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        prefs = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+        pairs = prefs.setdefault("protocol_handler", {}).setdefault("allowed_origin_protocol_pairs", {})
+        if (pairs.get(origin) or {}).get(scheme) is True:
+            return
+        pairs.setdefault(origin, {})[scheme] = True
+        f.write_text(json.dumps(prefs), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def open_app_window(url: str, profile_dir: Path, size=(1280, 820)) -> str:
     """Oeffnet das Fenster. -> Name des Browsers (fuer Meldungen)."""
     profile_dir.mkdir(parents=True, exist_ok=True)
+    allow_protocol(profile_dir, url)
     b = find_browser()
     if not b:
         webbrowser.open(url)

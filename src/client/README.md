@@ -37,6 +37,19 @@ Server-Adresse gleich ein – man muss sich nur noch anmelden.
   `.tar.gz` (Dateien ersetzen, ohne Admin).
   Installierte Pakete enthalten dafür die Datei `.rapalle-install`; ein Start aus dem Quellcode bekommt **keine** Auto-Updates.
 
+## Aus dem Dashboard extern öffnen (ab 1.4)
+Läuft das Dashboard im Fenster der Client-App, öffnen **Terminal** und **Remote-Bildschirm** eines Agents die passende
+Software lokal: Remotedesktop (mstsc/xfreerdp), VNC-Viewer, SSH-Client im Terminal oder das RMM-Terminal im eigenen
+App-Fenster. Im normalen Browser bleibt alles wie bisher (Web-Variante). Profil → „Client-App & Geräte“: standardmäßig
+extern, im Browser oder jedes Mal fragen; Umschalt+Klick zeigt immer die Auswahl.
+- Ziel: lokale IP + Standard-Port, eigene Adresse/Port, RMM-Gateway oder **über RMM (Cloudflare-Tunnel)** – dann legt
+  das Backend (Modul „Cloudflare Tunnel“ + „Netzwerk“) eine Tunnel-Adresse mit eigenem Service-Token an und leitet zum
+  Agent weiter; die App verbindet per `cloudflared access tcp` (lädt cloudflared einmalig selbst) auf `127.0.0.1`.
+  Offen: bis Nutzungsende, 10/30/60/120 Minuten oder dauerhaft (Recht „Relay unbegrenzt“).
+- Technik: Link-Schema `rapalle-rmm://launch?s=<server>&t=<startschein>` (Windows: HKCU\Software\Classes, Linux:
+  `x-scheme-handler/rapalle-rmm`). Der Startschein gilt 2 Minuten, einmal, nur für den angemeldeten Benutzer –
+  fremde Seiten können so nichts starten. Android: JS-Brücke `RMM.launch(schein)` (ohne Tunnel).
+
 ## Pakete auf dem Server bauen (wie die Agent-Pakete)
 *Module → Client-App → Einstellungen → „Client-Pakete bauen“* baut alles direkt aus `src/client` und legt die Pakete
 nach `backend/storage/client/` (Vorrang vor den mitgelieferten, übersteht Server-Updates). Vorher wählst du:

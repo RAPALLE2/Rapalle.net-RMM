@@ -125,11 +125,23 @@ class Api:
         return self.request("GET", f"/api/client/targets/{urllib.parse.quote(client_id)}?protocol={protocol}")
 
     def connect(self, client_id: str, protocol: str, host_mode: str, host: str = "", port_mode: str = "standard",
-                port: int | None = None, remember: bool = False) -> dict:
-        """-> {host, port, ...}. Nur bei host_mode "gateway" legt der Server eine Weiterleitung an."""
+                port: int | None = None, remember: bool = False, lifetime: str = "session", user: str = "") -> dict:
+        """-> {host, port, ...}. Bei "gateway" legt der Server eine Weiterleitung an, bei "tunnel"
+        zusaetzlich eine Cloudflare-Adresse (-> hostname, token_id, token_secret, lease)."""
         return self.request("POST", "/api/client/connect", {
             "client_id": client_id, "protocol": protocol, "host_mode": host_mode, "host": host,
-            "port_mode": port_mode, "port": port, "remember": remember})
+            "port_mode": port_mode, "port": port, "remember": remember, "lifetime": str(lifetime or "session"),
+            "user": user or ""})
+
+    def redeem(self, ticket: str) -> dict:
+        """Startschein aus dem Dashboard (rapalle-rmm://launch) einloesen."""
+        return self.request("POST", f"/api/client/launch/{urllib.parse.quote(ticket)}")
+
+    def tunnel_ping(self, lease: str) -> dict:
+        return self.request("POST", f"/api/client/tunnel/{urllib.parse.quote(lease)}/ping")
+
+    def tunnel_release(self, lease: str) -> None:
+        self.request("DELETE", f"/api/client/tunnel/{urllib.parse.quote(lease)}")
 
     def dashboard_url(self, solo: str | None = None, client_id: str | None = None) -> str:
         """Dashboard-Adresse mit uebergebener Sitzung (#client-token=...)."""
@@ -138,7 +150,7 @@ class Api:
             q = "?" + urllib.parse.urlencode({"solo": "console", "via": "client"})
         elif solo:
             q = "?" + urllib.parse.urlencode({"solo": solo, "client": client_id or ""})
-        return f"{self.server}/{q}#client-token={self.token}"
+        return f"{self.server}/{q}#client-token={self.token}&client-app={__version__}"
 
 
 def device_info(name: str = "") -> dict:

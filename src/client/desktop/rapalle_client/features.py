@@ -227,3 +227,54 @@ def launch_screen(protocol: str, host: str, port: int) -> str:
         need = "FreeRDP oder Remmina" if protocol == "rdp" else "einen VNC-Viewer (TigerVNC) oder Remmina"
         raise FeatureError(f"Bitte {need} installieren.\nAdresse: {host}:{port}")
     raise FeatureError(f"Bitte manuell verbinden: {host}:{port}")
+
+
+# ------------------------------------------------------------------ extern oeffnen (aus dem Dashboard)
+LINUX_TERMINALS = [("x-terminal-emulator", ["-e"]), ("gnome-terminal", ["--"]), ("konsole", ["-e"]),
+                   ("xfce4-terminal", ["-x"]), ("mate-terminal", ["-x"]), ("tilix", ["-e"]), ("kitty", []),
+                   ("alacritty", ["-e"]), ("xterm", ["-e"])]
+
+
+def build_ssh_command(host: str, port: int, user: str = "", alias: str = "") -> list[str]:
+    """ssh-Befehl. alias = eigener known_hosts-Name (Tunnel: 127.0.0.1 mit wechselndem Port)."""
+    cmd = ["ssh", "-p", str(port)]
+    if alias:
+        cmd += ["-o", f"HostKeyAlias={alias}"]
+    return cmd + [f"{user}@{host}" if user else host]
+
+
+def start_program(protocol: str, host: str, port: int, user: str = "", alias: str = ""):
+    """Startet RDP/VNC/SSH. -> (Meldung, Prozess oder None). Den Prozess braucht der Tunnel
+    ("bis Nutzungsende": Programm zu -> Tunnel zu)."""
+    sysname = system()
+    if protocol == "ssh":
+        ssh = build_ssh_command(host, port, user, alias)
+        if sysname == "windows":
+            if not shutil.which("ssh"):
+                raise FeatureError("Kein SSH-Client gefunden (Windows: Einstellungen → Optionale Features → OpenSSH-Client).")
+            p = subprocess.Popen(ssh, creationflags=0x00000010)          # CREATE_NEW_CONSOLE
+            return "SSH wird geöffnet …", p
+        if sysname == "linux":
+            if not shutil.which("ssh"):
+                raise FeatureError("Kein SSH-Client gefunden (Paket openssh-client).")
+            for term, flag in LINUX_TERMINALS:
+                if shutil.which(term):
+                    p = subprocess.Popen([term, *flag, *ssh], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return f"SSH in {term} …", p
+            raise FeatureError("Kein Terminal-Programm gefunden. Befehl: " + " ".join(ssh))
+        raise FeatureError("Bitte manuell verbinden: " + " ".join(ssh))
+    if sysname == "windows" and protocol == "rdp":
+        f = Path(tempfile.gettempdir()) / f"rapalle-{host}-{port}.rdp"
+        f.write_text(build_rdp_file(host, port, user), encoding="utf-8")
+        return "Remotedesktop wird geöffnet …", subprocess.Popen(["mstsc", str(f)])
+    if sysname == "windows":
+        for exe in WIN_VNC_VIEWERS:
+            if os.path.exists(exe):
+                return f"{Path(exe).stem} wird geöffnet …", subprocess.Popen([exe, f"{host}::{port}"])
+        return launch_screen(protocol, host, port), None
+    if sysname == "linux":
+        for cmd in linux_screen_candidates(protocol, host, port):
+            if shutil.which(cmd[0]) and cmd[0] != "xdg-open":
+                return f"{cmd[0]} wird geöffnet …", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return launch_screen(protocol, host, port), None
+    return launch_screen(protocol, host, port), None

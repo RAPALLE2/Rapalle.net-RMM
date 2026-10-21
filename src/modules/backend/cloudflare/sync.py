@@ -60,7 +60,7 @@ def validate(r: dict, data: dict) -> None:
     else:
         r["hostname"] = ""
     acc = r.get("access") or "none"
-    if acc not in ("none", "rmm", "otp"):
+    if acc not in ("none", "rmm", "otp", "service"):
         raise ValueError("Schutz: none, rmm oder otp")
     if mode == "browser" and acc == "none":
         raise ValueError("SSH/VNC im Browser geht nur mit Cloudflare Access – bitte einen Login wählen")
@@ -160,6 +160,26 @@ def _access(cf: Cf, data: dict, r: dict) -> None:
                 except CfError:
                     pass
                 st.pop(key, None)
+        return
+    if r["access"] == "service":
+        # Fernzugriff der Client-App: eigener Service-Token je Route (nur wer im RMM das Recht auf
+        # diesen Agenten hat, bekommt ihn) - keine Browser-Anmeldung noetig
+        for key in ("idp_id",):
+            if st.get(key):
+                try:
+                    cf.idp_delete(acc, st.pop(key))
+                except CfError:
+                    pass
+        stk = r.get("service_token") or {}
+        if not stk.get("id"):
+            t = cf.service_token_create(acc, f"RMM-Client: {r['name']}")
+            stk = {"id": t["id"], "client_id": t["client_id"], "secret_enc": store.enc(t["client_secret"])}
+            r["service_token"] = stk
+        st["app_id"] = cf.app_upsert(acc, st.get("app_id", ""), {
+            "name": f"RMM: {r['name']}"[:60], "domain": r["hostname"], "type": "self_hosted", "session_duration": "24h",
+            "app_launcher_visible": False})
+        cf.app_policy_set(acc, st["app_id"], {"name": "RMM", "decision": "non_identity",
+                                              "include": [{"service_token": {"token_id": stk["id"]}}], "precedence": 1})
         return
     if r["access"] == "rmm":
         base = _base(data)
@@ -326,6 +346,11 @@ def remove_route(rid: str) -> None:
                         fn(st[key])
                     except CfError:
                         pass
+            if (r.get("service_token") or {}).get("id"):
+                try:
+                    cf.service_token_delete(acc, r["service_token"]["id"])
+                except CfError:
+                    pass
             if st.get("dns_id") and r.get("zone_id"):
                 try:
                     cf.dns_delete(r["zone_id"], st["dns_id"])

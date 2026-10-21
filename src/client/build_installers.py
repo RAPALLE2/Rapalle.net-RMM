@@ -274,10 +274,11 @@ DESKTOP_ENTRY = """[Desktop Entry]
 Type=Application
 Name=RAPALLE.net RMM
 Comment=RMM-Dashboard, Relay-Laufwerk, Remote-Shell und Fernbild
-Exec=rapalle-client
+Exec=rapalle-client %u
 Icon=rapalle-client
 Terminal=false
 Categories=Network;RemoteAccess;
+MimeType=x-scheme-handler/rapalle-rmm;
 StartupWMClass=Tk
 """
 TAR_INSTALL = """#!/bin/sh
@@ -299,7 +300,7 @@ cp -r "$HERE/app/." "$DEST/"
 printf '#!/bin/sh\\nexec python3 "%s/rapalle-client.py" "$@"\\n' "$DEST" > "$BIN/rapalle-client"
 chmod +x "$BIN/rapalle-client"
 cp "$HERE/rapalle-client.png" "$ICONS/rapalle-client.png"
-sed "s|^Exec=.*|Exec=$BIN/rapalle-client|" "$HERE/rapalle-client.desktop" > "$APPS/rapalle-client.desktop"
+sed "s|^Exec=.*|Exec=$BIN/rapalle-client %u|" "$HERE/rapalle-client.desktop" > "$APPS/rapalle-client.desktop"
 echo "Installiert. Start ueber das Anwendungsmenue oder: $BIN/rapalle-client"
 """
 

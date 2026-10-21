@@ -14,7 +14,7 @@ import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
-import { isModuleOn, getClientActions } from "./modules.js";   // Optionale Modul-Funktionen (Guacamole-Knopf, Modul-Knöpfe)
+import { isModuleOn, getClientActions, runActionHandlers } from "./modules.js";   // Optionale Modul-Funktionen (Guacamole-Knopf, Modul-Knöpfe)
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker } from "./subjectpicker.js";
 import { api } from "./api.js";
 import { renderDashboard } from "../feature/dashboard.js";
@@ -286,7 +286,7 @@ export function renderActionsPart(target, client) {
   holder.appendChild(box);
   target.appendChild(holder);
   box.querySelectorAll("[data-action]").forEach((btn) =>
-    btn.addEventListener("click", () => handleAction(btn.dataset.action, client)));
+    btn.addEventListener("click", (ev) => handleAction(btn.dataset.action, client, ev)));
   scaleToContainer(holder);
 }
 
@@ -1147,7 +1147,9 @@ export async function handleQuickAction(action, client) {
   }
 }
 
-export function handleAction(action, client) {
+export function handleAction(action, client, ev, { forceWeb = false } = {}) {
+  // Module duerfen uebernehmen (z.B. Client-App: extern oeffnen) - mit forceWeb nicht
+  if (!forceWeb && runActionHandlers(action, client, ev)) return;
   const colorProps = { clientColor: client.color };
   const props = { clientId: client.id, clientName: client.hostname, platform: client.platform };
   if (action === "terminal") {

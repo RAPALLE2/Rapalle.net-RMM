@@ -40,7 +40,7 @@ def _err(e: Exception):
 
 
 def _route_view(r: dict) -> dict:
-    out = {k: v for k, v in r.items() if k != "oidc"}
+    out = {k: v for k, v in r.items() if k not in ("oidc", "service_token")}
     out["proto"] = services.proto_of(r)
     out["url"] = (f"https://{r['hostname']}" + (f"/{r['ref'].get('site')}/" if r["kind"] == "website" else "")
                   if r.get("hostname") else "")
@@ -61,7 +61,8 @@ def _nodes() -> list[dict]:
 def state(user: dict = Depends(get_current_user)):
     _perm(user)
     data = store.load()
-    return {**store.public_view(data), "routes": [_route_view(r) for r in data["routes"]],
+    return {**store.public_view(data), "remote": {"zone": (data.get("remote") or {}).get("zone", "")},
+            "routes": [_route_view(r) for r in data["routes"]],
             "connector": connector.status(), "catalog": services.catalog(), "nodes": _nodes(),
             "modes": services.MODES, "proto_ports": services.PROTO_PORT}
 
@@ -134,6 +135,40 @@ def set_account(body: AccountBody, user: dict = Depends(get_current_user)):
     _perm(user)
     try:
         return _load_account(body.account_id, body.public_base)
+    except Exception as e:      # noqa: BLE001
+        _err(e)
+
+
+class RemoteBody(BaseModel):
+    zone: str = ""
+
+
+@router.post("/remote")
+def set_remote(body: RemoteBody, user: dict = Depends(get_current_user)):
+    """Zone fuer den Fernzugriff der Client-App (Adressen rmm-<proto>-<agent>.<zone>)."""
+    _perm(user)
+
+    def upd(d):
+        if body.zone and body.zone not in [z["name"] for z in d.get("zones") or []]:
+            raise ValueError("Zone gehört nicht zu diesem Konto")
+        d["remote"] = {**(d.get("remote") or {}), "zone": body.zone}
+    try:
+        store.update(upd)
+    except Exception as e:      # noqa: BLE001
+        _err(e)
+    return {"ok": True}
+
+
+class LifeBody(BaseModel):
+    lifetime: str = "session"
+
+
+@router.post("/routes/{rid}/lifetime")
+def route_lifetime(rid: str, body: LifeBody, user: dict = Depends(get_current_user)):
+    _perm(user)
+    from . import remote
+    try:
+        return remote.set_lifetime(rid, body.lifetime)
     except Exception as e:      # noqa: BLE001
         _err(e)
 

@@ -206,3 +206,11 @@ class Cf:
 
     def teamnet_delete(self, acc: str, rid: str) -> None:
         self.call("DELETE", f"/accounts/{acc}/teamnet/routes/{rid}")
+
+    # ----------------------------------------------------------------- Service-Token (Client-App)
+    def service_token_create(self, acc: str, name: str) -> dict:
+        t = self.call("POST", f"/accounts/{acc}/access/service_tokens", {"name": name[:60], "duration": "8760h"})
+        return {"id": t["id"], "client_id": t["client_id"], "client_secret": t["client_secret"]}
+
+    def service_token_delete(self, acc: str, tid: str) -> None:
+        self.call("DELETE", f"/accounts/{acc}/access/service_tokens/{tid}")
