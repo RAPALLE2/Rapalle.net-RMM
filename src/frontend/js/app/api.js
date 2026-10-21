@@ -107,6 +107,7 @@ const _PERM_KEY = {
   manage_websites: "perm_manage_websites",
   manage_docker: "perm_manage_docker",
   manage_cloudflare: "perm_manage_cloudflare",
+  manage_headless_screen: "perm_manage_headless_screen",
   use_console: "perm_use_console",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",

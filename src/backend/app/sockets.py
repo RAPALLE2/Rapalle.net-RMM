@@ -1831,6 +1831,9 @@ async def dashboard_screen_start(sid, data):
         "quality": quality, "fps": fps,
         "require_consent": needs_consent,
         "requested_by": data.get("username", ""),
+        # Mehrbenutzer (Windows): vom Dashboard gewaehlte Sitzung des Benutzers,
+        # dessen Bildschirm gesehen/gesteuert werden soll.
+        "session": data.get("session"),
     })
 
     # Aufzeichnung nur starten, wenn global aktiviert.
@@ -1893,6 +1896,87 @@ async def dashboard_screen_set_monitor(sid, data):
     monitor = data.get("monitor")
     if client_id and monitor is not None:
         await send_to_agent(client_id, "screen-set-monitor", {"monitor": int(monitor)})
+
+
+# --- Mehrbenutzer-Auswahl: "erst einen Benutzer waehlen" ---
+@sio.on("screen-users", namespace="/dashboard")
+async def dashboard_screen_users(sid, data):
+    """Dashboard will wissen, welche Benutzer am Geraet angemeldet sind."""
+    from app import db as _db
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        return
+    ok = await send_to_agent(client_id, "screen-users", {})
+    if not ok:
+        await sio.emit("screen-users", {"id": client_id, "users": [], "multi": False,
+                                        "error": "Client ist offline."}, namespace="/dashboard")
+
+
+@sio.on("screen-users", namespace="/agent")
+async def on_screen_users(sid, payload):
+    await sio.emit("screen-users", payload, namespace="/dashboard")
+
+
+# --- Virtueller Bildschirmtreiber (headless, Modul "headless-screen") ---
+def _vdisplay_pkg():
+    """URL + SHA256 des Treiberpakets, wenn das Modul es bereitgestellt hat."""
+    try:
+        from app import modules as _m
+        if _m.is_enabled("headless-screen"):
+            return _m.use("headless-screen", "vdriver").package_info()
+    except Exception as e:
+        print(f"[vdisplay] Paketinfo nicht verfuegbar: {e}")
+    return {"url": "", "sha256": ""}
+
+
+@sio.on("vdisplay-status", namespace="/dashboard")
+async def dashboard_vdisplay_status(sid, data):
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        return
+    await send_to_agent(client_id, "vdisplay-status", {})
+
+
+@sio.on("vdisplay-install", namespace="/dashboard")
+async def dashboard_vdisplay_install(sid, data):
+    from app import db as _db
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "manage_headless_screen", client_id):
+        await sio.emit("vdisplay-result", {"id": client_id, "action": "install", "ok": False,
+                       "error": "Keine Berechtigung (manage_headless_screen)."}, namespace="/dashboard")
+        return
+    pkg = _vdisplay_pkg()
+    if not pkg.get("url"):
+        await sio.emit("vdisplay-result", {"id": client_id, "action": "install", "ok": False,
+                       "error": "Kein Treiberpaket auf dem Server. Modul „Headless-Bildschirm“ aktivieren."},
+                       namespace="/dashboard")
+        return
+    await send_to_agent(client_id, "vdisplay-install", pkg)
+    await _db.call(_db.add_audit_entry, data.get("username", "?"), "headless.vdisplay_install",
+                   target=client_id)
+
+
+@sio.on("vdisplay-remove", namespace="/dashboard")
+async def dashboard_vdisplay_remove(sid, data):
+    from app import db as _db
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "manage_headless_screen", client_id):
+        await sio.emit("vdisplay-result", {"id": client_id, "action": "remove", "ok": False,
+                       "error": "Keine Berechtigung (manage_headless_screen)."}, namespace="/dashboard")
+        return
+    await send_to_agent(client_id, "vdisplay-remove", {})
+    await _db.call(_db.add_audit_entry, data.get("username", "?"), "headless.vdisplay_remove",
+                   target=client_id)
+
+
+@sio.on("vdisplay-status", namespace="/agent")
+async def on_vdisplay_status(sid, payload):
+    await sio.emit("vdisplay-status", payload, namespace="/dashboard")
+
+
+@sio.on("vdisplay-result", namespace="/agent")
+async def on_vdisplay_result(sid, payload):
+    await sio.emit("vdisplay-result", payload, namespace="/dashboard")
 
 
 # ------------------------------------------------------------------

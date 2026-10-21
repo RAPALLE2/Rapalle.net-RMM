@@ -425,8 +425,7 @@ export function renderVnc(body, win) {
       overlay.remove();
       statusEl.textContent = t("vnc_connecting");
       statusEl.style.color = "var(--subtext)";
-      dashboardSocket.emit("screen-start", { clientId, username: state.user?.username || "unbekannt" });
-      _announceSessionStart(clientId);
+      startScreen(chosenSession);
     });
   }
 
@@ -443,9 +442,76 @@ export function renderVnc(body, win) {
   dashboardSocket.on("screen-error", onError);
   dashboardSocket.on("screen-mode", onMode);
 
-  // Agent anweisen, mit dem Streaming zu beginnen (Username für die Aufnahme)
-  dashboardSocket.emit("screen-start", { clientId, username: state.user?.username || "unbekannt" });
-  _announceSessionStart(clientId);
+  // --- Mehrbenutzer (Windows): "erst einen Benutzer waehlen" ---
+  // Sind mehrere Benutzer angemeldet, wird zuerst gefragt, WESSEN Bildschirm
+  // gesehen/gesteuert werden soll. Dieser Benutzer bekommt dann am Geraet die
+  // Freigabe-Abfrage. Bei 0/1 Benutzer startet es direkt (wie bisher).
+  let chosenSession = null;
+
+  function startScreen(session) {
+    chosenSession = session ?? null;
+    const payload = { clientId, username: state.user?.username || "unbekannt" };
+    if (chosenSession !== null && chosenSession !== undefined) payload.session = chosenSession;
+    dashboardSocket.emit("screen-start", payload);
+    _announceSessionStart(clientId);
+  }
+
+  function pickUserThenStart() {
+    let settled = false;
+    const onUsers = (data) => {
+      if (settled || data?.id !== clientId) return;
+      settled = true;
+      dashboardSocket.off("screen-users", onUsers);
+      clearTimeout(timer);
+      const users = Array.isArray(data?.users) ? data.users : [];
+      if (!data?.multi || users.length <= 1) {
+        startScreen(users.length === 1 ? users[0].session : null);
+        return;
+      }
+      showUserPicker(users);
+    };
+    dashboardSocket.on("screen-users", onUsers);
+    // Fallback: antwortet der Agent nicht (aelter/kein Windows), normal starten.
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      dashboardSocket.off("screen-users", onUsers);
+      startScreen(null);
+    }, 3500);
+    dashboardSocket.emit("screen-users", { clientId, username: state.user?.username || "unbekannt" });
+  }
+
+  function showUserPicker(users) {
+    statusEl.textContent = t("vnc_pick_user");
+    const ov = document.createElement("div");
+    ov.style.cssText = "position:absolute;inset:0;z-index:30;display:flex;align-items:center;"
+      + "justify-content:center;background:rgba(0,0,0,.72);padding:16px";
+    ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;width:420px;max-width:100%;color:var(--text)">
+      <b style="font-size:15px">${esc(t("vnc_pick_user_title"))}</b>
+      <div style="color:var(--subtext);font-size:12.5px;margin:4px 0 10px">${esc(t("vnc_pick_user_hint"))}</div>
+      <div data-list style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto"></div>
+    </div>`;
+    const list = ov.querySelector("[data-list]");
+    users.forEach((u) => {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.style.cssText = "width:100%;text-align:left;display:flex;align-items:center;gap:8px;padding:8px 10px";
+      const dot = u.active ? "🟢" : "⚪";
+      const tags = [u.console ? t("vnc_user_console") : "", u.active ? t("vnc_user_active") : t("vnc_user_disconnected")]
+        .filter(Boolean).join(" · ");
+      b.innerHTML = `<span>${dot}</span><span style="flex:1"><b>${esc(u.user)}</b>`
+        + `<div style="font-size:11px;color:var(--subtext)">${esc(tags)} \u00b7 Sitzung ${u.session}</div></span>`;
+      b.addEventListener("click", () => {
+        ov.remove();
+        statusEl.textContent = t("vnc_connecting");
+        startScreen(u.session);
+      });
+      list.appendChild(b);
+    });
+    imgArea.appendChild(ov);
+  }
+
+  pickUserThenStart();
 
   // --- Koordinaten vom angezeigten Bild auf die echte Auflösung umrechnen ---
   function mapCoords(clientX, clientY) {

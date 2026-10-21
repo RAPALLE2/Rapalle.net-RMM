@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "id": "headless-screen",
+  "name": "Headless-Bildschirm",
+  "version": "1.0.0",
+  "description": "Remote-Bildschirm auch ohne Monitor: installiert auf Wunsch einen virtuellen Bildschirmtreiber (nur Windows), damit headless-Server/VMs einen Desktop zum Aufnehmen haben. Außerdem Mehrbenutzer-Auswahl – sind mehrere Benutzer angemeldet, wählt man erst einen aus; dieser bekommt die Freigabe-Abfrage, und sein Bildschirm wird gesehen und gesteuert.",
+  "author": "RAPALLE.net",
+  "category": "Fernzugriff",
+  "icon": "🖥️",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "hs_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "apps": [
+    {
+      "id": "headless-screen",
+      "label": "Headless-Bildschirm",
+      "icon": "🖥️",
+      "title": "Headless-Bildschirm",
+      "entry": "app.js",
+      "export": "renderHeadless",
+      "perm": "manage_headless_screen",
+      "w": 920,
+      "h": 640
+    }
+  ],
+  "settings": [
+    {
+      "key": "driver_url",
+      "type": "string",
+      "label": "Treiberpaket-URL (ZIP)",
+      "default": "",
+      "help": "Optional eigene Quelle. Leer = das Modul lädt beim Aktivieren ein signiertes Paket in storage/headless-screen und liefert es selbst aus."
+    },
+    {
+      "key": "driver_sha256",
+      "type": "string",
+      "label": "SHA256 des Treiberpakets",
+      "default": "",
+      "help": "Wird nur zusammen mit einer eigenen URL geprüft."
+    },
+    {
+      "key": "consent_timeout",
+      "type": "number",
+      "label": "Wartezeit auf Freigabe (Sekunden)",
+      "default": 30
+    }
+  ]
+}

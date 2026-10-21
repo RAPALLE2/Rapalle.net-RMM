@@ -2744,6 +2744,7 @@ GLOBAL_PERM_KEYS = [
     # Modul "docker": Stacks anlegen, ALLE Container/Images/Volumes/Netzwerke steuern
     "manage_docker",
     "manage_cloudflare",
+    "manage_headless_screen",
     # Modul "console": RMM-Konsole benutzen (SSH, Dashboard, Client-App) - je Befehl zusaetzlich das passende Recht
     "use_console",
     "create_users",

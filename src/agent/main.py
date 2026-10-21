@@ -696,6 +696,8 @@ async def connect():
             # auf dem Client wirklich die neue Datei laeuft - eine Versions-
             # nummer allein hat das zuletzt nicht verlaesslich gezeigt.
             "screen_helper": True,
+            "vdisplay": _vdisplay_status() if IS_WINDOWS else {"supported": False},
+            "multiuser_select": IS_WINDOWS,
             # Patch-Fähigkeit ungefragt mitteilen. Das Backend muss dadurch
             # nicht erst einen Ping schicken, um zu wissen, ob ein
             # Patch-Auftrag auf diesem Client überhaupt Sinn ergibt.
@@ -4291,6 +4293,95 @@ def _win_console_session_id() -> int:
 # statt durchgereicht.
 _LAST_HELPER_SESSION = [None]
 
+# Vom Dashboard gewaehlte Windows-Sitzung (Mehrbenutzer: "erst einen Benutzer
+# waehlen"). None = automatisch die am besten geeignete Sitzung. Gilt fuer
+# Zustimmungsabfrage UND Aufnahme/Steuerung, damit beides denselben Benutzer
+# trifft.
+_PREFERRED_SESSION = [None]
+
+
+def _set_preferred_session(sid):
+    try:
+        _PREFERRED_SESSION[0] = int(sid) if sid is not None and str(sid) != "" else None
+    except (TypeError, ValueError):
+        _PREFERRED_SESSION[0] = None
+
+
+def _win_session_user(session_id: int) -> str:
+    """Anmeldename (DOMAENE\\Benutzer) einer Windows-Sitzung - '' wenn unbekannt."""
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        wts = ctypes.windll.wtsapi32
+
+        def q(info_class):
+            buf = ctypes.c_void_p()
+            n = wintypes.DWORD(0)
+            if not wts.WTSQuerySessionInformationW(0, wintypes.DWORD(session_id), info_class,
+                                                   ctypes.byref(buf), ctypes.byref(n)):
+                return ""
+            try:
+                return ctypes.wstring_at(buf) if buf.value else ""
+            finally:
+                wts.WTSFreeMemory(buf)
+        user = q(5)        # WTSUserName
+        if not user:
+            return ""
+        domain = q(7)      # WTSDomainName
+        return f"{domain}\\{user}" if domain else user
+    except Exception:
+        return ""
+
+
+def _win_logged_in_users() -> list:
+    """Alle Windows-Sitzungen mit angemeldetem Benutzer - fuer die Auswahl im
+    Dashboard. Jeweils {session, user, state, console, active}. Reihenfolge wie
+    _win_user_sessions() (am besten geeignete zuerst)."""
+    out = []
+    try:
+        console = _win_console_session_id()
+        active = set(_win_user_sessions_by_state(0))
+        for sid in _win_user_sessions():
+            user = _win_session_user(sid)
+            if not user:
+                continue
+            out.append({"session": sid, "user": user,
+                        "state": "active" if sid in active else "disconnected",
+                        "console": sid == console, "active": sid in active})
+    except Exception as e:
+        _print(f"[screen] Benutzerliste nicht lesbar: {e}")
+    return out
+
+
+def _win_user_sessions_by_state(want_state: int) -> list:
+    """Sitzungs-IDs mit genau diesem WTS-State (0=aktiv, 4=getrennt)."""
+    if platform.system() != "Windows":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _SI(ctypes.Structure):
+            _fields_ = [("SessionId", wintypes.DWORD), ("pWinStationName", wintypes.LPWSTR),
+                        ("State", ctypes.c_int)]
+        wts = ctypes.windll.wtsapi32
+        count = wintypes.DWORD(0)
+        arr = ctypes.POINTER(_SI)()
+        if not wts.WTSEnumerateSessionsW(0, 0, 1, ctypes.byref(arr), ctypes.byref(count)):
+            return []
+        try:
+            return [int(arr[i].SessionId) for i in range(count.value)
+                    if int(arr[i].SessionId) != 0 and int(arr[i].State) == want_state]
+        finally:
+            try:
+                wts.WTSFreeMemory(arr)
+            except Exception:
+                pass
+    except Exception:
+        return []
+
 
 def _win_user_sessions() -> list[int]:
     """
@@ -4342,7 +4433,13 @@ def _win_user_sessions() -> list[int]:
                     disconnected.append(sid)
             # Konsolensitzung innerhalb ihrer Stufe nach vorne holen.
             key = lambda x: (x != console, x)   # noqa: E731
-            return sorted(active, key=key) + sorted(disconnected, key=key)
+            ordered = sorted(active, key=key) + sorted(disconnected, key=key)
+            # Hat das Dashboard einen Benutzer gewaehlt (Mehrbenutzer), kommt
+            # dessen Sitzung nach vorne - sofern sie noch existiert.
+            pref = _PREFERRED_SESSION[0]
+            if pref is not None and pref in ordered:
+                ordered = [pref] + [x for x in ordered if x != pref]
+            return ordered
         finally:
             try:
                 wts.WTSFreeMemory(arr)
@@ -4967,6 +5064,136 @@ def _notify_screen_mode(loop, mode, reason="", code=None, params=None):
         pass
 
 
+# ====================================================================
+# Virtueller Bildschirmtreiber (headless) - nur Windows
+# --------------------------------------------------------------------
+# Ein "Indirect Display Driver" (IDD) stellt dem System einen Bildschirm
+# bereit, obwohl kein Monitor angeschlossen ist. Erst damit gibt es auf
+# einem headless-Server/VM ueberhaupt einen Desktop, den der Remote-
+# Bildschirm aufnehmen kann. Treiber + INF kommen als signiertes ZIP vom
+# RMM-Server (das Modul "headless-screen" laedt sie beim Aktivieren dorthin);
+# der Agent installiert sie als SYSTEM mit pnputil. Ohne URL wird nichts
+# installiert - es werden keine Binaerdateien mit dem Agenten ausgeliefert.
+# ====================================================================
+_VDISPLAY_DIR = Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "RapalleRMM" / "vdisplay" \
+    if platform.system() == "Windows" else Path("/tmp/rmm-vdisplay")
+_VDISPLAY_HWID = "Root\\RapalleIddSampleDriver"   # HardwareID der mitgelieferten INF
+
+
+def _vdisplay_status() -> dict:
+    """-> {supported, installed, present, active, driver, error}."""
+    if not IS_WINDOWS:
+        return {"supported": False, "installed": False, "present": False, "active": False,
+                "error": "Nur unter Windows verfuegbar"}
+    out = {"supported": True, "installed": False, "present": False, "active": False, "error": ""}
+    try:
+        r = _run(["pnputil", "/enum-devices", "/connected"])
+        txt = (r.stdout or "") + (r.stdout is None and "" or "")
+        if "RapalleIdd" in txt or "Rapalle Virtual Display" in txt:
+            out["present"] = True
+    except Exception:
+        pass
+    # Treiber im Treiberspeicher? (auch wenn gerade kein Geraet aktiv ist)
+    try:
+        r = _run(["pnputil", "/enum-drivers"])
+        if "rapalleidd" in (r.stdout or "").lower() or "rapalle virtual display" in (r.stdout or "").lower():
+            out["installed"] = True
+    except Exception:
+        pass
+    # Aktiver (zusaetzlicher) Bildschirm vorhanden?
+    try:
+        import ctypes
+        n = ctypes.windll.user32.GetSystemMetrics(80)   # SM_CMONITORS
+        out["monitors"] = int(n)
+        out["active"] = out["present"] and int(n) >= 1
+    except Exception:
+        pass
+    return out
+
+
+def _vdisplay_install(url: str, sha256: str = "") -> dict:
+    """Treiber-ZIP vom Server holen, pruefen, entpacken und als Geraet anlegen."""
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "Der virtuelle Bildschirm wird nur unter Windows unterstuetzt."}
+    if _win_session_id() != 0 and os.environ.get("RMM_SCREEN_HELPER") == "1":
+        return {"ok": False, "error": "Nur der Agent-Dienst (SYSTEM) kann den Treiber installieren."}
+    if not url:
+        return {"ok": False, "error": "Kein Treiberpaket auf dem Server hinterlegt "
+                "(Modul „Headless-Bildschirm“ zuerst aktivieren)."}
+    try:
+        import hashlib
+        import urllib.request
+        import zipfile
+        _VDISPLAY_DIR.mkdir(parents=True, exist_ok=True)
+        zpath = _VDISPLAY_DIR / "driver.zip"
+        # Relative Server-Adresse gegen die eigene Server-URL aufloesen und den
+        # Download mit dem Agent-Token absichern (die Datei liegt auf dem RMM).
+        full = url if "://" in url else (BACKEND_URL.rstrip("/") + "/" + url.lstrip("/"))
+        headers = {"X-Agent-Token": AGENT_TOKEN} if full.startswith(BACKEND_URL.rstrip("/")) else {}
+        _print(f"[vdisplay] lade Treiberpaket: {full}")
+        req = urllib.request.Request(full, headers=headers)
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            blob = resp.read()
+        if sha256 and hashlib.sha256(blob).hexdigest().lower() != sha256.lower():
+            return {"ok": False, "error": "Pruefsumme des Treiberpakets stimmt nicht - Abbruch."}
+        zpath.write_bytes(blob)
+        with zipfile.ZipFile(zpath) as zf:
+            # Zip-Slip vermeiden
+            for name in zf.namelist():
+                if name.startswith(("/", "\\")) or ".." in Path(name).parts:
+                    return {"ok": False, "error": f"Unsicherer Pfad im Paket: {name}"}
+            zf.extractall(_VDISPLAY_DIR)
+        inf = next(iter(_VDISPLAY_DIR.rglob("*.inf")), None)
+        if not inf:
+            return {"ok": False, "error": "Im Treiberpaket ist keine INF-Datei enthalten."}
+        # 1) Treiber in den Treiberspeicher (signiert) aufnehmen
+        r = _run(["pnputil", "/add-driver", str(inf), "/install"])
+        log = (r.stdout or "") + (r.stderr or "")
+        _print(f"[vdisplay] add-driver rc={r.returncode}: {log.strip()[:300]}")
+        # 2) Geraet anlegen (falls noch keins aktiv). Bevorzugt mit der
+        #    mitgelieferten Installationshilfe, sonst ueber die INF.
+        helper_exe = next(iter(_VDISPLAY_DIR.rglob("*nstall*.exe")), None)
+        if not _vdisplay_status().get("present"):
+            if helper_exe:
+                _run([str(helper_exe), "install"])
+            else:
+                _run(["pnputil", "/add-device", "/hardwareid", _VDISPLAY_HWID])
+        st = _vdisplay_status()
+        if not (st.get("installed") or st.get("present")):
+            return {"ok": False, "error": "Installation lief durch, aber der Treiber ist nicht sichtbar. "
+                    "Moeglicher Grund: nicht signierter Treiber oder fehlende Rechte. "
+                    f"Details: {log.strip()[:300]}"}
+        return {"ok": True, "detail": "Virtueller Bildschirm installiert.", **st}
+    except Exception as e:
+        return {"ok": False, "error": f"Installation fehlgeschlagen: {e}"}
+
+
+def _vdisplay_remove() -> dict:
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "Nur unter Windows."}
+    try:
+        helper_exe = next(iter(_VDISPLAY_DIR.rglob("*nstall*.exe")), None)
+        if helper_exe:
+            _run([str(helper_exe), "remove"])
+        else:
+            _run(["pnputil", "/remove-device", "/hardwareid", _VDISPLAY_HWID])
+        # Treiber aus dem Speicher nehmen
+        r = _run(["pnputil", "/enum-drivers"])
+        pub = None
+        cur = {}
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.lower().startswith("published name"):
+                cur["pub"] = line.split(":", 1)[1].strip()
+            elif "rapalle" in line.lower() and cur.get("pub"):
+                pub = cur["pub"]
+        if pub:
+            _run(["pnputil", "/delete-driver", pub, "/uninstall", "/force"])
+        return {"ok": True, "detail": "Virtueller Bildschirm entfernt."}
+    except Exception as e:
+        return {"ok": False, "error": f"Entfernen fehlgeschlagen: {e}"}
+
+
 def _someone_logged_in() -> bool:
     """
     Prüft, ob am Gerät gerade jemand angemeldet ist. Nur dann wird um
@@ -5257,6 +5484,9 @@ async def on_screen_start(data):
     # Zustimmung am Gerät einholen (nur physische Geräte; das Backend schickt
     # require_consent entsprechend - und als doppelte Absicherung fragen VMs
     # und LXCs auch bei gesetztem Flag nie).
+    # Mehrbenutzer: Hat das Dashboard einen Benutzer (Windows-Sitzung) gewaehlt,
+    # trifft die Auswahl sowohl die Zustimmungsabfrage als auch die Aufnahme.
+    _set_preferred_session((data or {}).get("session") if isinstance(data, dict) else None)
     require_consent = bool(isinstance(data, dict) and data.get("require_consent"))
     _print(f"[agent] screen-start empfangen (require_consent={require_consent}, "
            f"device_type={DETECTED_DEVICE_TYPE or 'physical'})")
@@ -5327,6 +5557,66 @@ async def on_screen_set_monitor(data):
             _print(f"[agent] {_at('log_monitor_switched', n=_screen_stream['monitor'])}")
         except Exception:
             pass
+
+
+@sio.on("screen-users", namespace="/agent")
+async def on_screen_users(data):
+    """Dashboard fragt: welche Benutzer sind angemeldet? (Mehrbenutzer-Auswahl,
+    nur Windows). Antwort ueber 'screen-users' zurueck."""
+    loop = asyncio.get_event_loop()
+    users = []
+    multi = False
+    if IS_WINDOWS:
+        users = await loop.run_in_executor(None, _win_logged_in_users)
+        multi = len(users) > 1
+    try:
+        await sio.emit("screen-users", {
+            "id": DEVICE_ID, "users": users, "multi": multi,
+            "platform": platform.system(),
+        }, namespace="/agent")
+    except Exception:
+        pass
+
+
+@sio.on("vdisplay-status", namespace="/agent")
+async def on_vdisplay_status(data):
+    """Zustand des virtuellen Bildschirmtreibers (headless) melden."""
+    loop = asyncio.get_event_loop()
+    st = await loop.run_in_executor(None, _vdisplay_status)
+    try:
+        await sio.emit("vdisplay-status", {"id": DEVICE_ID, **st}, namespace="/agent")
+    except Exception:
+        pass
+
+
+@sio.on("vdisplay-install", namespace="/agent")
+async def on_vdisplay_install(data):
+    """Virtuellen Bildschirmtreiber installieren (nur Windows, als SYSTEM)."""
+    loop = asyncio.get_event_loop()
+    url = (data or {}).get("url") or ""
+    sha = (data or {}).get("sha256") or ""
+    res = await loop.run_in_executor(None, _vdisplay_install, url, sha)
+    try:
+        await sio.emit("vdisplay-result", {"id": DEVICE_ID, "action": "install", **res},
+                       namespace="/agent")
+    except Exception:
+        pass
+    st = await loop.run_in_executor(None, _vdisplay_status)
+    await sio.emit("vdisplay-status", {"id": DEVICE_ID, **st}, namespace="/agent")
+
+
+@sio.on("vdisplay-remove", namespace="/agent")
+async def on_vdisplay_remove(data):
+    """Virtuellen Bildschirmtreiber wieder entfernen."""
+    loop = asyncio.get_event_loop()
+    res = await loop.run_in_executor(None, _vdisplay_remove)
+    try:
+        await sio.emit("vdisplay-result", {"id": DEVICE_ID, "action": "remove", **res},
+                       namespace="/agent")
+    except Exception:
+        pass
+    st = await loop.run_in_executor(None, _vdisplay_status)
+    await sio.emit("vdisplay-status", {"id": DEVICE_ID, **st}, namespace="/agent")
 
 
 # Umrechnungstabelle für Sondertasten vom Browser zu pynput
