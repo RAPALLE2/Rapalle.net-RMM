@@ -34,3 +34,6 @@ src/agent/restart_count.txt
 # Modul-System: aktivierte Module, Einstellungen, Crash-Zusammenfassung und Modul-Daten
 src/backend/data/modules.json
 src/backend/data/modules/
+
+# Interne Dokumentation (nur fuer mich, nicht veroeffentlichen)
+docs/web/

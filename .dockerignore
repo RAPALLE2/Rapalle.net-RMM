@@ -41,3 +41,6 @@ src/client/.venv
 src/client/build
 src/client/dist
 src/client/out
+
+# Interne Dokumentation nicht ins Image
+docs/web/
