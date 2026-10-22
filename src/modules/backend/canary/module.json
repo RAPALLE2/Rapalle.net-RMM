@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "canary",
+  "name": "Canary & IP-Tracker",
+  "version": "1.0.0",
+  "description": "Honeypot-Werkzeuge: IP-Tracker-Links (öffentlicher Link sammelt IP, Standort, Browser/OS u. a. und leitet sofort auf ein Ziel weiter) und Canary-Tokens (Web-Link, E-Mail-Pixel, Köder-Datei in Word/PDF/Excel, QR-Code und DNS), die bei Aufruf Alarm schlagen – im Dashboard und (mit Modul „Benachrichtigungen“) per Webhook/E-Mail.",
+  "author": "RAPALLE.net",
+  "category": "Sicherheit",
+  "icon": "🕵️",
+  "requires": [],
+  "pip": [],
+  "routers": ["canary_routes", "public_routes"],
+  "entry": "module",
+  "hooks": {
+    "startup": "on_startup",
+    "shutdown": "on_shutdown",
+    "disable": "on_disable"
+  },
+  "apps": [
+    { "id": "iptracker", "label": "IP-Tracker", "icon": "📍", "title": "IP-Tracker",
+      "entry": "app.js", "export": "renderIpTracker", "perm": "manage_canary", "w": 1000, "h": 680 },
+    { "id": "canary", "label": "Canary-Tokens", "icon": "🕵️", "title": "Canary-Tokens",
+      "entry": "app.js", "export": "renderCanary", "perm": "manage_canary", "w": 1000, "h": 680 }
+  ],
+  "settings": [
+    { "key": "alert_email", "type": "string", "label": "Alarm-E-Mail (optional)", "default": "",
+      "help": "Zusätzlich zu Dashboard/Webhook per E-Mail benachrichtigen. Braucht SMTP im Modul „Benachrichtigungen“." },
+    { "key": "dns_enabled", "type": "bool", "label": "DNS-Canary-Server aktiv", "default": false,
+      "help": "Nur nötig für DNS-Tokens. Die Token-Domain muss per NS-Eintrag auf diesen Server delegiert sein." },
+    { "key": "dns_port", "type": "number", "label": "DNS-Port", "default": 53, "min": 1, "max": 65535 },
+    { "key": "dns_answer_ip", "type": "string", "label": "DNS-Antwort-IP", "default": "0.0.0.0" }
+  ]
+}

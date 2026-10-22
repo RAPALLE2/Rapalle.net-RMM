@@ -2745,6 +2745,7 @@ GLOBAL_PERM_KEYS = [
     "manage_docker",
     "manage_cloudflare",
     "manage_headless_screen",
+    "manage_canary",
     # Modul "console": RMM-Konsole benutzen (SSH, Dashboard, Client-App) - je Befehl zusaetzlich das passende Recht
     "use_console",
     "create_users",

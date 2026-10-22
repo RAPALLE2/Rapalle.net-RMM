@@ -154,6 +154,7 @@ PERM_LABELS = {
     "manage_docker": "Docker verwalten (Stacks anlegen, alle Container, Images, Volumes, Netzwerke – Modul „Docker“)",
     "manage_cloudflare": "Cloudflare Tunnel verwalten (Zugang, Tunnel, Routen, Freigaben – Modul „Cloudflare Tunnel“)",
     "manage_headless_screen": "Virtuellen Bildschirm (headless) installieren/entfernen – Modul „Headless-Bildschirm“",
+    "manage_canary": "IP-Tracker und Canary-Tokens verwalten – Modul „Canary & IP-Tracker“",
     "use_console": "RMM-Konsole benutzen (SSH, Dashboard, Client-App) – je Befehl zusätzlich das passende Recht",
     "create_users": "Benutzer erstellen",
     "network_scan": "Netzwerk-Scan",
