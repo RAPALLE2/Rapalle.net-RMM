@@ -11,6 +11,8 @@
 #   GET    /api/admin/realms/{id}/ad-groups          AD-Gruppen auflisten
 #   POST   /api/admin/realms/{id}/ad-groups/import   AD-Gruppen als RMM-Gruppen importieren
 #   GET    /api/admin/sso/local-admins               lokale Admin-Konten (Bedingung fuers Deaktivieren)
+#   GET    /api/admin/sso/ad-connections             im Modul "Active Directory" verbundene ADs (zur Auswahl)
+#   POST   /api/admin/sso/ad-connections/{cid}/import   eine davon als Realm uebernehmen
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -140,6 +142,45 @@ def import_realm_ad_groups(realm_id: str, body: ImportAdGroupsBody,
     db.add_audit_entry(user["username"], "ad_groups.imported", target=realm_id,
                        details=f"{len(imported)} Gruppen")
     return {"ok": True, "imported": imported, "count": len(imported)}
+
+
+@router.get("/sso/ad-connections")
+def ad_connections(user: dict = Depends(get_current_user)):
+    """Im Modul "Active Directory" verbundene ADs - direkt als Anmeldequelle waehlbar."""
+    require_perm(user, "manage_sso")
+    try:
+        from app import modules
+        if not modules.is_enabled("addir"):
+            return {"available": False, "connections": []}
+        conns = modules.use("addir", "store").list_conns()
+    except Exception:
+        return {"available": False, "connections": []}
+    taken = {(r.get("server"), r.get("base_dn")) for r in db.list_realms_full()}
+    return {"available": True, "connections": [
+        {"id": c["id"], "name": c["name"], "server": c.get("server"), "base_dn": c.get("base_dn"),
+         "bind_user": c.get("bind_user"), "port": c.get("port"), "use_ssl": bool(c.get("use_ssl")),
+         "already": (c.get("server"), c.get("base_dn")) in taken}
+        for c in conns]}
+
+
+@router.post("/sso/ad-connections/{cid}/import")
+def import_ad_connection(cid: str, user: dict = Depends(get_current_user)):
+    """Eine AD-Verbindung des Moduls "Active Directory" als SSO-Realm anlegen
+    (Bind-Benutzer/Passwort werden uebernommen)."""
+    require_perm(user, "manage_sso")
+    from app import modules
+    if not modules.is_enabled("addir"):
+        raise HTTPException(409, "Modul „Active Directory“ ist nicht aktiv")
+    adstore = modules.use("addir", "store")
+    c = adstore.get(cid)
+    if not c:
+        raise HTTPException(404, "AD-Verbindung nicht gefunden")
+    r = db.create_realm(c["name"], c.get("server") or "", c.get("base_dn") or "",
+                        c.get("bind_user") or "", adstore.dec(c.get("bind_pw_enc", "")),
+                        port=c.get("port"), use_ssl=bool(c.get("use_ssl")))
+    r.pop("bind_password", None)
+    db.add_audit_entry(user["username"], "realm.imported_from_ad", target=r["id"], details=c["name"])
+    return {"ok": True, "realm": r}
 
 
 @router.get("/sso/local-admins")

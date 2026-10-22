@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "addir",
+  "name": "Active Directory",
+  "version": "1.0.0",
+  "description": "Active Directory per LDAP verwalten: mehrere AD-Verbindungen, Benutzer anlegen/verschieben/bearbeiten, Passwörter setzen und zurücksetzen, aktivieren/sperren/entsperren, Ablaufdatum, Gruppen anlegen/verschieben/zuweisen, OUs anlegen/verschieben sowie Massen-Import per CSV. Verbundene ADs lassen sich im Modul „SSO“ direkt als Anmeldequelle wählen.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🗂️",
+  "requires": [],
+  "pip": ["ldap3>=2.9.0"],
+  "entry": "module",
+  "routers": ["ad_routes"],
+  "hooks": { "startup": "on_startup" },
+  "apps": [
+    { "id": "addir", "label": "Active Directory", "icon": "🗂️", "title": "Active Directory",
+      "entry": "app.js", "export": "renderAd", "perm": "manage_ad", "w": 1100, "h": 720 }
+  ]
+}
