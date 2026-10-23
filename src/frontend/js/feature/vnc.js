@@ -240,6 +240,25 @@ export function renderVnc(body, win) {
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
 
+  // --- Strg+C / Strg+V automatisch: echte Zwischenablage mitsynchronisieren ---
+  // Strg+V: lokale Zwischenablage lesen -> Remote setzen -> dann Strg+V am Remote.
+  // Strg+C: Strg+C am Remote -> kurz warten -> Remote-Zwischenablage hierher holen.
+  let _autoClipWorking = false;
+  async function pasteToRemote() {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch { /* Browser blockt evtl. */ }
+    if (text) dashboardSocket.emit("screen-input", { clientId, type: "clipboard-set", text });
+    // Kurze Pause, damit der Agent die Zwischenablage gesetzt hat, dann einfügen.
+    await new Promise((r) => setTimeout(r, text ? 60 : 0));
+    dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "v"] });
+  }
+  function copyFromRemote() {
+    dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "c"] });
+    // Dem Remote-PC Zeit geben, die Auswahl zu kopieren, dann abholen.
+    setTimeout(() => dashboardSocket.emit("screen-clipboard-get", { clientId }), 140);
+  }
+
+
   let framesReceived = 0;
   let monitorCount = 1;
   let monitorIndex = 1;
@@ -681,6 +700,23 @@ export function renderVnc(body, win) {
   img.addEventListener("keydown", (e) => {
     if (!controlEnabled()) return;
     e.preventDefault();
+
+    // Strg+C / Strg+V: echte Zwischenablage automatisch mitnehmen (ohne die
+    // Knöpfe in der Leiste). Nur bei reinem Strg (nicht mit Alt/Meta/Shift).
+    if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "v" || e.key === "V")) {
+      if (!_autoClipWorking) { _autoClipWorking = true; pasteToRemote().finally(() => { _autoClipWorking = false; }); }
+      return;
+    }
+    if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "c" || e.key === "C")) {
+      copyFromRemote();
+      return;
+    }
+    if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "x" || e.key === "X")) {
+      // Ausschneiden = kopieren + Agent führt Strg+X ohnehin aus; danach abholen.
+      dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "x"] });
+      setTimeout(() => dashboardSocket.emit("screen-clipboard-get", { clientId }), 140);
+      return;
+    }
 
     // Tastenkombination mit Modifiern (Strg/Alt) -> als "combo" senden
     if (e.ctrlKey || e.altKey || e.metaKey) {

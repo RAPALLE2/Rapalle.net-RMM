@@ -24,7 +24,14 @@ ZIP = DIR / "driver.zip"
 SHA = DIR / "driver.zip.sha256"
 # Quelle: quartz-/IddSampleDriver-artiges Paket. Per Umgebung/Einstellung ersetzbar;
 # Standard leer, damit nie ungewollt eine feste Fremdquelle gezogen wird.
-DEFAULT_SOURCE = ""
+# Standard-Treiber fuer Leute ohne eigenes Paket: der quelloffene, signierte
+# "Virtual Display Driver" (IddSampleDriver-Nachfolger). Statt eine feste - und damit
+# alternde - Datei-URL zu hinterlegen, loest das Modul beim Aktivieren automatisch das
+# AKTUELLE Release auf (erste .zip-Datei) und laedt es. So funktioniert es fuer
+# Nicht-Fachleute ohne jede Eingabe; eine eigene driver_url hat weiterhin Vorrang.
+DEFAULT_REPO = "VirtualDrivers/Virtual-Display-Driver"
+DEFAULT_PROJECT_URL = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/latest"
+DEFAULT_SOURCE = ""      # wird beim Aktivieren per API ermittelt (resolve_default_url)
 _lock = threading.Lock()
 _state = {"downloading": False, "error": "", "have": False}
 
@@ -66,21 +73,63 @@ def status() -> dict:
     st = _settings()
     return {"custom_url": bool((st.get("driver_url") or "").strip()),
             "have_local": have_local(), "downloading": _state["downloading"],
-            "error": _state["error"], "source": st.get("driver_url") or DEFAULT_SOURCE}
+            "error": _state["error"], "source": st.get("driver_url") or DEFAULT_PROJECT_URL,
+            "auto_default": not (st.get("driver_url") or "").strip()}
+
+
+def resolve_default_url() -> str:
+    """URL des Standard-Treibers (aktuelles Release des Open-Source-VDD) ermitteln.
+    Nimmt die erste passende .zip-Datei des neuesten Releases. Leerer String bei Fehler."""
+    import json
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{DEFAULT_REPO}/releases/latest",
+            headers={"User-Agent": "RAPALLE-RMM", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            rel = json.loads(r.read() or b"{}")
+        assets = rel.get("assets") or []
+        # Bevorzugt x64/zip-Dateien, die wie ein Treiberpaket aussehen.
+        def score(a):
+            n = (a.get("name") or "").lower()
+            s = 0
+            if n.endswith(".zip"):
+                s += 5
+            if "x64" in n or "amd64" in n:
+                s += 2
+            if "driver" in n or "vdd" in n or "virtual" in n:
+                s += 1
+            if "arm" in n:
+                s -= 3
+            return s
+        zips = sorted([a for a in assets if (a.get("name") or "").lower().endswith(".zip")],
+                      key=score, reverse=True)
+        if zips:
+            return zips[0].get("browser_download_url") or ""
+    except Exception as e:      # noqa: BLE001
+        print(f"[headless-screen] Standard-Treiber nicht aufgelöst: {e}")
+    return ""
 
 
 def ensure_async(ctx=None) -> None:
-    """Beim Aktivieren: Paket besorgen, falls keine eigene URL gesetzt ist."""
+    """Beim Aktivieren: Paket besorgen, falls keine eigene URL gesetzt ist.
+    Ohne eigene URL wird automatisch der quelloffene Standard-Treiber geladen -
+    gedacht fuer Leute, die sich nicht auskennen (keine Eingabe noetig)."""
     st = _settings()
     if (st.get("driver_url") or "").strip() or have_local():
         return
-    if not DEFAULT_SOURCE:
+
+    def worker():
+        url = DEFAULT_SOURCE or resolve_default_url()
+        if not url:
+            if ctx:
+                ctx.log("Standard-Treiber konnte nicht automatisch geladen werden (kein Internet?). "
+                        "Bitte in den Modul-Einstellungen eine driver_url angeben oder ein driver.zip "
+                        "in storage/headless-screen/ ablegen.")
+            return
         if ctx:
-            ctx.log("Kein Treiberpaket hinterlegt – bitte in den Modul-Einstellungen eine "
-                    "driver_url angeben oder ein driver.zip in storage/headless-screen/ ablegen.")
-        return
-    threading.Thread(target=_download, args=(DEFAULT_SOURCE, ctx), daemon=True,
-                     name="hs-driver-dl").start()
+            ctx.log(f"Lade quelloffenen Standard-Bildschirmtreiber: {url}")
+        _download(url, ctx)
+    threading.Thread(target=worker, daemon=True, name="hs-driver-dl").start()
 
 
 def _download(url: str, ctx=None) -> None:

@@ -137,10 +137,12 @@ async function drawPkg(host) {
   const ok = st.custom_url || st.have_local;
   host.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--panel-2)">
     ${ok
-      ? `✅ Treiberpaket bereit${st.custom_url ? " (eigene Quelle)" : ""}.`
+      ? `✅ Treiberpaket bereit${st.custom_url ? " (eigene Quelle)" : " (quelloffener Standard-Treiber)"}.`
       : st.downloading
-        ? `⏳ Treiberpaket wird geladen …`
-        : `⚠ Kein Treiberpaket auf dem Server. In den Modul-Einstellungen eine <code>driver_url</code> (signiertes ZIP mit INF) angeben oder ein <code>driver.zip</code> in <code>storage/headless-screen/</code> ablegen.`}
+        ? `⏳ Standard-Bildschirmtreiber wird heruntergeladen …`
+        : st.auto_default
+          ? `⏳ Beim Aktivieren wird automatisch der quelloffene, signierte Standard-Treiber geladen – nichts weiter nötig. Kommt er nicht an (kein Internet?), kannst du in den Modul-Einstellungen eine eigene <code>driver_url</code> angeben.`
+          : `⚠ Kein Treiberpaket auf dem Server. In den Modul-Einstellungen eine <code>driver_url</code> (signiertes ZIP mit INF) angeben oder ein <code>driver.zip</code> in <code>storage/headless-screen/</code> ablegen.`}
     ${st.error ? `<div style="color:var(--danger);font-size:12px;margin-top:4px">${esc(st.error)}</div>` : ""}
   </div>`;
 }

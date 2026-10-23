@@ -35,7 +35,7 @@
       "type": "string",
       "label": "Treiberpaket-URL (ZIP)",
       "default": "",
-      "help": "Optional eigene Quelle. Leer = das Modul lädt beim Aktivieren ein signiertes Paket in storage/headless-screen und liefert es selbst aus."
+      "help": "Leer lassen (empfohlen): das Modul lädt beim Aktivieren automatisch den quelloffenen, signierten „Virtual Display Driver“ herunter – ideal für Einsteiger. Nur für eine eigene Treiberquelle hier eine ZIP-URL eintragen."
     },
     {
       "key": "driver_sha256",
