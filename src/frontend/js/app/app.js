@@ -53,7 +53,7 @@ import { updateClientLayouts } from "./dashlayout.js";
 import { renderPanelPart } from "../feature/panelpart.js";
 import { renderFleetWidget } from "../feature/fleetwidget.js";
 import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning } from "./startmenu.js";
-import { t } from "./i18n.js";
+import { t, initLanguages, loadLocale } from "./i18n.js";
 
 // -----------------------------------------------------------------
 // Content-Router: welcher Renderer gehört zu welchem appId?
@@ -236,6 +236,7 @@ async function startSession(user) {
   state.user = user;
   applyTheme(user.theme);
   applyAccent(user.accent || "teal");
+  try { await loadLocale(user.language || "de"); } catch { /* Puffer/Fallback */ }
   setLanguage(user.language || "de");
   applyStaticTranslations();
 
@@ -903,6 +904,9 @@ function initDesktopDrop() {
 }
 
 async function main() {
+  // Sprachen aus allen lang-Ordnern laden (Login-Fenster + Puffer übersetzen).
+  try { await initLanguages(); } catch { /* offline -> Puffer/Fallback */ }
+  applyStaticTranslations();
   // Rückkehr vom Spotify-OAuth-Login (?code&state=rmm-spotify:...) verarbeiten
   // und die URL säubern - unabhängig vom RMM-Login-Status.
   // Renderer für Fenster-Inhalte registrieren

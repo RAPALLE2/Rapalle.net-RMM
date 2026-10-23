@@ -1,0 +1,14 @@
+{
+ "_label": "Deutsch",
+ "ai_no_conn_selected": "Keine Verbindung ausgewählt",
+ "ai_no_conns": "Noch keine Verbindungen. Lege mit ＋ eine an (API-URL, API-Key, Modell).",
+ "ai_del_conn_q": "Verbindung \"{name}\" löschen?",
+ "ai_api_hint": "OpenAI-kompatible APIs (OpenAI, OpenRouter, Ollama, LM Studio, vLLM …) und Anthropic werden unterstützt. Der Pfad (/v1/chat/completions bzw. /v1/messages) wird automatisch ergänzt.",
+ "ai_model": "Modell",
+ "ai_key_keep": "leer lassen = Key behalten",
+ "ai_visibility": "Sichtbarkeit",
+ "ai_vis_private": "Privat (nur ich)",
+ "ai_vis_all": "Alle Benutzer",
+ "ai_vis_shared": "Bestimmte Benutzer/Gruppen",
+ "ai_create": "Anlegen"
+}

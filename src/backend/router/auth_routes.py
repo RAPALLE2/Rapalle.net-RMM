@@ -82,6 +82,23 @@ def _public_user(user: dict) -> dict:
     }
 
 
+@router.get("/languages")
+def languages():
+    """Alle verfuegbaren Sprachen (aus allen lang-Ordnern) - ohne Anmeldung,
+    weil schon das Login-Fenster uebersetzt werden soll."""
+    from app import i18n_loader
+    return {"languages": i18n_loader.available()}
+
+
+@router.get("/lang/{code}")
+def language_strings(code: str):
+    """Alle Uebersetzungen einer Sprache (zusammengefuehrt aus Kern + Modulen)."""
+    from app import i18n_loader
+    if not i18n_loader.has(code):
+        raise HTTPException(404, "Unbekannte Sprache")
+    return {"code": code, "strings": i18n_loader.strings(code)}
+
+
 @router.get("/realms")
 def public_realms():
     """

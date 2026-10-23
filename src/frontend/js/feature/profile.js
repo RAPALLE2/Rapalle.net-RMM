@@ -12,7 +12,7 @@ import { setLanguage, applyStaticTranslations } from "../app/i18n_apply.js";
 import { renderSidebar } from "../app/sidebar.js";
 import { renderMainContent } from "../app/panel.js";
 import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePrefs } from "../app/persist.js";
-import { t } from "../app/i18n.js";
+import { t, availableLanguages, loadAvailableLanguages, loadLocale, getLanguage } from "../app/i18n.js";
 import { condenseHints } from "../app/help.js";
 import { getModuleApi } from "../app/modules.js";
 import { getBarPrefs, setBarPrefs } from "../app/bars.js";
@@ -56,10 +56,7 @@ export function renderProfile(body, win) {
       </div>
       <div class="form-row">
         <label>Sprache</label>
-        <select id="pr-lang">
-          <option value="de" ${u.language === "de" ? "selected" : ""}>Deutsch</option>
-          <option value="en" ${u.language === "en" ? "selected" : ""}>English</option>
-        </select>
+        <select id="pr-lang" data-lang-select></select>
       </div>
       <div class="form-row">
         <label>Design</label>
@@ -331,6 +328,30 @@ export function renderProfile(body, win) {
   };
   window.addEventListener("dashedit-changed", _syncEditCheckbox);
 
+  // Sprach-Dropdown aus allen gefundenen lang-Ordnern füllen (eine neue Datei
+  // wie zb_ZB.json taucht hier automatisch auf). Danach wirkt die Wahl als
+  // Live-Vorschau: gewählte Sprache nachladen und Oberfläche neu zeichnen.
+  const langSel = body.querySelector("#pr-lang");
+  const fillLangs = () => {
+    let langs = availableLanguages();
+    if (!langs.length) langs = [{ code: "de_DE", label: "Deutsch" }, { code: "en_US", label: "English" }];
+    const cur = getLanguage();   // Kurzcode (de)
+    langSel.innerHTML = langs.map((l) => {
+      const short = (l.code.split(/[_-]/)[0] || l.code).toLowerCase();
+      return `<option value="${esc(l.code)}" ${short === cur ? "selected" : ""}>${esc(l.label)}</option>`;
+    }).join("");
+  };
+  fillLangs();
+  loadAvailableLanguages().then(fillLangs);    // nachladen, falls noch nicht da
+  langSel.addEventListener("change", async () => {
+    const { setLanguage } = await import("../app/i18n_apply.js");
+    await loadLocale(langSel.value);
+    setLanguage(langSel.value);
+    applyStaticTranslations();
+    renderSidebar();
+    renderMainContent();
+  });
+
   // Live-Vorschau: Theme sofort umschalten, wenn im Dropdown geändert
   body.querySelector("#pr-theme").addEventListener("change", (e) => applyTheme(e.target.value));
 
@@ -381,7 +402,7 @@ export function renderProfile(body, win) {
       updated = await api.updateProfile({
         display_name: body.querySelector("#pr-name").value,
         email: body.querySelector("#pr-email").value.trim(),
-        language: body.querySelector("#pr-lang").value,
+        language: body.querySelector("#pr-lang").value,  // volle Locale, z.B. de_DE
         theme: body.querySelector("#pr-theme").value,
         accent: selectedAccent,
       });

@@ -102,19 +102,45 @@ def strings_in(src: str):
             pos += len(raw) + 1
 
 
+
+import json as _json
+
+def _lang_dirs():
+    base = ROOT.parent  # .../src
+    dirs = [ROOT.parent.parent / "backend" / "data" / "lang"] if False else []
+    # ROOT = .../frontend/js ; wir brauchen src-Wurzel
+    src_root = ROOT.parents[1]  # .../src
+    out = [src_root / "backend" / "data" / "lang"]
+    for area in ("backend", "frontend", "node"):
+        b = src_root / "modules" / area
+        if b.is_dir():
+            for mod in sorted(b.iterdir()):
+                ld = mod / "lang"
+                if ld.is_dir():
+                    out.append(ld)
+    return out
+
+
+def _keys_for(short_lang):
+    """Alle Schluessel einer Sprache (de/en) aus allen lang-Ordnern (zusammengefuehrt)."""
+    # Dateiname beginnt mit dem Kurzcode: de_* / en_*
+    keys = set()
+    for d in _lang_dirs():
+        for f in d.glob(f"{short_lang}_*.json"):
+            try:
+                obj = _json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            keys |= {k for k in obj.keys() if not k.startswith("_")}
+    return keys
+
+
 def check_keys() -> None:
-    src = (ROOT / "app" / "i18n.js").read_text(encoding="utf-8")
-    blocks = {}
-    for lang in ("de", "en"):
-        m = re.search(rf"\n  {lang}: \{{\n(.*?)\n  \}},?\n", src, re.S)
-        if not m:
-            print(f"  {lang}: Block nicht gefunden!")
-            return
-        blocks[lang] = set(
-            re.findall(r"(?:^|,)\s*([a-zA-Z_][\w]*)\s*:", m.group(1), re.M))
-    only_de = sorted(blocks["de"] - blocks["en"])
-    only_en = sorted(blocks["en"] - blocks["de"])
-    print(f"Schlüssel: de={len(blocks['de'])} en={len(blocks['en'])}")
+    de = _keys_for("de")
+    en = _keys_for("en")
+    only_de = sorted(de - en)
+    only_en = sorted(en - de)
+    print(f"Schlüssel: de={len(de)} en={len(en)}")
     print(f"  nur in DE: {only_de or 'keine'}")
     print(f"  nur in EN: {only_en or 'keine'}")
 
@@ -133,12 +159,7 @@ def check_used_keys() -> None:
     Oberflaeche steht dann z.B. "set_db_hint" statt eines Satzes, und niemand
     merkt es, bis ein Benutzer es meldet.
     """
-    src = (ROOT / "app" / "i18n.js").read_text(encoding="utf-8")
-    m = re.search(r"\n  de: \{\n(.*?)\n  \},?\n", src, re.S)
-    if not m:
-        print("  de-Block nicht gefunden!")
-        return
-    keys = set(re.findall(r"(?:^|,)\s*([a-zA-Z_][\w]*)\s*:", m.group(1), re.M))
+    keys = _keys_for("de")
     used: dict = {}
     for f in sorted(ROOT.rglob("*.js")):
         if f.name.startswith("i18n") or "vendor" in f.parts:
