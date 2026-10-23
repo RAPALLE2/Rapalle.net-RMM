@@ -47,6 +47,7 @@ class ProfileBody(BaseModel):
     language: str | None = None   # "de" oder "en"
     theme: str | None = None      # "dark" oder "light"
     accent: str | None = None     # Farbpalette, z.B. "teal", "violet", ...
+    email: str | None = None
 
 
 def _auth_realm_of(user) -> str | None:
@@ -74,6 +75,7 @@ def _public_user(user: dict) -> dict:
         "language": user["language"],
         "theme": user["theme"],
         "accent": user["accent"] if "accent" in user.keys() else "teal",
+        "email": (user["email"] if "email" in user.keys() else None) or "",
         # Realm-ID (AD/LDAP/SSO) oder null bei lokalem Konto - das Frontend
         # blendet damit u.a. die Passwort-ändern-Funktion aus.
         "auth_realm": _auth_realm_of(user),
@@ -384,7 +386,17 @@ def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
     if (new_name is not None and new_name != user.get("display_name")
             and not (is_super_admin(user) or user_has_permission(user, "edit_profile_name"))):
         new_name = user.get("display_name")
-    db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent)
+    email = body.email
+    if email is not None:
+        email = email.strip()
+        if email:
+            import re as _re
+            if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                raise HTTPException(400, "Ungültige E-Mail-Adresse")
+            other = db.get_user_by_email(email)
+            if other and other["id"] != user["id"]:
+                raise HTTPException(400, "Diese E-Mail-Adresse wird bereits verwendet")
+    db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent, email=email)
     return _public_user(db.get_user_by_id(user["id"]))
 
 

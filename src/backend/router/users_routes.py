@@ -31,6 +31,7 @@ class CreateUserBody(BaseModel):
     # werden (siehe db.auto_assign_groups) - die Rechte selbst haengen an den
     # Gruppen bzw. den Grants.
     role: str = "admin"
+    email: str | None = None
     password: str | None = None    # wenn None -> automatisch generiertes Einmalpasswort
     one_time_password: bool = True  # True = User MUSS beim ersten Login ein eigenes PW setzen
 
@@ -65,6 +66,14 @@ def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
     if db.get_user_by_username(body.username):
         raise HTTPException(400, "Benutzername existiert bereits")
 
+    if body.email:
+        import re as _re
+        if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", body.email.strip()):
+            raise HTTPException(400, "Ungültige E-Mail-Adresse")
+        existing = db.get_user_by_email(body.email.strip())
+        if existing:
+            raise HTTPException(400, "Diese E-Mail-Adresse wird bereits verwendet")
+
     # "api" = Vorlage "API-Benutzer" (Modul "api" legt die passende Gruppe an)
     if body.role not in ("admin", "support", "viewer", "api"):
         raise HTTPException(400, "Unbekannte Rolle (erlaubt: admin, support, viewer)")
@@ -80,7 +89,8 @@ def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
             raise HTTPException(409, "API-Konten brauchen das Modul „REST-API“")
         import secrets as _secrets
         new_user = db.create_user(username=body.username, password_hash=hash_password(_secrets.token_urlsafe(48)),
-                                  display_name=body.display_name, role="api", must_change_pw=False)
+                                  display_name=body.display_name, role="api", must_change_pw=False,
+                                  email=body.email)
         key = apikeys.generate(new_user)
         db.add_audit_entry(user["username"], "user.created", target=body.username, details="API-Konto")
         return {"id": new_user["id"], "username": new_user["username"], "generated_password": None, "api_key": key}
@@ -103,6 +113,7 @@ def create_user(body: CreateUserBody, user: dict = Depends(get_current_user)):
         display_name=body.display_name,
         role=body.role,
         must_change_pw=body.one_time_password,
+        email=body.email,
     )
     db.add_audit_entry(user["username"], "user.created", target=body.username)
 

@@ -588,6 +588,7 @@ export function renderSettings(body, win) {
         <h3>${t("set_create_user")}</h3>
         <div class="form-row"><label>${t("username")}</label><input type="text" id="su-username" /></div>
         <div class="form-row"><label>${t("set_display_name")}</label><input type="text" id="su-display" /></div>
+        <div class="form-row"><label>E-Mail</label><input type="email" id="su-email" placeholder="name@firma.de" /></div>
         <div class="form-row">
           <label>${t("set_default_role")}</label>
           <select id="su-role">
@@ -710,6 +711,7 @@ export function renderSettings(body, win) {
       const payload = {
         username,
         display_name: root.querySelector("#su-display").value.trim() || username,
+        email: root.querySelector("#su-email").value.trim() || null,
         role,
         one_time_password: !isFixed,
         password: isFixed ? root.querySelector("#su-password").value : null,

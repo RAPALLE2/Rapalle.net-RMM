@@ -51,6 +51,10 @@ export function renderProfile(body, win) {
         <input type="text" id="pr-name" value="${esc(u.display_name)}" ${mayEditName ? "" : "disabled title=\"Keine Berechtigung\""} />
       </div>
       <div class="form-row">
+        <label>E-Mail</label>
+        <input type="email" id="pr-email" value="${esc(u.email || "")}" placeholder="name@firma.de" />
+      </div>
+      <div class="form-row">
         <label>Sprache</label>
         <select id="pr-lang">
           <option value="de" ${u.language === "de" ? "selected" : ""}>Deutsch</option>
@@ -372,12 +376,16 @@ export function renderProfile(body, win) {
   _wireBar("#pr-bars-m-task", "mobile", "task");
 
   body.querySelector("#pr-save").addEventListener("click", async () => {
-    const updated = await api.updateProfile({
-      display_name: body.querySelector("#pr-name").value,
-      language: body.querySelector("#pr-lang").value,
-      theme: body.querySelector("#pr-theme").value,
-      accent: selectedAccent,
-    });
+    let updated;
+    try {
+      updated = await api.updateProfile({
+        display_name: body.querySelector("#pr-name").value,
+        email: body.querySelector("#pr-email").value.trim(),
+        language: body.querySelector("#pr-lang").value,
+        theme: body.querySelector("#pr-theme").value,
+        accent: selectedAccent,
+      });
+    } catch (e) { window.notify?.(e.message || "Speichern fehlgeschlagen", "error", 6000); return; }
     state.user = updated;
     applyTheme(updated.theme);
     applyAccent(updated.accent || "teal");

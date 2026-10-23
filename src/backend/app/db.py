@@ -875,6 +875,7 @@ def init_db() -> None:
     # damit sie in JEDEM Browser gleich sind (nicht pro Browser/localStorage).
     _migrate_add_column("users", "silent_screen", "INTEGER DEFAULT 0")
     _migrate_add_column("users", "ui_prefs", "TEXT")
+    _migrate_add_column("users", "email", "TEXT")
     # Client-Websites: Öffnen im internen Browser-Fenster oder externen Tab.
     _migrate_add_column("client_websites", "open_mode", "TEXT DEFAULT 'external'")
     _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
@@ -1988,14 +1989,14 @@ def node_delete(client_id: str) -> None:
     _conn.commit()
 
 
-def create_user(username: str, password_hash: str, display_name: str, role: str, must_change_pw: bool) -> dict:
+def create_user(username: str, password_hash: str, display_name: str, role: str, must_change_pw: bool, email: str | None = None) -> dict:
     user_id = _new_id()
     _conn.execute(
         """
-        INSERT INTO users (id, username, password_hash, display_name, role, must_change_pw, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (id, username, password_hash, display_name, role, must_change_pw, created_at, email)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, username, password_hash, display_name, role, int(must_change_pw), _now_ms()),
+        (user_id, username, password_hash, display_name, role, int(must_change_pw), _now_ms(), (email or "").strip() or None),
     )
     _conn.commit()
     # Standard-Gruppen sofort zuweisen, damit ein frisches Konto nicht ohne
@@ -2033,22 +2034,36 @@ def set_user_totp(user_id: str, secret: str | None = None,
     _conn.commit()
 
 
-def update_user_profile(user_id: str, display_name: str | None = None, language: str | None = None, theme: str | None = None, accent: str | None = None) -> None:
+def update_user_profile(user_id: str, display_name: str | None = None, language: str | None = None, theme: str | None = None, accent: str | None = None, email: str | None = None) -> None:
     """Aktualisiert nur die übergebenen Felder (die anderen bleiben unverändert)."""
     user = get_user_by_id(user_id)
     if not user:
         return
+    cur_email = user["email"] if "email" in user.keys() else None
     _conn.execute(
-        "UPDATE users SET display_name = ?, language = ?, theme = ?, accent = ? WHERE id = ?",
+        "UPDATE users SET display_name = ?, language = ?, theme = ?, accent = ?, email = ? WHERE id = ?",
         (
             display_name if display_name is not None else user["display_name"],
             language if language is not None else user["language"],
             theme if theme is not None else user["theme"],
             accent if accent is not None else (user["accent"] if "accent" in user.keys() else "teal"),
+            (email.strip() or None) if email is not None else cur_email,
             user_id,
         ),
     )
     _conn.commit()
+
+
+def set_user_email(user_id: str, email: str | None) -> None:
+    _conn.execute("UPDATE users SET email = ? WHERE id = ?", ((email or "").strip() or None, user_id))
+    _conn.commit()
+
+
+def get_user_by_email(email: str) -> dict | None:
+    if not email:
+        return None
+    row = _conn.execute("SELECT * FROM users WHERE email = ? COLLATE NOCASE", (email.strip(),)).fetchone()
+    return dict(row) if row else None
 
 
 def delete_user(user_id: str) -> None:

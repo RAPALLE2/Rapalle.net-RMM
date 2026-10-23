@@ -8,7 +8,8 @@
 //   Icon-Modus: nur noch das Symbol, der Titel erscheint beim Überfahren.
 
 import { state } from "./state.js";
-import { focusWindow, toggleMinimize, minimizeAll } from "./windowmanager.js";
+import { focusWindow, toggleMinimize, toggleMaximize, togglePin, closeWindow, minimizeAll, openWindow, snapWindowTo } from "./windowmanager.js";
+import { bindContextMenu } from "./contextmenu.js";
 import { esc } from "./utils.js";
 
 // Symbol je App. Die Schlüssel entsprechen den appId-Werten aus openWindow()
@@ -119,6 +120,7 @@ export function renderTaskbar() {
         renderTaskbar();
       });
       bindTaskbarTip(btn, win.title);
+      bindContextMenu(btn, () => taskbarMenu(win.key));
       _btnCache.set(win.key, btn);
       // Neue Knöpfe dürfen einmalig hereingleiten.
       btn.classList.add("is-new");
@@ -152,6 +154,65 @@ export function renderTaskbar() {
     if (at !== btn) container.insertBefore(btn, at || null);
   });
 }
+
+// ------------------------------------------------------------------
+// Rechtsklick-Menü eines Taskleisten-Knopfs: schließen, kleine Vorschau,
+// in neuem Fenster öffnen, min/max, anheften, andocken.
+// ------------------------------------------------------------------
+function windowPreview(win) {
+  const wrap = document.createElement("div");
+  wrap.className = "ctx-win-preview";
+  const src = win._el;
+  if (!src) { wrap.textContent = "Keine Vorschau"; return wrap; }
+  // Maßstab so, dass die Vorschau ~240px breit ist.
+  const rect = src.getBoundingClientRect();
+  const w = rect.width || win.w || 640, h = rect.height || win.h || 460;
+  const scale = Math.min(240 / w, 150 / h, 1);
+  wrap.style.width = Math.round(w * scale) + "px";
+  wrap.style.height = Math.round(h * scale) + "px";
+  const clone = src.cloneNode(true);
+  clone.style.cssText = `position:absolute;left:0;top:0;width:${w}px;height:${h}px;transform:scale(${scale});transform-origin:top left;pointer-events:none;margin:0;display:flex`;
+  clone.classList.add("is-preview-clone");
+  // Interaktive/teure Inhalte in der Vorschau neutralisieren
+  clone.querySelectorAll("canvas, video, iframe").forEach((el) => { el.style.visibility = "hidden"; });
+  wrap.appendChild(clone);
+  wrap.addEventListener("click", () => { focusWindow(win.key); });
+  return wrap;
+}
+
+function taskbarMenu(key) {
+  const win = state.windows.find((w) => w.key === key);
+  if (!win) return null;
+  const items = [{ header: win.title }];
+  if (!win.minimized) items.push({ preview: windowPreview(win) });
+  items.push({ separator: true });
+  if (win.minimized) items.push({ label: "Anzeigen", icon: "🔼", onClick: () => { toggleMinimize(key); focusWindow(key); renderTaskbar(); } });
+  else items.push({ label: "In den Vordergrund", icon: "⬆️", onClick: () => { focusWindow(key); renderTaskbar(); } });
+  items.push({ label: win.minimized ? "Bleibt minimiert" : "Minimieren", icon: "🔽", disabled: win.minimized, onClick: () => { toggleMinimize(key); renderTaskbar(); } });
+  items.push({ label: win.maximized ? "Wiederherstellen" : "Maximieren", icon: win.maximized ? "🗗" : "🗖", onClick: () => { if (win.minimized) toggleMinimize(key); toggleMaximize(key); renderTaskbar(); } });
+  items.push({
+    label: "Andocken", icon: "▦", submenu: [
+      { label: "Linke Hälfte", icon: "◧", onClick: () => { if (win.minimized) toggleMinimize(key); snapWindowTo(key, "left"); } },
+      { label: "Rechte Hälfte", icon: "◨", onClick: () => { if (win.minimized) toggleMinimize(key); snapWindowTo(key, "right"); } },
+      { label: "Obere Hälfte", icon: "▀", onClick: () => { if (win.minimized) toggleMinimize(key); snapWindowTo(key, "top"); } },
+      { label: "Untere Hälfte", icon: "▄", onClick: () => { if (win.minimized) toggleMinimize(key); snapWindowTo(key, "bottom"); } },
+    ],
+  });
+  items.push({ label: win.pinned ? "Lösen (nicht mehr anheften)" : "Immer im Vordergrund", icon: "📌", onClick: () => { togglePin(key); renderTaskbar(); } });
+  items.push({ separator: true });
+  items.push({
+    label: "In neuem Fenster öffnen", icon: "🗔", onClick: () => {
+      openWindow({ key: win.appId + "-" + Math.random().toString(36).slice(2, 7), appId: win.appId,
+                   title: win.title, props: { ...(win.props || {}) }, clientColor: win.clientColor,
+                   w: win.w, h: win.h });
+      renderTaskbar();
+    },
+  });
+  items.push({ separator: true });
+  items.push({ label: "Schließen", icon: "✖️", danger: true, onClick: () => { closeWindow(key); renderTaskbar(); } });
+  return items;
+}
+
 
 // ------------------------------------------------------------------
 // Eigener Hover-Tooltip: erscheint sofort und wird ÜBER der Leiste

@@ -16,6 +16,7 @@ import { state } from "./state.js";
 import { esc } from "./utils.js";
 // t() wird fuer die Tooltips der Fensterknoepfe gebraucht ("Schliessen" usw.).
 import { t } from "./i18n.js";
+import { bindContextMenu } from "./contextmenu.js";
 
 // Optionale Aufräum-Funktionen pro Fenster-Key (z.B. VNC: Stream stoppen,
 // Socket-Listener entfernen). Apps können hier eine Funktion hinterlegen.
@@ -341,6 +342,7 @@ function createWindowElement(win) {
   // --- Titelleiste ---
   const titlebar = document.createElement("div");
   titlebar.className = "rmm-window-titlebar";
+  bindContextMenu(titlebar, (e) => (e.target.closest("button") ? null : windowMenu(win.key)));
 
   const titleSpan = document.createElement("span");
   titleSpan.className = "rmm-window-title";
@@ -942,4 +944,36 @@ function showSnapAssist(sourceWin, zone) {
   document.addEventListener("mousedown", _assistOutside, true);
   // Verlässt der Fokus das Fenster (Tab-Wechsel), ebenfalls aufräumen.
   window.addEventListener("blur", clearSnapAssist);
+}
+
+// ------------------------------------------------------------------
+// Fenster-Menü (Rechtsklick auf die Titelleiste). Gleiche Aktionen wie die
+// Taskleiste; hier inline, um Import-Zyklen mit taskbar.js zu vermeiden.
+// ------------------------------------------------------------------
+export function windowMenu(key) {
+  const win = state.windows.find((w) => w.key === key);
+  if (!win) return null;
+  const snap = (zone) => () => { if (win.minimized) toggleMinimize(key); snapWindowTo(key, zone); };
+  return [
+    { header: win.title },
+    { separator: true },
+    { label: win.maximized ? "Wiederherstellen" : "Maximieren", icon: win.maximized ? "🗗" : "🗖",
+      onClick: () => { toggleMaximize(key); } },
+    { label: "Minimieren", icon: "🔽", onClick: () => { toggleMinimize(key); } },
+    { label: "Andocken", icon: "▦", submenu: [
+      { label: "Linke Hälfte", icon: "◧", onClick: snap("left") },
+      { label: "Rechte Hälfte", icon: "◨", onClick: snap("right") },
+      { label: "Obere Hälfte", icon: "▀", onClick: snap("top") },
+      { label: "Untere Hälfte", icon: "▄", onClick: snap("bottom") },
+    ] },
+    { label: win.pinned ? "Lösen (nicht mehr anheften)" : "Immer im Vordergrund", icon: "📌",
+      onClick: () => { togglePin(key); } },
+    { separator: true },
+    { label: "In neuem Fenster öffnen", icon: "🗔", onClick: () => {
+      openWindow({ key: win.appId + "-" + Math.random().toString(36).slice(2, 7), appId: win.appId,
+                   title: win.title, props: { ...(win.props || {}) }, clientColor: win.clientColor, w: win.w, h: win.h });
+    } },
+    { separator: true },
+    { label: "Schließen", icon: "✖️", danger: true, onClick: () => { closeWindow(key); } },
+  ];
 }

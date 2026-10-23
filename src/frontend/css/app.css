@@ -82,3 +82,39 @@ body {
 
     background: #fafafa;
 }
+/* ============================================================
+   Einheitliches Rechtsklick-/Kontextmenü (js/app/contextmenu.js)
+   ============================================================ */
+.ctx-menu {
+  position: fixed; z-index: 100000; min-width: 210px; max-width: 320px;
+  background: var(--panel, #121c2e); color: var(--text, #e6edf6);
+  border: 1px solid var(--border, #243249); border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .45); padding: 5px;
+  font-size: 13px; user-select: none; animation: ctx-in .09s ease;
+}
+@keyframes ctx-in { from { opacity: 0; transform: translateY(-3px) scale(.98); } to { opacity: 1; transform: none; } }
+.ctx-item {
+  display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+  border-radius: 7px; cursor: pointer; line-height: 1.2; white-space: nowrap;
+}
+.ctx-item:hover { background: color-mix(in srgb, var(--accent, #2dd4bf) 18%, transparent); }
+.ctx-item.disabled { opacity: .45; cursor: default; }
+.ctx-item.disabled:hover { background: transparent; }
+.ctx-item.danger { color: var(--danger, #f87171); }
+.ctx-item.danger:hover { background: color-mix(in srgb, var(--danger, #f87171) 18%, transparent); }
+.ctx-ic { width: 18px; text-align: center; flex: 0 0 auto; }
+.ctx-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.ctx-arrow { opacity: .6; font-size: 11px; }
+.ctx-sep { height: 1px; background: var(--border, #243249); margin: 5px 6px; }
+.ctx-header {
+  padding: 5px 10px 4px; font-size: 11.5px; font-weight: 700; color: var(--subtext, #8fa1ba);
+  text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 300px;
+}
+.ctx-preview { padding: 4px 6px 6px; }
+.ctx-win-preview {
+  position: relative; overflow: hidden; border: 1px solid var(--border, #243249);
+  border-radius: 8px; background: var(--bg, #0b1220); cursor: pointer;
+}
+.ctx-win-preview:hover { border-color: var(--accent, #2dd4bf); }
+.ctx-win-preview .is-preview-clone { box-shadow: none !important; border-radius: 0 !important; }
+.ctx-sub { animation: ctx-in .08s ease; }
