@@ -2747,6 +2747,8 @@ GLOBAL_PERM_KEYS = [
     "manage_headless_screen",
     "manage_canary",
     "manage_ad",
+    "manage_tenants",
+    "use_tenants",
     # Modul "console": RMM-Konsole benutzen (SSH, Dashboard, Client-App) - je Befehl zusaetzlich das passende Recht
     "use_console",
     "create_users",

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "tenant-link",
+  "name": "Mandant-Freigabe",
+  "version": "1.0.0",
+  "description": "Gegenstück auf einem Mandanten-Backend: erlaubt einem Haupt-RMM, dieses Backend einzubetten und per Autologin zu öffnen (frame-ancestors/CORS für die angegebenen Haupt-RMM-Adressen). Der Login läuft über die normale Anmeldung – jeder Benutzer hinterlegt seine Zugangsdaten im Haupt-RMM.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🔗",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": ["tl_routes"],
+  "hooks": { "startup": "on_startup" },
+  "settings": [
+    { "key": "parents", "type": "string", "label": "Erlaubte Haupt-RMM-Adressen", "default": "",
+      "help": "Kommagetrennt, z. B. https://rmm.firma.de. Leer = nur gleiche Herkunft (keine Einbettung von außen)." }
+  ]
+}

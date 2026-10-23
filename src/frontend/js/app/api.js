@@ -21,8 +21,10 @@ import { t } from "./i18n.js";
     // die Markierung gilt also nur in ihren Fenstern.
     const ca = /(?:^#|&)client-app=([A-Za-z0-9._-]+)/.exec(location.hash || "");
     if (ca) localStorage.setItem("rmm_client_app", ca[1]); else localStorage.removeItem("rmm_client_app");
+    // Mandanten-Modul: "&embedded=1" -> dieses Dashboard laeuft eingebettet im Haupt-RMM.
+    if (/(?:^#|&)embedded=1/.test(location.hash || "")) document.documentElement.classList.add("rmm-embedded");
     const rest = (location.hash || "").replace(/(^#|&)client-token=[A-Za-z0-9._-]+/, "$1")
-      .replace(/(^#|&)client-app=[A-Za-z0-9._-]+/, "$1").replace(/^#&+/, "#").replace(/&&+/g, "&");
+      .replace(/(^#|&)client-app=[A-Za-z0-9._-]+/, "$1").replace(/(^#|&)embedded=1/, "$1").replace(/^#&+/, "#").replace(/&&+/g, "&");
     history.replaceState(null, "", location.pathname + location.search + (rest === "#" ? "" : rest));
   } catch { /* egal */ }
 })();
@@ -110,6 +112,8 @@ const _PERM_KEY = {
   manage_headless_screen: "perm_manage_headless_screen",
   manage_canary: "perm_manage_canary",
   manage_ad: "perm_manage_ad",
+  manage_tenants: "perm_manage_tenants",
+  use_tenants: "perm_use_tenants",
   use_console: "perm_use_console",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",

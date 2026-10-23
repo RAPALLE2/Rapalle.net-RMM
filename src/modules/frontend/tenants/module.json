@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "tenants",
+  "name": "Mandanten",
+  "version": "1.0.0",
+  "description": "Mehrere eigenständige RMM-Backends (Firmen, Abteilungen) verbinden und im Haupt-RMM direkt wechseln. Jeder Mandant ist komplett getrennt (eigene DB, Settings, Rechte, Spaces, Agents). Pro Benutzer eigene Zugangsdaten je Mandant; per App direkt in das Dashboard eines Mandanten wechseln (Autologin, offene Fenster bleiben). Einstellbar, welcher Benutzer/welche Gruppe einen Mandanten sehen darf. Die Spaces/Dateien des aktiven Mandanten erscheinen zusätzlich im eigenen Explorer/Spaces.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "🏢",
+  "requires": [],
+  "pip": ["httpx>=0.24"],
+  "entry": "module",
+  "routers": ["tenant_routes"],
+  "hooks": { "startup": "on_startup" },
+  "apps": [
+    { "id": "tenants", "label": "Mandanten", "icon": "🏢", "title": "Mandanten",
+      "entry": "app.js", "export": "renderTenants", "perm": "use_tenants", "w": 1200, "h": 800 }
+  ]
+}
