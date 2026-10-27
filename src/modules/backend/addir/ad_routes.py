@@ -166,6 +166,16 @@ def _ad(cid: str):
         raise HTTPException(404, str(e))
 
 
+@router.get("/{cid}/dashboard")
+def dashboard(cid: str, user: dict = Depends(get_current_user)):
+    _perm(user)
+    try:
+        with _ad(cid) as ad:
+            return ad.dashboard()
+    except AdError as e:
+        _err(e)
+
+
 @router.get("/{cid}/tree")
 def tree(cid: str, user: dict = Depends(get_current_user)):
     _perm(user)

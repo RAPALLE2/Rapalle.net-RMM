@@ -21,45 +21,109 @@ let TREE = [];          // OUs/Container der aktiven Verbindung
 
 export function renderAd(body) {
   body.innerHTML = `
-    <div style="display:flex;flex-direction:column;height:100%;min-height:0;font-size:13px">
-      <div class="tab-bar" style="padding:8px 12px 0;flex:0 0 auto">
-        ${["conn:Verbindungen", "browse:Durchsuchen", "bulk:Massen-Import"].map((t, i) => {
-          const [k, l] = t.split(":"); return `<button class="tab-btn ${i ? "" : "active"}" data-tab="${k}">${l}</button>`;
-        }).join("")}
-      </div>
-      <div style="padding:6px 12px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">
-        <span style="color:var(--subtext);font-size:12px">AD-Verbindung</span>
-        <select data-conn style="min-width:240px"></select>
-      </div>
-      <div data-pane style="flex:1;overflow:auto;padding:12px 14px;min-height:0"></div>
+    <div class="ad-root" style="display:flex;height:100%;min-height:0;font-size:13px">
+      <aside class="ad-side" style="width:230px;flex:0 0 230px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:auto;background:var(--panel-2,var(--panel))">
+        <div style="padding:14px 14px 10px;display:flex;align-items:center;gap:10px">
+          <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent-2,#38bdf8));display:grid;place-items:center;color:#07211d;font-weight:900;font-size:18px">🗂️</div>
+          <div style="min-width:0"><div data-conn-name style="font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</div>
+            <div style="font-size:11.5px;color:var(--subtext)">AD-Management</div></div>
+        </div>
+        <div style="padding:0 10px">
+          <select data-conn style="width:100%;margin-bottom:8px"></select>
+        </div>
+        <nav data-nav style="padding:4px 8px;display:flex;flex-direction:column;gap:2px"></nav>
+      </aside>
+      <main data-pane style="flex:1;overflow:auto;padding:0;min-height:0;position:relative"></main>
     </div>`;
   const pane = body.querySelector("[data-pane]");
   const connSel = body.querySelector("[data-conn]");
-  let tab = "conn";
-  const select = (t) => { tab = t; body.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === t)); draw(); };
-  body.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => select(b.dataset.tab)));
+  const navEl = body.querySelector("[data-nav]");
+  let view = "overview";
+  let counts = {};
 
-  const loadConns = async () => {
-    let d; try { d = await aq("/connections"); } catch (e) { pane.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; return []; }
-    const cs = d.connections;
-    connSel.innerHTML = cs.length ? cs.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("") : `<option value="">keine</option>`;
-    if (cs.length && !CONN) CONN = cs[0].id;
-    if (CONN) connSel.value = CONN;
-    return cs;
+  const NAV = [
+    { id: "overview", icon: "▦", label: "Übersicht" },
+    { id: "computer", icon: "🖥️", label: "Computer", count: () => counts.computers },
+    { id: "user", icon: "👤", label: "Benutzer", count: () => counts.users },
+    { id: "group", icon: "👥", label: "Gruppen", count: () => counts.groups },
+    { id: "ou", icon: "🗂️", label: "Organisationseinheiten", count: () => counts.ous },
+    { sep: "Administration" },
+    { id: "conn", icon: "🔌", label: "Verbindungen" },
+    { id: "bulk", icon: "⬆️", label: "Massen-Import" },
+  ];
+
+  const drawNav = () => {
+    navEl.innerHTML = NAV.map((n) => {
+      if (n.sep) return `<div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--subtext);padding:12px 10px 4px">${esc(n.sep)}</div>`;
+      const c = n.count ? n.count() : null;
+      const act = view === n.id;
+      return `<a data-view="${n.id}" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;cursor:pointer;${act ? "background:color-mix(in srgb,var(--accent) 16%,transparent);font-weight:600" : ""}">
+        <span style="width:18px;text-align:center;${act ? "color:var(--accent)" : ""}">${n.icon}</span>
+        <span style="flex:1">${esc(n.label)}</span>
+        ${c != null ? `<span style="font-size:11.5px;color:var(--subtext)">${c}</span>` : ""}</a>`;
+    }).join("");
+    navEl.querySelectorAll("[data-view]").forEach((a) => a.addEventListener("click", () => select(a.dataset.view)));
   };
-  connSel.addEventListener("change", async () => { CONN = connSel.value; TREE = []; if (tab !== "conn") draw(); });
+
+  const select = (v) => { view = v; drawNav(); draw(); };
 
   const draw = async () => {
-    if (tab === "conn") return drawConns(pane, loadConns, () => { CONN = connSel.value || CONN; });
-    if (!CONN) { pane.innerHTML = `<div style="color:var(--subtext)">Erst eine AD-Verbindung anlegen (Reiter „Verbindungen“).</div>`; return; }
-    if (!TREE.length) { try { TREE = (await aq(`/${CONN}/tree`)).tree; } catch (e) { pane.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; return; } }
-    if (tab === "browse") return drawBrowse(pane);
-    if (tab === "bulk") return drawBulk(pane);
+    if (view === "conn") return drawConns(pane, loadConns, afterConnChange);
+    if (view === "bulk") { if (!ensureConn()) return; TREE.length ? drawBulk(pane) : loadTree().then(() => drawBulk(pane)); return; }
+    if (view === "overview") { if (!ensureConn()) return; return drawDashboard(pane, () => select("overview")); }
+    // computer/user/group/ou -> Browse mit fester Art
+    if (!ensureConn()) return;
+    KIND = view;
+    const go = () => drawBrowse(pane);
+    TREE.length ? go() : loadTree().then(go);
   };
-  loadConns().then(draw);
+
+  const ensureConn = () => {
+    if (CONN) return true;
+    pane.innerHTML = `<div style="padding:20px;color:var(--subtext)">Keine AD-Verbindung. Lege unter <b>Verbindungen</b> eine an.</div>`;
+    return false;
+  };
+
+  const loadTree = async () => {
+    try { TREE = (await aq(`/${CONN}/tree`)).tree; } catch { TREE = []; }
+  };
+
+  const loadConns = async () => {
+    let d;
+    try { d = await aq("/connections"); } catch (e) { pane.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(e.message)}</div>`; return []; }
+    const cs = d.connections;
+    connSel.innerHTML = cs.length ? cs.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("") : `<option value="">keine Verbindung</option>`;
+    if (cs.length && !CONN) CONN = cs[0].id;
+    if (CONN) connSel.value = CONN;
+    const cur = cs.find((c) => c.id === CONN);
+    body.querySelector("[data-conn-name]").textContent = cur ? cur.name : "AD-Management";
+    return cs;
+  };
+
+  const afterConnChange = () => { CONN = connSel.value || CONN; };
+
+  connSel.addEventListener("change", async () => {
+    CONN = connSel.value; TREE = []; counts = {};
+    const cs = await aq("/connections").then((d) => d.connections).catch(() => []);
+    const cur = cs.find((c) => c.id === CONN);
+    body.querySelector("[data-conn-name]").textContent = cur ? cur.name : "AD-Management";
+    loadDashboardCounts().then(drawNav);
+    draw();
+  });
+
+  async function loadDashboardCounts() {
+    if (!CONN) return;
+    try {
+      const d = await aq(`/${CONN}/dashboard`);
+      counts = { computers: d.computers.total, users: d.users.total, groups: d.groups, ous: d.ous };
+      window.__adDash = window.__adDash || {}; window.__adDash[CONN] = d;
+    } catch { /* zeigt die Dashboard-Seite den Fehler */ }
+  }
+
+  drawNav();
+  loadConns().then(() => { loadDashboardCounts().then(drawNav); draw(); });
 }
 
-// ============================================================ Verbindungen
 async function drawConns(pane, loadConns, onChange) {
   let cs; try { cs = await loadConns(); } catch { cs = []; }
   pane.innerHTML = `
@@ -137,37 +201,139 @@ function connDialog(c, done) {
   });
 }
 
+// ============================================================ Dashboard / Übersicht
+function statCard(big, label, sub) {
+  return `<div style="border:1px solid var(--border);border-radius:14px;padding:16px 18px;background:var(--panel)">
+    <div style="font-size:12.5px;color:var(--subtext)">${esc(label)}</div>
+    <div style="font-size:34px;font-weight:800;line-height:1.1;margin-top:2px">${big}</div>
+    ${sub ? `<div style="font-size:12px;color:var(--subtext);margin-top:2px">${sub}</div>` : ""}</div>`;
+}
+
+function bar(segments) {
+  // segments: [{v, color}]
+  const total = segments.reduce((a, s) => a + s.v, 0) || 1;
+  return `<div style="display:flex;height:8px;border-radius:6px;overflow:hidden;margin:10px 0 6px">${
+    segments.map((s) => `<div style="width:${(s.v / total * 100).toFixed(1)}%;background:${s.color}"></div>`).join("")}</div>`;
+}
+
+function listRow(icon, title, meta, right) {
+  return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+    <span style="font-size:16px">${icon}</span>
+    <span style="flex:1;min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</b>
+      ${meta ? `<span style="font-size:11.5px;color:var(--subtext)">${esc(meta)}</span>` : ""}</span>
+    ${right || ""}</div>`;
+}
+
+function hbar(label, value, max, color) {
+  const pct = max ? Math.max(2, value / max * 100) : 0;
+  return `<div style="padding:7px 0;border-bottom:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>${esc(label)}</span><b>${value}</b></div>
+    <div style="height:5px;border-radius:4px;background:var(--panel-2,#0d1626);margin-top:5px;overflow:hidden"><div style="width:${pct.toFixed(1)}%;height:100%;background:${color}"></div></div></div>`;
+}
+
+async function drawDashboard(pane, reload) {
+  pane.innerHTML = `<div style="padding:22px 26px;color:var(--subtext)">⏳ Lade Übersicht …</div>`;
+  let d;
+  try { d = await aq(`/${CONN}/dashboard`); } catch (e) { pane.innerHTML = `<div style="padding:22px 26px;color:var(--danger)">${esc(e.message)}</div>`; return; }
+  const c = d.computers, u = d.users;
+  const ACC = "var(--accent)", WARN = "#e0a43b", DANGER = "#e06a7d", SUB = "var(--subtext)";
+  const domain = (d.base_dn || "").split(",").map((p) => p.split("=").slice(1).join("=")).filter(Boolean).join(".");
+  const maxOs = Math.max(1, ...d.os.map((x) => x.count));
+  const maxOu = Math.max(1, ...d.per_ou.map((x) => x.count));
+  pane.innerHTML = `
+    <div style="padding:20px 26px;max-width:1200px;margin:0 auto">
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:6px">
+        <div style="flex:1"><h1 style="margin:0;font-size:26px">Übersicht</h1>
+          <div style="color:var(--subtext)">Zustand der Domäne auf einen Blick.</div></div>
+        <button class="btn btn-sm" data-refresh>⟳ Aktualisieren</button>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:14px">
+        <div style="border:1px solid var(--border);border-radius:14px;padding:16px 18px;background:var(--panel)">
+          <div style="font-size:12.5px;color:var(--subtext)">Computerkonten in der Domäne</div>
+          <div style="font-size:40px;font-weight:800;line-height:1.05">${c.total}
+            <span style="font-size:15px;font-weight:600;color:var(--subtext)">davon ${c.servers} Server, ${c.dc} Domain Controller</span></div>
+          ${bar([{ v: c.active, color: ACC }, { v: c.inactive, color: WARN }, { v: c.disabled, color: DANGER }])}
+          <div style="display:flex;gap:16px;font-size:12px;color:var(--subtext);flex-wrap:wrap">
+            <span>🟩 ${c.active} Aktiv genutzt</span><span>🟨 ${c.inactive} Länger als ${d.inactive_days} Tage inaktiv</span><span>🟥 ${c.disabled} Deaktiviert</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          ${statCard(u.active, "Aktive Benutzer", `${u.disabled} deaktiviert`)}
+          ${statCard(d.groups, "Gruppen", "Sicherheits- und Verteilergruppen")}
+          ${statCard(d.ous, "OUs und Container", esc(domain || d.base_dn))}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <div style="border:1px solid var(--border);border-radius:14px;padding:16px 18px;background:var(--panel)">
+          <div style="display:flex;align-items:center;margin-bottom:4px"><b style="flex:1">Inaktive Computer</b>
+            <span style="font-size:12px;color:var(--subtext)">länger als ${d.inactive_days} Tage nicht angemeldet</span></div>
+          ${d.inactive_computers.length ? d.inactive_computers.map((x) =>
+            listRow("🖥️", x.name, "AD / " + x.ou,
+              `<span style="font-size:11px;background:color-mix(in srgb,${WARN} 22%,transparent);color:${WARN};border-radius:8px;padding:2px 8px">${x.days == null ? "nie" : x.days + " T"}</span>`)).join("")
+            : `<div style="color:var(--subtext);padding:8px 0">Keine inaktiven Computer.</div>`}
+        </div>
+        <div style="border:1px solid var(--border);border-radius:14px;padding:16px 18px;background:var(--panel)">
+          <b>Betriebssysteme</b>
+          <div style="margin-top:6px">${d.os.map((o) => hbar(o.name, o.count, maxOs, ACC)).join("") || `<div style="color:var(--subtext)">—</div>`}</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <div style="border:1px solid var(--border);border-radius:14px;padding:16px 18px;background:var(--panel)">
+          <b>Zuletzt angelegt</b>
+          <div style="margin-top:6px">${d.recent.length ? d.recent.map((r) =>
+            listRow(r.os.toLowerCase().includes("server") ? "🖳" : "🖥️", r.name, r.os,
+              `<span style="font-size:12px;color:var(--subtext)">${esc(r.when)}</span>`)).join("")
+            : `<div style="color:var(--subtext)">—</div>`}</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:14px;padding:16px 18px;background:var(--panel)">
+          <b>Computer je OU</b>
+          <div style="margin-top:6px">${d.per_ou.map((o) => hbar(o.name, o.count, maxOu, "var(--accent-2,#38bdf8)")).join("") || `<div style="color:var(--subtext)">—</div>`}</div>
+        </div>
+      </div>
+    </div>`;
+  pane.querySelector("[data-refresh]").addEventListener("click", reload);
+}
+
+// ============================================================ Durchsuchen
 // ============================================================ Durchsuchen
 let KIND = "user";
+const KIND_LABEL = { user: "Benutzer", group: "Gruppen", ou: "Organisationseinheiten", computer: "Computer" };
 function drawBrowse(pane) {
+  const title = KIND_LABEL[KIND] || "Objekte";
+  const newBtn = KIND === "computer"
+    ? ""
+    : `<button class="btn-primary btn-sm" data-new>＋ ${KIND === "user" ? "Benutzer" : KIND === "group" ? "Gruppe" : "OU"}</button>`;
   pane.innerHTML = `
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-      <select data-kind>${[["user", "Benutzer"], ["group", "Gruppen"], ["ou", "OUs"], ["computer", "Computer"]].map(([k, l]) => `<option value="${k}" ${k === KIND ? "selected" : ""}>${l}</option>`).join("")}</select>
-      <input data-q placeholder="Suche (Name, Benutzername, E-Mail …)" style="flex:1;min-width:180px">
-      <select data-base style="max-width:280px"><option value="">— ganzer Baum —</option>${TREE.filter((t) => t.type !== "base").map((t) => `<option value="${esc(t.dn)}">${esc(t.name)}</option>`).join("")}</select>
-      <button class="btn-primary btn-sm" data-go>Suchen</button>
-      <span style="flex:1"></span>
-      <button class="btn btn-sm" data-new-user>＋ Benutzer</button>
-      <button class="btn btn-sm" data-new-group>＋ Gruppe</button>
-      <button class="btn btn-sm" data-new-ou>＋ OU</button>
-    </div>
-    <div data-res style="color:var(--subtext)">Suche starten …</div>`;
-  const kindSel = pane.querySelector("[data-kind]");
-  kindSel.addEventListener("change", () => { KIND = kindSel.value; run(); });
+    <div style="padding:20px 26px;max-width:1200px;margin:0 auto">
+      <h1 style="margin:0 0 2px;font-size:24px">${esc(title)}</h1>
+      <div style="color:var(--subtext);margin-bottom:12px" data-count>Lade …</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <input data-q placeholder="Suche …" style="flex:1;min-width:200px">
+        <select data-base style="max-width:280px"><option value="">— ganzer Baum —</option>${TREE.filter((t) => t.type !== "base").map((t) => `<option value="${esc(t.dn)}">${esc(t.name)}</option>`).join("")}</select>
+        <button class="btn btn-sm" data-go>Suchen</button>
+        <span style="flex:1"></span>
+        ${newBtn}
+      </div>
+      <div data-res style="color:var(--subtext)">⏳ …</div>
+    </div>`;
+  pane.querySelector("[data-new]")?.addEventListener("click", () => {
+    if (KIND === "user") userDialog(null, run);
+    else if (KIND === "group") groupDialog(run);
+    else if (KIND === "ou") ouDialog(run);
+  });
   const run = async () => {
     const res = pane.querySelector("[data-res]");
     res.textContent = "⏳ …";
     try {
       const d = await aq(`/${CONN}/search?kind=${KIND}&q=${encodeURIComponent(pane.querySelector("[data-q]").value.trim())}&base=${encodeURIComponent(pane.querySelector("[data-base]").value)}`);
       res.innerHTML = renderResults(d.results, KIND);
+      const cnt = pane.querySelector("[data-count]"); if (cnt) cnt.textContent = `${d.results.length} ${KIND_LABEL[KIND] || ""}`;
       wireRows(res);
     } catch (e) { res.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; }
   };
   pane.querySelector("[data-go]").addEventListener("click", run);
   pane.querySelector("[data-q]").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
-  pane.querySelector("[data-new-user]").addEventListener("click", () => userDialog(null, run));
-  pane.querySelector("[data-new-group]").addEventListener("click", () => groupDialog(run));
-  pane.querySelector("[data-new-ou]").addEventListener("click", () => ouDialog(run));
   run();
 }
 

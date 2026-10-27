@@ -197,6 +197,110 @@ class Ad:
                 d["locked"] = bool(int(d.get("lockoutTime") or 0))
         return out
 
+    def _ou_of(self, dn: str) -> str:
+        """Erste OU/Container oberhalb eines Objekts als Kurzname (fuer "je OU")."""
+        import re as _re
+        parts = (dn or "").split(",")
+        for p in parts[1:]:
+            m = _re.match(r"\s*(?:OU|CN)=(.+)", p, _re.I)
+            if m:
+                return m.group(1)
+        return self.base_dn.split(",")[0].split("=")[-1]
+
+    @staticmethod
+    def _filetime_days_ago(val) -> float | None:
+        """AD-FILETIME (lastLogonTimestamp/whenCreated) -> Tage her (oder None)."""
+        import datetime
+        if val in (None, "", 0, "0"):
+            return None
+        try:
+            if hasattr(val, "timestamp"):           # ldap3 liefert oft datetime
+                dt = val
+            else:
+                ft = int(val)
+                if ft <= 0 or ft > 10**19:
+                    return None
+                epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+                dt = epoch + datetime.timedelta(microseconds=ft / 10)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 86400.0
+        except Exception:
+            return None
+
+    def dashboard(self, inactive_days: int = 90) -> dict:
+        """Kennzahlen fuer die Uebersicht (eine Sammelabfrage je Objektart)."""
+        import datetime
+        # --- Computer ---
+        comps = [self._entry(e) for e in self._search(
+            self.base_dn, "(objectClass=computer)",
+            ("sAMAccountName", "cn", "operatingSystem", "operatingSystemVersion", "userAccountControl",
+             "distinguishedName", "whenCreated", "lastLogonTimestamp", "dNSHostName"))]
+        servers = dc = active = inactive = disabled = 0
+        os_count: dict = {}
+        ou_count: dict = {}
+        inactive_list = []
+        for c in comps:
+            uac = int(c.get("userAccountControl") or 0)
+            is_dis = bool(uac & UAC_DISABLED)
+            os_name = (c.get("operatingSystem") or "Unbekannt").strip() or "Unbekannt"
+            if is_dis:
+                disabled += 1
+            osl = os_name.lower()
+            if "server" in osl:
+                servers += 1
+            dn = c.get("distinguishedName") or c.get("dn") or ""
+            if "domain controllers" in dn.lower():
+                dc += 1
+            os_count[os_name] = os_count.get(os_name, 0) + 1
+            ou = self._ou_of(dn)
+            ou_count[ou] = ou_count.get(ou, 0) + 1
+            days = self._filetime_days_ago(c.get("lastLogonTimestamp"))
+            if is_dis:
+                pass
+            elif days is None or days > inactive_days:
+                inactive += 1
+                inactive_list.append({"name": c.get("cn") or c.get("sAMAccountName") or dn.split(",")[0],
+                                      "ou": ou, "days": None if days is None else int(days), "dn": dn})
+            else:
+                active += 1
+        inactive_list.sort(key=lambda x: (x["days"] is not None, x["days"] or 0), reverse=False)
+        # --- zuletzt angelegt (Computer + Server) ---
+        def created(c):
+            v = c.get("whenCreated")
+            try:
+                return v if hasattr(v, "timestamp") else None
+            except Exception:
+                return None
+        recent = sorted([c for c in comps if created(c)], key=lambda c: c["whenCreated"], reverse=True)[:6]
+        recent_list = [{"name": c.get("cn") or c.get("sAMAccountName"),
+                        "os": (c.get("operatingSystem") or "Betriebssystem unbekannt"),
+                        "when": c["whenCreated"].strftime("%d.%m.%Y")} for c in recent]
+        # --- Benutzer ---
+        users = [self._entry(e) for e in self._search(
+            self.base_dn, "(&(objectClass=user)(!(objectClass=computer)))",
+            ("userAccountControl", "sAMAccountName"))]
+        u_active = sum(1 for u in users if not (int(u.get("userAccountControl") or 0) & UAC_DISABLED))
+        u_disabled = len(users) - u_active
+        # --- Gruppen / OUs ---
+        groups = self._search(self.base_dn, "(objectClass=group)", ("sAMAccountName",))
+        ous = self._search(self.base_dn, "(|(objectClass=organizationalUnit)(objectClass=container))", ("name",))
+        top_os = sorted(os_count.items(), key=lambda x: -x[1])
+        top_ou = sorted(ou_count.items(), key=lambda x: -x[1])
+        return {
+            "base_dn": self.base_dn,
+            "computers": {"total": len(comps), "servers": servers, "dc": dc,
+                          "active": active, "inactive": inactive, "disabled": disabled},
+            "users": {"total": len(users), "active": u_active, "disabled": u_disabled},
+            "groups": len(groups),
+            "ous": len(ous),
+            "inactive_days": inactive_days,
+            "inactive_computers": inactive_list[:12],
+            "os": [{"name": n, "count": c} for n, c in top_os[:9]],
+            "recent": recent_list,
+            "per_ou": [{"name": n, "count": c} for n, c in top_ou[:8]],
+        }
+
     def get_by_dn(self, dn: str, attrs=("*",)) -> dict | None:
         res = self._search(dn, "(objectClass=*)", attrs, scope=_ldap()[0].BASE)
         return self._entry(res[0]) if res else None
