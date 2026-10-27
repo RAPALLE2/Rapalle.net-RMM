@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "dist",
+  "name": "Verteilung (/dist)",
+  "version": "1.0.0",
+  "description": "Einheitliche Download-Verteilung unter rmm.url.de/dist mit Unterordnern: enrollment (Installer/Dateien für Clients), agent (Agent-Pakete), client (Client-App-Pakete) und frei anlegbaren weiteren Ordnern. Jeder Ordner ist einzeln öffentlich oder privat (Standard öffentlich). Löst die früheren Einzel-Seiten (Deployment/Agent-Dist/Client-Dist) ab; die alten Pfade leiten auf /dist um.",
+  "author": "RAPALLE.net",
+  "category": "System",
+  "icon": "📦",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": ["dist_routes"],
+  "hooks": { "startup": "on_startup" },
+  "apps": [
+    { "id": "dist", "label": "Verteilung", "icon": "📦", "title": "Verteilung (/dist)",
+      "entry": "app.js", "export": "renderDist", "perm": "manage_dist", "w": 900, "h": 640 }
+  ]
+}

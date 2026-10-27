@@ -158,6 +158,7 @@ PERM_LABELS = {
     "manage_ad": "Active Directory verwalten (Benutzer, Gruppen, OUs, Passwörter) – Modul „Active Directory“",
     "manage_tenants": "Mandanten verwalten (Backends verbinden, Freigaben) – Modul „Mandanten“",
     "use_tenants": "Mandanten öffnen und wechseln – Modul „Mandanten“",
+    "manage_dist": "Verteilung verwalten (/dist: Ordner, Dateien, Freigaben) – Modul „Verteilung“",
     "use_console": "RMM-Konsole benutzen (SSH, Dashboard, Client-App) – je Befehl zusätzlich das passende Recht",
     "create_users": "Benutzer erstellen",
     "network_scan": "Netzwerk-Scan",

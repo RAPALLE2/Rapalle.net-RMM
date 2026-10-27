@@ -1455,5 +1455,7 @@
  "vnc_chat_user": "Benutzer",
  "vnc_chat_granted": "Benutzer hat Administrator-Rechte erteilt",
  "vnc_chat_revoked": "Administrator-Rechte entzogen",
- "vnc_chat_user_left": "Der Benutzer hat die Fernwartung getrennt."
+ "vnc_chat_user_left": "Der Benutzer hat die Fernwartung getrennt.",
+ "vnc_chat_granted_silent": "Silent-Modus: Administrator-Rechte ohne Benutzerfreigabe aktiv",
+ "perm_manage_dist": "Verteilung verwalten"
 }

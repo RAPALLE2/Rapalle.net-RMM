@@ -114,6 +114,7 @@ const _PERM_KEY = {
   manage_ad: "perm_manage_ad",
   manage_tenants: "perm_manage_tenants",
   use_tenants: "perm_use_tenants",
+  manage_dist: "perm_manage_dist",
   use_console: "perm_use_console",
   use_vpn: "perm_use_vpn",
   ticket_create: "perm_ticket_create",
