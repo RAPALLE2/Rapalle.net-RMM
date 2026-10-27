@@ -1448,5 +1448,12 @@
  "agent_wayland": "Wayland-Sitzung erkannt – die Bildschirmaufnahme benötigt X11. Bei Ubuntu am Anmeldebildschirm über das Zahnrad „Ubuntu auf Xorg\" wählen. Es wird stattdessen eine Shell geöffnet.",
  "agent_no_display": "Kein grafischer Bildschirm gefunden (headless VM/Server). Es wird stattdessen eine Shell geöffnet.",
  "agent_mode_no_packages": "Bildschirm-Übertragung nicht möglich: mss/Pillow lassen sich nicht laden ({err}). Python: {python}. Es wird stattdessen eine Shell geöffnet.",
- "agent_err_consent_denied": "Der Benutzer am Gerät hat den Remote-Bildschirm nicht bestätigt."
+ "agent_err_consent_denied": "Der Benutzer am Gerät hat den Remote-Bildschirm nicht bestätigt.",
+ "vnc_chat_title": "Chat mit dem Benutzer",
+ "vnc_chat_ph": "Nachricht an den Benutzer …",
+ "vnc_chat_you": "Du (Admin)",
+ "vnc_chat_user": "Benutzer",
+ "vnc_chat_granted": "Benutzer hat Administrator-Rechte erteilt",
+ "vnc_chat_revoked": "Administrator-Rechte entzogen",
+ "vnc_chat_user_left": "Der Benutzer hat die Fernwartung getrennt."
 }

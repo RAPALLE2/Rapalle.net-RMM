@@ -56,11 +56,25 @@ export function renderVnc(body, win) {
         <span style="width:1px;height:16px;background:var(--border)"></span>
         <button class="btn" id="vnc-clip-send-${win.key}" title="${t("vnc_clip_send_title")}">📋→</button>
         <button class="btn" id="vnc-clip-get-${win.key}" title="${t("vnc_clip_get_title")}">→📋</button>
+        <span style="width:1px;height:16px;background:var(--border)"></span>
+        <button class="btn" id="vnc-chat-${win.key}" title="${t("vnc_chat_title")}">💬 <span id="vnc-chat-badge-${win.key}" style="display:none;background:var(--danger);color:#fff;border-radius:8px;padding:0 5px;font-size:10px">0</span></button>
         </span>
       </div>
       <div id="vnc-area-${win.key}" style="flex:1 1 0;min-height:0;min-width:0;overflow:hidden;position:relative">
         <img id="vnc-img-${win.key}" style="position:absolute;left:0;top:0;display:block"
              tabindex="0" />
+        <div id="vnc-chatpanel-${win.key}" style="display:none;position:absolute;top:0;right:0;bottom:0;width:300px;max-width:70%;background:var(--panel);border-left:1px solid var(--border);display:none;flex-direction:column;z-index:20">
+          <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px">
+            <b style="flex:1">💬 ${t("vnc_chat_title")}</b>
+            <span id="vnc-grant-${win.key}" style="font-size:11px;color:var(--subtext)"></span>
+            <button class="btn btn-sm" id="vnc-chat-close-${win.key}">✕</button>
+          </div>
+          <div id="vnc-chatlog-${win.key}" style="flex:1;overflow:auto;padding:8px 10px;font-size:12.5px;display:flex;flex-direction:column;gap:6px"></div>
+          <div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border)">
+            <input type="text" id="vnc-chatinput-${win.key}" placeholder="${t("vnc_chat_ph")}" style="flex:1" />
+            <button class="btn btn-sm btn-primary" id="vnc-chatsend-${win.key}">${t("send")}</button>
+          </div>
+        </div>
       </div>
       <div class="bar-optrow" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel-2);font-size:12px;flex-wrap:wrap">
         <span style="color:var(--subtext)">${t("vnc_send_text")}</span>
@@ -240,6 +254,65 @@ export function renderVnc(body, win) {
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
 
+  // --- Chat-/Steuerfenster der Fernwartung (Benutzer <-> Admin) ---
+  // Die Person vor dem PC bekommt ein Fenster (nur wenn NICHT Silent-Modus);
+  // hier ist die Admin-Seite: Chat, Anzeige der erteilten Admin-Rechte und ein
+  // Hinweis, wenn der Benutzer die Verbindung trennt.
+  const chatPanel = body.querySelector(`#vnc-chatpanel-${win.key}`);
+  const chatLog = body.querySelector(`#vnc-chatlog-${win.key}`);
+  const chatInput = body.querySelector(`#vnc-chatinput-${win.key}`);
+  const chatBadge = body.querySelector(`#vnc-chat-badge-${win.key}`);
+  const grantLbl = body.querySelector(`#vnc-grant-${win.key}`);
+  let chatOpen = false, unread = 0;
+  function chatSetOpen(open) {
+    chatOpen = open;
+    chatPanel.style.display = open ? "flex" : "none";
+    if (open) { unread = 0; chatBadge.style.display = "none"; chatInput.focus(); layoutImage(); }
+    else layoutImage();
+  }
+  function addChat(sender, text, sysMsg) {
+    const row = document.createElement("div");
+    if (sysMsg) {
+      row.style.cssText = "color:var(--subtext);font-style:italic;text-align:center;font-size:11.5px";
+      row.textContent = text;
+    } else {
+      const mine = sender === "admin";
+      row.style.cssText = `align-self:${mine ? "flex-end" : "flex-start"};max-width:80%`;
+      row.innerHTML = `<div style="font-size:10px;color:var(--subtext);margin-bottom:2px">${mine ? t("vnc_chat_you") : t("vnc_chat_user")}</div>`
+        + `<div style="background:${mine ? "var(--accent)" : "var(--panel-2)"};color:${mine ? "#0b0f14" : "var(--text)"};border-radius:10px;padding:6px 9px">${esc(text)}</div>`;
+    }
+    chatLog.appendChild(row);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    if (!chatOpen && !sysMsg) { unread++; chatBadge.textContent = unread; chatBadge.style.display = "inline-block"; }
+  }
+  function sendChat() {
+    const txt = chatInput.value.trim();
+    if (!txt) return;
+    chatInput.value = "";
+    addChat("admin", txt);
+    dashboardSocket.emit("screen-session-chat", { clientId, username: state.user?.username || "", text: txt });
+  }
+  body.querySelector(`#vnc-chat-${win.key}`).addEventListener("click", () => chatSetOpen(!chatOpen));
+  body.querySelector(`#vnc-chat-close-${win.key}`).addEventListener("click", () => chatSetOpen(false));
+  body.querySelector(`#vnc-chatsend-${win.key}`).addEventListener("click", sendChat);
+  chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+  function onSessChat(d) { if (d.id !== clientId) return; addChat("user", d.text || ""); }
+  function onSessGrant(d) {
+    if (d.id !== clientId) return;
+    grantLbl.textContent = d.granted ? "🛡️ " + t("vnc_chat_granted") : "";
+    addChat(null, d.granted ? t("vnc_chat_granted") : t("vnc_chat_revoked"), true);
+    if (d.granted) window.notify?.(t("vnc_chat_granted"), "success");
+  }
+  function onSessDisc(d) {
+    if (d.id !== clientId) return;
+    addChat(null, t("vnc_chat_user_left"), true);
+    window.notify?.(t("vnc_chat_user_left"), "warning", 6000);
+  }
+  dashboardSocket.on("screen-session-chat", onSessChat);
+  dashboardSocket.on("screen-session-grant", onSessGrant);
+  dashboardSocket.on("screen-session-disconnect", onSessDisc);
+
   // --- Strg+C / Strg+V automatisch: echte Zwischenablage mitsynchronisieren ---
   // Strg+V: lokale Zwischenablage lesen -> Remote setzen -> dann Strg+V am Remote.
   // Strg+C: Strg+C am Remote -> kurz warten -> Remote-Zwischenablage hierher holen.
@@ -290,6 +363,9 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
     dashboardSocket.off("screen-clipboard", onClipboard);
+    dashboardSocket.off("screen-session-chat", onSessChat);
+    dashboardSocket.off("screen-session-grant", onSessGrant);
+    dashboardSocket.off("screen-session-disconnect", onSessDisc);
     try { areaObserver?.disconnect(); } catch (e) {}
     window.removeEventListener("mouseup", onMouseUp);
 

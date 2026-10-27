@@ -1448,5 +1448,12 @@
  "agent_wayland": "Wayland session detected – screen capture needs X11. On Ubuntu, pick „Ubuntu on Xorg\" via the gear icon at the login screen. A shell will be opened instead.",
  "agent_no_display": "No graphical screen found (headless VM/server). A shell will be opened instead.",
  "agent_mode_no_packages": "Screen streaming not possible: mss/Pillow cannot be loaded ({err}). Python: {python}. A shell will be opened instead.",
- "agent_err_consent_denied": "The user at the device did not confirm remote screen access."
+ "agent_err_consent_denied": "The user at the device did not confirm remote screen access.",
+ "vnc_chat_title": "Chat with the user",
+ "vnc_chat_ph": "Message to the user …",
+ "vnc_chat_you": "You (admin)",
+ "vnc_chat_user": "User",
+ "vnc_chat_granted": "User granted administrator rights",
+ "vnc_chat_revoked": "Administrator rights revoked",
+ "vnc_chat_user_left": "The user disconnected the remote session."
 }

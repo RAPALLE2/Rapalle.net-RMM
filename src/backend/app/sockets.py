@@ -1883,6 +1883,40 @@ async def dashboard_screen_clipboard_get(sid, data):
                            namespace="/dashboard")
 
 
+# --- Chat-/Steuerfenster der laufenden Fernwartung ---
+@sio.on("screen-session-chat", namespace="/dashboard")
+async def dashboard_session_chat(sid, data):
+    """Admin tippt im VNC-Fenster -> an den Agenten (zeigt es der Person vor dem PC)."""
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        return
+    await send_to_agent(client_id, "screen-session-chat", {"text": (data.get("text") or "")[:2000]})
+
+
+@sio.on("screen-session-chat", namespace="/agent")
+async def on_session_chat(sid, payload):
+    await sio.emit("screen-session-chat", payload, namespace="/dashboard")
+
+
+@sio.on("screen-session-grant", namespace="/agent")
+async def on_session_grant(sid, payload):
+    # Benutzer hat Admin-Rechte erlaubt/entzogen -> ans Dashboard + Audit.
+    from app import db as _db
+    cid = (payload or {}).get("id")
+    await _db.call(_db.add_audit_entry, "system",
+                   "screen.admin_" + ("granted" if payload.get("granted") else "revoked"),
+                   target=cid)
+    await sio.emit("screen-session-grant", payload, namespace="/dashboard")
+
+
+@sio.on("screen-session-disconnect", namespace="/agent")
+async def on_session_disconnect(sid, payload):
+    # Benutzer hat die Fernwartung getrennt -> Aufnahme stoppen + Dashboard informieren.
+    cid = (payload or {}).get("id")
+    recording.stop_recording(cid)
+    await sio.emit("screen-session-disconnect", payload, namespace="/dashboard")
+
+
 @sio.on("screen-clipboard", namespace="/agent")
 async def on_screen_clipboard(sid, payload):
     """Agent liefert den Inhalt der Remote-Zwischenablage -> ans Dashboard."""

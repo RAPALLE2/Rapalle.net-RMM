@@ -3921,6 +3921,18 @@ TEXTS = {
         "deny": "Ablehnen",
         "auto": "Automatisch abgelehnt in {secs} s",
         "somebody": "Ein Administrator",
+        "sess_title": "Fernwartung aktiv",
+        "sess_sub": "{who} ist mit diesem Computer verbunden.",
+        "sess_chat_ph": "Nachricht an den Administrator ...",
+        "sess_send": "Senden",
+        "sess_grant_on": "Administrator-Rechte erlauben",
+        "sess_grant_off": "Administrator-Rechte entziehen",
+        "sess_granted": "Administrator-Rechte sind erteilt.",
+        "sess_disconnect": "Verbindung trennen",
+        "sess_you": "Du",
+        "sess_admin": "Admin",
+        "sess_connected": "Verbunden",
+        "sess_ended": "Die Fernwartung wurde beendet.",
     },
     "en": {
         "window": "RAPALLE.net RMM - Remote screen",
@@ -3930,6 +3942,18 @@ TEXTS = {
         "deny": "Deny",
         "auto": "Automatically denied in {secs} s",
         "somebody": "An administrator",
+        "sess_title": "Remote support active",
+        "sess_sub": "{who} is connected to this computer.",
+        "sess_chat_ph": "Message to the administrator ...",
+        "sess_send": "Send",
+        "sess_grant_on": "Allow administrator rights",
+        "sess_grant_off": "Revoke administrator rights",
+        "sess_granted": "Administrator rights are granted.",
+        "sess_disconnect": "Disconnect",
+        "sess_you": "You",
+        "sess_admin": "Admin",
+        "sess_connected": "Connected",
+        "sess_ended": "The remote session has ended.",
     },
 }
 
@@ -3938,6 +3962,109 @@ def ht(key, **kw):
     tbl = TEXTS.get(LANG) or TEXTS["de"]
     txt = tbl.get(key) or TEXTS["de"].get(key) or key
     return txt.format(**kw) if kw else txt
+
+
+# --- Chat-/Steuerfenster waehrend einer aktiven Fernwartung -------------------
+# Laeuft in der Benutzersitzung, zeigt wer verbunden ist, erlaubt Chat mit dem
+# Administrator, das Erteilen/Entziehen von Administrator-Rechten und das Trennen
+# der Verbindung. Bei aktivem Silent-Modus wird es NICHT geoeffnet (der Agent
+# schickt dann kein "session-open"). reply(obj) schiebt Ereignisse zum Agenten.
+class SessionWindow:
+    def __init__(self, who, reply):
+        import tkinter as tk
+        self.reply = reply
+        self.granted = False
+        self.closed = False
+        self.root = tk.Tk()
+        self.root.title(ht("sess_title"))
+        self.root.configure(bg="#131c2b")
+        self.root.attributes("-topmost", True)
+        self.root.minsize(360, 420)
+        try:
+            self.root.geometry("380x460+%d+80" % (self.root.winfo_screenwidth() - 400))
+        except Exception:
+            pass
+        BG = "#131c2b"; TEXT = "#e6ecf5"; SUB = "#8ea0b8"; ACC = "#4f8cff"; DANGER = "#b4455a"
+        head = tk.Frame(self.root, bg=BG, padx=14, pady=10); head.pack(fill="x")
+        tk.Label(head, text="🖥️ " + ht("sess_title"), font=("Segoe UI", 12, "bold"), bg=BG, fg=TEXT, anchor="w").pack(fill="x")
+        self.sub = tk.Label(head, text=ht("sess_sub", who=who), font=("Segoe UI", 9), bg=BG, fg=SUB, anchor="w", justify="left", wraplength=340)
+        self.sub.pack(fill="x")
+        # Chat-Verlauf
+        chat_wrap = tk.Frame(self.root, bg="#0d1420"); chat_wrap.pack(fill="both", expand=True, padx=10, pady=(4, 6))
+        self.log = tk.Text(chat_wrap, bg="#0d1420", fg=TEXT, bd=0, font=("Segoe UI", 10), wrap="word", state="disabled", padx=8, pady=8)
+        self.log.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(chat_wrap, command=self.log.yview); sb.pack(side="right", fill="y")
+        self.log.config(yscrollcommand=sb.set)
+        self.log.tag_config("you", foreground="#7fd6a0", font=("Segoe UI", 9, "bold"))
+        self.log.tag_config("admin", foreground="#7fb4ff", font=("Segoe UI", 9, "bold"))
+        self.log.tag_config("sys", foreground=SUB, font=("Segoe UI", 8, "italic"))
+        # Eingabezeile
+        row = tk.Frame(self.root, bg=BG, padx=10); row.pack(fill="x")
+        self.entry = tk.Entry(row, bg="#0d1420", fg=TEXT, insertbackground=TEXT, bd=0, font=("Segoe UI", 10))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 6))
+        self.entry.bind("<Return>", lambda e: self._send())
+        tk.Button(row, text=ht("sess_send"), command=self._send, bg=ACC, fg="#ffffff", bd=0, font=("Segoe UI", 9, "bold"), padx=14, pady=5, cursor="hand2").pack(side="right")
+        # Aktionen
+        act = tk.Frame(self.root, bg=BG, padx=10, pady=10); act.pack(fill="x")
+        self.grant_btn = tk.Button(act, text=ht("sess_grant_on"), command=self._toggle_grant, bg="#24304a", fg=TEXT, bd=0, font=("Segoe UI", 9, "bold"), pady=7, cursor="hand2")
+        self.grant_btn.pack(fill="x", pady=(0, 6))
+        tk.Button(act, text="✖ " + ht("sess_disconnect"), command=self._disconnect, bg=DANGER, fg="#ffffff", bd=0, font=("Segoe UI", 9, "bold"), pady=7, cursor="hand2").pack(fill="x")
+        self.root.protocol("WM_DELETE_WINDOW", self._minimize)   # X minimiert statt trennt
+        self._sys(ht("sess_connected"))
+
+    def _append(self, who_tag, who_text, text):
+        self.log.config(state="normal")
+        self.log.insert("end", who_text + ": ", who_tag)
+        self.log.insert("end", text + "\n")
+        self.log.see("end")
+        self.log.config(state="disabled")
+
+    def _sys(self, text):
+        self.log.config(state="normal"); self.log.insert("end", text + "\n", "sys"); self.log.see("end"); self.log.config(state="disabled")
+
+    def _send(self):
+        txt = self.entry.get().strip()
+        if not txt:
+            return
+        self.entry.delete(0, "end")
+        self._append("you", ht("sess_you"), txt)
+        try: self.reply({"session": "chat", "text": txt})
+        except Exception: pass
+
+    def _toggle_grant(self):
+        self.granted = not self.granted
+        self.grant_btn.config(text=ht("sess_grant_off") if self.granted else ht("sess_grant_on"),
+                              bg="#2e7d57" if self.granted else "#24304a")
+        if self.granted:
+            self._sys(ht("sess_granted"))
+        try: self.reply({"session": "grant", "granted": self.granted})
+        except Exception: pass
+
+    def _disconnect(self):
+        try: self.reply({"session": "disconnect"})
+        except Exception: pass
+        self._sys(ht("sess_ended"))
+        self.close()
+
+    def _minimize(self):
+        try: self.root.iconify()
+        except Exception: pass
+
+    # Vom Agenten aufgerufen (ueber den Tk-Thread via after):
+    def on_admin_chat(self, text):
+        self.root.after(0, lambda: self._append("admin", ht("sess_admin"), text))
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try: self.root.after(0, self.root.destroy)
+        except Exception: pass
+
+    def run(self):
+        try: self.root.mainloop()
+        except Exception as e: log("Sessionfenster: %s" % e)
+        self.closed = True
 
 
 def consent_dialog(who, timeout_s):
@@ -4032,7 +4159,7 @@ def main():
     log("connected to the agent on port %s" % port)
 
     state = {"quality": 60, "fps": 10, "monitor": 1,
-             "left": 0, "top": 0, "stream": False, "stop": False}
+             "left": 0, "top": 0, "stream": False, "stop": False, "sesswin": None}
 
     mouse = keyboard = None
     try:
@@ -4173,7 +4300,35 @@ def main():
                     send(sock, b"R" + json.dumps({"consent": bool(ok)}).encode())
                 except Exception:
                     pass
+            elif c == "session-open":
+                # Chat-/Steuerfenster in einem eigenen Thread (eigenes Tk).
+                if state.get("sesswin") is None:
+                    def _run_win(who):
+                        try:
+                            win = SessionWindow(who, lambda o: send(sock, b"R" + json.dumps(o).encode()))
+                            state["sesswin"] = win
+                            win.run()
+                        except Exception as e:
+                            log("Sessionfenster-Start: %s" % e)
+                        finally:
+                            state["sesswin"] = None
+                    threading.Thread(target=_run_win, args=(o.get("who") or ht("somebody"),), daemon=True).start()
+            elif c == "session-chat":
+                w = state.get("sesswin")
+                if w is not None:
+                    try: w.on_admin_chat(o.get("text") or "")
+                    except Exception as e: log("Admin-Chat: %s" % e)
+            elif c == "session-close":
+                w = state.get("sesswin")
+                if w is not None:
+                    try: w.close()
+                    except Exception: pass
+                    state["sesswin"] = None
             elif c == "stop":
+                w = state.get("sesswin")
+                if w is not None:
+                    try: w.close()
+                    except Exception: pass
                 state["stop"] = True
                 break
         state["stop"] = True
@@ -4784,6 +4939,9 @@ def _screen_helper_loop(loop, helper):
             helper.alive = False
             break
         kind, meta, jpeg = got
+        if kind == "reply" and isinstance(meta, dict) and meta.get("session"):
+            _handle_session_reply(loop, meta)
+            continue
         if kind != "frame":
             continue
         if meta.get("error"):
@@ -5435,6 +5593,68 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
         return False
 
 
+# --- Chat-/Steuerfenster der laufenden Fernwartung (Agent-Seite) --------------
+# Oeffnet im Helfer (Benutzersitzung) das Fenster, in dem die Person vor dem PC
+# chatten, Admin-Rechte erlauben und die Verbindung trennen kann. Bei Silent-
+# Modus (require_consent == False) wird es NICHT geoeffnet.
+_session = {"active": False, "by": "", "granted": False, "window": False}
+
+
+def _open_session_window(requested_by: str) -> None:
+    helper = _screen_stream.get("helper")
+    if helper is None or not helper.alive:
+        return
+    _session["window"] = helper.send({"cmd": "session-open", "who": requested_by or _at("consent_requested")})
+
+
+def _close_session_window() -> None:
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive and _session.get("window"):
+        helper.send({"cmd": "session-close"})
+    _session["window"] = False
+
+
+def _handle_session_reply(loop, obj: dict) -> None:
+    """Ereignis aus dem Fenster (Benutzersitzung) -> ans Dashboard melden."""
+    kind = obj.get("session")
+    if kind == "chat":
+        text = (obj.get("text") or "")[:2000]
+        _session_emit(loop, "screen-session-chat", {"from": "user", "text": text})
+    elif kind == "grant":
+        _session["granted"] = bool(obj.get("granted"))
+        _session_emit(loop, "screen-session-grant", {"granted": _session["granted"]})
+        _print(f"[agent] Admin-Rechte vom Benutzer {'erteilt' if _session['granted'] else 'entzogen'}")
+    elif kind == "disconnect":
+        _print("[agent] Benutzer hat die Fernwartung getrennt.")
+        _session_emit(loop, "screen-session-disconnect", {})
+        _screen_stream["active"] = False
+        _screen_stream["epoch"] += 1
+        _session["active"] = False
+
+
+def _session_emit(loop, event: str, payload: dict) -> None:
+    try:
+        asyncio.run_coroutine_threadsafe(
+            sio.emit(event, {"id": DEVICE_ID, **payload}, namespace="/agent"), loop)
+    except Exception as e:      # noqa: BLE001
+        _print(f"[agent] Session-Event {event}: {e}")
+
+
+def session_grant_active() -> bool:
+    """Darf der Agent waehrend dieser Sitzung mit erhoehten Rechten arbeiten?
+    (Vom Dashboard genutzte Befehle duerfen das pruefen.)"""
+    return bool(_session.get("active") and _session.get("granted"))
+
+
+@sio.on("screen-session-chat", namespace="/agent")
+async def on_screen_session_chat(data):
+    """Chat-Nachricht vom Administrator -> im Fenster der Benutzersitzung zeigen."""
+    text = (data or {}).get("text") or ""
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive:
+        helper.send({"cmd": "session-chat", "text": str(text)[:2000]})
+
+
 @sio.on("screen-start", namespace="/agent")
 async def on_screen_start(data):
     """Startet das Bildschirm-Streaming - oder signalisiert Shell-Modus bei headless."""
@@ -5534,6 +5754,19 @@ async def on_screen_start(data):
     _screen_stream["thread"].start()
     _print(f"[agent] {_at('log_screen_started')}")
 
+    # Chat-/Steuerfenster in der Benutzersitzung - NUR wenn nicht Silent-Modus
+    # (bei Silent kommt require_consent=False vom Backend). Kurz warten, bis der
+    # Helfer verbunden ist, dann oeffnen.
+    _session.update(active=True, by=(data or {}).get("requested_by") or "", granted=False)
+    if require_consent:
+        def _later():
+            for _ in range(20):
+                if _screen_stream.get("helper") and _screen_stream["helper"].alive:
+                    break
+                time.sleep(0.25)
+            _open_session_window(_session["by"])
+        threading.Thread(target=_later, daemon=True).start()
+
 
 @sio.on("screen-stop", namespace="/agent")
 async def on_screen_stop(data):
@@ -5543,6 +5776,8 @@ async def on_screen_stop(data):
     # sonst startete eine verspaetete Zustimmung einen Stream, den niemand
     # mehr sieht - und blockierte die naechste Sitzung.
     _screen_stream["epoch"] += 1
+    _close_session_window()
+    _session.update(active=False, granted=False)
     _print(f"[agent] {_at('log_screen_stopped')}")
 
 
