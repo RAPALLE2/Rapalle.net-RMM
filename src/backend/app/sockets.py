@@ -1884,6 +1884,53 @@ async def dashboard_screen_clipboard_get(sid, data):
 
 
 # --- Chat-/Steuerfenster der laufenden Fernwartung ---
+# --- Registry (nur Windows, Recht c_registry je Client) ---
+@sio.on("registry", namespace="/dashboard")
+async def dashboard_registry(sid, data):
+    client_id = data.get("clientId")
+    op = data.get("op") or "list"
+    # Schreiben/Loeschen braucht c_registry; Lesen (list/get) ebenso (Registry kann sensibel sein).
+    if not await _ws_user_may(data.get("username"), "c_registry", client_id):
+        await sio.emit("registry-result", {"id": client_id, "rid": data.get("rid"), "op": op,
+                       "ok": False, "error": "Keine Berechtigung (Registry)."}, namespace="/dashboard")
+        return
+    ok = await send_to_agent(client_id, "registry", {k: data.get(k) for k in ("op", "path", "name", "type", "data", "rid")})
+    if not ok:
+        await sio.emit("registry-result", {"id": client_id, "rid": data.get("rid"), "op": op,
+                       "ok": False, "error": "Client ist offline."}, namespace="/dashboard")
+
+
+@sio.on("registry-result", namespace="/agent")
+async def on_registry_result(sid, payload):
+    await sio.emit("registry-result", payload, namespace="/dashboard")
+
+
+# --- Windows-Automatik-Updates aus/ein (Recht c_win_update) ---
+@sio.on("wu-auto", namespace="/dashboard")
+async def dashboard_wu_auto(sid, data):
+    from app import db as _db
+    client_id = data.get("clientId")
+    setting = "disabled" in data
+    perm = "c_win_update" if setting else "c_patch_view"
+    if not await _ws_user_may(data.get("username"), perm, client_id):
+        await sio.emit("wu-auto", {"id": client_id, "supported": True,
+                       "error": "Keine Berechtigung."}, namespace="/dashboard")
+        return
+    payload = {"disabled": bool(data.get("disabled"))} if setting else {}
+    ok = await send_to_agent(client_id, "wu-auto", payload)
+    if setting and ok:
+        await _db.call(_db.add_audit_entry, data.get("username", "?"),
+                       "winupdate.auto_" + ("disabled" if data.get("disabled") else "enabled"), target=client_id)
+    if not ok:
+        await sio.emit("wu-auto", {"id": client_id, "supported": True, "error": "Client ist offline."},
+                       namespace="/dashboard")
+
+
+@sio.on("wu-auto", namespace="/agent")
+async def on_wu_auto(sid, payload):
+    await sio.emit("wu-auto", payload, namespace="/dashboard")
+
+
 @sio.on("screen-session-chat", namespace="/dashboard")
 async def dashboard_session_chat(sid, data):
     """Admin tippt im VNC-Fenster -> an den Agenten (zeigt es der Person vor dem PC)."""
@@ -1903,9 +1950,10 @@ async def on_session_grant(sid, payload):
     # Benutzer hat Admin-Rechte erlaubt/entzogen -> ans Dashboard + Audit.
     from app import db as _db
     cid = (payload or {}).get("id")
+    action = "granted" if payload.get("granted") else "revoked"
+    detail = "silent (ohne Benutzerfreigabe)" if payload.get("silent") else "durch Benutzer"
     await _db.call(_db.add_audit_entry, "system",
-                   "screen.admin_" + ("granted" if payload.get("granted") else "revoked"),
-                   target=cid)
+                   "screen.admin_" + action, target=cid, details=detail)
     await sio.emit("screen-session-grant", payload, namespace="/dashboard")
 
 

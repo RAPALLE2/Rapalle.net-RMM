@@ -698,6 +698,8 @@ async def connect():
             "screen_helper": True,
             "vdisplay": _vdisplay_status() if IS_WINDOWS else {"supported": False},
             "multiuser_select": IS_WINDOWS,
+            "registry": IS_WINDOWS,
+            "wu_auto": wu_auto_status() if IS_WINDOWS else {"supported": False},
             # Patch-Fähigkeit ungefragt mitteilen. Das Backend muss dadurch
             # nicht erst einen Ping schicken, um zu wissen, ob ein
             # Patch-Auftrag auf diesem Client überhaupt Sinn ergibt.
@@ -5386,6 +5388,198 @@ def _vdisplay_remove() -> dict:
         return {"ok": False, "error": f"Entfernen fehlgeschlagen: {e}"}
 
 
+# ====================================================================
+# Registry (nur Windows) - lesen/schreiben/auflisten/loeschen
+# ====================================================================
+_REG_HIVES = {}
+if IS_WINDOWS:
+    import winreg as _wr
+    _REG_HIVES = {
+        "HKLM": _wr.HKEY_LOCAL_MACHINE, "HKEY_LOCAL_MACHINE": _wr.HKEY_LOCAL_MACHINE,
+        "HKCU": _wr.HKEY_CURRENT_USER, "HKEY_CURRENT_USER": _wr.HKEY_CURRENT_USER,
+        "HKCR": _wr.HKEY_CLASSES_ROOT, "HKEY_CLASSES_ROOT": _wr.HKEY_CLASSES_ROOT,
+        "HKU": _wr.HKEY_USERS, "HKEY_USERS": _wr.HKEY_USERS,
+        "HKCC": _wr.HKEY_CURRENT_CONFIG, "HKEY_CURRENT_CONFIG": _wr.HKEY_CURRENT_CONFIG,
+    }
+_REG_TYPES = {}
+if IS_WINDOWS:
+    import winreg as _wr
+    _REG_TYPES = {"REG_SZ": _wr.REG_SZ, "REG_EXPAND_SZ": _wr.REG_EXPAND_SZ,
+                  "REG_DWORD": _wr.REG_DWORD, "REG_QWORD": getattr(_wr, "REG_QWORD", 11),
+                  "REG_MULTI_SZ": _wr.REG_MULTI_SZ, "REG_BINARY": _wr.REG_BINARY}
+    _REG_TYPE_NAME = {v: k for k, v in _REG_TYPES.items()}
+
+
+def _reg_split(path: str):
+    """'HKLM\\Software\\Foo' -> (hive_const, 'Software\\Foo'). Akzeptiert / und \\."""
+    import winreg as _wr
+    path = (path or "").replace("/", "\\").strip("\\ ")
+    if "\\" in path:
+        root, sub = path.split("\\", 1)
+    else:
+        root, sub = path, ""
+    hive = _REG_HIVES.get(root.upper())
+    if hive is None:
+        raise ValueError(f"Unbekannter Registry-Hive: {root}")
+    return hive, sub
+
+
+def _reg_list(path: str) -> dict:
+    """Werte + Unterschluessel eines Schluessels auflisten."""
+    import winreg as _wr
+    hive, sub = _reg_split(path)
+    key = _wr.OpenKey(hive, sub, 0, _wr.KEY_READ)
+    try:
+        values, subkeys = [], []
+        i = 0
+        while True:
+            try:
+                name, data, typ = _wr.EnumValue(key, i)
+            except OSError:
+                break
+            values.append({"name": name or "(Standard)", "type": _REG_TYPE_NAME.get(typ, str(typ)),
+                           "data": _reg_jsonable(data)})
+            i += 1
+        i = 0
+        while True:
+            try:
+                subkeys.append(_wr.EnumKey(key, i))
+            except OSError:
+                break
+            i += 1
+        return {"path": path, "values": values, "subkeys": sorted(subkeys)}
+    finally:
+        _wr.CloseKey(key)
+
+
+def _reg_jsonable(data):
+    if isinstance(data, bytes):
+        return data.hex()
+    if isinstance(data, (list, tuple)):
+        return list(data)
+    return data
+
+
+def _reg_get(path: str, name: str) -> dict:
+    import winreg as _wr
+    hive, sub = _reg_split(path)
+    key = _wr.OpenKey(hive, sub, 0, _wr.KEY_READ)
+    try:
+        data, typ = _wr.QueryValueEx(key, name)
+        return {"name": name, "type": _REG_TYPE_NAME.get(typ, str(typ)), "data": _reg_jsonable(data)}
+    finally:
+        _wr.CloseKey(key)
+
+
+def _reg_set(path: str, name: str, type_name: str, data) -> dict:
+    import winreg as _wr
+    hive, sub = _reg_split(path)
+    typ = _REG_TYPES.get((type_name or "REG_SZ").upper(), _wr.REG_SZ)
+    if typ in (_wr.REG_DWORD, getattr(_wr, "REG_QWORD", 11)):
+        data = int(data)
+    elif typ == _wr.REG_MULTI_SZ:
+        data = list(data) if isinstance(data, (list, tuple)) else str(data).split("\n")
+    elif typ == _wr.REG_BINARY:
+        data = bytes.fromhex(data) if isinstance(data, str) else bytes(data)
+    else:
+        data = str(data)
+    key = _wr.CreateKeyEx(hive, sub, 0, _wr.KEY_SET_VALUE | _wr.KEY_CREATE_SUB_KEY)
+    try:
+        _wr.SetValueEx(key, name, 0, typ, data)
+    finally:
+        _wr.CloseKey(key)
+    return {"ok": True}
+
+
+def _reg_delete(path: str, name: str | None) -> dict:
+    import winreg as _wr
+    hive, sub = _reg_split(path)
+    if name:
+        key = _wr.OpenKey(hive, sub, 0, _wr.KEY_SET_VALUE)
+        try:
+            _wr.DeleteValue(key, name)
+        finally:
+            _wr.CloseKey(key)
+    else:
+        _wr.DeleteKey(hive, sub)
+    return {"ok": True}
+
+
+def registry_op(op: str, data: dict) -> dict:
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "Registry gibt es nur unter Windows."}
+    try:
+        path = data.get("path") or ""
+        if op == "list":
+            return {"ok": True, **_reg_list(path)}
+        if op == "get":
+            return {"ok": True, **_reg_get(path, data.get("name") or "")}
+        if op == "set":
+            return _reg_set(path, data.get("name") or "", data.get("type") or "REG_SZ", data.get("data"))
+        if op == "delete":
+            return _reg_delete(path, data.get("name"))
+        return {"ok": False, "error": f"Unbekannte Registry-Aktion: {op}"}
+    except FileNotFoundError:
+        return {"ok": False, "error": "Schlüssel/Wert nicht gefunden"}
+    except PermissionError:
+        return {"ok": False, "error": "Keine Berechtigung (als Administrator nötig)"}
+    except Exception as e:      # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+# ====================================================================
+# Windows-Update: automatische Updates aus-/einschalten (Richtlinie)
+# ====================================================================
+# Setzt HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+#   NoAutoUpdate = 1 (aus) / 0 (an).  Installation laeuft weiter ueber die
+#   Patch-Funktion (patch-scan/patch-apply), auch wenn die Automatik aus ist.
+_WU_AU_KEY = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+
+
+def wu_auto_status() -> dict:
+    if not IS_WINDOWS:
+        return {"supported": False}
+    try:
+        import winreg as _wr
+        try:
+            key = _wr.OpenKey(_wr.HKEY_LOCAL_MACHINE, _WU_AU_KEY, 0, _wr.KEY_READ)
+            try:
+                val = _wr.QueryValueEx(key, "NoAutoUpdate")[0]
+            finally:
+                _wr.CloseKey(key)
+            disabled = bool(int(val))
+        except FileNotFoundError:
+            disabled = False
+        return {"supported": True, "auto_disabled": disabled}
+    except Exception as e:      # noqa: BLE001
+        return {"supported": True, "error": str(e)}
+
+
+def wu_set_auto(disabled: bool) -> dict:
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "Nur unter Windows."}
+    try:
+        import winreg as _wr
+        key = _wr.CreateKeyEx(_wr.HKEY_LOCAL_MACHINE, _WU_AU_KEY, 0, _wr.KEY_SET_VALUE)
+        try:
+            _wr.SetValueEx(key, "NoAutoUpdate", 0, _wr.REG_DWORD, 1 if disabled else 0)
+            # 2 = "benachrichtigen, nicht automatisch laden/installieren"
+            _wr.SetValueEx(key, "AUOptions", 0, _wr.REG_DWORD, 2 if disabled else 4)
+        finally:
+            _wr.CloseKey(key)
+        # Dienst benachrichtigen (best effort)
+        try:
+            subprocess.run(["gpupdate", "/target:computer", "/force"], timeout=60,
+                           capture_output=True)
+        except Exception:
+            pass
+        return {"ok": True, **wu_auto_status()}
+    except PermissionError:
+        return {"ok": False, "error": "Keine Berechtigung (als Administrator/SYSTEM nötig)"}
+    except Exception as e:      # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
 def _someone_logged_in() -> bool:
     """
     Prüft, ob am Gerät gerade jemand angemeldet ist. Nur dann wird um
@@ -5880,6 +6074,33 @@ async def on_vdisplay_install(data):
         pass
     st = await loop.run_in_executor(None, _vdisplay_status)
     await sio.emit("vdisplay-status", {"id": DEVICE_ID, **st}, namespace="/agent")
+
+
+@sio.on("registry", namespace="/agent")
+async def on_registry(data):
+    """Registry-Aktion (list/get/set/delete). Antwort ueber 'registry-result'."""
+    loop = asyncio.get_event_loop()
+    op = (data or {}).get("op") or "list"
+    rid = (data or {}).get("rid") or ""
+    res = await loop.run_in_executor(None, registry_op, op, data or {})
+    try:
+        await sio.emit("registry-result", {"id": DEVICE_ID, "rid": rid, "op": op, **res}, namespace="/agent")
+    except Exception:
+        pass
+
+
+@sio.on("wu-auto", namespace="/agent")
+async def on_wu_auto(data):
+    """Automatische Windows-Updates aus/ein (oder nur Status, wenn 'set' fehlt)."""
+    loop = asyncio.get_event_loop()
+    if isinstance(data, dict) and "disabled" in data:
+        res = await loop.run_in_executor(None, wu_set_auto, bool(data.get("disabled")))
+    else:
+        res = await loop.run_in_executor(None, wu_auto_status)
+    try:
+        await sio.emit("wu-auto", {"id": DEVICE_ID, **res}, namespace="/agent")
+    except Exception:
+        pass
 
 
 @sio.on("vdisplay-remove", namespace="/agent")

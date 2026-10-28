@@ -1457,5 +1457,7 @@
  "vnc_chat_revoked": "Administrator rights revoked",
  "vnc_chat_user_left": "The user disconnected the remote session.",
  "vnc_chat_granted_silent": "Silent mode: administrator rights active without user approval",
- "perm_manage_dist": "manage distribution"
+ "perm_manage_dist": "manage distribution",
+ "perm_c_registry": "Read and edit the client registry (Windows)",
+ "perm_c_win_update": "Toggle Windows automatic updates (Windows)"
 }

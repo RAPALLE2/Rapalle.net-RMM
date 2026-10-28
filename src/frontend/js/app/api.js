@@ -96,6 +96,8 @@ const _PERM_KEY = {
   c_taskmanager_view: "perm_c_taskmanager_view",
   c_taskmanager_kill: "perm_c_taskmanager_kill",
   c_power: "perm_c_power",
+  c_registry: "perm_c_registry",
+  c_win_update: "perm_c_win_update",
   c_relay: "perm_c_relay",
   c_delete: "perm_c_delete",
   use_relay: "perm_use_relay",

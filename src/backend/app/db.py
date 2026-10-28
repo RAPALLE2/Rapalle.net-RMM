@@ -2854,6 +2854,8 @@ CLIENT_ONLY_PERM_KEYS = [
     "c_portforward",                # Port-Weiterleitung auf diesen Client
     "c_notes_view", "c_notes_edit",
     "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
+    "c_registry",                      # Registry lesen/schreiben (nur Windows)
+    "c_win_update",                    # Windows-Automatik-Updates aus/ein (nur Windows)
     "c_websites_view", "c_websites_edit",
     "c_screen_silent",      # Remote-Bildschirm ohne Anfrage (pro Client)
     "set_warranty",         # Garantie-Datum dieses Clients setzen/ändern

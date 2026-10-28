@@ -197,6 +197,8 @@ PERM_LABELS = {
     "c_terminal_console": "Terminal (nur Agent-Konsole)",
     "c_guacamole": "Guacamole",
     "c_power": "Herunterfahren/Neustarten",
+    "c_registry": "Registry bearbeiten (Windows)",
+    "c_win_update": "Windows-Automatik-Updates steuern (Windows)",
     "c_explorer_view": "Datei-Explorer sehen",
     "c_explorer_edit": "Datei-Explorer bearbeiten",
     "c_taskmanager_view": "Task-Manager sehen",
