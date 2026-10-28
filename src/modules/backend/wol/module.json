@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "wol",
+  "name": "Wake-on-LAN",
+  "version": "1.0.0",
+  "description": "Startet ausgeschaltete PCs per Wake-on-LAN (Magic Packet) – sofern das Gerät WOL unterstützt und es im BIOS/Netzwerkkarte aktiviert ist. Das Paket kann vom RMM-Server (Backend) oder von einer Node im Netz des Ziels gesendet werden. MAC-Adressen werden automatisch aus den Messwerten des Agenten erkannt und können ergänzt werden. Fügt dem Agent-Panel die Aktion „Einschalten (WOL)“ hinzu.",
+  "author": "RAPALLE.net",
+  "category": "Netzwerk",
+  "icon": "⏻",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": ["wol_routes"],
+  "hooks": { "startup": "on_startup" }
+}

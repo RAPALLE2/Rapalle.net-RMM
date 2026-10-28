@@ -469,7 +469,47 @@ async def docker_api(data: dict) -> dict:
         data.get("body"), bool(data.get("raw")), float(data.get("timeout") or 60))
 
 
+def _magic_packet(mac: str) -> bytes:
+    """Magic Packet: 6x 0xFF + 16x die 6-Byte-MAC."""
+    hexmac = mac.replace(":", "").replace("-", "").replace(".", "").strip()
+    if len(hexmac) != 12:
+        raise ValueError(f"Ungueltige MAC: {mac}")
+    raw = bytes.fromhex(hexmac)
+    return b"\xff" * 6 + raw * 16
+
+
+def send_wol(data: dict) -> dict:
+    """Wake-on-LAN: Magic Packet an eine oder mehrere MACs senden.
+    data: {macs:[...], broadcasts:[...], port:int}. Sendet an alle angegebenen
+    Broadcast-Adressen (Standard 255.255.255.255) auf Port 9 (und 7)."""
+    macs = [m for m in (data.get("macs") or ([data["mac"]] if data.get("mac") else [])) if m]
+    if not macs:
+        raise ValueError("Keine MAC-Adresse angegeben")
+    ports = data.get("ports") or [int(data.get("port") or 9), 7]
+    targets = data.get("broadcasts") or ["255.255.255.255"]
+    sent = []
+    errors = []
+    for mac in macs:
+        try:
+            pkt = _magic_packet(mac)
+        except ValueError as e:
+            errors.append(str(e))
+            continue
+        for bc in targets:
+            for port in ports:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+                        sk.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                        sk.sendto(pkt, (bc, int(port)))
+                    sent.append(f"{mac} -> {bc}:{port}")
+                except OSError as e:
+                    errors.append(f"{mac} -> {bc}:{port}: {e}")
+    return {"sent": sent, "errors": errors, "ok_count": len(sent)}
+
+
 async def handle(op: str, data: dict):
+    if op == "wol":
+        return send_wol(data)
     if op == "ping":
         return {"pong": True, "time": int(time.time())}
     if op == "status":
