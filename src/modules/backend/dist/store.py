@@ -14,9 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
-from app.paths import BACKEND_DIR
-
-DIST_DIR = BACKEND_DIR / "dist"
+from app.paths import DIST_DIR  # storage/dist
 META = ".dist.json"
 # Diese Ordner gibt es immer (werden bei Bedarf angelegt).
 CORE_FOLDERS = {

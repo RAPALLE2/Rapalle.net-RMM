@@ -15,7 +15,7 @@ from pathlib import Path
 from app import db
 from app.paths import STORAGE_DIR
 
-DIR = STORAGE_DIR / "deployment"
+from app.paths import DEPLOYMENT_DIR as DIR  # storage/web/deployment
 SETTING_HTML = "deployment_html"
 SETTING_PUBLIC = "deployment_public"
 SETTING_TITLE = "deployment_title"

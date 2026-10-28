@@ -21,7 +21,35 @@ from app import db
 from app.auth import can_access_client, is_super_admin, user_has_permission
 from app.paths import MODULES_DATA_DIR
 
+from pathlib import Path as _Path
+
+from app.paths import DOCKER_PROJECTS_DIR
+
 from . import compose, engine
+
+
+def project_dir(project: str) -> _Path:
+    """storage/docker/<projektname> - der Projekt-Root eines Stacks."""
+    d = DOCKER_PROJECTS_DIR / project
+    return d
+
+
+def compose_text(st: dict) -> str:
+    """Compose-Inhalt eines Stacks je nach Quelle:
+       source == "file": aus <project_dir>/<compose_file> lesen (Standard docker-compose.yml);
+       sonst: der gespeicherte Inline-Text ("eigene compose")."""
+    if st.get("source") == "file":
+        root = project_dir(st["project"])
+        fname = st.get("compose_file") or "docker-compose.yml"
+        f = (root / fname)
+        try:
+            f.resolve().relative_to(root.resolve())
+        except (ValueError, OSError):
+            raise ValueError("Compose-Datei liegt außerhalb des Projektordners")
+        if not f.is_file():
+            raise ValueError(f"Compose-Datei nicht gefunden: {root.name}/{fname}")
+        return f.read_text(encoding="utf-8")
+    return st.get("compose", "")
 from .engine import DockerError, q
 
 REG = MODULES_DATA_DIR / "docker" / "stacks.json"
@@ -91,17 +119,37 @@ def visible(user) -> list[dict]:
 
 
 # ------------------------------------------------------------------ Aendern
-def create(name: str, target: str, text: str, user: dict) -> dict:
+def create(name: str, target: str, text: str, user: dict, source: str = "inline",
+           compose_file: str = "docker-compose.yml") -> dict:
     engine.parse_target(target)
     project = compose.project_name(name)
-    data, _ = compose.parse(text)
-    compose.plan(data, project, "pruefung")          # kompletten Bauplan pruefen (Ports, Volumes, Abhaengigkeiten ...)
+    source = "file" if source == "file" else "inline"
+    # Projektordner immer anlegen (storage/docker/<projekt>) - dient als Projekt-Root
+    # fuer relative Volumes und, bei Quelle "file", fuer die Compose-Datei.
+    root = project_dir(project)
+    root.mkdir(parents=True, exist_ok=True)
+    if source == "inline":
+        text_eff = text
+    else:
+        f = root / (compose_file or "docker-compose.yml")
+        if text and text.strip():          # mitgelieferten Text als Datei anlegen, falls noch keine da
+            f.parent.mkdir(parents=True, exist_ok=True)
+            if not f.is_file():
+                f.write_text(text, encoding="utf-8")
+        if not f.is_file():
+            raise ValueError(f"Lege zuerst eine Compose-Datei an: storage/docker/{project}/{compose_file or 'docker-compose.yml'}")
+        text_eff = f.read_text(encoding="utf-8")
+    data, _ = compose.parse(text_eff)
+    compose.plan(data, project, "pruefung",
+                 project_root=str(root) if target == "local" else None)  # Bauplan + Pfade pruefen
     with _lock:
         d = _load()
         if any(v["project"] == project and v["target"] == target for v in d.values()):
             raise ValueError(f"Auf diesem Ziel gibt es schon einen Stack „{project}“")
         sid = secrets.token_hex(6)
-        d[sid] = {"name": name.strip()[:80], "project": project, "target": target, "compose": text, "members": [],
+        d[sid] = {"name": name.strip()[:80], "project": project, "target": target,
+                  "source": source, "compose_file": (compose_file or "docker-compose.yml"),
+                  "compose": text if source == "inline" else "", "members": [],
                   "publish": [], "created": int(time.time()), "created_by": user["username"], "updated": int(time.time()),
                   "deployed": None}
         _save(d)
@@ -114,10 +162,27 @@ def update(sid: str, changes: dict) -> dict:
         if sid not in d:
             raise KeyError(sid)
         st = d[sid]
+        if "source" in changes and changes["source"] in ("inline", "file"):
+            st["source"] = changes["source"]
+        if "compose_file" in changes and changes["compose_file"]:
+            st["compose_file"] = str(changes["compose_file"]).strip()
         if "compose" in changes:
-            data, _ = compose.parse(changes["compose"])
-            compose.plan(data, st["project"], sid)
-            st["compose"] = changes["compose"]
+            if st.get("source") == "file":
+                # Inhalt in die Datei im Projektordner schreiben
+                root = project_dir(st["project"]); root.mkdir(parents=True, exist_ok=True)
+                f = root / (st.get("compose_file") or "docker-compose.yml")
+                try:
+                    f.resolve().relative_to(root.resolve())
+                except (ValueError, OSError):
+                    raise ValueError("Compose-Datei liegt außerhalb des Projektordners")
+                data, _ = compose.parse(changes["compose"])
+                compose.plan(data, st["project"], sid)
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(changes["compose"], encoding="utf-8")
+            else:
+                data, _ = compose.parse(changes["compose"])
+                compose.plan(data, st["project"], sid)
+                st["compose"] = changes["compose"]
         if "name" in changes:
             st["name"] = (changes["name"] or st["project"]).strip()[:80]
         if "members" in changes:
@@ -176,8 +241,11 @@ async def pull(target: str, image: str, log: list) -> None:
 
 async def deploy(st: dict, pull_images: bool = True) -> list[str]:
     """Stack anlegen/aktualisieren (vorhandene Container des Stacks werden neu erstellt)."""
-    data, notes = compose.parse(st["compose"])
-    pl = compose.plan(data, st["project"], st["id"])
+    text = compose_text(st)
+    data, notes = compose.parse(text)
+    # Relative Volumes gegen den Projekt-Root aufloesen (nur sinnvoll fuer das lokale Ziel).
+    root = str(project_dir(st["project"])) if st.get("target") == "local" else None
+    pl = compose.plan(data, st["project"], st["id"], project_root=root)
     from . import publish
     publish.inject(st, pl)                          # Port-Freigaben ("eigener Port") eintragen
     t = st["target"]

@@ -1325,7 +1325,7 @@ def _installer_hint(name: str, token: str, backend_url: str = "") -> str:
 
 
 PROJECT_ROOT_DIR = _PROJ_ROOT
-INSTALLER_DIST_DIR = _DIST
+INSTALLER_DIST_DIR = _DIST / "agent"  # storage/dist/agent -> erscheint unter /dist/agent
 BUILD_SCRIPT = _APP_DIR / "build_installers.py"
 
 # Dateiname-Muster -> Anzeige im Dashboard.

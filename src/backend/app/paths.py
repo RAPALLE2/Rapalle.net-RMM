@@ -58,8 +58,15 @@ BACKEND_REQUIREMENTS_FILE = DATA_DIR / "requirements.txt"
 REPO_FILE = DATA_DIR / "repo.txt"
 
 STORAGE_DIR = BACKEND_DIR / "storage"
-DEPLOYMENT_DIR = STORAGE_DIR / "deployment"            # Relay-Sektion "Deployment"
-SPACES_DIR = STORAGE_DIR / "spaces"                    # Relay-Sektion "Storage" (Spaces folgen spaeter)
+# Einheitliche storage-Struktur:
+#   storage/web/<name>/     alle Websites (Modul Webserver); web/deployment = Deployment
+#   storage/dist/<ordner>/  Verteilung (/dist: enrollment, agent, client, ...)
+#   storage/spaces/...      Spaces (persoenlich/teams/public)
+#   storage/docker/<projekt>/  Docker-Projekte (compose) des Docker-Moduls
+WEB_DIR = STORAGE_DIR / "web"                          # alle Website-Ordner
+DEPLOYMENT_DIR = WEB_DIR / "deployment"                # Deployment-Seite (Website-Ordner)
+SPACES_DIR = STORAGE_DIR / "spaces"
+DOCKER_PROJECTS_DIR = STORAGE_DIR / "docker"           # eigene Docker-Projekte je Name
 
 LOGS_DIR = BACKEND_DIR / "logs"
 BACKEND_LOG_DIR = LOGS_DIR / "backend"                 # Diagnose-Logs, startup.log
@@ -72,7 +79,7 @@ AUDIO_DIR = MEDIA_DIR / "audio"                        # Medien-Bibliothek des A
 TICKET_FILES_DIR = MEDIA_DIR / "tickets"               # Ticket-Anhaenge
 
 TEMP_DIR = BACKEND_DIR / "temp"
-DIST_DIR = TEMP_DIR / "dist"                           # gebaute Agent-Installer
+DIST_DIR = STORAGE_DIR / "dist"                        # Verteilung (/dist): enrollment, agent, client, ...
 
 # --- Agent -----------------------------------------------------------------
 AGENT_MAIN_FILE = AGENT_DIR / "main.py"

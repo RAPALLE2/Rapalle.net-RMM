@@ -132,7 +132,7 @@ def _ports(items) -> tuple[dict, dict]:
     return exposed, bind
 
 
-def _volumes(items, project: str, declared: dict) -> tuple[list[str], list[str]]:
+def _volumes(items, project: str, declared: dict, project_root: str | None = None) -> tuple[list[str], list[str]]:
     """-> (Binds fuer HostConfig, benannte Volumes die angelegt werden muessen)"""
     binds, named = [], []
     for v in items or []:
@@ -151,9 +151,18 @@ def _volumes(items, project: str, declared: dict) -> tuple[list[str], list[str]]
             raise ComposeError(f"Volume-Angabe nicht verstanden: {v}")
         if not src:
             continue                                  # anonym: Docker legt es selbst an
-        if src.startswith(("./", "../", "~")):
-            raise ComposeError(f"Relative Pfade werden nicht unterstützt ({src}) – benanntes Volume oder absoluten Pfad nutzen")
-        if src.startswith("/"):
+        if src.startswith(("./", "../", "~")) or (project_root and not src.startswith("/") and ("/" in src or src in (".", ".."))):
+            # Relativ zum Projekt-Root (storage/docker/<projekt>) aufloesen.
+            if not project_root:
+                raise ComposeError(f"Relative Pfade brauchen einen Projekt-Root ({src})")
+            import os as _os
+            base = _os.path.realpath(project_root)
+            full = _os.path.realpath(_os.path.join(base, _os.path.expanduser(src)))
+            if full != base and not full.startswith(base + _os.sep):
+                raise ComposeError(f"Pfad liegt außerhalb des Projektordners: {src}")
+            _os.makedirs(full, exist_ok=True)
+            binds.append(f"{full}:{dst}" + (":ro" if ro else ""))
+        elif src.startswith("/"):
             binds.append(f"{src}:{dst}" + (":ro" if ro else ""))
         else:
             ext = (declared.get(src) or {}) if isinstance(declared.get(src), dict) else {}
@@ -173,7 +182,7 @@ def _mem(v) -> int | None:
     return int(float(m.group(1)) * {"": 1, "b": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[m.group(2)])
 
 
-def plan(data: dict, project: str, stack_id: str) -> dict:
+def plan(data: dict, project: str, stack_id: str, project_root: str | None = None) -> dict:
     """Uebersetzt Compose in Bauplan: {networks: [...], volumes: [...], containers: [{name, service, image, config}]}"""
     services = data["services"]
     decl_vols = data.get("volumes") or {}
@@ -185,7 +194,7 @@ def plan(data: dict, project: str, stack_id: str) -> dict:
         exposed, bindings = _ports(s.get("ports"))
         for e in s.get("expose") or []:
             exposed.setdefault(f"{e}/tcp" if "/" not in str(e) else str(e), {})
-        binds, named = _volumes(s.get("volumes"), project, decl_vols)
+        binds, named = _volumes(s.get("volumes"), project, decl_vols, project_root)
         volumes.update(named)
         nets = s.get("networks")
         net_names = list(nets.keys()) if isinstance(nets, dict) else list(nets or [])

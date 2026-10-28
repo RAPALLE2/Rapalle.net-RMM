@@ -175,24 +175,9 @@ def _serve(parts: list[str]):
                     custom_html=db.get_setting(store.SETTING_HTML) or "", listing=True)
 
 
-def _dist_redirect(sub: str):
-    """Ist das neue Modul "dist" aktiv, zeigen die alten /deployment-Links dorthin."""
-    try:
-        from app import modules
-        if modules.is_enabled("dist"):
-            from starlette.responses import RedirectResponse
-            return RedirectResponse("/dist/enrollment" + (("/" + sub) if sub else ""), status_code=307)
-    except Exception:
-        pass
-    return None
-
-
 @router.get("/deployment", include_in_schema=False)
 @router.get("/deployment/", include_in_schema=False)
 def deployment_index():
-    r = _dist_redirect("")
-    if r is not None:
-        return r
     if not store.is_public():
         return _OFF
     return _serve([])
@@ -200,9 +185,6 @@ def deployment_index():
 
 @router.get("/deployment/{full_path:path}", include_in_schema=False)
 def deployment_file(full_path: str, request: Request):
-    r = _dist_redirect(full_path)
-    if r is not None:
-        return r
     if not store.is_public():
         return _OFF
     return _serve([p for p in full_path.split("/") if p])

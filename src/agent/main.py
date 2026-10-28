@@ -4170,6 +4170,32 @@ def main():
         log("input not available: %s" % e)
         MB = KK = None
 
+    # --- Benutzer hat Vorrang: bewegt die Person vor dem PC die Maus selbst,
+    # werden die fern gesteuerten Maus-Befehle kurz ignoriert. Wir unterscheiden
+    # unsere EIGENE Fernbewegung (mouse.position = ...) von einer echten Bewegung,
+    # indem wir uns die zuletzt gesetzte Position merken.
+    user_mouse = {"last_local": 0.0, "set_pos": None, "set_at": 0.0}
+    PRIORITY_WINDOW = 1.2          # s, so lange gilt der Benutzer als "aktiv"
+
+    def _on_local_move(x, y):
+        now = time.time()
+        sp = user_mouse["set_pos"]
+        # Kam diese Bewegung von UNS (letzte ferngesetzte Position, frisch)? -> ignorieren.
+        if sp is not None and abs(x - sp[0]) <= 2 and abs(y - sp[1]) <= 2 and (now - user_mouse["set_at"]) < 0.5:
+            return
+        user_mouse["last_local"] = now
+
+    try:
+        from pynput.mouse import Listener as _MouseListener
+        _ml = _MouseListener(on_move=_on_local_move)
+        _ml.daemon = True
+        _ml.start()
+    except Exception as e:
+        log("Maus-Beobachter nicht verfuegbar: %s" % e)
+
+    def user_active():
+        return (time.time() - user_mouse["last_local"]) < PRIORITY_WINDOW
+
     # Tastennamen des Browsers -> pynput. MUSS zur Tabelle _SPECIAL_KEYS im
     # Agenten passen. Vorher stand hier nur getattr(Key, name): Das Dashboard
     # schickt aber Browser-Namen ("Enter", "Escape", "Control", "ArrowUp"),
@@ -4245,24 +4271,32 @@ def main():
 
         if mouse is None:
             return
+        # Benutzer-Vorrang: bewegt die Person gerade selbst die Maus, lassen wir
+        # ihre Bewegung in Ruhe und verwerfen die ferngesteuerte Maus-Aktion.
+        if k in ("move", "click", "down", "up", "double", "dblclick", "scroll") and user_active():
+            return
         ox, oy = state["left"], state["top"]
         def pos(x):
             return (int(x["x"]) + ox, int(x["y"]) + oy)
         btn = {"left": "left", "right": "right", "middle": "middle"}.get(
             d.get("button", "left"), "left")
         b = getattr(MB, btn)
+        def _set(p):
+            mouse.position = p
+            user_mouse["set_pos"] = p
+            user_mouse["set_at"] = time.time()
         if k == "move":
-            mouse.position = pos(d)
+            _set(pos(d))
         elif k == "click":
-            mouse.position = pos(d); mouse.click(b, 1)
+            _set(pos(d)); mouse.click(b, 1)
         elif k == "down":
-            mouse.position = pos(d); mouse.press(b)
+            _set(pos(d)); mouse.press(b)
         elif k == "up":
-            mouse.position = pos(d); mouse.release(b)
+            _set(pos(d)); mouse.release(b)
         elif k in ("double", "dblclick"):
             # Das Dashboard schickt "double" - der Helfer kannte bisher nur
             # "dblclick", ein Doppelklick kam also nie an.
-            mouse.position = pos(d); mouse.click(MB.left, 2)
+            _set(pos(d)); mouse.click(MB.left, 2)
         elif k == "scroll":
             mouse.scroll(0, int(d.get("dy", 0)))
 
@@ -5757,7 +5791,11 @@ async def on_screen_start(data):
     # Chat-/Steuerfenster in der Benutzersitzung - NUR wenn nicht Silent-Modus
     # (bei Silent kommt require_consent=False vom Backend). Kurz warten, bis der
     # Helfer verbunden ist, dann oeffnen.
-    _session.update(active=True, by=(data or {}).get("requested_by") or "", granted=False)
+    # Silent-Modus (require_consent == False): kein Fenster beim Benutzer UND der
+    # Admin hat sofort erhoehte Rechte, ohne dass jemand am Geraet zustimmt.
+    # Mit Benutzerfreigabe (require_consent == True): Rechte erst nach Klick im Fenster.
+    _session.update(active=True, by=(data or {}).get("requested_by") or "",
+                    granted=not require_consent)
     if require_consent:
         def _later():
             for _ in range(20):
@@ -5766,6 +5804,10 @@ async def on_screen_start(data):
                 time.sleep(0.25)
             _open_session_window(_session["by"])
         threading.Thread(target=_later, daemon=True).start()
+    else:
+        # Dashboard informieren, dass im Silent-Modus bereits Admin-Rechte gelten.
+        _session_emit(loop, "screen-session-grant", {"granted": True, "silent": True})
+        _print("[agent] Silent-Modus: Admin-Rechte ohne Benutzerfreigabe aktiv.")
 
 
 @sio.on("screen-stop", namespace="/agent")

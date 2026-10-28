@@ -111,6 +111,23 @@ def dist_file(folder: str, filename: str):
     return FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 
+# --- Kurz-Aliasse: /enrollment /agent /client zeigen auf /dist/<name> ---
+from starlette.responses import RedirectResponse as _Redirect
+
+def _alias(folder):
+    def idx():
+        return _Redirect(f"/dist/{folder}", status_code=307)
+    def sub(filename: str):
+        return _Redirect(f"/dist/{folder}/{filename}", status_code=307)
+    return idx, sub
+
+for _name in ("enrollment", "agent", "client"):
+    _idx, _sub = _alias(_name)
+    router.add_api_route(f"/{_name}", _idx, methods=["GET"], include_in_schema=False)
+    router.add_api_route(f"/{_name}/", _idx, methods=["GET"], include_in_schema=False)
+    router.add_api_route(f"/{_name}/{{filename}}", _sub, methods=["GET"], include_in_schema=False)
+
+
 # ====================================================== Verwaltung
 def _perm(user):
     require_perm(user, "manage_dist")

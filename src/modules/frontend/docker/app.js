@@ -467,9 +467,14 @@ export function renderDocker(body) {
         <div style="flex:1;min-width:160px"><label style="font-size:12px;color:var(--subtext)">Name</label><input data-name placeholder="z. B. wiki"></div>
         <div><label style="font-size:12px;color:var(--subtext)">Ziel</label><select data-target style="width:auto">${targets.map((t) =>
           `<option value="${esc(t.target)}" ${t.ok ? "" : "disabled"}>${esc(t.name)}${t.ok ? "" : " (nicht bereit)"}</option>`).join("")}</select></div>
+        <div><label style="font-size:12px;color:var(--subtext)">Compose-Quelle</label>
+          <select data-source style="width:auto"><option value="inline">Eigene Compose (im RMM bearbeiten)</option><option value="file">Compose-Datei (im Projektordner)</option></select></div>
+        <div data-filewrap style="display:none"><label style="font-size:12px;color:var(--subtext)">Datei im Projektordner</label>
+          <input data-cfile value="docker-compose.yml" style="width:170px"></div>
         <label style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><input type="checkbox" data-dep checked style="width:16px;height:16px;appearance:auto"> sofort bereitstellen</label>
         <button class="btn-primary" data-create>Anlegen</button></div>
-      <div data-out style="margin-top:8px"></div>`, 860);
+      <div data-proot style="font-size:11.5px;color:var(--subtext);margin-top:6px"></div>
+      <div data-out style="margin-top:8px"></div>`, 880);
     ov.querySelector("[data-x]").onclick = () => ov.remove();
     const sp = ov.querySelector("[data-srcp]");
     let yml = "services:\n  app:\n    image: nginx:alpine\n    restart: unless-stopped\n    ports:\n      - \"8080:80\"\n";
@@ -525,6 +530,22 @@ export function renderDocker(body) {
       ov.querySelectorAll("[data-src]").forEach((x) => x.classList.toggle("active", x === b)); srcs[b.dataset.src]();
     }));
     editor();
+    // Compose-Quelle: "file" zeigt Dateifeld; Projekt-Root-Hinweis aktualisieren
+    const proot = ov.querySelector("[data-proot]");
+    const slug = (n) => (n || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "projekt";
+    const updProot = () => {
+      const src = ov.querySelector("[data-source]").value;
+      ov.querySelector("[data-filewrap]").style.display = src === "file" ? "" : "none";
+      const name = ov.querySelector("[data-name]").value.trim();
+      const pr = "storage/docker/" + slug(name);
+      proot.innerHTML = src === "file"
+        ? `📁 Projekt-Root: <code>${esc(pr)}</code> – lege dort deine <code>${esc(ov.querySelector("[data-cfile]").value || "docker-compose.yml")}</code> an (relative Volumes wie <code>./data</code> landen unter diesem Ordner). Der Editor-Inhalt wird beim Anlegen als Datei gespeichert, falls noch keine da ist.`
+        : `📁 Projekt-Root: <code>${esc(pr)}</code> – relative Volumes (<code>./data</code>) landen unter diesem Ordner.`;
+    };
+    ov.querySelector("[data-source]").addEventListener("change", updProot);
+    ov.querySelector("[data-cfile]").addEventListener("input", updProot);
+    ov.querySelector("[data-name]").addEventListener("input", updProot);
+    updProot();
     ov.querySelector("[data-create]").addEventListener("click", async (e) => {
       const name = ov.querySelector("[data-name]").value.trim();
       if (!name) { window.notify?.("Bitte einen Namen eingeben", "error"); return; }
@@ -532,7 +553,7 @@ export function renderDocker(body) {
       const out = ov.querySelector("[data-out]");
       out.innerHTML = `<div>⏳ ${ov.querySelector("[data-dep]").checked ? "Lege an und stelle bereit (Images laden kann dauern) …" : "Lege an …"}</div>`;
       try {
-        const r = await dreq("/stacks", { method: "POST", body: { name, target: ov.querySelector("[data-target]").value, compose: yml, deploy: ov.querySelector("[data-dep]").checked } });
+        const r = await dreq("/stacks", { method: "POST", body: { name, target: ov.querySelector("[data-target]").value, compose: yml, source: ov.querySelector("[data-source]").value, compose_file: ov.querySelector("[data-cfile]").value.trim() || "docker-compose.yml", deploy: ov.querySelector("[data-dep]").checked } });
         view = { kind: "stack", id: r.stack.id, tab: r.log.length ? "log" : "containers", lastLog: r.log };
         ov.remove();
         window.notify?.(r.ok ? `Stack „${name}“ angelegt` : `Stack angelegt, Bereitstellen fehlgeschlagen`, r.ok ? "success" : "error");

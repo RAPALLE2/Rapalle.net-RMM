@@ -83,13 +83,17 @@ async def targets(user: dict = Depends(get_current_user)):
 class StackBody(BaseModel):
     name: str
     target: str = "local"
-    compose: str
+    compose: str = ""
+    source: str = "inline"          # "inline" = eigene Compose, "file" = Compose-Datei im Projektordner
+    compose_file: str = "docker-compose.yml"
     deploy: bool = True
 
 
 class StackPut(BaseModel):
     name: str | None = None
     compose: str | None = None
+    source: str | None = None
+    compose_file: str | None = None
 
 
 class MembersBody(BaseModel):
@@ -101,8 +105,12 @@ class DownBody(BaseModel):
 
 
 def _pub(st: dict, user) -> dict:
-    return {k: st.get(k) for k in ("id", "name", "project", "target", "members", "publish", "created", "created_by",
-                                   "updated", "deployed")} | {"level": stacks.level(user, st)}
+    out = {k: st.get(k) for k in ("id", "name", "project", "target", "members", "publish", "created", "created_by",
+                                  "updated", "deployed")} | {"level": stacks.level(user, st)}
+    out["source"] = st.get("source", "inline")
+    out["compose_file"] = st.get("compose_file", "docker-compose.yml")
+    out["project_dir"] = f"storage/docker/{st.get('project')}"
+    return out
 
 
 @router.get("/stacks")
@@ -125,7 +133,7 @@ async def create_stack(body: StackBody, user: dict = Depends(get_current_user)):
     if not stacks.target_ok(user, body.target):
         raise HTTPException(404, "Ziel nicht gefunden")
     try:
-        st = stacks.create(body.name, body.target, body.compose, user)
+        st = stacks.create(body.name, body.target, body.compose, user, source=body.source, compose_file=body.compose_file)
     except Exception as e:
         _err(e)
     _audit(user, "stack_created", f"{st['project']} auf {st['target']}")
@@ -146,7 +154,11 @@ async def stack_detail(sid: str, user: dict = Depends(get_current_user)):
         err = None
     except DockerError as e:
         cs, err = [], str(e)
-    return {"stack": {**_pub(st, user), "compose": st["compose"]}, "containers": cs, "error": err}
+    try:
+        ctext = stacks.compose_text(st)
+    except Exception:
+        ctext = st.get("compose", "")
+    return {"stack": {**_pub(st, user), "compose": ctext}, "containers": cs, "error": err}
 
 
 @router.put("/stacks/{sid}")

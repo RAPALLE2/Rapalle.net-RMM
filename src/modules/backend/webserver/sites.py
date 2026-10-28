@@ -28,11 +28,11 @@ from starlette.requests import Request   # auf Modulebene: FastAPI muss die Typa
 
 from app import db
 from app.auth import is_super_admin, user_has_permission
-from app.paths import MODULES_DATA_DIR, STORAGE_DIR
+from app.paths import MODULES_DATA_DIR, STORAGE_DIR, WEB_DIR
 
 from . import webhost
 
-ROOT = STORAGE_DIR / "websites"
+ROOT = WEB_DIR  # storage/web/<name>
 REG = MODULES_DATA_DIR / "webserver" / "sites.json"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 # Immer gesperrt (zusaetzlich zu allen belegten Adressen, siehe reserved())
