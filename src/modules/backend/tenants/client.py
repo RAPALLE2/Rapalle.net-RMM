@@ -5,6 +5,9 @@
 #   - autologin(): Token fuer die Einbettung (Dashboard mit #client-token=)
 #   - api(): beliebige Mandanten-API im Namen des Benutzers (z. B. Spaces/Relay)
 # httpx (async). TLS-Pruefung je Mandant abschaltbar (selbstsignierte Zertifikate).
+# Verbindung je Mandant waehlbar (Feld "via"): "" = vom RMM-Server, sonst Node-ID ->
+# die Aufrufe laufen UEBER DIESE NODE (Node-Modul "tenants", Befehl "tenants-http") -
+# fuer Mandanten, die nur im Kunden-LAN erreichbar sind.
 from __future__ import annotations
 
 import httpx
@@ -22,6 +25,33 @@ def _base(tenant: dict) -> str:
     return (tenant.get("url") or "").rstrip("/")
 
 
+async def _request(tenant: dict, method: str, url: str, headers: dict | None = None,
+                   json_body=None, content: bytes | None = None, timeout: float = 25) -> httpx.Response:
+    """Eine Anfrage an den Mandanten - direkt oder ueber die gewaehlte Node."""
+    verify = bool(tenant.get("verify_tls", True))
+    headers = dict(headers or {})
+    via = tenant.get("via") or ""
+    if not via:
+        async with httpx.AsyncClient(verify=verify, timeout=timeout, follow_redirects=True) as c:
+            return await c.request(method, url, headers=headers, json=json_body, content=content)
+    import base64
+    import json as _json
+    from app import node_manager
+    if json_body is not None:
+        content = _json.dumps(json_body).encode()
+        headers.setdefault("Content-Type", "application/json")
+    try:
+        node_manager.require_module(via, "tenants")
+        res = await node_manager.command(via, "tenants-http", {
+            "method": method, "url": url, "headers": headers, "verify": verify, "timeout": timeout,
+            "body": base64.b64encode(content).decode() if content else ""}, timeout=timeout + 15)
+    except node_manager.NodeError as e:
+        raise httpx.ConnectError(f"über Node: {e}") from None
+    return httpx.Response(int(res.get("status") or 502), headers=res.get("headers") or [],
+                          content=base64.b64decode(res.get("body") or ""),
+                          request=httpx.Request(method, url))
+
+
 async def _login(tenant: dict, username: str, password: str, realm: str, code: str = "") -> str:
     base = _base(tenant)
     if not base:
@@ -29,10 +59,8 @@ async def _login(tenant: dict, username: str, password: str, realm: str, code: s
     body = {"username": username, "password": password, "realm": realm or "local"}
     if code:
         body["code"] = code
-    verify = bool(tenant.get("verify_tls", True))
     try:
-        async with httpx.AsyncClient(verify=verify, timeout=20, follow_redirects=True) as c:
-            r = await c.post(base + "/api/auth/login", json=body)
+        r = await _request(tenant, "POST", base + "/api/auth/login", json_body=body, timeout=20)
     except httpx.HTTPError as e:
         raise TenantError(f"Mandant nicht erreichbar: {e}") from None
     if r.status_code != 200:
@@ -67,7 +95,9 @@ async def verify_credentials(tenant: dict, username: str, password: str, realm: 
 
 async def api(tenant: dict, token: str, method: str, path: str, **kw) -> httpx.Response:
     base = _base(tenant)
-    verify = bool(tenant.get("verify_tls", True))
-    headers = {"Authorization": "Bearer " + token}
-    async with httpx.AsyncClient(verify=verify, timeout=25, follow_redirects=True) as c:
-        return await c.request(method, base + path, headers=headers, **kw)
+    headers = {"Authorization": "Bearer " + token, **(kw.pop("headers", None) or {})}
+    try:
+        return await _request(tenant, method, base + path, headers=headers,
+                              json_body=kw.pop("json", None), content=kw.pop("content", None))
+    except httpx.HTTPError as e:
+        raise TenantError(f"Mandant nicht erreichbar: {e}") from None

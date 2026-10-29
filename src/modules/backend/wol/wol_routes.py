@@ -42,12 +42,12 @@ def status(cid: str, user: dict = Depends(get_current_user)):
     manual = cfg["macs"]
     # verfuegbare Absender: Backend + online-Nodes
     try:
-        from app.node_manager import _sid_by_client
-        nodes = [{"id": n, "name": (db.get_client(n) or {}).get("hostname") or n[:8]} for n in _sid_by_client.keys()]
+        from app.node_manager import node_choices
+        nodes = node_choices("wol", user)        # installed=False -> Modul erst nachladen
     except Exception:
         nodes = []
     return {"enabled": cfg["enabled"], "config": cfg, "macs": auto, "manual_macs": manual,
-            "nodes": nodes, "can_backend": True}
+            "nodes": nodes, "can_backend": True, "proxmox": wake.proxmox_info(cid, user)}
 
 
 class CfgBody(BaseModel):
@@ -78,11 +78,14 @@ class WakeBody(BaseModel):
 async def do_wake(cid: str, body: WakeBody, user: dict = Depends(get_current_user)):
     _client(user, cid)
     try:
-        res = await wake.wake(cid, body.via)
+        res = await wake.wake(cid, body.via, user)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(409, str(e))
     except Exception as e:      # noqa: BLE001
         raise HTTPException(502, str(e))
     db.add_audit_entry(user["username"], "wol.wake", target=cid,
-                       details=f"via {res.get('via')}, {res.get('ok_count', 0)} Pakete")
+                       details=(res.get("detail") if res.get("via") == "proxmox"
+                                else f"via {res.get('via')}, {res.get('ok_count', 0)} Pakete"))
     return res

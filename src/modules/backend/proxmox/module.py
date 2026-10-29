@@ -1,4 +1,5 @@
-# module.py (Modul "proxmox") - automatischer Abgleich Agenten <-> Proxmox-Gaeste (alle 10 Minuten)
+# module.py (Modul "proxmox") - automatischer Abgleich Agenten <-> Proxmox-Gaeste
+# (Intervall aus den Modul-Einstellungen; neuer/umgezogener Agent -> Abgleich kurz danach)
 from . import match
 
 
@@ -12,3 +13,8 @@ async def on_shutdown(ctx):
 
 async def on_disable(ctx):
     match.end()
+
+
+async def on_client(ctx, data: dict):
+    """Neuer Agent bzw. Agent wieder online (z.B. nach Migration/Umzug)."""
+    match.scan_soon()

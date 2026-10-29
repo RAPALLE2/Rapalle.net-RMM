@@ -8,10 +8,24 @@
 // Große Netze laufen als Hintergrund-Job mit Fortschrittsanzeige. Der
 // ⚡ Speed-Up verteilt die /24-Blöcke auf mehrere parallele Worker.
 
+import { nodeHint } from "/js/app/nodechoice.js";
 import { api } from "/js/app/api.js";
 import { esc } from "/js/app/utils.js";
 import { openWindow } from "/js/app/windowmanager.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
+
+// Auswahl "Backend oder Node" fuellen (Nodes nur mit nachgeladenem Node-Modul "network")
+function fillVia(sel, preset = "") {
+  api.nodeChoices("network").then((r) => {
+    for (const n of r.nodes || []) {
+      const o = document.createElement("option");
+      o.value = n.id; o.disabled = !n.active;
+      o.textContent = `🖧 Node ${n.name}${nodeHint(n)}`;
+      sel.appendChild(o);
+    }
+    if (preset) sel.value = preset;
+  }).catch(() => {});
+}
 import { t } from "/js/app/i18n.js";
 
 const SPEEDS = {
@@ -35,6 +49,7 @@ export function renderNetwork(body, win) {
           ${Object.entries(SPEEDS).map(([k, v]) =>
             `<button class="btn net-speed" data-speed="${k}" title="${esc(v.hint)}">${v.label}</button>`).join("")}
         </div>
+        <select id="net-via" title="Von wo aus scannen?"><option value="">🖥 Vom Backend</option></select>
         <button class="btn-primary" id="net-scan">🔍 Scannen</button>
         <button class="btn" id="net-stop" style="display:none">✋ ${t("cancel")}</button>
       </div>
@@ -53,6 +68,8 @@ export function renderNetwork(body, win) {
     </div>`;
 
   const subnetInput = body.querySelector("#net-subnet");
+  const viaSel = body.querySelector("#net-via");
+  fillVia(viaSel, win?.props?.via || "");
   const scanBtn = body.querySelector("#net-scan");
   const stopBtn = body.querySelector("#net-stop");
   const statusEl = body.querySelector("#net-status");
@@ -112,7 +129,7 @@ export function renderNetwork(body, win) {
     tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_scanning")}</td></tr>`;
     scanBtn.disabled = true;
     try {
-      const res = await api.scanStart(subnetInput.value.trim() || null, speed);
+      const res = await api.scanStart(subnetInput.value.trim() || null, speed, viaSel.value);
       jobId = res.job_id;
       stopBtn.style.display = "";
       progEl.style.display = "";
@@ -190,7 +207,7 @@ export function renderNetwork(body, win) {
         const ip = btn.dataset.portscan;
         openWindow({
           key: `portscan-${ip}`, appId: "portscan",
-          title: `Portscan — ${ip}`, props: { ip }, w: 560, h: 480,
+          title: `Portscan — ${ip}`, props: { ip, via: viaSel.value }, w: 560, h: 480,
         });
       }));
   }

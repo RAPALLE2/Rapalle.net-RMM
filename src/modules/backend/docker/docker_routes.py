@@ -71,9 +71,12 @@ async def targets(user: dict = Depends(get_current_user)):
             if not can_access_client(user, cid):
                 continue
             c = db.get_client(cid) or {}
+            # Node-Modul "docker" muss auf der Node nachgeladen sein (seit Node 0.2.0 nicht mehr eingebaut)
+            has = node_manager.node_has(cid, "docker")
             out.append({"target": f"node:{cid}", "name": f"Node {c.get('hostname') or n.get('hostname') or cid}",
-                        "ok": bool(n.get("online") and (n.get("docker") or {}).get("running", (n.get("docker") or {}).get("installed"))),
-                        "online": n.get("online"), "docker": n.get("docker"), "update_available": n.get("update_available")})
+                        "ok": bool(n.get("online") and has and (n.get("docker") or {}).get("running", (n.get("docker") or {}).get("installed"))),
+                        "online": n.get("online"), "docker": n.get("docker"), "update_available": n.get("update_available"),
+                        "module_installed": has})
     except Exception:
         pass
     return {"targets": out, "manage": stacks.manage_all(user)}

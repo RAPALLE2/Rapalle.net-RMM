@@ -465,61 +465,75 @@ async def rename_client_path(client_id: str, body: FsRenameBody, user: dict = De
 
 
 @router.post("/{client_id}/update-agent")
-async def update_client_agent(client_id: str, user: dict = Depends(get_current_user)):
+async def update_client_agent(client_id: str, wait: bool = False,
+                              user: dict = Depends(get_current_user)):
     """
-    Weist den Agenten an, sich selbst zu aktualisieren: Er startet den
-    Client-Update-Befehl in einer eigenen Shell-Session (lädt das aktuelle
-    Agent-Paket, ersetzt agent.py und startet den Dienst neu). Nach dem Neustart
-    meldet der Agent "updated" zurück.
+    Weist den Agenten an, sich selbst zu aktualisieren (laedt das aktuelle
+    Agent-Paket, ersetzt agent.py, startet den Dienst neu). Nach dem Neustart
+    meldet der Agent "updated" zurueck.
 
-    Der Endpunkt wartet bis zu 60 Sekunden auf diese Bestätigung:
-      - kommt sie -> Update erfolgreich.
-      - kommt sie nicht -> Fehler (das Update ist vermutlich fehlgeschlagen).
+    WICHTIG: Die Anfrage kehrt SOFORT zurueck (Auftrag angenommen). Frueher hielt
+    sie bis zu 55 s offen und wartete auf die Bestaetigung - Reverse Proxies
+    (nginx/NPM, Traefik, ...) brechen solche Anfragen vorher ab und das Dashboard
+    zeigte "Update fehlgeschlagen: Fehler 504", obwohl das Update evtl. lief.
+    Den Fortschritt fragt das Dashboard ueber GET .../update-agent/status ab
+    (zusaetzlich kommen die Socket-Ereignisse client:action-log / client:updated).
+
+    ?wait=true stellt das alte, blockierende Verhalten fuer Skripte/REST-API her.
     """
     _require_client_perm(user, client_id, "manage_agent")
     if not state.is_online(client_id):
         raise HTTPException(409, "Der Agent ist nicht verbunden.")
 
     client = db.get_client(client_id)
-    # Eventuelle alte Bestätigung verwerfen, damit wir nur auf die neue reagieren.
     state.update_confirmed.pop(client_id, None)
+    state.update_jobs[client_id] = {
+        "started": time.time(), "mono": time.monotonic(), "stage": "sent", "detail": "",
+        "updated": False, "version_before": (client or {}).get("agent_version") or "",
+        "version": "", "by": user["username"],
+    }
 
     ok = await send_to_agent(client_id, "update-agent", {})
     if not ok:
+        state.update_jobs.pop(client_id, None)
         raise HTTPException(503, "Client ist offline")
     db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id,
                        details=(client or {}).get("hostname"))
 
-    # Auf "updated"-Bestätigung warten.
-    #
-    # ACHTUNG bei Änderungen: Diese Wartezeit muss KLEINER bleiben als das
-    # Zeitlimit des Browsers für diesen Pfad (frontend/js/api.js,
-    # SLOW_SUFFIXES["/update-agent"] = 90 s). Sonst bricht der Browser ab,
-    # während das Update noch läuft - und meldet einen Fehler, den es nicht
-    # gibt. Genau so entstand am 23.08. die Meldung "nach 45 s keine
-    # Antwort", obwohl der Agent sich Sekunden später erfolgreich meldete.
-    #
-    # Unabhängig davon informiert das Backend die Dashboards über das
-    # Ereignis 'client:updated', sobald der Agent zurück ist. Selbst wenn
-    # diese Anfrage ins Leere läuft, wird die Oberfläche also richtig.
+    if not wait:
+        return {"ok": True, "pending": True}
+
     UPDATE_WAIT_S = 55.0
     deadline = time.monotonic() + UPDATE_WAIT_S
     while time.monotonic() < deadline:
         await asyncio.sleep(1.0)
-        if client_id in state.update_confirmed:
-            state.update_confirmed.pop(client_id, None)
-            db.add_audit_entry(user["username"], "agent.updated", target=client_id,
-                               details=(client or {}).get("hostname"))
+        if (state.update_jobs.get(client_id) or {}).get("updated"):
             return {"ok": True, "updated": True}
+    raise HTTPException(504, "Der Agent hat innerhalb von 55 Sekunden kein erfolgreiches "
+                             "Update bestaetigt - bitte /tmp/rapalle-agent-update.log pruefen.")
 
-    db.add_audit_entry(user["username"], "agent.update_timeout", target=client_id,
-                       details=(client or {}).get("hostname"))
-    raise HTTPException(
-        504,
-        "Der Agent hat innerhalb von 60 Sekunden kein erfolgreiches Update "
-        "bestätigt. Das Update ist möglicherweise fehlgeschlagen - bitte den "
-        "Client bzw. das Log /tmp/rapalle-agent-update.log prüfen.",
-    )
+
+@router.get("/{client_id}/update-agent/status")
+def update_client_agent_status(client_id: str, user: dict = Depends(get_current_user)):
+    """Fortschritt des zuletzt angestossenen Agent-Updates dieses Clients."""
+    _require_client_perm(user, client_id, "manage_agent")
+    job = state.update_jobs.get(client_id)
+    client = db.get_client(client_id) or {}
+    if not job:
+        return {"job": False, "online": state.is_online(client_id),
+                "agent_version": client.get("agent_version") or ""}
+    elapsed = time.monotonic() - job["mono"]
+    out = {k: v for k, v in job.items() if k != "mono"}
+    out.update({"job": True, "elapsed": int(elapsed), "online": state.is_online(client_id),
+                "agent_version": client.get("agent_version") or ""})
+    if job["updated"]:
+        if not job.get("audited"):
+            job["audited"] = True
+            db.add_audit_entry(job.get("by") or user["username"], "agent.updated",
+                               target=client_id, details=client.get("hostname"))
+    elif job["stage"] != "error" and elapsed > 240:
+        out["stage"] = "timeout"
+    return out
 
 
 class UpdateAllBody(BaseModel):

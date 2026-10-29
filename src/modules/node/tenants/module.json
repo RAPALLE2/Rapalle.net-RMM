@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "tenants",
+  "name": "Mandanten (Node-Teil)",
+  "version": "1.0.0",
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  }
+}

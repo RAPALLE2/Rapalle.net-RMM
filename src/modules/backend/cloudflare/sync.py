@@ -322,7 +322,8 @@ def apply(username: str = "") -> dict:
 
 async def _deploy_node(cid: str, token: str):
     from app.node_manager import NodesAPI
-    return await NodesAPI("cloudflare").deploy(cid, {"tunnel_token": token})
+    # Diese Node wurde im Cloudflare-Modul ausdruecklich fuer den Tunnel gewaehlt -> aktivieren
+    return await NodesAPI("cloudflare").deploy(cid, {"tunnel_token": token}, activate=True)
 
 
 def remove_route(rid: str) -> None:

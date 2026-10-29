@@ -560,15 +560,16 @@ export const api = {
   scanNetwork: (subnet) => request(`/api/network/scan${subnet ? `?subnet=${encodeURIComponent(subnet)}` : ""}`),
   // Job-basierter Scan (große Netze wie 10.10 = /16, mit Fortschritt + Speed-Up)
   scanPreview: (target) => request(`/api/network/scan/preview${target ? `?target=${encodeURIComponent(target)}` : ""}`),
-  scanStart: (target, speed) => request(
-    `/api/network/scan/start?speed=${encodeURIComponent(speed || "normal")}${target ? `&target=${encodeURIComponent(target)}` : ""}`,
+  scanStart: (target, speed, via = "") => request(
+    `/api/network/scan/start?speed=${encodeURIComponent(speed || "normal")}${target ? `&target=${encodeURIComponent(target)}` : ""}${via ? `&via=${encodeURIComponent(via)}` : ""}`,
     { method: "POST" }),
   scanJob: (jobId) => request(`/api/network/scan/job/${jobId}`),
   scanCancel: (jobId) => request(`/api/network/scan/job/${jobId}/cancel`, { method: "POST" }),
   lastScan: () => request("/api/network/scan/last"),
-  portScan: (ip, mode = "standard", ports = "") => {
+  portScan: (ip, mode = "standard", ports = "", via = "") => {
     const q = new URLSearchParams({ ip, mode });
     if (mode === "custom" && ports) q.set("ports", ports);
+    if (via) q.set("via", via);
     return request(`/api/network/portscan?${q.toString()}`);
   },
 
@@ -617,6 +618,7 @@ export const api = {
 
   // --- Agent-Verwaltung ---
   updateAgent: (clientId) => request(`/api/clients/${clientId}/update-agent`, { method: "POST" }),
+  updateAgentStatus: (clientId) => request(`/api/clients/${clientId}/update-agent/status`),
   updateAllAgents: (opts = {}) => request("/api/clients/update-all-agents", {
     method: "POST", body: JSON.stringify({ include_offline: !!opts.include_offline }) }),
   uninstallAgent: (clientId) => request(`/api/clients/${clientId}/uninstall-agent`, { method: "POST" }),
@@ -664,6 +666,7 @@ export const api = {
   nodeDockerInstall: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/docker-install`, { method: "POST" }),
   nodeLogs: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/logs`),
   nodeModules: () => request("/api/nodes/modules"),
+  nodeChoices: (moduleId) => request(`/api/nodes/choices/${encodeURIComponent(moduleId)}`),
   nodeDeploy: (clientId, moduleId, params = {}) =>
     request(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}`,
       { method: "POST", body: JSON.stringify({ params }) }),

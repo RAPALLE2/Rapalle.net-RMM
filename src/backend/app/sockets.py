@@ -367,6 +367,9 @@ class ConnectionState:
         # frisch registriert hat ("updated: true"). Wird vom Update-Endpunkt
         # abgefragt, um ein Update als erfolgreich zu bestätigen.
         self.update_confirmed: dict[str, float] = {}
+        # Laufende Agent-Updates (vom Dashboard angestossen): Stufe/Detail aus
+        # agent-action-log, updated=True nach erfolgreicher Neuanmeldung.
+        self.update_jobs: dict[str, dict] = {}
 
     def is_online(self, client_id: str) -> bool:
         return client_id in self.client_id_to_sid
@@ -1180,6 +1183,9 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
         if not payload.get("updated"):
             return
         state.update_confirmed[client_id] = time.monotonic()
+        job = state.update_jobs.get(client_id)
+        if job:
+            job.update(updated=True, stage="updated", version=payload.get("agent_version") or "")
         await sio.emit("client:updated", {"id": client_id}, namespace="/dashboard")
         from app import notifier
         from router.admin_routes import build_notification
@@ -1458,6 +1464,13 @@ async def on_agent_action_log(sid, payload):
     die Dashboards weitergereicht, damit man in Echtzeit sieht, was auf dem
     Client passiert (statt nur eines generischen 60s-Timeouts).
     """
+    try:
+        job = state.update_jobs.get(payload.get("id") or "")
+        if job and payload.get("kind") == "update" and not job.get("updated"):
+            job["stage"] = str(payload.get("stage") or "")[:40]
+            job["detail"] = str(payload.get("detail") or "")[:2000]
+    except Exception:
+        pass
     await sio.emit("client:action-log", {
         "id": payload.get("id"),
         "kind": payload.get("kind"),
@@ -2243,7 +2256,8 @@ def _admin_from_token(token: str):
         from app.auth import decode_access_token
         payload = decode_access_token(token)
         u = db.get_user_by_id(payload.get("sub"))
-        if u and u.get("role") == "admin":
+        from app.auth import is_super_admin
+        if u and is_super_admin(u):
             return u
     except Exception:
         pass

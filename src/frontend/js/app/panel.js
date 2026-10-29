@@ -215,7 +215,9 @@ export function renderStatusPart(target, client) {
   // dehnen sich immer über die KOMPLETTE Panelfläche aus (gleiches Layout,
   // voller Platz), die Schrift bleibt konstant lesbar.
   const holder = document.createElement("div");
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;gap:14px 20px;flex-wrap:wrap;min-width:0;align-content:center";
+  // min-height statt height: Ist das Panel zu klein, waechst der Inhalt und das
+  // Panel scrollt (statt oben abgeschnitten / zusammengedrueckt zu werden).
+  holder.style.cssText = "width:100%;min-height:100%;flex:1 0 auto;box-sizing:border-box;display:flex;align-items:center;gap:14px 20px;flex-wrap:wrap;min-width:0;align-content:center";
   const box = holder;
   box.innerHTML = `
     <div class="quick-actions" style="flex:none;width:180px;display:flex;flex-direction:column;gap:7px;margin-top:0;flex-wrap:nowrap;justify-content:center;align-self:stretch">
@@ -263,9 +265,14 @@ export function renderStatusPart(target, client) {
 export function renderActionsPart(target, client) {
   target.innerHTML = "";
   const holder = document.createElement("div");
-  holder.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible";
+  // KEIN Herunterskalieren mehr: Bei vielen Modul-Knoepfen wurde alles immer
+  // kleiner. Jetzt normale Groesse; passt es nicht, scrollt das Panel
+  // (.dash-lp-body / .panelpart-body haben overflow:auto). min-height statt
+  // height, damit die Zentrierung bei Ueberlauf oben nichts abschneidet.
+  holder.className = "actions-holder";
+  holder.style.cssText = "width:100%;min-height:100%;flex:1 0 auto;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:2px 0";
   const box = document.createElement("div");
-  box.style.cssText = "width:240px;display:flex;flex-direction:column;gap:8px";
+  box.style.cssText = "width:100%;max-width:260px;display:flex;flex-direction:column;gap:8px;margin:auto 0";
   box.innerHTML = `
     ${hasClientPerm(client.id, "c_explorer_view") ? `<button class="action-btn" data-action="explorer" ${client.online ? "" : "disabled"}>📁 ${t("file_explorer")}</button>` : ""}
     ${hasClientPerm(client.id, "c_terminal_console") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
@@ -287,7 +294,6 @@ export function renderActionsPart(target, client) {
   target.appendChild(holder);
   box.querySelectorAll("[data-action]").forEach((btn) =>
     btn.addEventListener("click", (ev) => handleAction(btn.dataset.action, client, ev)));
-  scaleToContainer(holder);
 }
 
 // --- WEBSITES-Part (Quick-Access) ---
@@ -1112,16 +1118,46 @@ export async function handleQuickAction(action, client) {
 
     if (!(await uiConfirm(t("agent_update_q", { host: client.hostname }), { description: t("agent_update_desc"), okText: t("agent_update_ok") }))) return;
     window.notify?.(t("pn_agent_updating", { host: client.hostname }), "info", 60000, { tag: "agent-update:" + client.id });
+    const tag = { tag: "agent-update:" + client.id };
     try {
-      const res = await api.updateAgent(client.id);
-      if (res && res.updated) {
-        window.notify?.(t("pn_agent_updated", { host: client.hostname }), "success", 8000, { tag: "agent-update:" + client.id });
-      } else {
-        window.notify?.(t("pn_agent_update_done", { host: client.hostname }), "success", 6000, { tag: "agent-update:" + client.id });
-      }
+      // Kehrt sofort zurueck (sonst bricht ein Reverse Proxy nach ~60 s mit 504 ab);
+      // der Fortschritt wird danach abgefragt.
+      await api.updateAgent(client.id);
     } catch (e) {
-      window.notify?.(t("pn_update_failed") + ": " + e.message, "error", 14000, { tag: "agent-update:" + client.id });
+      window.notify?.(t("pn_update_failed") + ": " + e.message, "error", 14000, tag);
+      return;
     }
+    const until = Date.now() + 240000;
+    let lastStage = "";
+    const STAGE_TXT = {
+      sent: "Befehl gesendet …", received: "Agent hat den Befehl empfangen …",
+      launched: "Update-Skript läuft, Agent startet neu …",
+      "launched-fallback": "Update-Skript läuft (Ausweichweg) …",
+    };
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 2500));
+      let st;
+      try { st = await api.updateAgentStatus(client.id); } catch { continue; }   // Backend/Proxy kurz weg -> weiter warten
+      if (st.updated) {
+        window.notify?.(t("pn_agent_updated", { host: client.hostname })
+          + (st.version ? ` (${st.version})` : ""), "success", 8000, tag);
+        return;
+      }
+      if (st.stage === "error") {
+        window.notify?.(t("pn_update_failed") + ": " + (st.detail || "Fehler auf dem Client"), "error", 20000, tag);
+        return;
+      }
+      if (st.stage === "timeout") break;
+      if (st.stage && st.stage !== lastStage) {
+        lastStage = st.stage;
+        const txt = STAGE_TXT[st.stage] || st.stage;
+        window.notify?.(`${client.hostname}: ${txt}` + (st.stage === "launched-fallback" && st.detail ? ` – ${st.detail}` : ""),
+          st.stage === "launched-fallback" ? "warn" : "info", 60000, tag);
+      }
+    }
+    window.notify?.(t("pn_update_failed") + ": Der Agent hat sich nach 4 Minuten nicht mit einem Update zurückgemeldet. "
+      + "Log auf dem Client prüfen (Linux: /tmp/rapalle-agent-update.log, Windows: Ereignisanzeige/Aufgabenplanung „RapalleRmmUpdate“).",
+      "error", 30000, tag);
     return;
   }
   if (action === "uninstall") {

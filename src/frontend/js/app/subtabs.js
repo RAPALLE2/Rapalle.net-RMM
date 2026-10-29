@@ -104,6 +104,19 @@ export function buildSubTabs(root, opts = {}) {
   const nav = document.createElement("div");
   nav.className = "sub-nav";
   nav.style.padding = "0 0 12px";
+  // Liegen die Abschnitte in einem eigenen, gepolsterten Kasten (z.B.
+  // .settings-section), Leiste und Fussbereich aber direkt in root, klebten
+  // Unterpunkt-Knoepfe und "Speichern" am Fensterrand. Gleiche Innenabstaende
+  // wie der Kasten uebernehmen.
+  // Abstand = Summe der Innenabstaende aller Kaesten zwischen root und Abschnitt.
+  let padL = 0, padR = 0;
+  for (let el = sections[0].box.parentElement; el && el !== root && root.contains(el); el = el.parentElement) {
+    const cs = getComputedStyle(el);
+    padL += (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.marginLeft) || 0);
+    padR += (parseFloat(cs.paddingRight) || 0) + (parseFloat(cs.marginRight) || 0);
+  }
+  padL = padL > 0 ? padL + "px" : ""; padR = padR > 0 ? padR + "px" : "";
+  if (padL || padR) nav.style.padding = `12px ${padR || "0"} 4px ${padL || "0"}`;
   nav.innerHTML = sections
     .map((s, i) => `<button type="button" data-sub="${i}">${esc(s.title)}</button>`)
     .join("");
@@ -139,7 +152,8 @@ export function buildSubTabs(root, opts = {}) {
   if (pinned.length) {
     const foot = document.createElement("div");
     foot.className = "sub-foot";
-    foot.style.cssText = "margin-top:14px;padding-top:12px;border-top:1px solid var(--border)";
+    foot.style.cssText = "margin-top:14px;padding-top:12px;border-top:1px solid var(--border)"
+      + (padL || padR ? `;padding-left:${padL || 0};padding-right:${padR || 0};padding-bottom:16px` : "");
     let any = false;
     pinned.forEach((sel) => {
       root.querySelectorAll(sel).forEach((el) => { foot.appendChild(el); any = true; });

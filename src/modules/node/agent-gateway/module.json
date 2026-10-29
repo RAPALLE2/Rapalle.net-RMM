@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "agent-gateway",
+  "name": "Agent-Gateway (Node-Teil)",
+  "version": "1.0.0",
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": ["up", "down", "restart", "status"],
+    "params": [{"key": "listen_port", "label": "Port für Agents", "type": "number", "default": 8765}]
+  }
+}

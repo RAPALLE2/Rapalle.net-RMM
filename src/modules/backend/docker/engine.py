@@ -73,10 +73,11 @@ async def call(target: str, method: str, path: str, body=None, raw: bool = False
     else:
         from app import node_manager
         try:
+            node_manager.require_module(cid, "docker")
             res = await node_manager.command(cid, "docker-api", {"method": method, "path": full, "body": body,
                                                                  "raw": raw, "timeout": timeout}, timeout=timeout + 10)
         except node_manager.NodeError as e:
-            raise DockerError(f"Node: {e} (Node aktuell? „Node aktualisieren“)", 503)
+            raise DockerError(f"Node: {e}", 503)
         status, data = int(res["status"]), base64.b64decode(res["body"] or "")
     if status >= 400:
         try:

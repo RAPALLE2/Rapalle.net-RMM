@@ -132,6 +132,7 @@ const SYNC_PREFIXES = [
   "rmm_term_",         // Terminal-Einstellungen
   "rmm_notifications", // Benachrichtigungs-Center
   "rmm_bars:",         // Kopf-/Taskleiste automatisch ausblenden (bars.js)
+  "rmm_pve_never:",    // Proxmox-Einsortieren: "Nicht erneut fragen" (Modul proxmox)
 ];
 // Diese bleiben bewusst NUR im Browser (Sicherheit / gerätegebunden).
 const NEVER_SYNC = new Set([

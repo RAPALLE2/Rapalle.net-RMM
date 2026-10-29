@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "id": "agent-gateway",
+  "name": "Agent-Gateway (über Node)",
+  "version": "1.0.0",
+  "description": "Agents in internen Netzen ohne direkten Weg zum RMM verbinden sich mit einer Node; die Node reicht ihre Verbindung gebündelt an das Backend weiter, verarbeitet wird alles im Backend. Node-Modul je Node einzeln installieren und aktivieren (Port einstellbar, Standard 8765). Agent-Installation in diesem Netz dann mit der Adresse http://<IP-der-Node>:<Port> statt der Backend-Adresse.",
+  "author": "RAPALLE.net",
+  "category": "Netzwerk",
+  "icon": "🔀",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "hooks": { "startup": "on_startup" }
+}

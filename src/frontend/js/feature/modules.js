@@ -7,6 +7,8 @@
 
 import { esc, uiConfirm } from "../app/utils.js";
 import { moduleRequest as req, loadModules, getModules, reportModuleCrash } from "../app/modules.js";
+import { api } from "../app/api.js";
+import { state } from "../app/state.js";
 
 const STATUS = {
   enabled:  { label: "aktiv",        color: "#3ecf8e" },
@@ -125,6 +127,7 @@ export function renderModules(body, win) {
     const tabs = [["overview", "Übersicht"]];
     if (m.features.length) tabs.push(["features", "Funktionen"]);
     if (m.settings_schema.length || m.custom_settings_ui) tabs.push(["settings", "Einstellungen"]);
+    if ((m.parts || []).includes("node")) tabs.push(["nodes", "Nodes"]);
     tabs.push(["crashes", `Abstürze${m.crash_count ? ` (${m.crash_count})` : ""}`]);
     if (!tabs.some(([k]) => k === tab)) tab = "overview";
     root.innerHTML = `
@@ -144,7 +147,58 @@ export function renderModules(body, win) {
     if (tg) tg.onclick = async () => { tg.disabled = true; await (m.enabled ? disable(m.id) : enable(m.id)); };
     root.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { tab = b.dataset.tab; drawDetail(m); });
     const box = root.querySelector("#mod-tab");
-    ({ overview: tabOverview, features: tabFeatures, settings: tabSettings, crashes: tabCrashes }[tab])(box, m);
+    ({ overview: tabOverview, features: tabFeatures, settings: tabSettings, nodes: tabNodes, crashes: tabCrashes }[tab])(box, m);
+  }
+
+  // ------------------------------------------------------------------ Nodes
+  // Node-Teil dieses Moduls auf Nodes nachladen/entfernen. Absichtlich NICHT
+  // automatisch: auf einer Node liegen nur die Module, die dort gebraucht werden.
+  async function tabNodes(box, m) {
+    // Node-Teil dieses Moduls je Node installieren und EINZELN aktivieren. Absichtlich
+    // keine Sammel-Aktion: auf jeder Node ist jedes Modul aus, bis es dort aktiviert wird.
+    box.innerHTML = `<div style="color:var(--subtext)">Lade Nodes …</div>`;
+    let nodes = [];
+    try { nodes = (await api.listNodes()).nodes || []; }
+    catch (e) { box.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; return; }
+    const host = (n) => (state.clients || []).find((c) => c.id === n.client_id)?.hostname || n.hostname || n.client_id.slice(0, 8);
+    const busy = new Set();
+    const vtoo = (v) => { try { const p = String(v || "0").split(".").map(Number); return (p[0] || 0) * 1e6 + (p[1] || 0) * 1e3 + (p[2] || 0) < 3000; } catch { return false; } };
+    const draw = () => {
+      box.innerHTML = `
+        <p style="margin:0 0 10px;color:var(--subtext);font-size:12.5px">Den Node-Teil von <b>${esc(m.name)}</b> auf einzelnen Nodes installieren und <b>aktivieren</b>.
+          Nach dem Installieren ist das Modul aus; erst nach „Aktivieren“ ist die Node bei diesem Modul als Ziel wählbar.
+          ${m.enabled ? "" : "<b style='color:#f5a524'>Das Modul ist aus – erst aktivieren.</b>"}</p>
+        ${nodes.length ? `<table class="data-table" style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">Node</th><th style="text-align:left">Zustand</th><th style="text-align:left">Modul</th><th></th></tr></thead><tbody>
+          ${nodes.map((n) => { const mm = (n.modules || {})[m.id]; const on = n.online && n.state !== "off";
+            const act = mm && (mm.state === "running" || mm.state === "partial"); const old = vtoo(n.version);
+            return `<tr><td>🖧 <b>${esc(host(n))}</b>${old ? ` <span style="font-size:11px;color:#f5a524">Node veraltet – aktualisieren</span>` : n.update_available ? ` <span style="font-size:11px;color:#f5a524">Node-Update verfügbar</span>` : ""}</td>
+              <td>${on ? "<span style='color:#3ecf8e'>online</span>" : "<span style='color:var(--subtext)'>offline</span>"}</td>
+              <td>${!mm ? "<span style='color:var(--subtext)'>nicht installiert</span>"
+                : act ? `<span style="color:#3ecf8e">aktiv</span> · v${esc(mm.version || "?")}` : `<span style="color:#f5a524">aus</span> · v${esc(mm.version || "?")}`}</td>
+              <td style="text-align:right;white-space:nowrap">${busy.has(n.client_id) ? "⏳" : !on ? "" : !mm
+                ? `<button class="btn btn-sm" data-inst="${esc(n.client_id)}" ${m.enabled ? "" : "disabled"}>Installieren</button>`
+                : `${act ? `<button class="btn btn-sm" data-off="${esc(n.client_id)}">■ Deaktivieren</button>`
+                         : `<button class="btn btn-sm btn-primary" data-on="${esc(n.client_id)}" ${old ? "disabled title='Node erst aktualisieren'" : ""}>▶ Aktivieren</button>`}
+                   <button class="btn btn-sm" data-inst="${esc(n.client_id)}" ${m.enabled ? "" : "disabled"} title="Dateien neu übertragen">Neu einspielen</button>
+                   <button class="btn btn-sm btn-danger" data-rem="${esc(n.client_id)}">Entfernen</button>`}</td></tr>`; }).join("")}
+          </tbody></table>` : `<div style="color:var(--subtext)">Keine Nodes vorhanden. Eine Node richtest du in der Node-App ein.</div>`}`;
+      const run = async (cid, fn, ok) => {
+        busy.add(cid); draw();
+        try { await fn(); window.notify?.(ok, "success", 3000); }
+        catch (e) { window.notify?.(`${host(nodes.find((x) => x.client_id === cid) || { client_id: cid })}: ${e.message}`, "error", 8000); }
+        busy.delete(cid);
+        try { nodes = (await api.listNodes()).nodes || []; } catch { /* egal */ }
+        draw();
+      };
+      box.querySelectorAll("[data-inst]").forEach((b) => b.onclick = () => run(b.dataset.inst, () => api.nodeDeploy(b.dataset.inst, m.id), `${m.name}: auf Node installiert (aus)`));
+      box.querySelectorAll("[data-on]").forEach((b) => b.onclick = () => run(b.dataset.on, () => api.nodeModuleAction(b.dataset.on, m.id, "up"), `${m.name}: auf Node aktiviert`));
+      box.querySelectorAll("[data-off]").forEach((b) => b.onclick = () => run(b.dataset.off, () => api.nodeModuleAction(b.dataset.off, m.id, "down"), `${m.name}: auf Node deaktiviert`));
+      box.querySelectorAll("[data-rem]").forEach((b) => b.onclick = async () => {
+        if (!(await uiConfirm(`Node-Teil von „${m.name}“ von dieser Node entfernen?`, { okText: "Entfernen", danger: true }))) return;
+        run(b.dataset.rem, () => api.nodeRemoveModule(b.dataset.rem, m.id), `${m.name}: von Node entfernt`);
+      });
+    };
+    draw();
   }
 
   function row(k, v) { return `<tr><td style="padding:4px 14px 4px 0;color:var(--subtext);vertical-align:top;white-space:nowrap">${k}</td><td style="padding:4px 0">${v}</td></tr>`; }

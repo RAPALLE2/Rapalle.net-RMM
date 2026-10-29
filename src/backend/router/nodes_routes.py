@@ -81,6 +81,14 @@ def node_modules(user: dict = Depends(get_current_user)):
     return {"modules": modules.node_modules()}
 
 
+@router.get("/choices/{module_id}")
+def node_choices(module_id: str, user: dict = Depends(get_current_user)):
+    """Verbundene Nodes fuer die Auswahl "Backend oder Node" eines Moduls.
+    installed=False -> Node-Modul muss erst nachgeladen werden."""
+    return {"nodes": node_manager.node_choices(module_id, user),
+            "has_node_part": any(m["id"] == module_id for m in modules.node_modules())}
+
+
 @router.get("/{client_id}")
 async def get_node(client_id: str, user: dict = Depends(get_current_user)):
     _perm(user, client_id)

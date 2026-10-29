@@ -27,6 +27,14 @@ import importlib
 import os
 import sys
 
+# Speicher: glibc-Arenen begrenzen, BEVOR irgendein Thread entsteht (siehe app/memtrim.py)
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from app import memtrim as _memtrim
+    _memtrim.limit_arenas()
+except Exception:
+    pass
+
 # Eigenes Verzeichnis (src/backend/) IMMER in den Suchpfad legen. Wird main.py aus
 # einem anderen Arbeitsverzeichnis heraus gestartet - im Container z.B. durch
 # einen abweichenden WORKDIR -, findet Python das Paket "app" sonst nicht.

@@ -265,6 +265,7 @@ async def _node_disconnect(sid):
         return
     if _sid_by_client.get(cid) == sid:
         _sid_by_client.pop(cid, None)
+        _caps.pop(cid, None)
         _add_log(cid, f"{_ts()} Node getrennt")
         await _broadcast(cid)
         await modules.emit("node_offline", client_id=cid)
@@ -273,6 +274,10 @@ async def _node_disconnect(sid):
 async def _apply_report(cid: str, payload: dict) -> None:
     if not isinstance(payload, dict):
         return
+    _caps[cid] = {"version": str(payload.get("version") or _caps.get(cid, {}).get("version") or ""),
+                  "modules": {k: (v or {}).get("state") for k, v in (payload.get("modules") or {}).items()}
+                  if isinstance(payload.get("modules"), dict) else _caps.get(cid, {}).get("modules", {}),
+                  "ops": set(payload.get("ops") or [])}
     fields: dict[str, Any] = {"last_seen": int(time.time() * 1000)}
     if payload.get("version"):
         fields["version"] = str(payload["version"])[:40]
@@ -369,14 +374,20 @@ async def docker_install(client_id: str) -> Any:
     return await command(client_id, "docker-install", timeout=900)
 
 
-async def deploy_module(client_id: str, module_id: str, params: dict | None = None) -> Any:
-    """Schickt den Node-Teil eines Moduls (src/modules/node/<id>/) an die Node und installiert ihn."""
+async def deploy_module(client_id: str, module_id: str, params: dict | None = None,
+                        activate: bool = False) -> Any:
+    """Schickt den Node-Teil eines Moduls (src/modules/node/<id>/) an die Node und installiert ihn.
+    Seit Node 0.3.0 ist er danach AUS (je Node einzeln aktivieren). activate=True nur, wenn der
+    Benutzer genau diese Node fuer genau dieses Modul ausdruecklich gewaehlt hat (z.B. Cloudflare-Tunnel)."""
     if not modules.is_enabled(module_id):
         raise NodeError(f"Das Modul '{module_id}' ist nicht aktiv (Modul-App).")
     bundle = modules.node_bundle(module_id)
     if bundle is None:
         raise NodeError(f"Das Modul '{module_id}' hat keinen Node-Teil.")
     res = await command(client_id, "module-install", {"bundle": bundle, "params": params or {}}, timeout=300)
+    if activate and not (isinstance(res, dict) and res.get("start")):
+        res = {**(res if isinstance(res, dict) else {}),
+               "start": await command(client_id, "module-action", {"id": module_id, "action": "up", "data": {}}, timeout=180)}
     await _refresh_quietly(client_id)
     return res
 
@@ -410,6 +421,65 @@ def _ts() -> str:
 
 
 # =========================================================================
+# Welche Node kann was? (Backend ODER Node waehlen - nur Nodes mit Modul)
+# =========================================================================
+# Docker-API, WOL, Browser-, Mandanten- und Netzwerk-Abruf sind NODE-MODULE. Seit Node 0.3.0
+# ist jedes Modul nach dem Installieren AUS und wird je Node einzeln aktiviert. Eine Node ist
+# fuer ein Modul nur waehlbar, wenn es dort installiert UND aktiv (running) ist. Aeltere Nodes
+# mit fest eingebautem Docker/WOL zaehlen bewusst NICHT mehr (alles aus, bis aktiviert).
+_caps: dict[str, dict] = {}                     # client_id -> {version, modules{id: state}, ops}
+
+
+def _mod_state(client_id: str, module_id: str) -> str:
+    return ((_caps.get(client_id) or {}).get("modules") or {}).get(module_id) or ""
+
+
+def _too_old(client_id: str) -> bool:
+    """Node vor 0.3.0: kennt die Einzel-Aktivierung nicht -> erst aktualisieren."""
+    try:
+        v = (_caps.get(client_id) or {}).get("version") or "0"
+        return tuple(int(x) for x in v.split(".")[:3]) < (0, 3, 0)
+    except ValueError:
+        return False
+
+
+def node_has(client_id: str, module_id: str) -> bool:
+    """Ist das Node-Modul auf dieser (verbundenen) Node installiert UND aktiviert?"""
+    return not _too_old(client_id) and _mod_state(client_id, module_id) in ("running", "partial")
+
+
+def node_choices(module_id: str, user: dict | None = None) -> list[dict]:
+    """Alle verbundenen Nodes fuer eine Backend/Node-Auswahl:
+    [{id, name, online, installed, active, state}] - nur active=True ist waehlbar."""
+    from app.auth import can_access_client
+    out = []
+    for cid in list(_sid_by_client):
+        if user is not None and not can_access_client(user, cid):
+            continue
+        st = _mod_state(cid, module_id)
+        out.append({"id": cid, "name": (db.get_client(cid) or {}).get("hostname") or cid[:8],
+                    "online": True, "installed": bool(st), "active": node_has(cid, module_id), "state": st,
+                    "outdated": _too_old(cid)})
+    return sorted(out, key=lambda x: (not x["active"], x["name"].lower()))
+
+
+def require_module(client_id: str, module_id: str) -> None:
+    if client_id not in _sid_by_client:
+        raise NodeError("Die Node ist offline.")
+    name = (db.get_client(client_id) or {}).get("hostname") or client_id[:8]
+    if _too_old(client_id):
+        raise NodeError(f"Die Node {name} ist veraltet – bitte zuerst „Node aktualisieren“ und das Modul "
+                        f"„{module_id}“ danach einzeln aktivieren.")
+    st = _mod_state(client_id, module_id)
+    if not st:
+        raise NodeError(f"Auf der Node {name} ist das Modul „{module_id}“ nicht installiert. "
+                        f"Installieren und aktivieren: Node-App → Module oder Modul-App → {module_id} → Nodes.")
+    if not node_has(client_id, module_id):
+        raise NodeError(f"Das Modul „{module_id}“ ist auf der Node {name} nicht aktiviert – "
+                        f"in der Node-App oder Modul-App → {module_id} → Nodes aktivieren.")
+
+
+# =========================================================================
 # Schmale API fuer Module (ctx.nodes)
 # =========================================================================
 
@@ -428,8 +498,8 @@ class NodesAPI:
     def online(self) -> list[str]:
         return list(_sid_by_client)
 
-    async def deploy(self, client_id: str, params: dict | None = None):
-        return await deploy_module(client_id, self.module_id, params)
+    async def deploy(self, client_id: str, params: dict | None = None, activate: bool = False):
+        return await deploy_module(client_id, self.module_id, params, activate)
 
     async def remove(self, client_id: str):
         return await remove_module(client_id, self.module_id)

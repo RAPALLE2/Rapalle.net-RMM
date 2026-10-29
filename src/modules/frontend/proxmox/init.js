@@ -16,6 +16,7 @@ import { maybeShowBanner, openSuggestDialog } from "./suggest.js";
 let connected = new Set();
 let guestMap = {};
 let suggestions = [];
+let candidates = [];
 
 async function refresh() {
   try { connected = new Set((await preq("/clients")).clients.map((c) => c.client_id)); } catch { /* Modul aus / kein Zugriff */ }
@@ -23,7 +24,8 @@ async function refresh() {
     const g = await preq("/guest-map");
     guestMap = g.map || {};
     suggestions = g.suggestions || [];
-    maybeShowBanner(suggestions, refresh);
+    candidates = g.candidates || [];
+    maybeShowBanner(suggestions, refresh, { candidates });
   } catch { /* egal */ }
 }
 
@@ -37,6 +39,7 @@ function hostOf(entry) {
 }
 
 export function init() {
+  window.RMM_PVE_REFRESH = refresh;
   refresh();
   setInterval(refresh, 60000);
   window.addEventListener("rmm-client-updated", (e) => {
@@ -46,7 +49,7 @@ export function init() {
   });
   registerModuleApi("proxmox", { openDashboard, refresh, isConnected: (id) => connected.has(id),
                                  guestOf: (id) => guestMap[id] || null,
-                                 openSuggestions: () => openSuggestDialog(suggestions, refresh) });
+                                 openSuggestions: () => openSuggestDialog(suggestions, refresh, { candidates }) });
   registerClientAction("proxmox", {
     label(client) {
       const g = guestMap[client.id];

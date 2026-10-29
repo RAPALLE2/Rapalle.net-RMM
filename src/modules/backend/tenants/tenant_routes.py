@@ -36,6 +36,7 @@ class TenantBody(BaseModel):
     color: str = ""
     note: str = ""
     allow: list = []
+    via: str = ""          # "" = vom RMM-Server, sonst Node-ID (Node-Modul "tenants")
 
 
 def _norm_url(u: str) -> str:
@@ -74,6 +75,7 @@ def admin_create(body: TenantBody, user: dict = Depends(get_current_user)):
         t = {"id": tid, "name": body.name.strip()[:80], "url": _norm_url(body.url),
              "verify_tls": bool(body.verify_tls), "color": body.color.strip()[:16],
              "note": body.note.strip()[:300], "allow": _clean_allow(body.allow),
+             "via": body.via.strip()[:64],
              "created": int(time.time()), "created_by": user["username"]}
         d["tenants"][tid] = t
         return t
@@ -92,7 +94,7 @@ def admin_update(tid: str, body: TenantBody, user: dict = Depends(get_current_us
             return None
         t.update(name=body.name.strip()[:80] or t["name"], url=_norm_url(body.url) or t["url"],
                  verify_tls=bool(body.verify_tls), color=body.color.strip()[:16],
-                 note=body.note.strip()[:300], allow=_clean_allow(body.allow))
+                 note=body.note.strip()[:300], allow=_clean_allow(body.allow), via=body.via.strip()[:64])
         return t
     t = store.update(upd)
     if not t:

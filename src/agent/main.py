@@ -1844,6 +1844,121 @@ def _vpn_drop_stream(stream_id: str, notify: bool) -> None:
                                 "stream": stream_id})
 
 
+# ---------------------------------------------------------------------------
+# WireGuard-VPN (Modul "vpn"): Das Backend erzeugt die komplette Konfiguration
+# (Schluessel, Adresse, Host) und schickt sie hierher; der Agent wendet sie nur an.
+#   wg-join  {tunnel, peer, name, conf}   ->  wg-result {tunnel, peer, ok, error}
+#   wg-leave {tunnel, name}
+# Linux: wireguard-tools (wg-quick) noetig. Windows: WireGuard fuer Windows (Dienst).
+# Gleiche Logik wie modules/node/vpn/wgsys.py (hier kompakt, der Agent ist eine Datei).
+# ---------------------------------------------------------------------------
+_WG_NAME = re.compile(r"^[A-Za-z0-9_=+.-]{1,15}$")
+
+
+def _wg_conf_dir():
+    if IS_WINDOWS:
+        d = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Rapalle", "wireguard")
+    else:
+        d = "/etc/wireguard"
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _wg_exe():
+    if IS_WINDOWS:
+        p = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "WireGuard", "wireguard.exe")
+        return p if os.path.exists(p) else shutil.which("wireguard.exe")
+    return shutil.which("wg-quick")
+
+
+def _wg_run(cmd, timeout=90):
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def _wg_install():
+    """WireGuard beim ersten Tunnel nachladen (Agent laeuft als root/SYSTEM)."""
+    try:
+        if IS_WINDOWS:
+            if shutil.which("winget"):
+                _wg_run(["winget", "install", "-e", "--id", "WireGuard.WireGuard", "--silent",
+                         "--accept-package-agreements", "--accept-source-agreements"], 600)
+        elif shutil.which("apt-get"):
+            _wg_run(["apt-get", "install", "-y", "-q", "wireguard-tools"], 600)
+        elif shutil.which("dnf"):
+            _wg_run(["dnf", "install", "-y", "wireguard-tools"], 600)
+        elif shutil.which("pacman"):
+            _wg_run(["pacman", "-S", "--noconfirm", "wireguard-tools"], 600)
+    except Exception:
+        pass
+
+
+def _wg_up(name, conf):
+    exe = _wg_exe()
+    if not exe:
+        _wg_install()
+        exe = _wg_exe()
+    if not exe:
+        raise RuntimeError("WireGuard fehlt – " + ("WireGuard für Windows installieren" if IS_WINDOWS
+                                                  else "Paket wireguard-tools installieren"))
+    path = os.path.join(_wg_conf_dir(), name + ".conf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(conf)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if IS_WINDOWS:
+        _wg_run([exe, "/uninstalltunnelservice", name], 60)
+        code, out = _wg_run([exe, "/installtunnelservice", path])
+    else:
+        if os.path.exists("/sys/class/net/" + name):
+            _wg_run(["wg-quick", "down", name], 60)
+        code, out = _wg_run(["wg-quick", "up", name])
+    if code != 0:
+        raise RuntimeError(out.strip()[-400:] or "WireGuard-Fehler %d" % code)
+
+
+def _wg_down(name):
+    exe = _wg_exe()
+    if exe:
+        if IS_WINDOWS:
+            _wg_run([exe, "/uninstalltunnelservice", name], 60)
+        elif os.path.exists("/sys/class/net/" + name):
+            _wg_run(["wg-quick", "down", name], 60)
+    try:
+        os.remove(os.path.join(_wg_conf_dir(), name + ".conf"))
+    except OSError:
+        pass
+
+
+@sio.on("wg-join", namespace="/agent")
+async def on_wg_join(payload):
+    name = str(payload.get("name") or "")
+    res = {"tunnel": payload.get("tunnel"), "peer": payload.get("peer"), "ok": False, "error": ""}
+    try:
+        if not _WG_NAME.match(name):
+            raise RuntimeError("ungültiger Tunnelname")
+        await asyncio.to_thread(_wg_up, name, str(payload.get("conf") or ""))
+        res["ok"] = True
+        _print(f"[wg] Tunnel {name} verbunden")
+    except Exception as e:
+        res["error"] = str(e)
+        _print(f"[wg] Tunnel {name}: {e}")
+    await sio.emit("wg-result", res, namespace="/agent")
+
+
+@sio.on("wg-leave", namespace="/agent")
+async def on_wg_leave(payload):
+    name = str(payload.get("name") or "")
+    if _WG_NAME.match(name):
+        try:
+            await asyncio.to_thread(_wg_down, name)
+            _print(f"[wg] Tunnel {name} entfernt")
+        except Exception as e:
+            _print(f"[wg] Tunnel {name} entfernen: {e}")
+
+
 @sio.on("vpn-open", namespace="/agent")
 async def on_vpn_open(payload):
     """Neue Verbindung durch den Tunnel aufbauen."""

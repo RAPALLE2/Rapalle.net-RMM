@@ -9,12 +9,27 @@
 //   - all:      alle Ports 1-65535 (dauert länger)
 //   - custom:   frei angegebene Ports/Bereiche, z.B. "22,80,8000-8100"
 
+import { nodeHint } from "/js/app/nodechoice.js";
 import { api } from "/js/app/api.js";
 import { esc } from "/js/app/utils.js";
+
+// Auswahl "Backend oder Node" fuellen (Nodes nur mit nachgeladenem Node-Modul "network")
+function fillVia(sel, preset = "") {
+  api.nodeChoices("network").then((r) => {
+    for (const n of r.nodes || []) {
+      const o = document.createElement("option");
+      o.value = n.id; o.disabled = !n.active;
+      o.textContent = `🖧 Node ${n.name}${nodeHint(n)}`;
+      sel.appendChild(o);
+    }
+    if (preset) sel.value = preset;
+  }).catch(() => {});
+}
 import { t } from "/js/app/i18n.js";
 
 export function renderPortscan(body, win) {
   const presetIp = win.props?.ip || "";
+  setTimeout(() => { const v = body.querySelector(`#ps-via-${win.key}`); if (v) fillVia(v, win.props?.via || ""); }, 0);
 
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
@@ -26,6 +41,7 @@ export function renderPortscan(body, win) {
           <option value="all">${t("ps_mode_all")}</option>
           <option value="custom">${t("ps_mode_custom")}</option>
         </select>
+        <select id="ps-via-${win.key}" title="Von wo aus scannen?"><option value="">🖥 Vom Backend</option></select>
         <button class="btn-primary" id="ps-scan-${win.key}">🔍 ${t("ps_scan")}</button>
       </div>
       <div id="ps-custom-row-${win.key}" class="explorer-toolbar" style="display:none">
@@ -60,7 +76,7 @@ export function renderPortscan(body, win) {
     resultEl.innerHTML = "";
     scanBtn.disabled = true;
     try {
-      const res = await api.portScan(ip, mode, ports);
+      const res = await api.portScan(ip, mode, ports, body.querySelector(`#ps-via-${win.key}`).value);
       const scannedInfo = res.scanned ? ` (${res.scanned} ${t("ps_ports_checked")})` : "";
       if (!res.ports.length) {
         statusEl.textContent = t("ps_none") + scannedInfo;

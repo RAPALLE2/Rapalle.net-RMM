@@ -85,6 +85,9 @@ _SESSION_TTL = 3600.0
 # Domain und wären damit sowohl wirkungslos als auch ein Datenleck zwischen
 # zwei angemeldeten Benutzern.
 _jars: dict[str, http.cookiejar.CookieJar] = {}
+# Proxy-Sitzung -> Node-ID: Seiten werden dann UEBER DIESE NODE abgerufen (Node-Modul
+# "browser", Befehl "browser-http"); Cookies liegen dann auf der Node.
+_session_via: dict[str, str] = {}
 
 _MAX_BYTES = 25 * 1024 * 1024
 _TIMEOUT = 30
@@ -131,6 +134,7 @@ def _purge() -> None:
         _sessions.pop(token, None)
         _jars.pop(token, None)
         _session_insecure.pop(token, None)
+        _session_via.pop(token, None)
 
 
 def _check_session(token: str) -> str:
@@ -222,6 +226,8 @@ def _cert_problem(err: Exception) -> str:
     bei einem Netzwerkfehler wäre der Knopf nur ein Angebot, die Prüfung
     ohne Not abzuschalten.
     """
+    if isinstance(err, _NodeCertError):
+        return str(err)
     reason = getattr(err, "reason", err)
     if isinstance(reason, (ssl.SSLCertVerificationError, ssl.SSLError)):
         return str(reason)
@@ -563,12 +569,7 @@ def _decode_body(data: bytes, encoding: str) -> bytes:
     return data
 
 
-def _do_request(session: str, method: str, url: str, headers: dict,
-                body: bytes | None, insecure: bool):
-    """
-    Anfrage stellen (blockierend, läuft im Thread).
-    Rückgabe: (status, header-liste, rumpf, endgültige adresse)
-    """
+def _prepare_headers(method: str, url: str, headers: dict) -> dict:
     parsed = urlparse(url)
     send = {k: v for k, v in headers.items() if k.lower() not in _DROP_REQUEST}
     send.setdefault("User-Agent", _UA)
@@ -578,7 +579,43 @@ def _do_request(session: str, method: str, url: str, headers: dict,
     send["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
     if method not in ("GET", "HEAD"):
         send["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+    return send
 
+
+class _NodeCertError(Exception):
+    """Zertifikatsfehler beim Abruf ueber die Node (fuer _cert_problem)."""
+
+
+async def _node_request(session: str, node_id: str, method: str, url: str, headers: dict,
+                        body: bytes | None, insecure: bool):
+    """Wie _do_request, aber die Node holt die Seite in IHREM Netz."""
+    import base64
+    from app import node_manager
+    try:
+        node_manager.require_module(node_id, "browser")
+        res = await node_manager.command(node_id, "browser-http", {
+            "session": session, "method": method, "url": url,
+            "headers": _prepare_headers(method, url, headers),
+            "body": base64.b64encode(body).decode() if body and method not in ("GET", "HEAD") else "",
+            "insecure": insecure, "timeout": _TIMEOUT, "max_bytes": _MAX_BYTES}, timeout=_TIMEOUT + 15)
+    except node_manager.NodeError as e:
+        if "CERTIFICATE_VERIFY_FAILED" in str(e):
+            raise _NodeCertError(str(e))
+        raise RuntimeError(f"Node: {e}")
+    raw: dict = {}
+    for k, v in res.get("headers") or []:
+        raw[k] = v if k not in raw else raw[k]          # erster Wert gewinnt (Set-Cookie bleibt auf der Node)
+    data = _decode_body(base64.b64decode(res.get("body") or ""), raw.get("Content-Encoding", ""))
+    return int(res.get("status") or 200), raw, data, res.get("final") or url
+
+
+def _do_request(session: str, method: str, url: str, headers: dict,
+                body: bytes | None, insecure: bool):
+    """
+    Anfrage stellen (blockierend, läuft im Thread).
+    Rückgabe: (status, header-liste, rumpf, endgültige adresse)
+    """
+    send = _prepare_headers(method, url, headers)
     req = UrlRequest(url, data=body if method not in ("GET", "HEAD") else None,
                      headers=send, method=method)
     try:
@@ -620,8 +657,12 @@ def _pass_headers(raw: dict) -> dict:
 # Endpunkte
 # ==================================================================
 
+class SessionBody(BaseModel):
+    via: str = ""          # "" = RMM-Server, sonst Node-ID (Node-Modul "browser")
+
+
 @router.post("/session")
-def create_session(user: dict = Depends(get_current_user)):
+def create_session(body: SessionBody | None = None, user: dict = Depends(get_current_user)):
     """
     Kurzlebige Proxy-Sitzung anlegen.
 
@@ -636,7 +677,18 @@ def create_session(user: dict = Depends(get_current_user)):
     token = secrets.token_urlsafe(24)
     _sessions[token] = (user.get("username", ""), time.time() + _SESSION_TTL)
     _jars[token] = http.cookiejar.CookieJar()
-    return {"token": token, "ttl": int(_SESSION_TTL)}
+    via = (body.via if body else "") or ""
+    if via:
+        from app import node_manager
+        from app.auth import can_access_client
+        if not can_access_client(user, via):
+            raise HTTPException(404, "Node nicht gefunden")
+        try:
+            node_manager.require_module(via, "browser")
+        except node_manager.NodeError as e:
+            raise HTTPException(409, str(e))
+        _session_via[token] = via
+    return {"token": token, "ttl": int(_SESSION_TTL), "via": via}
 
 
 @router.api_route("/fetch",
@@ -667,9 +719,13 @@ async def fetch_page(request: Request, s: str = Query(...), url: str = Query(...
     headers = dict(request.headers)
 
     loop = asyncio.get_event_loop()
+    via = _session_via.get(s)
     try:
-        status, raw, data, final = await loop.run_in_executor(
-            None, _do_request, s, request.method, target, headers, body, insecure)
+        if via:
+            status, raw, data, final = await _node_request(s, via, request.method, target, headers, body, insecure)
+        else:
+            status, raw, data, final = await loop.run_in_executor(
+                None, _do_request, s, request.method, target, headers, body, insecure)
     except HTTPException:
         raise
     except Exception as e:
@@ -721,6 +777,10 @@ async def proxy_ws(ws: WebSocket, s: str = Query(...), url: str = Query(...)):
         target = _validate(url)
     except HTTPException:
         await ws.close(code=1008)
+        return
+    if _session_via.get(s):
+        # WebSockets laufen (noch) nicht ueber eine Node
+        await ws.close(code=1011)
         return
 
     try:

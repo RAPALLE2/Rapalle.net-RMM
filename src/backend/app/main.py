@@ -538,6 +538,11 @@ async def _uptime_monitor_engine():
 
 @api.on_event("startup")
 async def _start_background_tasks():
+    try:                                   # Arbeitsspeicher klein halten (app/memtrim.py)
+        from app import memtrim as _memtrim
+        _memtrim.start(_asyncio.get_running_loop())
+    except Exception as _e:
+        print(f"[startup] memtrim: {_e}")
     # Aktivierte Module laden. Ein Fehler betrifft NUR das jeweilige Modul.
     try:
         await _modules.load_enabled()

@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "proxmox",
   "name": "Proxmox VE",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Verbindet einen Agenten mit einer Proxmox-VE-Instanz (mehrere Agenten = mehrere Instanzen): eigenes Proxmox-Dashboard mit VMs, LXC-Containern, Storage, Benutzern, Nodes und Aufgaben; Gäste starten/stoppen, Snapshots, Backups, Konfiguration, Konsole und API-Explorer. Adresse lokal, eigene oder über das RMM-Relay (Tunnel durch den Agenten); Anmeldung per API-Token oder Benutzer + Passwort. Eigene Rechte pro Agent plus „Standard-Proxmox“.",
   "author": "RAPALLE.net",
   "category": "Virtualisierung",
@@ -18,6 +18,52 @@
   "hooks": {
     "startup": "on_startup",
     "shutdown": "on_shutdown",
-    "disable": "on_disable"
-  }
+    "disable": "on_disable",
+    "client_new": "on_client",
+    "client_online": "on_client"
+  },
+  "settings": [
+    {
+      "key": "auto_match",
+      "type": "bool",
+      "label": "Automatisch abgleichen",
+      "default": true,
+      "help": "Agenten regelmäßig mit den VMs/CTs der verbundenen Proxmox-Hosts vergleichen (auch kurz nach dem Hinzufügen/Umziehen eines Agenten)."
+    },
+    {
+      "key": "match_mac",
+      "type": "bool",
+      "label": "Abgleich über MAC-Adresse",
+      "default": true
+    },
+    {
+      "key": "match_ip",
+      "type": "bool",
+      "label": "Abgleich über IP-Adresse",
+      "default": true,
+      "help": "Nur wenn genau ein Gast diese IP hat."
+    },
+    {
+      "key": "match_hostname",
+      "type": "bool",
+      "label": "Abgleich über Hostname",
+      "default": true,
+      "help": "Hostname-Treffer sind immer nur ein Vorschlag."
+    },
+    {
+      "key": "auto_assign",
+      "type": "bool",
+      "label": "Sichere Treffer sofort zuordnen",
+      "default": false,
+      "help": "MAC-/IP-Treffer ohne Rückfrage als VM/CT einordnen und dem Head des Proxmox-Nodes unterordnen."
+    },
+    {
+      "key": "scan_minutes",
+      "type": "number",
+      "label": "Abgleich alle … Minuten",
+      "default": 10,
+      "min": 2,
+      "max": 1440
+    }
+  ]
 }

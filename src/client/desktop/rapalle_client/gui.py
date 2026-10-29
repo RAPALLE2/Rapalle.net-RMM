@@ -36,6 +36,11 @@ def resource(name: str) -> Path:
 class ClientApp:
     def __init__(self, minimized: bool = False):
         self.store = Store(default_data_dir())
+        # WireGuard-Tunnel aus dem RMM vollautomatisch einrichten/entfernen (vpn.py)
+        from . import vpn as _vpn
+        self.vpn = _vpn.VpnSync(self.store, default_data_dir(), lambda: self.api,
+                                on_status=lambda text: self.root.after(0, self._vpn_status, text),
+                                refresh=self._refresh_session)
         self.api: Api | None = None
         self.root = tk.Tk()
         self.root.title("RAPALLE.net RMM")
@@ -297,6 +302,20 @@ class ClientApp:
         btn("Fernbild (Remotedesktop) …", lambda: self.choose_client("Fernbild per Remotedesktop", lambda c: self.screen(c, "rdp"), online_only=False))
         btn("Fernbild (VNC) …", lambda: self.choose_client("Fernbild per VNC", lambda c: self.screen(c, "vnc"), online_only=False))
         ttk.Separator(f).pack(fill="x", pady=12)
+        # VPN: Tunnel, in denen ich Teilnehmer bin, automatisch einrichten, verbinden und bei Ablauf loeschen
+        self.v_vpn = tk.BooleanVar(value=bool(self.store.get("vpn_auto", True)))
+
+        def _vpn_toggle():
+            self.store.set(vpn_auto=bool(self.v_vpn.get()))
+            if self.v_vpn.get():
+                self.vpn.now()
+            else:
+                self.bg(self.vpn.remove_all, lambda *_: self._vpn_status("VPN-Automatik aus – Tunnel entfernt"))
+        ttk.Checkbutton(f, text="VPN-Tunnel automatisch verwalten", variable=self.v_vpn, command=_vpn_toggle).pack(anchor="w")
+        self.lbl_vpn = ttk.Label(f, text="VPN: wird geprüft …", style="Sub.TLabel")
+        self.lbl_vpn.pack(anchor="w", pady=(2, 8))
+        self.vpn.start()
+        ttk.Separator(f).pack(fill="x", pady=8)
         self.v_auto = tk.BooleanVar(value=autostart.is_enabled())
         ttk.Checkbutton(f, text="Mit der Anmeldung am Computer starten", variable=self.v_auto,
                         command=self.toggle_autostart).pack(anchor="w")
@@ -559,6 +578,11 @@ class ClientApp:
                 features.unmount_relay(self.store)
             except Exception:
                 pass
+            try:                                   # eigene VPN-Tunnel beim Abmelden entfernen
+                self.vpn.stop()
+                self.vpn.remove_all()
+            except Exception:
+                pass
             if dev:
                 try:
                     self.api.remove_device(dev)
@@ -570,6 +594,20 @@ class ClientApp:
             self.api = None
             self.show_login("Abgemeldet.")
         self.bg(work, done)
+
+    # ------------------------------------------------------------- VPN
+    def _vpn_status(self, text: str):
+        try:
+            if getattr(self, "lbl_vpn", None) is not None and self.lbl_vpn.winfo_exists():
+                self.lbl_vpn.config(text=text)
+        except Exception:
+            pass
+
+    def _refresh_session(self):
+        """Sitzung mit dem gespeicherten Geraetetoken erneuern (fuer Hintergrund-Abfragen)."""
+        token = self.store.load_token()
+        if self.api is not None and token:
+            self.api.session(token)
 
     # ------------------------------------------------------------- Updates
     def check_update(self, auto: bool):

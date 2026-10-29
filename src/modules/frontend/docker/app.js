@@ -78,6 +78,7 @@ export function renderDocker(body) {
       ${targets.map((t) => `<div style="padding:4px 10px;font-size:12px;display:flex;gap:6px;align-items:center">${stateDot(t.ok ? "running" : "dead")}
           <span style="flex:1">${esc(t.name)}</span><span style="color:var(--subtext)">${esc(t.version || (t.ok ? "" : "aus"))}</span></div>
           ${!t.ok && t.error ? `<div style="font-size:11px;color:var(--subtext);padding:0 10px 4px 24px">${esc(t.error)}</div>` : ""}
+          ${t.module_installed === false ? `<div style="font-size:11px;color:var(--warn);padding:0 10px 4px 24px">Docker-Modul auf dieser Node nicht installiert/aktiviert – Node-App → Module oder Modul-App → Docker → Nodes</div>` : ""}
           ${t.update_available ? `<div style="font-size:11px;color:var(--warn);padding:0 10px 4px 24px">Node aktualisieren!</div>` : ""}`).join("")}`;
     nav.querySelectorAll("[data-v]").forEach((el) => el.addEventListener("click", () => {
       const v = el.dataset.v;
@@ -466,7 +467,7 @@ export function renderDocker(body) {
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
         <div style="flex:1;min-width:160px"><label style="font-size:12px;color:var(--subtext)">Name</label><input data-name placeholder="z. B. wiki"></div>
         <div><label style="font-size:12px;color:var(--subtext)">Ziel</label><select data-target style="width:auto">${targets.map((t) =>
-          `<option value="${esc(t.target)}" ${t.ok ? "" : "disabled"}>${esc(t.name)}${t.ok ? "" : " (nicht bereit)"}</option>`).join("")}</select></div>
+          `<option value="${esc(t.target)}" ${t.ok ? "" : "disabled"}>${t.target === "local" ? "🖥 Backend – " : "🖧 "}${esc(t.name)}${t.ok ? "" : t.module_installed === false ? " (Modul nicht aktiviert)" : " (nicht bereit)"}</option>`).join("")}</select></div>
         <div><label style="font-size:12px;color:var(--subtext)">Compose-Quelle</label>
           <select data-source style="width:auto"><option value="inline">Eigene Compose (im RMM bearbeiten)</option><option value="file">Compose-Datei (im Projektordner)</option></select></div>
         <div data-filewrap style="display:none"><label style="font-size:12px;color:var(--subtext)">Datei im Projektordner</label>

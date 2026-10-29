@@ -7,7 +7,8 @@
 // bleiben erhalten. Wer welchen Mandanten sehen darf, stellt ein Admin (Recht
 // manage_tenants) in der Verwaltung ein. Die feinen Rechte liegen auf dem Mandanten.
 
-import { getToken } from "/js/app/api.js";
+import { nodeHint } from "/js/app/nodechoice.js";
+import { getToken, api } from "/js/app/api.js";
 import { state } from "/js/app/state.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { hasGlobalPerm } from "/js/app/state.js";
@@ -219,7 +220,10 @@ function tenantForm(t, dir, done) {
       <label>Farbe</label><input data-f="color" type="color" value="${esc(t.color || "#2dd4bf")}" style="width:60px;height:30px;padding:0">
       <label>Notiz</label><input data-f="note" value="${esc(t.note || "")}">
       <label>TLS prüfen</label><label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" data-f="verify_tls" ${t.verify_tls ? "checked" : ""}> Zertifikat des Mandanten prüfen</label>
+      <label>Verbindung über</label><select data-f="via"><option value="">🖥 Backend (RMM-Server)</option>${t.via ? `<option value="${esc(t.via)}" selected>🖧 Node (lädt …)</option>` : ""}</select>
     </div>
+    <div style="font-size:11.5px;color:var(--subtext);margin-top:6px">Über eine Node laufen Anmeldung und API-Aufrufe (z. B. Spaces) – nötig, wenn der Mandant nur im Netz der Node erreichbar ist.
+      Das eingebettete Dashboard lädt dein Browser weiterhin direkt von der Backend-URL.</div>
     <div style="font-weight:600;margin:12px 0 4px;font-size:12.5px">Sichtbar für (leer = alle)</div>
     <div style="display:flex;gap:6px;margin-bottom:6px"><input data-filter placeholder="Benutzer/Gruppe filtern" style="flex:1"></div>
     <div data-allow style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px"></div>
@@ -235,10 +239,26 @@ function tenantForm(t, dir, done) {
     $("[data-allow]").querySelectorAll("[data-a]").forEach((c) => c.addEventListener("change", () => { c.checked ? allow.add(c.dataset.a) : allow.delete(c.dataset.a); }));
   };
   $("[data-filter]").addEventListener("input", drawAllow); drawAllow();
+  // Nodes fuer "Verbindung über" (nur mit nachgeladenem Node-Modul "tenants" waehlbar)
+  api.nodeChoices("tenants").then((r) => {
+    const sel = $('[data-f="via"]');
+    sel.querySelectorAll("option:not([value=''])").forEach((o) => o.remove());
+    for (const n of r.nodes || []) {
+      const o = document.createElement("option");
+      o.value = n.id; o.disabled = !n.active && n.id !== t.via;
+      o.textContent = `🖧 Node ${n.name}${nodeHint(n)}`;
+      if (n.id === t.via) o.selected = true;
+      sel.appendChild(o);
+    }
+    if (t.via && !(r.nodes || []).some((n) => n.id === t.via)) {
+      const o = document.createElement("option"); o.value = t.via; o.selected = true; o.textContent = "🖧 Node (offline)"; sel.appendChild(o);
+    }
+  }).catch(() => {});
   $("[data-x]").addEventListener("click", () => ov.remove());
   $("[data-ok]").addEventListener("click", async () => {
     const payload = { name: $('[data-f="name"]').value.trim(), url: $('[data-f="url"]').value.trim(),
       color: $('[data-f="color"]').value, note: $('[data-f="note"]').value.trim(), verify_tls: $('[data-f="verify_tls"]').checked,
+      via: $('[data-f="via"]').value,
       allow: [...allow].map((x) => { const [type, id] = x.split(":"); return { type, id }; }) };
     try { if (ed) await tq(`/admin/${t.id}`, { method: "PUT", body: payload }); else await tq("/admin", { method: "POST", body: payload }); ov.remove(); done(); window.notify?.("Gespeichert", "success", 1500); }
     catch (e) { window.notify?.(e.message, "error", 6000); }

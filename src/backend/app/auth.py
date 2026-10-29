@@ -162,7 +162,11 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict:
 
 def require_admin(user: dict) -> None:
     """Kleine Hilfsfunktion: wirft einen Fehler, wenn der User kein Admin ist."""
-    if user["role"] != "admin":
+    # Voll-Admin auf JEDEM Weg (Rolle 'admin', globales Recht 'admin' - auch
+    # ueber eine Gruppe - oder Alt-Schluessel 'super_admin'). Frueher wurde nur
+    # die Rolle geprueft -> wer Admin ueber eine Gruppe war, kam z.B. nicht in
+    # Source -> Migration, obwohl alles andere ging.
+    if not is_super_admin(user):
         raise HTTPException(403, "Nur für Administratoren")
 
 

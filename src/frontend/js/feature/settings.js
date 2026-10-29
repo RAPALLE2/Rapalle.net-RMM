@@ -63,7 +63,13 @@ export function renderSettings(body, win) {
     if (activeTab === "general") renderGeneralTab(content);
     else if (activeTab === "users") renderUsersTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
-    else if (activeTab === "source") sourceCleanup = renderSource(content);
+    else if (activeTab === "source") {
+      // Source bringt keine eigenen Innenabstaende mit -> sonst klebt alles am Fensterrand
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "padding:14px 16px 18px;box-sizing:border-box";
+      content.appendChild(wrap);
+      sourceCleanup = renderSource(wrap);
+    }
   }
 
   // ---------------- BRANDING (Logos per Upload ersetzen) ----------------

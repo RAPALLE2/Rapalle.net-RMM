@@ -25,10 +25,21 @@ Optional per Umgebung: NODE_BACKEND_URL, NODE_CLIENT_ID, NODE_TOKEN.
 Node-Module (siehe src/modules/backend/example/GUIDE.md, Abschnitt "Node-Teil")
 -----------------------------------------------------------------------------
   kind "compose": docker-compose.yml wird mit `docker compose` verwaltet.
-  kind "python":  node_module.py mit start(ctx) / stop(ctx) / action(ctx, name, data).
+  kind "python":  node_module.py mit start(ctx) / stop(ctx) / action(ctx, name, data)
+                  und optional OPS = {"befehl": fn(ctx, data)} - eigene Befehle, die das
+                  Backend wie eingebaute aufrufen kann (z.B. "docker-api", "wol").
+
+Seit 0.3.0 startet KEIN Modul von selbst: nach dem Installieren ist es AUS und muss
+je Node einzeln aktiviert werden (Aktion "up" -> meta.activated). Module ohne diese
+ausdrueckliche Aktivierung (auch alle aus aelteren Versionen) bleiben beim Start aus.
+
+Seit 0.2.0 sind Docker-API, Wake-on-LAN, Seitenabruf (Browser) und Mandanten-Abruf
+NICHT mehr fest eingebaut, sondern Node-Module der jeweiligen RMM-Module (docker, wol,
+browser, tenants). Sie werden je Node einzeln (Node-App) oder gesammelt (Modul-App ->
+Register "Nodes") nachgeladen - so liegen auf einer Node nur die Dateien, die sie braucht.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 import asyncio
 import base64
@@ -229,6 +240,8 @@ class ModuleContext:
         self.data_dir = MODS / mid / "data"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.params = _read_meta(mid).get("params", {})
+        # Adresse des RMM-Backends (z.B. fuer Weiterleitungen wie das Agent-Gateway)
+        self.backend_url = load_config().get("backend_url", "")
 
     def log(self, msg: str) -> None:
         log(f"[{self.id}] {msg}")
@@ -263,6 +276,7 @@ async def module_install(data: dict) -> dict:
     mid = _valid_id(bundle.get("id"))
     params = data.get("params") or {}
     d = MODS / mid
+    was_active = bool(_read_meta(mid).get("activated")) if d.exists() else False
     if d.exists():                                   # Neu einspielen: alten Stand sauber stoppen
         try:
             await module_action({"id": mid, "action": "down"})
@@ -283,14 +297,17 @@ async def module_install(data: dict) -> dict:
     (d / ".env").write_text("\n".join(env_lines) + ("\n" if env_lines else ""), encoding="utf-8")
     _write_meta(mid, {"id": mid, "version": bundle.get("version"), "hash": bundle.get("hash"),
                       "manifest": bundle.get("manifest") or {}, "params": params,
-                      "desired": "up", "installed_at": int(time.time())})
-    log(f"Modul '{mid}' v{bundle.get('version')} installiert")
-    sec = _node_section(mid)
-    if sec.get("autostart", True):
+                      "desired": "up" if was_active else "down", "activated": was_active,
+                      "installed_at": int(time.time())})
+    log(f"Modul '{mid}' v{bundle.get('version')} installiert" + ("" if was_active else " (aus - bitte aktivieren)"))
+    # Kein Autostart mehr: jedes Modul wird je Node einzeln aktiviert. Nur ein beim
+    # Neu-Einspielen bereits aktiviertes Modul laeuft gleich wieder.
+    if was_active:
         try:
             return {"installed": True, "start": await module_action({"id": mid, "action": "up"})}
         except Exception as exc:
             return {"installed": True, "start_error": str(exc)}
+    return {"installed": True, "active": False}
     return {"installed": True}
 
 
@@ -308,10 +325,10 @@ async def module_action(data: dict) -> dict:
     if kind == "compose":
         if action == "up":
             code, out = await _compose(mid, "up", "-d", "--remove-orphans")
-            meta["desired"] = "up"
+            meta["desired"] = "up"; meta["activated"] = True
         elif action == "down":
             code, out = await _compose(mid, "down")
-            meta["desired"] = "down"
+            meta["desired"] = "down"; meta["activated"] = False
         elif action == "restart":
             code, out = await _compose(mid, "restart")
         elif action == "status":
@@ -327,14 +344,27 @@ async def module_action(data: dict) -> dict:
             raise RuntimeError(out[-600:] or f"docker compose endete mit {code}")
         return {"exit": code, "output": out[-600:]}
     if kind == "python":
-        if mid not in _python_modules:
-            _py_load(mid)
+        # Geladen == aktiv: nur "up"/"restart" laden das Modul (sonst waeren seine
+        # Befehle/OPS verfuegbar, obwohl es nicht aktiviert ist).
         if action == "up":
-            meta["desired"] = "up"; _write_meta(mid, meta)
+            if mid not in _python_modules:
+                _py_load(mid)
+            meta["desired"] = "up"; meta["activated"] = True; _write_meta(mid, meta)
             return {"result": await _py_call(mid, "start")}
         if action == "down":
-            meta["desired"] = "down"; _write_meta(mid, meta)
-            return {"result": await _py_call(mid, "stop")}
+            meta["desired"] = "down"; meta["activated"] = False; _write_meta(mid, meta)
+            res = await _py_call(mid, "stop") if mid in _python_modules else {"stopped": True}
+            _python_modules.pop(mid, None)           # gestoppt -> seine Befehle (OPS) sind weg
+            return {"result": res}
+        if action == "restart":
+            if mid not in _python_modules:
+                raise RuntimeError(f"Modul '{mid}' ist nicht aktiviert")
+            await _py_call(mid, "stop")
+            _py_load(mid)
+            return {"result": await _py_call(mid, "start")}
+        if action == "status":
+            return {"result": {"running": mid in _python_modules,
+                               "ops": sorted(getattr(_python_modules.get(mid), "OPS", {}) or {})}}
         return {"result": await _py_call(mid, "action", action, data.get("data") or {})}
     raise RuntimeError(f"Unbekannte Modulart '{kind}'")
 
@@ -387,7 +417,7 @@ async def module_list() -> dict:
             continue
         sec = meta.get("manifest", {}).get("node", {}) or {}
         entry = {"version": meta.get("version"), "kind": sec.get("kind", "compose"),
-                 "desired": meta.get("desired"), "state": "unknown"}
+                 "desired": meta.get("desired"), "activated": bool(meta.get("activated")), "state": "unknown"}
         if entry["kind"] == "compose":
             try:
                 st = await docker_status()
@@ -413,6 +443,15 @@ async def reconcile() -> None:
         return
     for d in sorted(MODS.iterdir()):
         meta = _read_meta(d.name)
+        if meta.get("desired") == "up" and not meta.get("activated"):
+            # aus aelterer Node-Version (Autostart) -> jetzt AUS, muss einzeln aktiviert werden
+            try:
+                await module_action({"id": d.name, "action": "down"})   # z.B. Compose-Container wirklich stoppen
+            except Exception:
+                meta["desired"] = "down"; meta["activated"] = False
+                _write_meta(d.name, meta)
+            log(f"Modul '{d.name}' ist aus - bitte in der Node-App/Modul-App aktivieren")
+            continue
         if meta.get("desired") == "up":
             try:
                 await module_action({"id": d.name, "action": "up"})
@@ -430,86 +469,32 @@ async def _full_report() -> dict:
         "version": __version__, "os": f"{platform.system()} {platform.release()}",
         "hostname": socket.gethostname(), "python": sys.version.split()[0],
         "docker": await docker_status(), "modules": await module_list(),
+        "ops": sorted(_module_ops()),            # Befehle aus Node-Modulen (seit 0.2.0)
     }
 
 
-# -------------------------------------------------------------------------
-# Docker-Engine-API durchreichen (Modul "docker" im RMM steuert damit die
-# Container dieses Nodes: Stacks, Start/Stopp, Logs, Statistik, Images ...)
-# -------------------------------------------------------------------------
-DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
+def _module_ops() -> dict:
+    """Befehle, die laufende python-Node-Module ueber OPS bereitstellen -> {op: (modul, fn)}"""
+    out = {}
+    for mid, mod in _python_modules.items():
+        for op, fn in (getattr(mod, "OPS", None) or {}).items():
+            if callable(fn):
+                out[str(op)] = (mid, fn)
+    return out
 
 
-def _docker_api_sync(method: str, path: str, body, raw: bool, timeout: float) -> dict:
-    import http.client
-
-    class _Conn(http.client.HTTPConnection):
-        def connect(self):
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            s.connect(DOCKER_SOCK)
-            self.sock = s
-
-    if not path.startswith("/") or ".." in path:
-        raise RuntimeError("Ungültiger Docker-Pfad")
-    conn = _Conn("localhost", timeout=timeout)
-    try:
-        payload = json.dumps(body).encode() if body is not None else None
-        conn.request(method, path, body=payload, headers={"Content-Type": "application/json"} if payload else {})
-        r = conn.getresponse()
-        data = r.read()
-        return {"status": r.status, "body": base64.b64encode(data).decode()}
-    finally:
-        conn.close()
-
-
-async def docker_api(data: dict) -> dict:
-    return await asyncio.get_running_loop().run_in_executor(
-        None, _docker_api_sync, str(data.get("method") or "GET").upper(), str(data.get("path") or ""),
-        data.get("body"), bool(data.get("raw")), float(data.get("timeout") or 60))
-
-
-def _magic_packet(mac: str) -> bytes:
-    """Magic Packet: 6x 0xFF + 16x die 6-Byte-MAC."""
-    hexmac = mac.replace(":", "").replace("-", "").replace(".", "").strip()
-    if len(hexmac) != 12:
-        raise ValueError(f"Ungueltige MAC: {mac}")
-    raw = bytes.fromhex(hexmac)
-    return b"\xff" * 6 + raw * 16
-
-
-def send_wol(data: dict) -> dict:
-    """Wake-on-LAN: Magic Packet an eine oder mehrere MACs senden.
-    data: {macs:[...], broadcasts:[...], port:int}. Sendet an alle angegebenen
-    Broadcast-Adressen (Standard 255.255.255.255) auf Port 9 (und 7)."""
-    macs = [m for m in (data.get("macs") or ([data["mac"]] if data.get("mac") else [])) if m]
-    if not macs:
-        raise ValueError("Keine MAC-Adresse angegeben")
-    ports = data.get("ports") or [int(data.get("port") or 9), 7]
-    targets = data.get("broadcasts") or ["255.255.255.255"]
-    sent = []
-    errors = []
-    for mac in macs:
-        try:
-            pkt = _magic_packet(mac)
-        except ValueError as e:
-            errors.append(str(e))
-            continue
-        for bc in targets:
-            for port in ports:
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
-                        sk.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                        sk.sendto(pkt, (bc, int(port)))
-                    sent.append(f"{mac} -> {bc}:{port}")
-                except OSError as e:
-                    errors.append(f"{mac} -> {bc}:{port}: {e}")
-    return {"sent": sent, "errors": errors, "ok_count": len(sent)}
+async def _run_module_op(op: str, data: dict):
+    entry = _module_ops().get(op)
+    if not entry:
+        raise RuntimeError(f"Befehl '{op}' ist auf dieser Node nicht verfuegbar - das zugehoerige "
+                           f"Node-Modul ist nicht installiert oder gestoppt (Node-App bzw. Modul-App -> Nodes).")
+    mid, fn = entry
+    if asyncio.iscoroutinefunction(fn):
+        return await fn(ModuleContext(mid), data)
+    return await asyncio.get_running_loop().run_in_executor(None, fn, ModuleContext(mid), data)
 
 
 async def handle(op: str, data: dict):
-    if op == "wol":
-        return send_wol(data)
     if op == "ping":
         return {"pong": True, "time": int(time.time())}
     if op == "status":
@@ -526,14 +511,12 @@ async def handle(op: str, data: dict):
         return await module_action(data)
     if op == "module-list":
         return await module_list()
-    if op == "docker-api":
-        return await docker_api(data)
     if op == "logs":
         try:
             return {"log": LOG_FILE.read_text(encoding="utf-8")[-20000:]}
         except OSError:
             return {"log": ""}
-    raise RuntimeError(f"Unbekannter Befehl: {op}")
+    return await _run_module_op(op, data)
 
 
 @sio.on("node-cmd", namespace="/node")

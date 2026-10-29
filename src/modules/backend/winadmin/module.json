@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "winadmin",
   "name": "Windows-Verwaltung",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Für Windows-Maschinen: Registry-Editor (lesen/schreiben/löschen, Recht „Registry bearbeiten“ je Client – auch im Standard-Client) und Steuerung der automatischen Windows-Updates (aus-/einschalten, Recht „Windows-Automatik-Updates steuern“). Installiert wird weiterhin über die Update-/Patch-Funktion. Fügt dem Agent-Panel die Knöpfe „Registry“ und „Windows-Updates“ hinzu.",
   "author": "RAPALLE.net",
   "category": "System",

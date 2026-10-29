@@ -8,6 +8,7 @@ import { state } from "/js/app/state.js";
 import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { bar, dot, fmtBytes, fmtUptime, pct, preq, STATUS } from "./common.js";
 import { openConnectionDialog, showHelp } from "./connect.js";
+import { openSuggestDialog } from "./suggest.js";
 
 export function renderProxmox(body, win) {
   const cid = win?.props?.clientId;
@@ -402,27 +403,32 @@ async function renderDashboard(root, cid, initialGuest = null) {
     const when = gm.scanned?.[cid];
     pane.innerHTML = `
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-        <p style="color:var(--subtext);margin:0;flex:1">Agenten, die in VMs/Containern dieses Proxmox laufen – erkannt über MAC-Adresse bzw. Hostname.
-          Abgleich automatisch alle 10 Minuten${when ? `, zuletzt ${new Date(when * 1000).toLocaleTimeString()}` : ""}.</p>
-        <button class="btn-primary btn-sm" data-scan>🔍 Jetzt abgleichen</button></div>
+        <p style="color:var(--subtext);margin:0;flex:1">Agenten, die in VMs/Containern dieses Proxmox laufen – erkannt über MAC-Adresse, IP-Adresse bzw. Hostname
+          (Methoden, Intervall und „sichere Treffer sofort zuordnen“ in den Modul-Einstellungen)${when ? `. Zuletzt abgeglichen ${new Date(when * 1000).toLocaleTimeString()}` : ""}.
+          Gäste werden dem <b>Head</b> ihres Proxmox-Nodes untergeordnet.</p>
+        ${sug.length ? `<button class="btn btn-sm" data-sort>🧭 Einsortieren / Head wählen</button>` : ""}
+        <button class="btn btn-primary btn-sm" data-scan>🔍 Jetzt abgleichen</button></div>
       ${sug.length ? `<h4 style="margin:6px 0">Vorschläge (${sug.length})</h4>${sug.map((x) => `
         <div data-s="${esc(x.client_id)}" style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
-          <span>${x.type === "qemu" ? "🖥" : "📦"}</span><span style="flex:1"><b>${esc(x.client_name)}</b> → ${x.type === "qemu" ? "VM" : "CT"} ${x.vmid} „${esc(x.name)}“
+          <span>${x.type === "qemu" ? "🖥" : "📦"}</span><span style="flex:1"><b>${esc(x.client_name)}</b> → ${x.type === "qemu" ? "VM" : "CT"} ${x.vmid} „${esc(x.name)}“ · Node ${esc(x.node)} · Head ${esc(x.head_name || "")}
           <span style="color:var(--subtext);font-size:12px">(${esc(x.reason)})</span></span>
-          <button class="btn btn-sm" data-ign>Nein</button><button class="btn-primary btn-sm" data-acc>Übernehmen</button></div>`).join("")}` : ""}
+          <button class="btn btn-sm" data-ign>Nein</button><button class="btn btn-primary btn-sm" data-acc>Übernehmen</button></div>`).join("")}` : ""}
       <h4 style="margin:14px 0 6px">Zugeordnet (${linked.length})</h4>
-      ${linked.length ? `<table class="data-table" style="width:100%"><thead><tr><th style="text-align:left">Agent</th><th style="text-align:left">Gast</th><th>Node</th><th></th></tr></thead><tbody>
+      ${linked.length ? `<table class="data-table" style="width:100%"><thead><tr><th style="text-align:left">Agent</th><th style="text-align:left">Gast</th><th>Node</th><th style="text-align:left">Head</th><th></th></tr></thead><tbody>
         ${linked.map(([acid, m]) => `<tr><td>🔗 <b>${esc(name(acid))}</b></td><td>${m.type === "qemu" ? "VM" : "CT"} ${m.vmid} „${esc(m.name || "")}“</td><td>${esc(m.node)}</td>
+          <td>${esc(name((state.clients || []).find((c) => c.id === acid)?.parent_client_id || ""))}</td>
           <td style="text-align:right"><button class="btn-tool" data-unlink="${esc(acid)}" title="Zuordnung aufheben">✕</button></td></tr>`).join("")}</tbody></table>`
         : `<div style="color:var(--subtext)">Noch keine Agenten zugeordnet.</div>`}`;
     pane.querySelector("[data-scan]").addEventListener("click", async (e) => {
       e.target.disabled = true; e.target.textContent = "⏳ Gleiche ab …";
       try { const r = await preq("/scan", { method: "POST", body: { host: cid } });
         const x = Object.values(r.results)[0] || {};
-        window.notify?.(x.error ? `Abgleich: ${x.error}` : `${x.found} Agent(en) erkannt, ${x.new} neu`, x.error ? "error" : "success");
+        window.notify?.(x.error ? `Abgleich: ${x.error}` : `${x.found} Agent(en) erkannt, ${x.new} neu${x.assigned ? `, ${x.assigned} automatisch zugeordnet` : ""}`, x.error ? "error" : "success");
       } catch (err2) { window.notify?.(err2.message, "error"); }
       drawMatch(); window.RMM_PVE_REFRESH?.();
     });
+    pane.querySelector("[data-sort]")?.addEventListener("click", () =>
+      openSuggestDialog(sug, () => { drawMatch(); window.RMM_PVE_REFRESH?.(); }, { candidates: gm.candidates || [] }));
     pane.querySelectorAll("[data-s]").forEach((row) => {
       const go = async (what) => {
         try { const r = await preq(`/suggestions/${encodeURIComponent(row.dataset.s)}/${what}`, { method: "POST" });

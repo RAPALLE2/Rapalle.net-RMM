@@ -126,8 +126,9 @@ export function renderAd(body) {
 
 async function drawConns(pane, loadConns, onChange) {
   let cs; try { cs = await loadConns(); } catch { cs = []; }
-  pane.innerHTML = `
-    <div style="display:flex;gap:8px;margin-bottom:10px"><button class="btn-primary btn-sm" data-add>＋ AD-Verbindung</button></div>
+  pane.innerHTML = `<div style="padding:20px 26px;max-width:1200px;margin:0 auto">
+    <h1 style="margin:0 0 12px;font-size:24px">Verbindungen</h1>
+    <div style="display:flex;gap:8px;margin-bottom:12px"><button class="btn btn-primary btn-sm" data-add>＋ AD-Verbindung</button></div>
     ${cs.length ? cs.map((c) => `
       <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:8px"><b>${esc(c.name)}</b>
@@ -139,7 +140,7 @@ async function drawConns(pane, loadConns, onChange) {
         <div style="font-size:12px;color:var(--subtext);margin-top:4px">Basis: <code>${esc(c.base_dn || "")}</code> · Bind: ${esc(c.bind_user || "—")}
           · Passwort nur verschlüsselt: ${c.pw_requires_tls ? "ja" : "<span style='color:var(--warn,#d97706)'>nein</span>"}</div>
         <div data-testres="${esc(c.id)}" style="font-size:12px;margin-top:4px"></div>
-      </div>`).join("") : `<div style="color:var(--subtext)">Noch keine Verbindungen.</div>`}`;
+      </div>`).join("") : `<div style="color:var(--subtext)">Noch keine Verbindungen.</div>`}</div>`;
   pane.querySelector("[data-add]").addEventListener("click", () => connDialog(null, () => drawConns(pane, loadConns, onChange)));
   pane.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", async () => {
     const c = cs.find((x) => x.id === b.dataset.edit); connDialog(c, () => drawConns(pane, loadConns, onChange));
@@ -565,15 +566,16 @@ async function assignGroupDialog(userDn, after) {
 
 // ============================================================ Massen-Import
 function drawBulk(pane) {
-  pane.innerHTML = `
+  pane.innerHTML = `<div style="padding:20px 26px;max-width:1200px;margin:0 auto;box-sizing:border-box">
+    <h1 style="margin:0 0 10px;font-size:24px">Massen-Import</h1>
     <p style="color:var(--subtext);margin:0 0 8px">CSV mit Kopfzeile. Spalten: <code>sam,displayName,givenName,sn,mail,password,ou</code>
       (nur <code>sam</code> ist Pflicht; <code>ou</code> optional je Zeile, sonst die unten gewählte).</p>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
       <label style="font-size:12px;color:var(--subtext)">Standard-OU</label><select data-ou style="min-width:240px">${ouOptions()}</select>
       <label style="font-size:12.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" data-en checked> aktiviert anlegen</label></div>
-    <textarea data-csv rows="10" style="width:100%;font-family:var(--mono,monospace);font-size:12px" placeholder="sam,displayName,givenName,sn,mail,password&#10;mmuster,Max Muster,Max,Muster,max@firma.de,Start!2026&#10;eschmidt,Eva Schmidt,Eva,Schmidt,eva@firma.de,Start!2026"></textarea>
-    <div style="margin-top:8px"><button class="btn-primary btn-sm" data-go>Import starten</button></div>
-    <div data-res style="margin-top:10px;font-size:12.5px"></div>`;
+    <textarea data-csv rows="10" style="width:100%;box-sizing:border-box;font-family:var(--mono,monospace);font-size:12px" placeholder="sam,displayName,givenName,sn,mail,password&#10;mmuster,Max Muster,Max,Muster,max@firma.de,Start!2026&#10;eschmidt,Eva Schmidt,Eva,Schmidt,eva@firma.de,Start!2026"></textarea>
+    <div style="margin-top:10px"><button class="btn btn-primary btn-sm" data-go>Import starten</button></div>
+    <div data-res style="margin-top:10px;font-size:12.5px"></div></div>`;
   pane.querySelector("[data-go]").addEventListener("click", async () => {
     const csv = pane.querySelector("[data-csv]").value.trim();
     if (!csv) { window.notify?.("CSV fehlt", "warning"); return; }

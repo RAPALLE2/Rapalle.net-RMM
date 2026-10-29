@@ -55,20 +55,22 @@ services:
       # links = Port auf dem Host (im Browser), rechts = Port im Container.
       # Beide über RMM_PORT steuerbar; nach Änderung "docker compose up -d".
       - "${RMM_PORT:-4000}:${RMM_PORT:-4000}"
-      # WireGuard-Endpunkt (UDP!). Der Tunnel wird in reinem Python im
-      # Backend abgewickelt - es braucht weder das Kernel-Modul noch
-      # NET_ADMIN. Ohne diese Freigabe erreicht kein VPN-Client den Server.
-      - "${VPN_PORT:-51820}:${VPN_PORT:-51820}/udp"
-      # Relay: Bringt Benutzer und Node zusammen, wenn beide hinter NAT
-      # sitzen. Ohne diesen Port laeuft alles ueber die Agent-Verbindung -
-      # das funktioniert auch, ist aber deutlich langsamer.
-      - "${VPN_RELAY_PORT:-51821}:${VPN_RELAY_PORT:-51821}/udp"
+      # Modul "VPN (WireGuard)" mit dem BACKEND als Host: UDP-Ports der Tunnel
+      # (je Tunnel einer, ab 51820 aufsteigend). Fuer mehrere gleichzeitige Tunnel
+      # den Bereich vergroessern, z.B. "51820-51829:51820-51829/udp".
+      # Ist eine Node der Host, braucht es hier nichts.
+      - "${VPN_PORTS:-51820-51824}:${VPN_PORTS:-51820-51824}/udp"
       # RMM-Konsole per SSH (Modul "RMM-Konsole", Einstellung "SSH-Zugang"):
       #   ssh <benutzer>@<server> -p 2222
       # Links = Port auf dem Host (frei waehlbar ueber SSH_PORT), rechts = Port im
       # Container = Modul-Einstellung "SSH-Port" (Standard 2222). Solange SSH im
       # Modul aus ist, lauscht hier nichts.
       - "${SSH_PORT:-2222}:2222"
+
+    # Modul "VPN (WireGuard)" mit dem Backend als Host: Weiterleitung zwischen den
+    # Teilnehmern (NET_ADMIN und /dev/net/tun stehen weiter unten).
+    sysctls:
+      - net.ipv4.ip_forward=1
 
     volumes:
       # Der komplette Projektcode liegt als Bind-Mount im Container.
@@ -127,8 +129,8 @@ services:
       - NET_RAW
       - NET_ADMIN
 
-    # TUN-Geraet fuer wireguard-go. Ohne diese Zeile faellt das VPN auf die
-    # eigene Python-Umsetzung zurueck (weniger erprobt).
+    # TUN-Geraet fuer wireguard-go (Modul "VPN", falls der Wirt kein
+    # Kernel-WireGuard hat).
     #
     # Fehlt /dev/net/tun auf dem Wirt, einmalig laden:
     #     sudo modprobe tun

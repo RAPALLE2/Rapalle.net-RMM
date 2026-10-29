@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "vpn",
+  "name": "VPN (WireGuard)",
+  "version": "1.0.0",
+  "description": "WireGuard-Tunnel für Benutzer, Agents, Nodes und das Backend. Host ist das Backend oder eine beliebige Node (Node-Modul „vpn“ einzeln aktivieren). Virtuelles Netz oder Zugang ins reelle Netz des Hosts – jeder Teilnehmer mit eigener IP (Proxy-ARP) oder alle hinter der IP des Hosts (NAT). Laufzeit wie beim Relay, Tunnel und Teilnehmer jederzeit verlängern, hinzufügen oder verfallen lassen. Konfigurationsdateien zum Herunterladen (auch als QR-Code); die Client-App richtet Tunnel vollautomatisch ein und entfernt sie bei Ablauf. Rechte: „VPN benutzen“, „VPN unbegrenzt“ (Benutzer) sowie „VPN-Tunnel ausstellen“ / „ohne Ablaufzeit“ je Client oder im Standard-Client.",
+  "author": "RAPALLE.net",
+  "category": "Netzwerk",
+  "icon": "🛡️",
+  "requires": [],
+  "pip": ["qrcode"],
+  "entry": "module",
+  "routers": ["vpn_routes"],
+  "hooks": { "startup": "on_startup", "client_online": "on_client", "client_new": "on_client" },
+  "settings": [
+    {"key": "max_hours", "type": "number", "label": "Höchstlaufzeit ohne „VPN unbegrenzt“ (Stunden)", "default": 168, "min": 1, "max": 8760},
+    {"key": "pool", "type": "string", "label": "Adressbereich für virtuelle Netze", "default": "10.77.0.0/16", "help": "Jeder Tunnel bekommt daraus ein eigenes /24."},
+    {"key": "base_port", "type": "number", "label": "Erster UDP-Port je Host", "default": 51820, "min": 1024, "max": 65000},
+    {"key": "public_host", "type": "string", "label": "Öffentliche Adresse des Backends", "default": "", "help": "Hostname/IP, unter der Teilnehmer das Backend als VPN-Host erreichen (leer = Adresse des Dashboards)."}
+  ]
+}

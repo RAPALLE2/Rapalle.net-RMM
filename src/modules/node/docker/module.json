@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "docker",
+  "name": "Docker (Node-Teil)",
+  "version": "1.0.0",
+  "node": {
+    "kind": "python",
+    "requires_docker": true,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  }
+}

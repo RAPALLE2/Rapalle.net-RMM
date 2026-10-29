@@ -5,7 +5,9 @@
 #       bekannten IP (x.y.z.255), sonst 255.255.255.255.
 # Absender: "backend" (vom RMM-Server, nur sinnvoll wenn im selben LAN/Broadcast
 #           erreichbar), eine Node-ID (Node sendet im Netz des Ziels - empfohlen),
-#           oder "auto" (Node bevorzugt, sonst Backend).
+#           "proxmox" (Agent ist einer Proxmox-VM/CT zugeordnet -> Gast direkt ueber
+#           die Proxmox-API starten, kein WOL noetig) oder "auto"
+#           (Proxmox bevorzugt, dann Node, sonst Backend).
 from __future__ import annotations
 
 import socket
@@ -64,16 +66,49 @@ def _backend_send(macs: list[str], broadcasts: list[str], port: int) -> dict:
 
 
 def _online_nodes() -> list[str]:
+    """Verbundene Nodes, auf denen das Node-Modul "wol" nachgeladen ist."""
     try:
-        from app.node_manager import _sid_by_client
-        return list(_sid_by_client.keys())
+        from app.node_manager import _sid_by_client, node_has
+        return [n for n in _sid_by_client.keys() if node_has(n, "wol")]
     except Exception:
         return []
 
 
-async def wake(cid: str, via: str | None = None) -> dict:
+def _pve():
+    """Proxmox-Modul (power.py) oder None, wenn das Modul aus ist."""
+    try:
+        from app import modules
+        return modules.use("proxmox", "power")
+    except Exception:
+        return None
+
+
+def proxmox_info(cid: str, user: dict | None) -> dict | None:
+    """Zuordnung zu einer Proxmox-VM/CT (fuer Status + Dialog) oder None."""
+    pw = _pve()
+    g = pw.guest_of(cid) if pw else None
+    if not g:
+        return None
+    return {"host": g["host"], "host_name": g["host_name"], "node": g["node"], "type": g["type"],
+            "vmid": g["vmid"], "name": g.get("name") or "",
+            "may_start": bool(user and pw.may_start(user, cid))}
+
+
+async def wake(cid: str, via: str | None = None, user: dict | None = None) -> dict:
     """Weckt den PC. Rueckgabe: {ok, via, sent, errors, macs}."""
     cfg = store.get(cid)
+    via = via or cfg["via"] or "auto"
+    # VM/CT in Proxmox: direkt ueber Proxmox starten (braucht kein WOL/keine MAC)
+    if via in ("proxmox", "auto"):
+        info = proxmox_info(cid, user)
+        if info and info["may_start"]:
+            import asyncio
+            pw = _pve()
+            return await asyncio.get_running_loop().run_in_executor(None, pw.start, user, cid)
+        if via == "proxmox":
+            raise ValueError("Dieses Gerät ist keiner Proxmox-VM/-CT zugeordnet oder dir fehlt "
+                             "das Recht „Gäste ein-/ausschalten“ am Proxmox-Host."
+                             if info is None or not info["may_start"] else "Proxmox nicht verfügbar.")
     if not cfg["enabled"]:
         raise ValueError("Wake-on-LAN ist für dieses Gerät nicht aktiviert.")
     macs = known_macs(cid)
@@ -82,7 +117,6 @@ async def wake(cid: str, via: str | None = None) -> dict:
                          "(der Agent meldet sie automatisch, sobald er einmal online war).")
     broadcasts = _broadcasts(cid)
     port = cfg["port"]
-    via = via or cfg["via"] or "auto"
 
     async def via_node(node_id: str) -> dict:
         from app.node_manager import command
@@ -96,7 +130,12 @@ async def wake(cid: str, via: str | None = None) -> dict:
     if via not in ("auto", "backend"):
         # bestimmte Node
         if via not in nodes:
-            raise ValueError("Die gewählte Node ist offline.")
+            from app.node_manager import require_module, NodeError
+            try:
+                require_module(via, "wol")               # liefert die passende Meldung (offline/nicht installiert/aus)
+            except NodeError as e:
+                raise ValueError(str(e))
+            raise ValueError("Die gewählte Node ist nicht verfügbar.")
         r = await via_node(via)
         return {"ok": True, "macs": macs, **r}
     # auto: bevorzugt eine Node (am besten die des Ziel-LANs / der Host), sonst Backend

@@ -17,6 +17,7 @@ FROM python:3.12-slim
 # --- Grundeinstellungen ------------------------------------------------------
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    MALLOC_ARENA_MAX=2 \
     PIP_NO_CACHE_DIR=1 \
     PIP_ROOT_USER_ACTION=ignore \
     TZ=Europe/Berlin

@@ -7,10 +7,21 @@
     "kind": "compose",
     "compose": "docker-compose.yml",
     "requires_docker": true,
-    "autostart": true,
-    "actions": ["up", "down", "restart", "status", "logs"],
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status",
+      "logs"
+    ],
     "params": [
-      { "key": "tunnel_token", "label": "Tunnel-Token (setzt das Modul selbst)", "type": "secret", "default": "" }
+      {
+        "key": "tunnel_token",
+        "label": "Tunnel-Token (setzt das Modul selbst)",
+        "type": "secret",
+        "default": ""
+      }
     ]
   }
 }

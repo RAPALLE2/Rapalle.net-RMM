@@ -29,10 +29,11 @@
 //     nicht anzeigen. Dafür gibt es unten die Erkennung mit dem Hinweis,
 //     die Seite einmal in einem echten Tab zu öffnen und das Zertifikat
 //     dort zu bestätigen. Danach lädt sie auch im Fenster.
+import { nodeHint } from "/js/app/nodechoice.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { state } from "/js/app/state.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
-import { api } from "/js/app/api.js";
+import { api, getToken } from "/js/app/api.js";
 // t() unter Alias: in dieser Datei ist "t" bereits als lokaler
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "/js/app/i18n.js";
@@ -93,7 +94,8 @@ export function renderWebBrowser(body, win) {
              öffnen, die nur im Netz der Node erreichbar sind. -->
         <select id="wb-via" title="Über welchen Weg wird geladen?"
           style="max-width:190px">
-          <option value="">Direkt</option>
+          <option value="">Direkt (dein Browser)</option>
+          <option value="backend">🖥 Über Backend (RMM-Server)</option>
         </select>
         <button class="btn" id="wb-save" title="${tr("u_diese_seite_als_interne_app_speich")}">⭐ Als App</button>
         <button class="btn" id="wb-ext" title="${tr("u_in_neuem_browser_tab_offnen")}">🔗</button>
@@ -156,7 +158,7 @@ export function renderWebBrowser(body, win) {
     if ((frame.getAttribute("src") || "") === "about:blank") return;
     loaded = true;
     clearTimeout(loadTimer);
-    hint.innerHTML = tr("wb_hint_direct");
+    if (!body.querySelector("#wb-via")?.value) hint.innerHTML = tr("wb_hint_direct");
   });
 
   function navigate(raw, pushHistory = true) {
@@ -173,7 +175,7 @@ export function renderWebBrowser(body, win) {
     updateNav();
 
     const via = body.querySelector("#wb-via").value;
-    if (via) { navigateViaNode(via, url); return; }
+    if (via) { navigateVia(via, url); return; }
 
     // Direkt laden. Kein Umweg, keine Umschreibung - die Seite bekommt
     // genau das, was sie in einem normalen Tab auch bekäme.
@@ -181,63 +183,62 @@ export function renderWebBrowser(body, win) {
     watchLoad(url);
   }
 
-  // ---------------- Weg über eine Node (Reverse Proxy) ----------------
-  // Die Node holt die Seite in ihrem Netz und schickt sie zurück. Der
-  // iframe bekommt den Inhalt über srcdoc statt über eine Adresse - eine
-  // Adresse gäbe es hier nicht, die Seite existiert für diesen Browser ja
-  // gar nicht. Ein eingefügtes <base> sorgt dafür, dass relative Links,
-  // Bilder und Stylesheets weiterhin auf den richtigen Host zeigen.
-  async function navigateViaNode(clientId, url) {
+  // ---------------- Weg über Backend oder Node (Seitenproxy) ----------------
+  // "backend": der RMM-Server holt die Seite (Seiten im Netz des Servers).
+  // Node-ID:  die Node holt sie in IHREM Netz (Node-Modul "browser" muss auf der
+  //           Node nachgeladen sein). In beiden Faellen schreibt das Backend die
+  //           Seite um, damit Links, Bilder, Formulare und Anmeldungen weiter ueber
+  //           denselben Weg laufen. Je Weg eine Proxy-Sitzung (eigene Cookies).
+  const proxySessions = {};
+  async function proxySession(via) {
+    if (proxySessions[via]) return proxySessions[via];
+    const res = await fetch("/api/webproxy/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
+      body: JSON.stringify({ via: via === "backend" ? "" : via }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.detail || `Fehler ${res.status}`);
+    proxySessions[via] = d.token;
+    return d.token;
+  }
+  async function navigateVia(via, url) {
     clearTimeout(loadTimer);
     hint.style.display = "";
-    hint.textContent = "Wird über die Node geladen …";
-    frame.removeAttribute("src");
+    const label = via === "backend" ? "Backend" : (body.querySelector(`#wb-via option[value="${CSS.escape(via)}"]`)?.dataset.name || "Node");
+    hint.textContent = `Wird über ${label} geladen …`;
+    frame.removeAttribute("srcdoc");
     try {
-      const res = await api.nodeProxyFetch(clientId, url, { insecure: true });
-      const type = String(res.headers?.["Content-Type"]
-        || res.headers?.["content-type"] || "text/html");
-      const bytes = Uint8Array.from(atob(res.body || ""), (c) => c.charCodeAt(0));
-
-      if (!/^text\/html/i.test(type)) {
-        // Kein HTML (Bild, PDF, JSON …): als Datenobjekt anzeigen, statt es
-        // fälschlich als Seite zu deuten.
-        const blob = new Blob([bytes], { type: type.split(";")[0] });
-        frame.src = URL.createObjectURL(blob);
-        hint.textContent = `Über Node geladen · ${type.split(";")[0]}`;
-        return;
-      }
-
-      let html = new TextDecoder("utf-8").decode(bytes);
-      const base = `<base href="${url.replace(/"/g, "&quot;")}">`;
-      html = /<head[^>]*>/i.test(html)
-        ? html.replace(/<head([^>]*)>/i, `<head$1>${base}`)
-        : base + html;
-      frame.srcdoc = html;
-      hint.textContent = `Über Node geladen · Status ${res.status}`
-        + (res.truncated ? " · gekürzt (sehr grosse Seite)" : "");
+      const s = await proxySession(via);
+      frame.src = `/api/webproxy/fetch?s=${encodeURIComponent(s)}&doc=1&url=${encodeURIComponent(url)}`;
+      hint.textContent = `Über ${label} geladen (Seitenproxy)`;
     } catch (e) {
       frame.srcdoc = `<body style="font-family:system-ui;padding:26px;color:#b00">
-        <h3>Abruf über die Node fehlgeschlagen</h3><p>${String(e.message || e)
-          .replace(/</g, "&lt;")}</p></body>`;
-      hint.textContent = "Fehler beim Laden über die Node";
+        <h3>Abruf über ${label} nicht möglich</h3><p>${String(e.message || e).replace(/</g, "&lt;")}</p></body>`;
+      hint.textContent = "Fehler beim Laden";
     }
   }
 
-  // Nodes in die Wegewahl eintragen. Schlägt das fehl, bleibt es bei
-  // "Direkt" - der Browser muss auch ohne Nodes funktionieren.
+  // Nodes in die Wegewahl eintragen (nur mit nachgeladenem Node-Modul "browser"
+  // waehlbar). Schlägt das fehl, bleibt es bei Direkt/Backend.
   (async () => {
     try {
-      const res = await api.listNodes();
+      const res = await api.nodeChoices("browser");
       const sel = body.querySelector("#wb-via");
       for (const n of res.nodes || []) {
         const opt = document.createElement("option");
         opt.value = n.id;
-        opt.textContent = `über ${n.hostname || n.id}`;
+        opt.dataset.name = n.name;
+        opt.disabled = !n.active;
+        opt.textContent = `🖧 Über Node ${n.name}${nodeHint(n)}`;
         sel.appendChild(opt);
       }
       if (win?.props?.viaNode) sel.value = win.props.viaNode;
     } catch { /* keine Nodes verfügbar */ }
   })();
+  body.querySelector("#wb-via").addEventListener("change", () => {
+    if (history[idx]) navigate(history[idx], false);
+  });
 
   function updateNav() {
     body.querySelector("#wb-back").disabled = idx <= 0;

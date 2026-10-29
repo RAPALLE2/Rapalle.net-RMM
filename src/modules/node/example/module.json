@@ -7,10 +7,21 @@
     "kind": "compose",
     "compose": "docker-compose.yml",
     "requires_docker": true,
-    "autostart": true,
-    "actions": ["up", "down", "restart", "status", "logs"],
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status",
+      "logs"
+    ],
     "params": [
-      { "key": "port", "label": "Port auf der Node", "type": "number", "default": 18080 }
+      {
+        "key": "port",
+        "label": "Port auf der Node",
+        "type": "number",
+        "default": 18080
+      }
     ]
   }
 }

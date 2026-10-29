@@ -17,7 +17,7 @@ const STATE = {
   removing:   { label: "wird entfernt …",      color: "#f5a524" },
   error:      { label: "Fehler",               color: "#ff4d6d" },
 };
-const MOD_STATE = { running: "läuft", stopped: "gestoppt", partial: "teilweise", "no-docker": "Docker fehlt", error: "Fehler", unknown: "?" };
+const MOD_STATE = { running: "aktiv", stopped: "aus", partial: "teilweise", "no-docker": "Docker fehlt", error: "Fehler", unknown: "?" };
 const ago = (ms) => { if (!ms) return "–"; const s = Math.round((Date.now() - ms) / 1000); return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
 const chip = (text, color) => `<span style="font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid ${color};color:${color}">${esc(text)}</span>`;
 
@@ -107,20 +107,23 @@ function renderDetail(body, win, clientId) {
       const m = inst[id], ms = MOD_STATE[m.state] || m.state;
       const color = m.state === "running" ? "#3ecf8e" : m.state === "error" || m.state === "no-docker" ? "#ff4d6d" : "var(--subtext)";
       const acts = (avail.find((a) => a.id === id)?.actions || ["up", "down", "restart", "logs"]).filter((a) => a !== "status");
-      const label = { up: "▶ Start", down: "■ Stopp", restart: "↻ Neustart", logs: "📜 Log" };
+      const label = { up: "▶ Aktivieren", down: "■ Deaktivieren", restart: "↻ Neustart", logs: "📜 Log" };
+      // Seit Node 0.3.0: nach dem Installieren AUS - jedes Modul einzeln aktivieren.
+      const isOn = m.state === "running" || m.state === "partial";
       return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--panel)">
         <div style="display:flex;align-items:center;gap:10px"><b style="flex:1">${esc(id)} <span style="font-weight:400;color:var(--subtext);font-size:12px">v${esc(m.version || "?")}</span></b>${chip(ms, color)}</div>
         ${(m.containers || []).map((c) => `<div style="font-size:11px;color:var(--subtext);margin-top:3px">${esc(c.name || c.service)} · ${esc(c.status || c.state || "")}</div>`).join("")}
-        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${acts.map((a) => `<button class="btn" data-mact="${a}" data-mid="${esc(id)}">${label[a] || a}</button>`).join("")}
+        ${!isOn ? `<div style="font-size:12px;color:#f5a524;margin-top:4px">Aus – erst nach „Aktivieren“ auf dieser Node nutzbar.</div>` : ""}
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${acts.filter((a) => !(a === "up" && isOn) && !(a === "down" && !isOn) && !(a === "restart" && !isOn)).map((a) => `<button class="btn" data-mact="${a}" data-mid="${esc(id)}">${label[a] || a}</button>`).join("")}
           <button class="btn btn-danger" data-mrem="${esc(id)}" style="margin-left:auto">🗑 Entfernen</button></div>
         <pre class="nd-mlog" data-mlog="${esc(id)}" style="display:none;margin:8px 0 0;max-height:200px;overflow:auto;font-size:11px;background:var(--panel-2);padding:8px;border-radius:6px;white-space:pre-wrap"></pre></div>`;
     }).join("") : `<div style="color:var(--subtext);font-size:13px;margin-bottom:8px">Keine Node-Module installiert.</div>`;
     const deployable = avail.filter((a) => !inst[a.id]);
     const add = deployable.length ? `<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px">
-      <div style="font-size:12px;color:var(--subtext);margin-bottom:6px">Modul auf dieser Node bereitstellen</div>
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:6px">Modul auf dieser Node installieren (danach einzeln aktivieren)</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
         <select id="nd-newmod">${deployable.map((a) => `<option value="${esc(a.id)}" ${a.active ? "" : "disabled"}>${esc(a.icon)} ${esc(a.name)}${a.active ? "" : " (Modul nicht aktiv)"}</option>`).join("")}</select>
-        <span id="nd-params"></span><button class="btn-primary" id="nd-deploy">Bereitstellen</button></div></div>` : "";
+        <span id="nd-params"></span><button class="btn-primary" id="nd-deploy">Installieren</button></div></div>` : "";
     return installed + add;
   }
 

@@ -26,7 +26,7 @@ Server-Adresse gleich ein – man muss sich nur noch anmelden.
 | Fernbild-Ziel wählbar (Gateway, lokale IP, letzte, eigene + Port) | ✅ | ✅ | ✅ |
 | Autostart | ✅ | ✅ | – |
 | Gerät abmelden (Profil → Meine Geräte) | sofort | sofort | sofort |
-| WireGuard-VPN | später | später | später |
+| WireGuard-VPN (Modul „VPN“) | vollautomatisch: Tunnel anlegen, verbinden, bei Ablauf löschen (WireGuard für Windows, UAC-Abfrage) | vollautomatisch (wireguard-tools, pkexec) | QR-Code/Datei aus der VPN-App in die WireGuard-App |
 
 ## Updates
 - **Automatisch:** Nach dem Anmelden prüft die App, ob auf dem Server eine neuere Version liegt, und installiert sie
