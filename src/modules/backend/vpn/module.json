@@ -8,14 +8,55 @@
   "category": "Netzwerk",
   "icon": "🛡️",
   "requires": [],
-  "pip": ["qrcode"],
+  "pip": [
+    "qrcode"
+  ],
   "entry": "module",
-  "routers": ["vpn_routes"],
-  "hooks": { "startup": "on_startup", "client_online": "on_client", "client_new": "on_client" },
+  "routers": [
+    "vpn_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "client_online": "on_client",
+    "client_new": "on_client"
+  },
   "settings": [
-    {"key": "max_hours", "type": "number", "label": "Höchstlaufzeit ohne „VPN unbegrenzt“ (Stunden)", "default": 168, "min": 1, "max": 8760},
-    {"key": "pool", "type": "string", "label": "Adressbereich für virtuelle Netze", "default": "10.77.0.0/16", "help": "Jeder Tunnel bekommt daraus ein eigenes /24."},
-    {"key": "base_port", "type": "number", "label": "Erster UDP-Port je Host", "default": 51820, "min": 1024, "max": 65000},
-    {"key": "public_host", "type": "string", "label": "Öffentliche Adresse des Backends", "default": "", "help": "Hostname/IP, unter der Teilnehmer das Backend als VPN-Host erreichen (leer = Adresse des Dashboards)."}
+    {
+      "key": "max_hours",
+      "type": "number",
+      "label": "Höchstlaufzeit ohne „VPN unbegrenzt“ (Stunden)",
+      "default": 168,
+      "min": 1,
+      "max": 8760
+    },
+    {
+      "key": "pool",
+      "type": "string",
+      "label": "Adressbereich für virtuelle Netze",
+      "default": "10.77.0.0/16",
+      "help": "Jeder Tunnel bekommt daraus ein eigenes /24."
+    },
+    {
+      "key": "base_port",
+      "type": "number",
+      "label": "Erster UDP-Port je Host",
+      "default": 51820,
+      "min": 1024,
+      "max": 65000
+    },
+    {
+      "key": "public_host",
+      "type": "string",
+      "label": "Öffentliche Adresse des Backends",
+      "default": "",
+      "help": "Hostname/IP, unter der Teilnehmer das Backend als VPN-Host erreichen (leer = Adresse des Dashboards)."
+    },
+    {
+      "key": "quick_host",
+      "type": "string",
+      "label": "Host für Schnellzugriff (Client-App)",
+      "default": "",
+      "help": "„backend“ oder Node-ID. Leer = Backend, sonst erste Node mit aktivem VPN-Modul. Wird benutzt, wenn RDP/SSH/VNC aus dem Dashboard „über VPN“ geöffnet wird."
+    }
   ]
 }

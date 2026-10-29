@@ -52,14 +52,35 @@ def _conf_dir(data_dir: Path) -> Path:
 
 
 def _elevated(script_lines: list[str]) -> tuple[int, str]:
-    """Befehle mit Admin-/Root-Rechten ausfuehren (UAC bzw. pkexec)."""
+    """Befehle mit Admin-/Root-Rechten ausfuehren (UAC bzw. pkexec).
+    Windows: die Befehle kommen in eine temporaere .ps1-Datei, die per UAC-Abfrage mit
+    Administratorrechten laeuft (keine Probleme mit Anfuehrungszeichen/Leerzeichen in Pfaden)."""
     if IS_WINDOWS:
-        ps = "; ".join(script_lines)
-        cmd = ["powershell", "-NoProfile", "-Command",
-               f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',\"{ps}\""]
-    else:
-        sh = " ; ".join(script_lines)
-        cmd = ["sh", "-c", sh] if hasattr(os, "geteuid") and os.geteuid() == 0 else ["pkexec", "sh", "-c", sh]
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".ps1", prefix="rmm-")
+        with os.fdopen(fd, "w", encoding="utf-8-sig") as f:
+            f.write("$ErrorActionPreference = 'Continue'\r\n")
+            f.write("\r\n".join(script_lines) + "\r\n")
+            f.write("exit $LASTEXITCODE\r\n")
+        ps = ("$p = Start-Process -FilePath powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
+              f"-ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File \"{path}\"'); exit $p.ExitCode")
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                               creationflags=0x08000000)       # CREATE_NO_WINDOW
+            out = (p.stdout or "") + (p.stderr or "")
+            if "abgebrochen" in out.lower() or "canceled by the user" in out.lower():
+                return 1, "Administratorrechte wurden abgelehnt."
+            return p.returncode, out
+        except Exception as e:  # noqa: BLE001
+            return 1, str(e)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    sh = " ; ".join(script_lines)
+    cmd = ["sh", "-c", sh] if hasattr(os, "geteuid") and os.geteuid() == 0 else ["pkexec", "sh", "-c", sh]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -142,7 +163,8 @@ class VpnSync:
             self._wake.clear()
 
     def sync(self):
-        if not self.store.get("vpn_auto", True):
+        auto_on = bool(self.store.get("vpn_auto", True))
+        if not auto_on and not (self.store.get("vpn_manual") or self.managed()):
             return
         ok, why = supported()
         api = self.get_api()
@@ -158,7 +180,12 @@ class VpnSync:
                 raise
             self.refresh()
             data = self.get_api().request("GET", "/api/vpn/my")
-        want = {t["iface"]: t for t in data.get("tunnels", []) if t.get("auto", True)}
+        manual = set(self.store.get("vpn_manual", []) or [])          # per Dashboard-Knopf aktiviert
+        want = {t["iface"]: t for t in data.get("tunnels", [])
+                if (auto_on and t.get("auto", True)) or t["iface"] in manual}
+        gone = manual - {t["iface"] for t in data.get("tunnels", [])}
+        if gone:
+            self.store.set(vpn_manual=sorted(manual - gone))
         have = self.managed()
         if not ok:
             if want:
@@ -197,3 +224,4 @@ class VpnSync:
         for iface in list(self.managed()):
             uninstall(self.data_dir, iface)
         self._set_managed({})
+        self.store.set(vpn_manual=[])

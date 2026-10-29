@@ -5,6 +5,7 @@
 import { getToken } from "/js/app/api.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
+import { getModuleApi } from "/js/app/modules.js";
 
 async function vq(path, opts = {}) {
   const res = await fetch("/api/vpn" + path, {
@@ -212,7 +213,7 @@ export function renderVpn(body, win) {
           <td><b>${esc(p.name)}</b>${p.mine ? " (du)" : ""}</td><td>${KIND[p.kind] || p.kind}</td><td><code>${esc(p.ip)}</code></td>
           <td data-conn>${p.join_ok === false ? `<span style="color:var(--danger)" title="${esc(p.join_error)}">⚠ ${esc(p.join_error.slice(0, 60))}</span>` : "…"}</td>
           <td>${p.expires ? fmtExp(p.expires) : "wie Tunnel"}</td>
-          <td style="text-align:right;white-space:nowrap">${!ended && (p.mine || m) && p.kind === "user" ? `<button class="btn-tool" data-dl="${esc(p.id)}" title="WireGuard-Datei herunterladen">⬇</button><button class="btn-tool" data-qr="${esc(p.id)}" title="QR-Code für die WireGuard-App">▦</button>` : ""}
+          <td style="text-align:right;white-space:nowrap">${!ended && p.mine && getModuleApi("client")?.openAppLink && !/Android|iPhone|iPad/i.test(navigator.userAgent) ? `<button class="btn btn-sm btn-primary" data-pcapp title="PC-App holt die Datei und aktiviert den Tunnel in WireGuard">🖥 In PC-App aktivieren</button> ` : ""}${!ended && (p.mine || m) && p.kind === "user" ? `<button class="btn-tool" data-dl="${esc(p.id)}" title="WireGuard-Datei herunterladen">⬇</button><button class="btn-tool" data-qr="${esc(p.id)}" title="QR-Code für die WireGuard-App">▦</button>` : ""}
             ${!ended && !p.mine ? `<button class="btn-tool" data-ping="${esc(p.id)}" title="Vom Host aus anpingen (Diagnose)">📶</button>` : ""}
             ${m || p.mine ? `<button class="btn-tool" data-rm="${esc(p.id)}" title="Aus dem Tunnel entfernen">✕</button>` : ""}</td></tr>`).join("")
           || `<tr><td colspan="6" style="color:var(--subtext)">Noch keine Teilnehmer.</td></tr>`}</tbody></table>
@@ -283,6 +284,17 @@ export function renderVpn(body, win) {
         $("[data-qrbox]").innerHTML = `<div style="display:inline-block;background:#fff;padding:10px;border-radius:8px"><img src="${url}" style="width:240px;height:240px;display:block"></div>
           <div style="font-size:12px;color:var(--subtext);margin-top:4px">In der WireGuard-App: „+“ → „QR-Code scannen“.</div>`;
       } catch (e) { window.notify?.(e.message, "error"); }
+    });
+    root.querySelectorAll("[data-pcapp]").forEach((b) => b.onclick = async () => {
+      try {
+        const res = await fetch("/api/client/launch-vpn", { method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
+          body: JSON.stringify({ tunnel: tid }) });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || `Fehler ${res.status}`);
+        getModuleApi("client").openAppLink(d.url, d.ticket);
+        window.notify?.("PC-App richtet den Tunnel ein (Windows fragt nach Administratorrechten) …", "info", 6000);
+      } catch (e) { window.notify?.(e.message, "error", 8000); }
     });
     root.querySelectorAll("[data-ping]").forEach((b) => b.onclick = async () => {
       const box = $("[data-qrbox]");

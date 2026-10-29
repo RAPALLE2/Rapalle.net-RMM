@@ -109,27 +109,99 @@ def _run(cmd: list[str], input_text: str | None = None, timeout: int = 60) -> su
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
+def build_windows_url(server: str) -> str:
+    """Zweite Schreibweise fuer net use (manche Windows-11-Staende kommen damit besser zurecht)."""
+    scheme, host, port = server_parts(server)
+    default = 443 if scheme == "https" else 80
+    return f"{scheme}://{host}" + (f":{port}" if port != default else "") + "/dav/"
+
+
+def _win_service_running(name: str) -> bool | None:
+    try:
+        r = _run(["sc", "query", name], timeout=15)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None                                   # Dienst gibt es nicht
+    return "RUNNING" in (r.stdout or "")
+
+
+def _win_prepare_webdav(http: bool) -> str:
+    """Windows 11: Der Dienst „WebClient“ (WebDAV-Mini-Redirector) ist oft gestoppt bzw. auf
+    „Manuell“ und startet nicht von selbst -> net use scheitert mit Systemfehler 67.
+    Einmalig mit Administratorrechten (UAC): Dienst auf Automatisch + starten, Dateigroessen-
+    Grenze (Standard 50 MB) aufheben, bei HTTP Basic-Anmeldung erlauben."""
+    state = _win_service_running("WebClient")
+    if state is None:
+        return ("Der Windows-Dienst „WebClient“ fehlt. Unter Windows Server: Feature „WebDAV-Redirector“ installieren "
+                "(Server-Manager → Features → WebDAV-Redirector).")
+    if state and not http:
+        return ""
+    from .vpn import _elevated
+    lines = ["Set-Service -Name WebClient -StartupType Automatic",
+             "Start-Service -Name WebClient",
+             "New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters' "
+             "-Name FileSizeLimitInBytes -PropertyType DWord -Value 4294967295 -Force | Out-Null"]
+    if http:
+        lines.append("New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters' "
+                     "-Name BasicAuthLevel -PropertyType DWord -Value 2 -Force | Out-Null")
+        lines.append("Restart-Service -Name WebClient")
+    _elevated(lines)
+    import time as _t
+    for _ in range(10):
+        if _win_service_running("WebClient"):
+            return ""
+        _t.sleep(1)
+    return "Der Dienst „WebClient“ konnte nicht gestartet werden (Administratorrechte abgelehnt?)."
+
+
+_WIN_ERRORS = {
+    "67": "Netzwerkname nicht gefunden – WebClient-Dienst läuft nicht oder der Server ist per HTTPS nicht erreichbar.",
+    "53": "Netzwerkpfad nicht gefunden – Server-Adresse/Port prüfen.",
+    "5": "Zugriff verweigert – Anmeldung abgelehnt (Gerät im Dashboard entfernt? neu anmelden).",
+    "86": "Anmeldung abgelehnt – Gerät neu anmelden.",
+    "1244": "Anmeldung abgelehnt – Gerät neu anmelden.",
+    "1326": "Anmeldung abgelehnt – Gerät neu anmelden.",
+    "85": "Der Laufwerksbuchstabe ist schon belegt.",
+    "1219": "Zu diesem Server besteht schon eine Verbindung mit anderen Anmeldedaten (net use * /delete hilft).",
+    "2148073478": "Das Server-Zertifikat ist nicht vertrauenswürdig – WebDAV unter Windows braucht ein gültiges Zertifikat.",
+}
+
+
+def _win_error_hint(text: str) -> str:
+    import re as _re
+    m = _re.search(r"(?:Systemfehler|System error)\s+(\d+)", text or "")
+    return _WIN_ERRORS.get(m.group(1), "") if m else ""
+
+
 def mount_relay(server: str, username: str, token: str, store) -> str:
     """Verbindet das Relay als Laufwerk. -> Meldung fuer den Benutzer."""
     sysname = system()
     if sysname == "windows":
         letter = store.get("drive_letter") or free_drive_letter()
         scheme, _, _ = server_parts(server)
-        r = _run(build_windows_mount(server, letter, username, token))
-        if r.returncode != 0:
-            msg = (r.stderr or r.stdout).strip()
-            hint = ""
-            if scheme == "http":
-                hint = ("\n\nHinweis: Windows erlaubt WebDAV-Anmeldungen ohne HTTPS standardmäßig nicht "
-                        "(Registry: HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel = 2). "
-                        "Besser: den Server per HTTPS erreichbar machen.")
-            raise FeatureError(f"Laufwerk konnte nicht verbunden werden:\n{msg}{hint}")
-        store.set(drive_letter=letter)
-        try:
-            os.startfile(f"{letter}:\\")   # type: ignore[attr-defined]
-        except Exception:
-            pass
-        return f"Das Relay ist jetzt Laufwerk {letter}: im Explorer."
+        problem = _win_prepare_webdav(scheme == "http")
+        if problem:
+            raise FeatureError(f"Laufwerk konnte nicht verbunden werden:\n{problem}")
+        _run(build_windows_unmount(letter))                    # alte/halbe Verbindung auf dem Buchstaben weg
+        errors = []
+        for target in (build_windows_unc(server), build_windows_url(server)):
+            r = _run(["net", "use", f"{letter}:", target, token, f"/user:{username}", "/persistent:yes"], timeout=90)
+            if r.returncode == 0:
+                store.set(drive_letter=letter)
+                try:
+                    os.startfile(f"{letter}:\\")   # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                return f"Das Relay ist jetzt Laufwerk {letter}: im Explorer."
+            errors.append(((r.stderr or r.stdout) or "").strip())
+        msg = errors[-1] or errors[0]
+        hint = _win_error_hint(" ".join(errors))
+        if scheme == "http" and not hint:
+            hint = "Windows erlaubt WebDAV ohne HTTPS nur mit BasicAuthLevel = 2 – besser den Server per HTTPS erreichbar machen."
+        if store.get("insecure", False):
+            hint += "\nHinweis: Die App ist auf „Zertifikat nicht prüfen“ gestellt – Windows-WebDAV akzeptiert keine ungültigen Zertifikate."
+        raise FeatureError(f"Laufwerk konnte nicht verbunden werden:\n{msg}" + (f"\n\n{hint}" if hint else ""))
     if sysname == "linux":
         if not shutil.which("gio"):
             raise FeatureError("„gio“ fehlt (Paket glib2/libglib2.0-bin). Damit wird das Laufwerk im Dateimanager eingebunden.")

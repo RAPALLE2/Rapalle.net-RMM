@@ -50,6 +50,13 @@
       "label": "Öffentliche Adresse des Backends",
       "default": "",
       "help": "Hostname/IP, unter der Teilnehmer das Backend als VPN-Host erreichen (leer = Adresse des Dashboards)."
+    },
+    {
+      "key": "quick_host",
+      "type": "string",
+      "label": "Host für Schnellzugriff (Client-App)",
+      "default": "",
+      "help": "„backend“ oder Node-ID. Leer = Backend, sonst erste Node mit aktivem VPN-Modul. Wird benutzt, wenn RDP/SSH/VNC aus dem Dashboard „über VPN“ geöffnet wird."
     }
   ],
   "apps": [

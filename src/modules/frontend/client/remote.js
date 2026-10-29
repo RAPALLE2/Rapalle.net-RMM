@@ -45,6 +45,17 @@ export function clientAppKind() {
   return null;
 }
 
+// Im NORMALEN Browser: Ist die PC-App auf diesem Rechner installiert? (Merker nach dem ersten
+// erfolgreichen Start bzw. per Haken im Profil.) Dann oeffnen auch hier RDP/SSH/VNC direkt die App –
+// der Link rapalle-rmm:// ist systemweit registriert.
+export function hasPcApp() {
+  try { return localStorage.getItem("rmm_has_pc_app") === "1"; } catch { return false; }
+}
+export function setPcApp(on) {
+  try { on ? localStorage.setItem("rmm_has_pc_app", "1") : localStorage.removeItem("rmm_has_pc_app"); } catch { /* egal */ }
+}
+const isMobile = () => /Android|iPhone|iPad/i.test(navigator.userAgent);
+
 export async function loadOpenMode() {
   try { _mode = (await creq("/prefs")).open_mode; } catch { _mode = _mode || "external"; }
   return _mode;
@@ -54,7 +65,7 @@ export async function loadOpenMode() {
 // Rückgabe true = erledigt (kein Browser-Fenster). Umschalt-/Alt-Klick öffnet immer die Auswahl.
 export function actionHandler(action, client, ev) {
   if (action !== "terminal" && action !== "vnc") return false;
-  if (!clientAppKind()) return false;
+  if (!clientAppKind() && !hasPcApp()) return false;
   if (_mode === null) loadOpenMode();
   const mode = _mode || "external";
   const force = ev && (ev.shiftKey || ev.altKey);
@@ -64,6 +75,11 @@ export function actionHandler(action, client, ev) {
 }
 
 const kindKey = (cid, action) => `rmm_ext_kind:${cid}:${action}`;
+
+export async function openInPcApp(client) {
+  // eigener Panel-Knopf: Auswahl RDP/VNC bzw. SSH immer anzeigen
+  dialog("all", client, null);
+}
 
 async function openExternal(action, client, { ask }) {
   const remembered = (() => { try { return localStorage.getItem(kindKey(client.id, action)); } catch { return null; } })();
@@ -80,28 +96,54 @@ async function openExternal(action, client, { ask }) {
   dialog(action, client, remembered);
 }
 
-async function launch(client, params, remember = false) {
-  const res = await creq("/launch", { method: "POST", body: { client_id: client.id, remember, ...params } });
-  if (clientAppKind() === "android") {
-    window.RMM.launch(res.ticket);
-    return;
-  }
+// rapalle-rmm://-Link oeffnen. Im normalen Browser pruefen, ob die App wirklich startete
+// (das Fenster verliert dann den Fokus); sonst Hinweis mit Download.
+export function openAppLink(url, ticket) {
+  if (clientAppKind() === "android") { window.RMM.launch(ticket); return; }
+  let left = false;
+  const onBlur = () => { left = true; };
+  window.addEventListener("blur", onBlur, { once: true });
   const a = document.createElement("a");
-  a.href = res.url;
+  a.href = url;
   a.style.display = "none";
   document.body.appendChild(a);
   a.click();
   setTimeout(() => a.remove(), 1000);
+  if (clientAppKind()) return;                        // im App-Fenster selbst: kein Test noetig
+  setTimeout(() => {
+    window.removeEventListener("blur", onBlur);
+    if (left || document.hidden) { setPcApp(true); return; }
+    window.notify?.("Die PC-App hat sich nicht gemeldet. Ist sie installiert und angemeldet? "
+      + "Download: Profil → Client-App & Geräte. (Beim ersten Mal fragt der Browser, ob er den Link öffnen darf.)", "warn", 15000);
+  }, 2500);
 }
+
+async function launch(client, params, remember = false) {
+  const res = await creq("/launch", { method: "POST", body: { client_id: client.id, remember, ...params } });
+  openAppLink(res.url, res.ticket);
+}
+
+// VPN: eigenen Fernzugriffs-Tunnel (Benutzer + Agent) holen; die App richtet ihn vor dem Verbinden ein
+async function vpnQuick(client) {
+  const res = await fetch("/api/vpn/quick", { method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
+    body: JSON.stringify({ client_id: client.id }) });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(d.detail || `VPN: Fehler ${res.status}`);
+  return d;
+}
+const isPrivate = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip || "");
 
 // ------------------------------------------------------------------ Auswahl
 async function dialog(action, client, remembered) {
-  const kinds = action === "terminal" ? ["ssh", "shell"] : ["rdp", "vnc"];
+  let vpnOn = false;
+  try { vpnOn = (await import("/js/app/modules.js")).isModuleOn("vpn"); } catch { /* egal */ }
+  const kinds = action === "terminal" ? ["ssh", "shell"] : action === "all" ? ["rdp", "vnc", "ssh", "shell"] : ["rdp", "vnc"];
   let kind = kinds.includes(remembered) ? remembered : kinds[0];
   const ov = document.createElement("div");
   ov.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:12px";
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;width:500px;max-width:100%;max-height:calc(100dvh - 24px);overflow:auto;font-size:13px">
-    <b style="font-size:15px">${action === "terminal" ? "Terminal" : "Fernbild"} – ${esc(client.hostname)}</b>
+    <b style="font-size:15px">${action === "terminal" ? "Terminal" : action === "all" ? "In PC-App öffnen" : "Fernbild"} – ${esc(client.hostname)}</b>
     <div style="color:var(--subtext);font-size:12px;margin:2px 0 10px">Wird mit der Client-App lokal geöffnet.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" data-kinds>
       ${kinds.map((k) => `<button class="btn btn-sm" data-kind="${k}">${PROTO[k].label}</button>`).join("")}</div>
@@ -120,7 +162,7 @@ async function dialog(action, client, remembered) {
   $("[data-web]").addEventListener("click", async () => {
     close();
     const { handleAction } = await import("/js/app/panel.js");
-    handleAction(action, client, null, { forceWeb: true });
+    handleAction(action === "all" ? (kind === "ssh" || kind === "shell" ? "terminal" : "vnc") : action, client, null, { forceWeb: true });
   });
   let info = null;
   const drawBody = async () => {
@@ -145,6 +187,8 @@ async function dialog(action, client, remembered) {
       ${opt("tunnel", "Über RMM (Cloudflare-Tunnel)", "", !info.tunnel?.ok || clientAppKind() === "android",
             clientAppKind() === "android" ? "Nur in der Desktop-App" : info.tunnel?.reason || "")}
       ${info.gateway_available ? opt("gateway", "RMM-Gateway (Port am Server, nur für diese IP)") : ""}
+      ${vpnOn ? opt("vpn", "Über VPN (WireGuard-Tunnel zu diesem Gerät)", isPrivate(info.local_ip) ? ` <span style="font-size:11px;color:#3ecf8e">empfohlen – Gerät ist nicht öffentlich erreichbar</span>` : "",
+                  clientAppKind() === "android", "Auf Android die VPN-Datei per QR-Code in die WireGuard-App übernehmen") : ""}
       ${!info.tunnel?.ok ? `<div style="font-size:11.5px;color:var(--subtext);margin:0 0 4px 23px">Tunnel: ${esc(info.tunnel?.reason || "")}</div>` : ""}
       <div data-portrow style="display:flex;gap:8px;align-items:center;margin-top:8px">
         <span style="font-weight:600;font-size:12.5px;width:70px">Port</span>
@@ -162,7 +206,9 @@ async function dialog(action, client, remembered) {
           <span style="flex:1;color:var(--subtext)">${t.lifetime === 0 ? "dauerhaft" : t.lifetime === "session" ? "bis Nutzungsende" : "bis " + new Date(t.expires * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${t.active ? ` · ${t.active} verbunden` : ""}</span>
           <button class="btn btn-sm btn-danger" data-closet="${esc(t.route_id)}">Schließen</button></div>`).join("")}</div>` : ""}`;
     if (!body.querySelector('input[name="tgt"]:checked')) {
-      const first = body.querySelector('input[name="tgt"]:not([disabled])');
+      // Agent nicht oeffentlich (private IP) und kein Cloudflare-Tunnel -> gleich VPN anbieten
+      const pref = vpnOn && isPrivate(info.local_ip) && !info.tunnel?.ok ? body.querySelector('input[value="vpn"]:not([disabled])') : null;
+      const first = pref || body.querySelector('input[name="tgt"]:not([disabled])');
       if (first) first.checked = true;
     }
     const sync = () => {
@@ -184,7 +230,7 @@ async function dialog(action, client, remembered) {
   drawBody();
   $("[data-ok]").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
-    const remember = $("[data-remember]").checked;
+    let remember = $("[data-remember]").checked;
     let params = { protocol: kind };
     if (kind !== "shell") {
       const body = $("[data-body]");
@@ -198,8 +244,14 @@ async function dialog(action, client, remembered) {
     }
     btn.disabled = true;
     try {
+      if (params.host_mode === "vpn") {
+        window.notify?.("VPN-Tunnel wird vorbereitet …", "info", 4000);
+        const q = await vpnQuick(client);
+        params = { ...params, host_mode: "custom", host: q.agent_ip, vpn_tunnel: q.tunnel };
+        remember = false;
+      }
       if (remember) {
-        try { localStorage.setItem(kindKey(client.id, action), kind); } catch { /* egal */ }
+        try { localStorage.setItem(kindKey(client.id, action === "all" ? (kind === "ssh" || kind === "shell" ? "terminal" : "vnc") : action), kind); } catch { /* egal */ }
       }
       await launch(client, params, remember && kind !== "shell");
       close();
@@ -213,13 +265,16 @@ export async function renderOpenModePref(host) {
   const mode = await loadOpenMode();
   host.innerHTML = `
     <div style="font-weight:600;font-size:13px;margin:0 0 4px">Fernzugriff in der Client-App</div>
-    <div style="color:var(--subtext);font-size:12px;margin-bottom:6px">Terminal und Remote-Bildschirm eines Agents öffnen – gilt nur im Fenster der Client-App,
-      im normalen Browser bleibt es immer die Web-Variante. Umschalt+Klick zeigt jederzeit die Auswahl.</div>
+    <div style="color:var(--subtext);font-size:12px;margin-bottom:6px">Terminal und Remote-Bildschirm eines Agents öffnen – im Fenster der Client-App und (mit dem Haken unten)
+      auch im normalen Browser. Zusätzlich gibt es im Agent-Panel den Knopf „🖥 In PC-App öffnen“. Umschalt+Klick zeigt jederzeit die Auswahl.</div>
     <select data-openmode style="max-width:420px">
       <option value="external" ${mode === "external" ? "selected" : ""}>Extern mit passender Software (RDP, VNC, SSH) – Standard</option>
       <option value="ask" ${mode === "ask" ? "selected" : ""}>Jedes Mal fragen</option>
       <option value="web" ${mode === "web" ? "selected" : ""}>Im Browser-Fenster (wie ohne App)</option>
-    </select>`;
+    </select>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12.5px;cursor:pointer">
+      <input type="checkbox" data-haspc ${hasPcApp() ? "checked" : ""}> Die PC-App ist auf DIESEM Rechner installiert – Terminal/Remote-Bildschirm auch im normalen Browser direkt mit der App öffnen</label>`;
+  host.querySelector("[data-haspc]").addEventListener("change", (e) => setPcApp(e.target.checked));
   host.querySelector("[data-openmode]").addEventListener("change", async (e) => {
     try { await creq("/prefs", { method: "PUT", body: { open_mode: e.target.value } }); _mode = e.target.value; window.notify?.("Gespeichert", "success", 2000); }
     catch (err) { window.notify?.(err.message, "error"); }

@@ -16,12 +16,14 @@ import tkinter as tk
 import urllib.parse
 from tkinter import messagebox
 
-from . import browser, features, tunnel
+import hashlib
+
+from . import browser, features, tunnel, vpn
 from .api import Api, ApiError, normalize_server
 from .store import Store, default_data_dir
 
 BG, FG, SUB, ACC = "#0b1220", "#e6edf6", "#8fa1ba", "#2dd4bf"
-LABEL = {"rdp": "Remotedesktop", "vnc": "VNC", "ssh": "SSH", "shell": "RMM-Terminal"}
+LABEL = {"rdp": "Remotedesktop", "vnc": "VNC", "ssh": "SSH", "shell": "RMM-Terminal", "vpn": "VPN-Tunnel"}
 
 
 def parse(url: str) -> tuple[str, str]:
@@ -91,6 +93,13 @@ class Launcher:
             p = self.api.redeem(ticket)
             proto = p["protocol"]
             self.status(f"{LABEL.get(proto, proto)} wird geöffnet …")
+            if p.get("vpn_tunnel"):
+                t = self.ensure_vpn(p["vpn_tunnel"])
+                if proto == "vpn":
+                    self.status("VPN-Tunnel aktiv", f"„{t['name']}“ ist in WireGuard eingerichtet und verbunden.")
+                    return self.ui(lambda: self.root.after(2500, self.finish))
+                self.status(msg="VPN verbunden – warte kurz auf den Tunnel …")
+                time.sleep(3)
             if proto == "shell":
                 browser.open_app_window(self.api.dashboard_url("terminal", p["client_id"]),
                                         default_data_dir() / "browser", size=(1000, 640))
@@ -119,6 +128,27 @@ class Launcher:
             self.fail(str(e))
         except Exception as e:      # noqa: BLE001
             self.fail(f"Fehler: {e}")
+
+    def ensure_vpn(self, tid: str) -> dict:
+        """Eigenen Tunnel holen und SOFORT in WireGuard einrichten/aktivieren (auch ohne Automatik)."""
+        data = self.api.request("GET", "/api/vpn/my")
+        t = next((x for x in data.get("tunnels", []) if x["tunnel"] == tid), None)
+        if not t:
+            raise ValueError("Der VPN-Tunnel wurde nicht gefunden oder ist abgelaufen.")
+        ok, why = vpn.supported()
+        if not ok:
+            raise ValueError(f"VPN nicht möglich: {why}")
+        managed = dict(self.store.get("vpn_managed", {}) or {})
+        h = hashlib.sha256(t["conf"].encode()).hexdigest()[:16]
+        if managed.get(t["iface"]) != h:
+            self.status(msg="VPN-Tunnel wird in WireGuard eingerichtet (Administratorrechte nötig) …")
+            vpn.install(default_data_dir(), t["iface"], t["conf"])
+            managed[t["iface"]] = h
+            self.store.set(vpn_managed=managed)
+        manual = set(self.store.get("vpn_manual", []) or [])
+        manual.add(t["iface"])
+        self.store.set(vpn_manual=sorted(manual))
+        return t
 
     def watch(self):
         started, last_ping = time.time(), time.time()

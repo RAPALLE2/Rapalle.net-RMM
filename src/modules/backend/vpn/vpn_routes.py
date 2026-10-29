@@ -96,6 +96,10 @@ def _view(user: dict, t: dict, full: bool) -> dict:
 # ------------------------------------------------------------------ Hosts
 @router.get("/hosts")
 async def hosts(user: dict = Depends(get_current_user)):
+    return await hosts_route(user)
+
+
+async def hosts_route(user: dict):
     """Wer kann VPN-Host sein: Backend (Admins) + Nodes mit aktivem Node-Modul "vpn"."""
     from app import node_manager
     out = []
@@ -708,3 +712,43 @@ async def ping_peer(tid: str, pid: str, user: dict = Depends(get_current_user)):
         hint = ("Auch der Host erreicht den Teilnehmer nicht: Ist er verbunden (Handshake)? Blockiert seine Firewall "
                 "Ping? Windows-Agents öffnen ihre Firewall für das VPN-Netz ab der aktuellen Agent-Version.")
     return {**res, "ip": p["ip"], "hint": hint, "ip_forward": fwd}
+
+
+# ------------------------------------------------------------------ Schnellzugriff per VPN
+# (Client-App: RDP/SSH/VNC zu einem Agent, der nicht oeffentlich erreichbar ist)
+class QuickBody(BaseModel):
+    client_id: str
+    hours: float = 8
+
+
+@router.post("/quick")
+async def quick_access(body: QuickBody, req: Request, user: dict = Depends(get_current_user)):
+    """Eigenen 'Fernzugriff'-Tunnel (Benutzer + Agent) finden oder anlegen bzw. den Agent hinzufuegen.
+    Host: Einstellung quick_host (leer = Backend, sonst erste Node mit aktivem VPN-Modul)."""
+    if not (is_super_admin(user) or user_has_permission(user, "use_vpn")):
+        raise HTTPException(403, "Fehlendes Recht: use_vpn")
+    if not user_has_permission(user, "c_vpn", body.client_id):
+        raise HTTPException(403, "Kein Recht „VPN-Tunnel ausstellen“ für dieses Gerät")
+    hosts = [h for h in (await hosts_route(user))["hosts"] if h["available"]]
+    want = str(_set("quick_host", "")).strip()
+    host = next((h["id"] for h in hosts if h["id"] == want), None) or (hosts[0]["id"] if hosts else None)
+    if not host:
+        raise HTTPException(409, "Kein VPN-Host verfügbar (Backend-Werkzeuge fehlen bzw. kein Node-Modul „vpn“ aktiv)")
+    if host == body.client_id:
+        raise HTTPException(409, "Das Gerät ist selbst der VPN-Host")
+    t = next((x for x in store.load()["tunnels"].values() if x.get("quick") and x.get("created_by") == user["username"]
+              and x["host"] == host and x.get("state") == "active"), None)
+    if t is None:
+        res = await create_tunnel(TunnelBody(name=f"Fernzugriff {user['username']}", host=host, hours=body.hours,
+                                             members=MembersBody(users=[user["id"]], agents=[body.client_id])), req, user)
+        tid = res["tunnel"]["id"]
+        store.update(lambda d: d["tunnels"][tid].__setitem__("quick", True))
+    else:
+        tid = t["id"]
+        if not any(p["kind"] == "agent" and p["ref"] == body.client_id for p in t["peers"].values()):
+            await add_peers(tid, MembersBody(agents=[body.client_id]), user)
+        if t.get("expires") and t["expires"] - time.time() < 3600:          # fast abgelaufen -> verlaengern
+            await edit_tunnel(tid, EditBody(hours=body.hours), user)
+    t = store.get(tid)
+    agent = next(p for p in t["peers"].values() if p["kind"] == "agent" and p["ref"] == body.client_id)
+    return {"tunnel": tid, "agent_ip": agent["ip"], "name": t["name"], "host_name": _view(user, t, True)["host_name"]}

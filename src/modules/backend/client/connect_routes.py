@@ -367,6 +367,7 @@ _tickets: dict[str, dict] = {}
 class LaunchBody(Pref):
     client_id: str
     remember: bool = False
+    vpn_tunnel: str = ""        # Ziel ueber VPN: die App richtet diesen Tunnel vorher selbst ein (Modul "vpn")
 
 
 @router.post("/launch")
@@ -384,6 +385,8 @@ def launch(body: LaunchBody, request: Request, user: dict = Depends(get_current_
         if pref.get("lifetime") == "0" and not _may_unlimited(user, c["id"]):
             raise HTTPException(403, "Dauerhaft offen braucht das Recht „Relay unbegrenzt“")
         params = {"protocol": proto, "client_id": c["id"], **pref, "remember": bool(body.remember)}
+        if body.vpn_tunnel:
+            params["vpn_tunnel"] = body.vpn_tunnel[:32]
     now = time.time()
     for k in [k for k, v in _tickets.items() if v["exp"] < now]:
         _tickets.pop(k, None)
@@ -396,6 +399,27 @@ def launch(body: LaunchBody, request: Request, user: dict = Depends(get_current_
         base = str(request.base_url).rstrip("/")
     from urllib.parse import urlencode
     return {"ticket": t, "url": "rapalle-rmm://launch?" + urlencode({"s": base, "t": t}), "params": params}
+
+
+class LaunchVpnBody(BaseModel):
+    tunnel: str
+
+
+@router.post("/launch-vpn")
+def launch_vpn(body: LaunchVpnBody, request: Request, user: dict = Depends(get_current_user)):
+    """Startschein: die PC-App holt die eigene WireGuard-Datei dieses Tunnels und aktiviert sie sofort."""
+    now = time.time()
+    for k in [k for k, v in _tickets.items() if v["exp"] < now]:
+        _tickets.pop(k, None)
+    t = secrets.token_urlsafe(24)
+    _tickets[t] = {"user_id": user["id"], "exp": now + 120, "params": {"protocol": "vpn", "vpn_tunnel": body.tunnel[:32]}}
+    try:
+        from router.enrollment_routes import _backend_url
+        base = _backend_url(request).rstrip("/")
+    except Exception:
+        base = str(request.base_url).rstrip("/")
+    from urllib.parse import urlencode
+    return {"ticket": t, "url": "rapalle-rmm://launch?" + urlencode({"s": base, "t": t})}
 
 
 @router.post("/launch/{ticket}")
