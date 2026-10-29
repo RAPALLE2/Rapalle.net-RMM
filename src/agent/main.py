@@ -1901,6 +1901,14 @@ def _wg_up(name, conf):
     if not exe:
         raise RuntimeError("WireGuard fehlt – " + ("WireGuard für Windows installieren" if IS_WINDOWS
                                                   else "Paket wireguard-tools installieren"))
+    if name.startswith("rmt"):
+        # Endpunkt-Test: Reste frueherer Tests (rmt*) zuerst wegraeumen
+        for old in os.listdir(_wg_conf_dir()):
+            if old.startswith("rmt") and old.endswith(".conf") and old[:-5] != name:
+                try:
+                    _wg_down(old[:-5])
+                except Exception:
+                    pass
     path = os.path.join(_wg_conf_dir(), name + ".conf")
     with open(path, "w", encoding="utf-8") as f:
         f.write(conf)

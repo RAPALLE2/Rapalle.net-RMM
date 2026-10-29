@@ -178,6 +178,13 @@ async def expiry_loop():
 # ---------------------------------------------------------------------------
 # Endpunkt-Test: echter WireGuard-Handshake von einem Tester (Agent/Node oder Backend)
 # ---------------------------------------------------------------------------
+def _clean(out: str) -> str:
+    """wg-quick-Ausgabe auf die eigentliche Fehlermeldung kuerzen (ohne die "[#] Befehl"-Zeilen)."""
+    lines = [ln.strip() for ln in (out or "").replace("[#]", "\n[#]").splitlines()]
+    msg = [ln for ln in lines if ln and not ln.startswith("[#]") and not ln.startswith(("│", "┌", "└"))]
+    return " · ".join(msg[-3:]) or (out or "").strip()[-200:]
+
+
 async def endpoint_test(tid: str, via: str, endpoint: str | None = None) -> dict:
     """Legt einen kurzlebigen Test-Teilnehmer an, laesst den Tester (Agent/Backend) sich
     damit verbinden und prueft am Host, ob ein Handshake ankommt. Danach wird alles wieder
@@ -205,7 +212,10 @@ async def endpoint_test(tid: str, via: str, endpoint: str | None = None) -> dict
         if not st.get("up"):
             return {"ok": False, "step": "host", "detail": f"WireGuard-Schnittstelle auf dem Host läuft nicht. {st.get('error', '')}"}
         steps.append(f"Host lauscht auf UDP {t['port']}")
-        conf = "\n".join(["[Interface]", f"PrivateKey = {priv}", f"Address = {p['ip']}/32", "",
+        # Table = off: wg-quick legt KEINE Routen an. Fuer den Handshake braucht es keine (der Keepalive
+        # loest ihn aus) - und so gibt es keinen Konflikt "RTNETLINK answers: File exists", wenn der Tester
+        # schon eine Route ins VPN-Netz hat (anderer Tunnel, Reste eines frueheren Tests, gleiche Maschine).
+        conf = "\n".join(["[Interface]", f"PrivateKey = {priv}", f"Address = {p['ip']}/32", "Table = off", "",
                           "[Peer]", f"PublicKey = {t['host_pub']}", f"Endpoint = {endpoint}",
                           f"AllowedIPs = {t['host_ip']}/32", "PersistentKeepalive = 3"]) + "\n"
         key = f"{tid}:{pid}"
@@ -213,7 +223,7 @@ async def endpoint_test(tid: str, via: str, endpoint: str | None = None) -> dict
             try:
                 await asyncio.get_running_loop().run_in_executor(None, wgsys().up, name, conf)
             except Exception as e:  # noqa: BLE001
-                return {"ok": False, "step": "tester", "detail": f"Backend konnte den Test-Tunnel nicht starten: {e}"}
+                return {"ok": False, "step": "tester", "detail": f"Backend konnte den Test-Tunnel nicht starten: {_clean(str(e))}"}
         else:
             from app.sockets import send_to_agent
             if not await send_to_agent(via, "wg-join", {"tunnel": tid, "peer": pid, "name": name, "conf": conf}):
@@ -225,7 +235,7 @@ async def endpoint_test(tid: str, via: str, endpoint: str | None = None) -> dict
             ps = peer_state.get(key) or {}
             if ps.get("ok") is False:
                 return {"ok": False, "step": "tester", "steps": steps,
-                        "detail": f"Tester konnte WireGuard nicht starten: {ps.get('error')}"}
+                        "detail": f"Tester konnte WireGuard nicht starten: {_clean(ps.get('error', ''))}"}
             st = await host_status(store.get(tid) or t)
             hs = (st.get("peers", {}).get(pub) or {}).get("handshake") or 0
             if hs:
