@@ -178,7 +178,7 @@ async def expiry_loop():
 # ---------------------------------------------------------------------------
 # Endpunkt-Test: echter WireGuard-Handshake von einem Tester (Agent/Node oder Backend)
 # ---------------------------------------------------------------------------
-async def endpoint_test(tid: str, via: str) -> dict:
+async def endpoint_test(tid: str, via: str, endpoint: str | None = None) -> dict:
     """Legt einen kurzlebigen Test-Teilnehmer an, laesst den Tester (Agent/Backend) sich
     damit verbinden und prueft am Host, ob ein Handshake ankommt. Danach wird alles wieder
     entfernt. Nur so laesst sich zuverlaessig pruefen, ob Endpunkt-IP UND UDP-Port von dort
@@ -186,6 +186,7 @@ async def endpoint_test(tid: str, via: str) -> dict:
     t = store.get(tid)
     if not t or t.get("state") != "active":
         return {"ok": False, "step": "host", "detail": "Der Tunnel läuft auf dem Host nicht (Zustand nicht „aktiv“)."}
+    endpoint = endpoint or t["endpoint"]
     now = int(time.time())
     priv, pub = wgconf.keypair()
     pid = "test" + store.new_id()
@@ -205,7 +206,7 @@ async def endpoint_test(tid: str, via: str) -> dict:
             return {"ok": False, "step": "host", "detail": f"WireGuard-Schnittstelle auf dem Host läuft nicht. {st.get('error', '')}"}
         steps.append(f"Host lauscht auf UDP {t['port']}")
         conf = "\n".join(["[Interface]", f"PrivateKey = {priv}", f"Address = {p['ip']}/32", "",
-                          "[Peer]", f"PublicKey = {t['host_pub']}", f"Endpoint = {t['endpoint']}",
+                          "[Peer]", f"PublicKey = {t['host_pub']}", f"Endpoint = {endpoint}",
                           f"AllowedIPs = {t['host_ip']}/32", "PersistentKeepalive = 3"]) + "\n"
         key = f"{tid}:{pid}"
         if via == "backend":
@@ -217,7 +218,7 @@ async def endpoint_test(tid: str, via: str) -> dict:
             from app.sockets import send_to_agent
             if not await send_to_agent(via, "wg-join", {"tunnel": tid, "peer": pid, "name": name, "conf": conf}):
                 return {"ok": False, "step": "tester", "detail": "Der Tester-Agent ist offline."}
-        steps.append(f"Tester verbindet sich mit {t['endpoint']}")
+        steps.append(f"Tester verbindet sich mit {endpoint}")
         t0 = time.time()
         while time.time() - t0 < 25:
             await asyncio.sleep(2)
@@ -230,13 +231,13 @@ async def endpoint_test(tid: str, via: str) -> dict:
             if hs:
                 steps.append(f"Handshake nach {int(time.time() - t0)} s")
                 return {"ok": True, "steps": steps, "seconds": int(time.time() - t0),
-                        "detail": f"Endpunkt {t['endpoint']} ist vom Tester aus per UDP erreichbar – WireGuard-Handshake erfolgreich."}
+                        "detail": f"Endpunkt {endpoint} ist vom Tester aus per UDP erreichbar – WireGuard-Handshake erfolgreich."}
         if via != "backend" and peer_state.get(key, {}).get("ok") is None:
             return {"ok": False, "step": "tester", "steps": steps,
                     "detail": "Der Tester hat nicht geantwortet – Agent aktualisieren (kennt den VPN-Beitritt noch nicht)."}
         return {"ok": False, "step": "endpoint", "steps": steps,
-                "detail": f"Kein Handshake in 25 s: Beim Host kommt über {t['endpoint']} nichts an. Endpunkt-IP prüfen und "
-                          f"UDP-Port {t['endpoint'].rsplit(':', 1)[-1]} im Router/der Firewall zum Host weiterleiten "
+                "detail": f"Kein Handshake in 25 s: Beim Host kommt über {endpoint} nichts an. Endpunkt-IP prüfen und "
+                          f"UDP-Port {endpoint.rsplit(':', 1)[-1]} im Router/der Firewall zum Host weiterleiten "
                           f"(Docker: Port-Freigabe /udp, Container neu erstellen)."}
     finally:
         try:

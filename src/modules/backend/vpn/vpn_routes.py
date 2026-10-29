@@ -118,6 +118,8 @@ async def hosts(user: dict = Depends(get_current_user)):
 def list_tunnels(user: dict = Depends(get_current_user)):
     out = []
     for t in store.load()["tunnels"].values():
+        if t.get("temp"):
+            continue                                   # kurzlebiger Test-Tunnel (Verbindungstest)
         if _may_manage(user, t) or (is_super_admin(user)):
             out.append(_view(user, t, True))
         elif _is_member(user, t):
@@ -513,26 +515,22 @@ def candidates(user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------ Endpunkt-Test
-@router.get("/tunnels/{tid}/testers")
-def testers(tid: str, user: dict = Depends(get_current_user)):
-    """Wer kann den Endpunkt testen: Online-Agents/Nodes (mit c_vpn), Backend (Admins, wenn eine Node Host ist).
-    Aussagekraeftig ist der Test nur von AUSSERHALB des Host-Netzes (sonst greift das Router-Hairpin)."""
-    t = _tunnel_or_404(tid)
-    if not _may_manage(user, t):
-        raise HTTPException(403, "Nur Ersteller oder Administratoren")
+def _testers(user: dict, host: str, endpoint: str) -> dict:
+    """Wer kann testen: Online-Agents/Nodes (mit c_vpn), Backend (Admins, wenn eine Node Host ist).
+    Aussagekraeftig nur von AUSSERHALB des Host-Netzes (sonst greift das Router-Hairpin)."""
+    import socket
     from app.sockets import state
     ep_ips = set()
     try:
-        import socket
-        ep_ips = {ai[4][0] for ai in socket.getaddrinfo(t["endpoint"].rsplit(":", 1)[0].strip("[]"), None, socket.AF_INET)}
+        ep_ips = {ai[4][0] for ai in socket.getaddrinfo(endpoint.rsplit(":", 1)[0].strip("[]"), None, socket.AF_INET)}
     except OSError:
         pass
-    host_ip = (db.get_client(t["host"]) or {}).get("ip") if t["host"] != "backend" else ""
+    host_ip = (db.get_client(host) or {}).get("ip") if host != "backend" else ""
     out = []
-    if t["host"] != "backend" and is_super_admin(user):
+    if host != "backend" and is_super_admin(user):
         out.append({"id": "backend", "name": "RMM-Server (Backend)", "same_net": False})
     for c in db.list_clients():
-        if c["id"] == t["host"] or not state.is_online(c["id"]):
+        if c["id"] == host or not state.is_online(c["id"]):
             continue
         if not (can_access_client(user, c["id"]) and user_has_permission(user, "c_vpn", c["id"])):
             continue
@@ -540,6 +538,14 @@ def testers(tid: str, user: dict = Depends(get_current_user)):
         out.append({"id": c["id"], "name": c.get("hostname") or c["id"][:8], "ip": ip,
                     "same_net": bool(ip and (ip in ep_ips or ip == host_ip))})
     return {"testers": sorted(out, key=lambda x: (x["same_net"], x["name"].lower())), "endpoint_ips": sorted(ep_ips)}
+
+
+@router.get("/tunnels/{tid}/testers")
+def testers(tid: str, user: dict = Depends(get_current_user)):
+    t = _tunnel_or_404(tid)
+    if not _may_manage(user, t):
+        raise HTTPException(403, "Nur Ersteller oder Administratoren")
+    return _testers(user, t["host"], t["endpoint"])
 
 
 class TestBody(BaseModel):
@@ -591,3 +597,82 @@ def setup_script(user: dict = Depends(get_current_user)):
     sh = (Path(__file__).with_name("vpn-host-setup.sh")).read_text(encoding="utf-8")
     return PlainTextResponse(sh, media_type="text/x-shellscript",
                              headers={"Content-Disposition": 'attachment; filename="vpn-host-setup.sh"'})
+
+
+# ------------------------------------------------------------------ Verbindungstest ohne Tunnel
+# (Modul-Einstellungen: Host + Endpunkt + Port pruefen, BEVOR ein Tunnel angelegt wird)
+def _check_host_perm(user: dict, host: str) -> None:
+    if host == "backend":
+        if not is_super_admin(user):
+            raise HTTPException(403, "Nur Administratoren")
+    elif not user_has_permission(user, "c_vpn", host):
+        raise HTTPException(403, "Kein Recht „VPN-Tunnel ausstellen“ auf dieser Node")
+
+
+@router.get("/probe/defaults")
+def probe_defaults(host: str, req: Request, port: int = 0, user: dict = Depends(get_current_user)):
+    _check_host_perm(user, host)
+    port = port or int(_set("base_port", 51820))
+    ep = _default_endpoint(req, host, port)
+    return {"endpoint": ep, "port": port, "warnings": endpoint_problems(ep) if ep else [],
+            **_testers(user, host, ep or "")}
+
+
+class ProbeBody(BaseModel):
+    host: str = "backend"
+    endpoint: str = ""
+    port: int = 0
+    via: str
+
+
+@router.post("/probe")
+async def probe(body: ProbeBody, req: Request, user: dict = Depends(get_current_user)):
+    """Echter Handshake-Test fuer Host + Endpunkt + UDP-Port. Laeuft auf dem Port schon ein Tunnel
+    dieses Hosts, wird dieser benutzt; sonst wird ein Test-Tunnel angelegt und danach entfernt."""
+    _check_host_perm(user, body.host)
+    if body.via == "backend":
+        if not is_super_admin(user) or body.host == "backend":
+            raise HTTPException(403, "Das Backend kann nur testen, wenn eine Node Host ist (Admins)")
+    elif not user_has_permission(user, "c_vpn", body.via):
+        raise HTTPException(403, "Kein Recht „VPN-Tunnel ausstellen“ für diesen Tester")
+    port = body.port or int(_set("base_port", 51820))
+    ep = body.endpoint.strip() or _default_endpoint(req, body.host, port)
+    if not ep:
+        raise HTTPException(400, "Endpunkt angeben")
+    if ":" not in ep.rsplit("]", 1)[-1]:
+        ep = f"{ep}:{port}"
+    warnings = endpoint_problems(ep)
+    d = store.load()
+    running = next((t for t in d["tunnels"].values() if t["host"] == body.host and t["port"] == port
+                    and t.get("state") == "active"), None)
+    if running:
+        res = await hosting.endpoint_test(running["id"], body.via, ep)
+        res["used_tunnel"] = running["name"]
+        return {**res, "endpoint": ep, "endpoint_warnings": warnings}
+    if body.host != "backend":
+        from app import node_manager
+        try:
+            node_manager.require_module(body.host, "vpn")
+        except node_manager.NodeError as e:
+            raise HTTPException(409, str(e))
+    used = {t["subnet"] for t in d["tunnels"].values() if t.get("state") != "expired"}
+    priv, pub = wgconf.keypair()
+    t = {"id": store.new_id(), "name": "Verbindungstest", "host": body.host, "port": port, "endpoint": ep,
+         "mode": "virtual", "ip_mode": "nat", "subnet": wgconf.pick_subnet(str(_set("pool", "10.77.0.0/16")), used),
+         "lan": {}, "dns": "", "routes": [], "keepalive": 25, "host_pub": pub, "host_priv_enc": store.enc(priv),
+         "created": int(time.time()), "created_by": user["username"], "expires": int(time.time()) + 300,
+         "state": "pending", "error": "", "auto": False, "peers": {}, "temp": True}
+    t["host_ip"] = wgconf.host_ip(t)
+    store.update(lambda dd: dd["tunnels"].__setitem__(t["id"], t))
+    try:
+        ap = await hosting.apply(t["id"])
+        if not ap.get("ok"):
+            return {"ok": False, "step": "host", "endpoint": ep, "endpoint_warnings": warnings,
+                    "detail": f"Test-Tunnel ließ sich auf dem Host nicht starten: {ap.get('error')}"}
+        x = store.get(t["id"]) or {}
+        res = await hosting.endpoint_test(t["id"], body.via, ep)
+        return {**res, "endpoint": ep, "endpoint_warnings": warnings, "host_warnings": x.get("warnings") or []}
+    finally:
+        await hosting.host_down(t)
+        store.update(lambda dd: dd["tunnels"].pop(t["id"], None))
+        db.add_audit_entry(user["username"], "vpn.probe", details=f"{ep} über {body.via}")

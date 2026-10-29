@@ -63,5 +63,9 @@
       "w": 980,
       "h": 700
     }
-  ]
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
 }
