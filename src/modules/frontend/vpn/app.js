@@ -167,10 +167,16 @@ export function renderVpn(body, win) {
       </div>
       <div style="display:grid;grid-template-columns:150px 1fr;gap:4px 12px;margin-bottom:14px;font-size:12.5px">
         <span style="color:var(--subtext)">Zustand</span><span data-state>${esc(t.state)}${t.error ? ` – <span style="color:var(--danger)">${esc(t.error)}</span>` : ""}</span>
-        <span style="color:var(--subtext)">Host</span><span>${esc(t.host_name)} · Endpunkt <code>${esc(t.endpoint)}</code> · Schnittstelle <code>${esc(t.iface)}</code></span>
+        <span style="color:var(--subtext)">Host</span><span>${esc(t.host_name)} · Schnittstelle <code>${esc(t.iface)}</code> · UDP-Port <code>${t.port}</code></span>
+        <span style="color:var(--subtext)">Endpunkt</span><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${m && !ended ? `<input data-ep value="${esc(t.endpoint)}" style="min-width:240px"><button class="btn btn-sm" data-ep-save>Speichern</button>`
+                        : `<code>${esc(t.endpoint)}</code>`}
+          <span style="font-size:11.5px;color:var(--subtext)">Öffentliche Adresse:Port, unter der Teilnehmer den Host erreichen</span></span>
         <span style="color:var(--subtext)">Netz</span><span>${t.mode === "real" ? `reelles Netz ${esc(t.lan?.cidr || "")} über ${esc(t.lan?.iface || "")} – ${t.ip_mode === "own" ? `eigene IPs ${esc(t.lan?.pool_start)}–${esc(t.lan?.pool_end)}` : `NAT (IP des Hosts), intern ${esc(t.subnet)}`}` : `virtuell ${esc(t.subnet)} (Host ${esc(t.host_ip)})`}</span>
         <span style="color:var(--subtext)">Laufzeit</span><span>${ended ? "beendet" : fmtExp(t.expires)}</span>
       </div>
+      ${(t.endpoint_warnings || []).length && !ended ? `<div style="border:1px solid var(--danger);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px">
+        <b style="color:var(--danger)">Teilnehmer werden den Host so wahrscheinlich nicht erreichen:</b><ul style="margin:4px 0 0 18px;padding:0">${t.endpoint_warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${(t.warnings || []).length && !ended ? `<div style="border:1px solid #f5a524;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px">
         <b style="color:#f5a524">Tunnel läuft, aber:</b><ul style="margin:4px 0 0 18px;padding:0">${t.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><b style="flex:1">Teilnehmer (${t.peers.length})</b>
@@ -190,6 +196,13 @@ export function renderVpn(body, win) {
     $("[data-extend]")?.addEventListener("click", async () => {
       try { await vq(`/tunnels/${tid}`, { method: "PUT", body: { hours: Number($("[data-ext]").value) } }); detail(tid); }
       catch (e) { window.notify?.(e.message, "error", 6000); }
+    });
+    $("[data-ep-save]")?.addEventListener("click", async () => {
+      try {
+        const r = await vq(`/tunnels/${tid}`, { method: "PUT", body: { endpoint: $("[data-ep]").value.trim() } });
+        window.notify?.("Endpunkt gespeichert – Agents werden neu verbunden. Benutzer: Datei neu laden (die Client-App macht das selbst).", "success", 9000);
+        detail(tid);
+      } catch (e) { window.notify?.(e.message, "error", 6000); }
     });
     $("[data-retry]")?.addEventListener("click", async () => {
       try { const r = await vq(`/tunnels/${tid}/retry`, { method: "POST" }); window.notify?.(r.ok ? "Angewendet" : r.error, r.ok ? "success" : "error", 8000); detail(tid); }
@@ -225,7 +238,8 @@ export function renderVpn(body, win) {
             const s = st.peers[tr.dataset.p]; const td = tr.querySelector("[data-conn]");
             if (!s || td.textContent.startsWith("⚠")) return;
             td.innerHTML = s.connected ? `<span style="color:#3ecf8e">● verbunden</span> <span style="color:var(--subtext)">↓${bytes(s.rx)} ↑${bytes(s.tx)}</span>`
-              : s.handshake ? `<span style="color:var(--subtext)">zuletzt ${new Date(s.handshake * 1000).toLocaleTimeString()}</span>` : `<span style="color:var(--subtext)">nicht verbunden</span>`;
+              : (s.handshake ? `<span style="color:var(--subtext)">zuletzt ${new Date(s.handshake * 1000).toLocaleTimeString()}</span>` : `<span style="color:var(--subtext)">nicht verbunden</span>`)
+                + (s.hint ? `<div style="font-size:11px;color:#f5a524;max-width:340px;white-space:normal">${esc(s.hint)}</div>` : "");
           });
           if (st.error && m) $("[data-state]").innerHTML = `${esc(t.state)} – <span style="color:var(--danger)">Host: ${esc(st.error)}</span>`;
         } catch { /* weiter versuchen */ }

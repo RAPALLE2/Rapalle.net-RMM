@@ -77,6 +77,8 @@ def _view(user: dict, t: dict, full: bool) -> dict:
     out["iface"] = wgconf.iface(t)
     out["peer_iface"] = wgconf.peer_iface(t)
     out["can_manage"] = _may_manage(user, t)
+    if "endpoint_warnings" not in t and t.get("state") != "expired":
+        out["endpoint_warnings"] = endpoint_problems(t.get("endpoint", ""))      # aeltere Tunnel
     peers = []
     for p in t["peers"].values():
         if not full and not (p["kind"] == "user" and p["ref"] == user["id"]):
@@ -155,11 +157,50 @@ class TunnelBody(BaseModel):
 
 
 def _default_endpoint(req: Request, host: str, port: int) -> str:
+    """Oeffentliche Adresse des Hosts. Backend: VPN-Einstellung > Server-Adresse aus den
+    Einstellungen (Domain, IP, volle URL) > Adresse, ueber die das Dashboard gerade laeuft."""
     if host == "backend":
-        h = str(_set("public_host", "")) or urlparse(str(req.base_url)).hostname or "rmm.example"
+        h = str(_set("public_host", "")).strip()
+        if not h:
+            h = (db.get_setting("server_domain", "") or "").strip() or (db.get_setting("server_host", "") or "").strip()
+        if not h:
+            h = urlparse((db.get_setting("server_url", "") or "").strip()).hostname or ""
+        if not h:
+            h = urlparse(str(req.base_url)).hostname or ""
     else:
-        h = (db.get_client(host) or {}).get("ip") or ""
+        c = db.get_client(host) or {}
+        h = (c.get("node_endpoint") or "").split(":")[0] if c.get("node_endpoint") else (c.get("ip") or "")
     return f"{h}:{port}" if h else ""
+
+
+# Cloudflare leitet nur HTTP(S) weiter, KEIN UDP -> WireGuard kommt dort nie an
+_CF_NETS = ["173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
+            "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
+            "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22"]
+
+
+def endpoint_problems(endpoint: str) -> list[str]:
+    """Haeufige Gruende, warum Teilnehmer den Host nie erreichen (Tunnel 'aktiv', aber nie verbunden)."""
+    import socket
+    host = endpoint.rsplit(":", 1)[0].strip("[]")
+    out = []
+    if not host or host in ("localhost",) or host.startswith("127."):
+        return [f"Der Endpunkt „{endpoint}“ zeigt auf diesen Rechner selbst – von außen nicht erreichbar."]
+    try:
+        ips = {ai[4][0] for ai in socket.getaddrinfo(host, None, socket.AF_INET)}
+    except OSError:
+        return [f"„{host}“ lässt sich nicht auflösen."]
+    for ip in ips:
+        a = ipaddress.ip_address(ip)
+        if any(a in ipaddress.ip_network(n) for n in _CF_NETS):
+            out.append(f"„{host}“ läuft über den Cloudflare-Proxy ({ip}). Cloudflare leitet kein UDP weiter – "
+                       f"als Endpunkt die echte öffentliche IP bzw. einen DNS-Namen ohne Proxy (graue Wolke) angeben.")
+            break
+        if a.is_private or a.is_loopback or ip.startswith("100.64."):
+            out.append(f"„{host}“ ist eine interne Adresse ({ip}) – Teilnehmer außerhalb dieses Netzes erreichen sie nicht. "
+                       f"Für Zugriff von außen die öffentliche IP/DynDNS angeben und den UDP-Port im Router weiterleiten.")
+            break
+    return out
 
 
 def _new_peers(user: dict, t: dict, m: MembersBody, expires: int) -> list[dict]:
@@ -267,6 +308,7 @@ async def create_tunnel(body: TunnelBody, req: Request, user: dict = Depends(get
         joined = _new_peers(user, t, body.members, 0)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    t["endpoint_warnings"] = endpoint_problems(t["endpoint"])
     store.update(lambda dd: dd["tunnels"].__setitem__(t["id"], t))
     res = await hosting.apply(t["id"], joined=joined)
     db.add_audit_entry(user["username"], "vpn.tunnel_created",
@@ -299,7 +341,11 @@ async def edit_tunnel(tid: str, body: EditBody, user: dict = Depends(get_current
         if expires is not None:
             x["expires"] = expires
         if body.endpoint:
-            x["endpoint"] = body.endpoint.strip()
+            ep = body.endpoint.strip()
+            if ":" not in ep:
+                ep = f"{ep}:{x['port']}"
+            x["endpoint"] = ep
+            x["endpoint_warnings"] = endpoint_problems(ep)
         if body.dns is not None:
             x["dns"] = body.dns.strip()[:100]
         if body.auto is not None:
@@ -390,8 +436,23 @@ async def tunnel_status(tid: str, user: dict = Depends(get_current_user)):
     for p in t["peers"].values():
         s = st.get("peers", {}).get(p["pub"]) or {}
         hs = s.get("handshake") or 0
-        peers[p["id"]] = {"connected": bool(hs and now - hs < 180), "handshake": hs,
-                          "endpoint": s.get("endpoint", ""), "rx": s.get("rx", 0), "tx": s.get("tx", 0)}
+        connected = bool(hs and now - hs < 180)
+        rx = s.get("rx", 0)
+        # Diagnose aus Sicht des Hosts
+        if connected:
+            hint = ""
+        elif not st.get("up"):
+            hint = "Host-Tunnel läuft nicht"
+        elif not hs and p["kind"] == "user":
+            # (WireGuard zaehlt fehlgeschlagene Handshakes keinem Teilnehmer zu - daher nur dieser Hinweis)
+            hint = ("Noch nie verbunden: Tunnel in WireGuard aktiviert? Die App zeigt „aktiv“ auch ohne Verbindung. "
+                    "Sonst Endpunkt/UDP-Port prüfen; nach einer Endpunkt-Änderung die Datei neu laden.")
+        elif not hs:
+            hint = "Noch nie verbunden – Endpunkt/UDP-Port prüfen bzw. Agent aktualisieren."
+        else:
+            hint = "Verbindung eingeschlafen (letzter Handshake älter als 3 min)."
+        peers[p["id"]] = {"connected": connected, "handshake": hs, "hint": hint,
+                          "endpoint": s.get("endpoint", ""), "rx": rx, "tx": s.get("tx", 0)}
     return {"up": st.get("up", False), "error": st.get("error", ""), "peers": peers}
 
 
