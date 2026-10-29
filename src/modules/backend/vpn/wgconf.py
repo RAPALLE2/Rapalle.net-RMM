@@ -88,14 +88,35 @@ def _prefix(t: dict) -> str:
     return str(ipaddress.ip_network(t["subnet"]).prefixlen)
 
 
-def host_conf(t: dict) -> str:
-    """[Interface] des Hosts + alle aktiven Teilnehmer."""
-    i = "%i"
-    up, down = ["sysctl -w net.ipv4.ip_forward=1"], []
+def _sysctl(key: str) -> str:
+    """Kernel-Schalter setzen, aber NUR wenn noetig - und ohne den Tunnel zu verhindern.
+    In Docker-Containern ist /proc/sys meist schreibgeschuetzt ("permission denied");
+    dort muss der Schalter beim Container-Start gesetzt sein (docker-compose: sysctls)."""
+    path = "/proc/sys/" + key.replace(".", "/")
+    return (f'[ "$(cat {path} 2>/dev/null)" = 1 ] || sysctl -q -w {key}=1 2>/dev/null || '
+            f'echo "RMM-VPN Warnung: {key} ist aus und kann hier nicht gesetzt werden" >&2')
 
-    def rule(r):
-        up.append(f"iptables -A {r}")
-        down.append(f"iptables -D {r}")
+
+def _ipt(spec: str, table: str = "") -> tuple[str, str]:
+    """iptables-Regel idempotent hinzufuegen/entfernen; fehlt iptables oder das Recht -> nur Warnung."""
+    t = f"-t {table} " if table else ""
+    up = (f"command -v iptables >/dev/null 2>&1 && {{ iptables {t}-C {spec} 2>/dev/null || iptables {t}-A {spec}; }} "
+          f'|| echo "RMM-VPN Warnung: iptables-Regel nicht gesetzt ({spec})" >&2')
+    down = f"iptables {t}-D {spec} 2>/dev/null || true"
+    return up, down
+
+
+def host_conf(t: dict) -> str:
+    """[Interface] des Hosts + alle aktiven Teilnehmer.
+    Jede Hilfsregel steht in einer EIGENEN PostUp-Zeile und darf scheitern, ohne dass wg-quick
+    den Tunnel wieder abbaut (frueher: "sysctl: permission denied" im Container -> Tunnel weg)."""
+    i = "%i"
+    up, down = [_sysctl("net.ipv4.ip_forward")], []
+
+    def rule(spec, table=""):
+        u, d = _ipt(spec, table)
+        up.append(u)
+        down.append(d)
 
     if t["mode"] == "virtual":
         rule(f"FORWARD -i {i} -o {i} -j ACCEPT")
@@ -105,16 +126,14 @@ def host_conf(t: dict) -> str:
         rule(f"FORWARD -i {lif} -o {i} -m state --state RELATED,ESTABLISHED -j ACCEPT")
         if t.get("ip_mode") == "own":
             rule(f"FORWARD -i {lif} -o {i} -j ACCEPT")
-            up.append(f"sysctl -w net.ipv4.conf.{lif}.proxy_arp=1")
+            up.append(_sysctl(f"net.ipv4.conf.{lif}.proxy_arp"))
         else:
-            up.append(f"iptables -t nat -A POSTROUTING -s {t['subnet']} -o {lif} -j MASQUERADE")
-            down.append(f"iptables -t nat -D POSTROUTING -s {t['subnet']} -o {lif} -j MASQUERADE")
+            rule(f"POSTROUTING -s {t['subnet']} -o {lif} -j MASQUERADE", "nat")
     lines = ["# RMM-VPN Host – vom Backend erzeugt, nicht von Hand ändern",
              "[Interface]", f"Address = {t['host_ip']}/{_prefix(t)}", f"ListenPort = {t['port']}",
-             f"PrivateKey = {store.dec(t['host_priv_enc'])}",
-             f"PostUp = {'; '.join(up)}"]
-    if down:
-        lines.append(f"PostDown = {'; '.join(down)}")
+             f"PrivateKey = {store.dec(t['host_priv_enc'])}"]
+    lines += [f"PostUp = {u} || true" for u in up]
+    lines += [f"PostDown = {d}" for d in down]
     for p in t["peers"].values():
         lines += ["", f"# {p['kind']}: {p['name']}", "[Peer]", f"PublicKey = {p['pub']}", f"AllowedIPs = {p['ip']}/32"]
     return "\n".join(lines) + "\n"

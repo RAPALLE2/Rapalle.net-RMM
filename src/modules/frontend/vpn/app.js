@@ -66,7 +66,8 @@ export function renderVpn(body, win) {
             <span style="font-size:12px;color:var(--subtext)">${t.state === "expired" ? "" : fmtExp(t.expires)}</span>
           </div>
           <div style="font-size:12px;color:var(--subtext);margin-top:3px">Host: ${esc(t.host_name)} · ${t.mode === "real" ? `reelles Netz ${esc(t.lan?.cidr || "")} (${t.ip_mode === "own" ? "eigene IPs" : "IP des Hosts"})` : `virtuelles Netz ${esc(t.subnet)}`}
-            · ${t.peers.length} Teilnehmer${t.can_manage ? "" : " (du bist Teilnehmer)"}${t.error ? ` · <span style="color:var(--danger)">${esc(t.error)}</span>` : ""}</div>
+            · ${t.peers.length} Teilnehmer${t.can_manage ? "" : " (du bist Teilnehmer)"}${t.error ? ` · <span style="color:var(--danger)">${esc(t.error)}</span>` : ""}
+            ${(t.warnings || []).length && t.state === "active" ? ` · <span style="color:#f5a524">⚠ ${t.warnings.length} Hinweis(e)</span>` : ""}</div>
         </div>`).join("") : `<div style="color:var(--subtext)">Noch keine Tunnel.</div>`}`;
     root.querySelector("[data-new]")?.addEventListener("click", () => create(d));
     root.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => detail(el.dataset.open)));
@@ -141,6 +142,7 @@ export function renderVpn(body, win) {
       try {
         const r = await vq("/tunnels", { method: "POST", body: payload });
         if (!r.ok) window.notify?.(`Tunnel angelegt, Host meldet: ${r.error}`, "warn", 12000);
+        else if ((r.tunnel.warnings || []).length) window.notify?.("Tunnel aktiv – mit Hinweisen (siehe Details)", "warn", 8000);
         else window.notify?.("Tunnel aktiv", "success", 3000);
         detail(r.tunnel.id);
       } catch (e) { $("[data-msg]").innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; $("[data-ok]").disabled = false; }
@@ -169,6 +171,8 @@ export function renderVpn(body, win) {
         <span style="color:var(--subtext)">Netz</span><span>${t.mode === "real" ? `reelles Netz ${esc(t.lan?.cidr || "")} über ${esc(t.lan?.iface || "")} – ${t.ip_mode === "own" ? `eigene IPs ${esc(t.lan?.pool_start)}–${esc(t.lan?.pool_end)}` : `NAT (IP des Hosts), intern ${esc(t.subnet)}`}` : `virtuell ${esc(t.subnet)} (Host ${esc(t.host_ip)})`}</span>
         <span style="color:var(--subtext)">Laufzeit</span><span>${ended ? "beendet" : fmtExp(t.expires)}</span>
       </div>
+      ${(t.warnings || []).length && !ended ? `<div style="border:1px solid #f5a524;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px">
+        <b style="color:#f5a524">Tunnel läuft, aber:</b><ul style="margin:4px 0 0 18px;padding:0">${t.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><b style="flex:1">Teilnehmer (${t.peers.length})</b>
         ${m && !ended ? `<button class="btn btn-sm btn-primary" data-add>＋ Hinzufügen</button>` : ""}</div>
       <div data-addbox></div>

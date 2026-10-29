@@ -78,6 +78,26 @@ def _iface_exists(name: str) -> bool:
     return Path(f"/sys/class/net/{name}").exists()
 
 
+def _warnings(conf: str, out: str = "") -> list[str]:
+    """Was nach dem Hochfahren fehlt (Tunnel laeuft trotzdem)."""
+    # nur echte Meldungen - nicht die von wg-quick wiederholten Befehlszeilen ("[#] ...")
+    w = [ln.split("RMM-VPN Warnung:", 1)[1].strip() for ln in out.splitlines()
+         if "RMM-VPN Warnung:" in ln and not ln.lstrip().startswith("[#]")]
+    if any("ip_forward" in x for x in w):
+        w = [x for x in w if "ip_forward" not in x]          # ersetzt durch den ausfuehrlichen Hinweis unten
+    if not IS_WINDOWS:
+        try:
+            if Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() != "1":
+                w.append("IP-Weiterleitung (net.ipv4.ip_forward) ist aus – Teilnehmer erreichen nur den Host, "
+                         "nicht einander bzw. das Netz dahinter. Docker: in docker-compose.yml unter "
+                         "„sysctls: - net.ipv4.ip_forward=1“ setzen und den Container neu erstellen.")
+        except OSError:
+            pass
+        if "iptables" in conf and not shutil.which("iptables"):
+            w.append("iptables fehlt – Weiterleitungs-/NAT-Regeln konnten nicht gesetzt werden.")
+    return list(dict.fromkeys(w))
+
+
 def up(name: str, conf: str) -> dict:
     """Tunnel anlegen/aktualisieren und verbinden."""
     name = _check(name)
@@ -110,12 +130,12 @@ def up(name: str, conf: str) -> dict:
             finally:
                 os.unlink(tmp)
             if code == 0:
-                return {"ok": True, "changed": "synced"}
+                return {"ok": True, "changed": "synced", "warnings": _warnings(conf)}
         _run(["wg-quick", "down", name], timeout=60)
     code, out = _run(["wg-quick", "up", name], timeout=90)
     if code != 0:
         raise RuntimeError(out.strip()[-600:] or f"wg-quick endete mit {code}")
-    return {"ok": True, "changed": "up"}
+    return {"ok": True, "changed": "up", "warnings": _warnings(conf, out)}
 
 
 def down(name: str) -> dict:

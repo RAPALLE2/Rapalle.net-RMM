@@ -104,8 +104,10 @@ async def apply(tid: str, joined: list[dict] | None = None, left: list[dict] | N
         raise KeyError(tid)
     for p in left or []:
         await peer_leave(t, p)
+    warn = []
     try:
-        await host_up(t)
+        res = await host_up(t)
+        warn = list((res or {}).get("warnings") or []) if isinstance(res, dict) else []
         err = ""
     except Exception as e:  # noqa: BLE001
         err = str(e)
@@ -114,12 +116,13 @@ async def apply(tid: str, joined: list[dict] | None = None, left: list[dict] | N
         x = d["tunnels"].get(tid)
         if x:
             x["state"], x["error"] = ("error", err) if err else ("active", "")
+            x["warnings"] = [] if err else warn
     store.update(upd)
     if err:
         return {"ok": False, "error": err}
     for p in joined or []:
         await peer_join(t, p)
-    return {"ok": True}
+    return {"ok": True, "warnings": warn}
 
 
 async def end_tunnel(tid: str, reason: str = "abgelaufen") -> None:
