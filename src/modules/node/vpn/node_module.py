@@ -37,7 +37,11 @@ def vpn_check(ctx, data):
     return {**wg.available(), "tunnels": wg.list_rmm()}
 
 
-OPS = {"vpn-up": vpn_up, "vpn-down": vpn_down, "vpn-status": vpn_status, "vpn-check": vpn_check,
+def vpn_ping(ctx, data):
+    return wg.ping(str(data.get("ip") or ""))
+
+
+OPS = {"vpn-ping": vpn_ping, "vpn-up": vpn_up, "vpn-down": vpn_down, "vpn-status": vpn_status, "vpn-check": vpn_check,
        "vpn-tools": vpn_tools}
 
 
@@ -46,7 +50,8 @@ def _install(ctx):
     import os
     import shutil
     import subprocess
-    need = {"wg-quick": "wireguard-tools", "wg": "wireguard-tools", "iptables": "iptables", "ip": "iproute2"}
+    need = {"wg-quick": "wireguard-tools", "wg": "wireguard-tools", "iptables": "iptables", "ip": "iproute2",
+            "ping": "iputils-ping"}
     missing = sorted({pkg for exe, pkg in need.items() if not shutil.which(exe)})
     if not missing or not shutil.which("apt-get") or not (hasattr(os, "geteuid") and os.geteuid() == 0):
         return {"missing": missing}

@@ -1927,7 +1927,34 @@ def _wg_up(name, conf):
         raise RuntimeError(out.strip()[-400:] or "WireGuard-Fehler %d" % code)
 
 
+def _wg_firewall(name, allow_from, add=True):
+    """Eingehenden Verkehr aus dem VPN-Netz zulassen (Ping, Freigaben, Remote-Dienste der Teilnehmer).
+    Windows: Firewall-Regel je Tunnel. Linux: ufw bzw. firewalld, falls aktiv (sonst ist meist nichts zu tun)."""
+    rule = "RMM-VPN " + name
+    try:
+        if IS_WINDOWS:
+            _wg_run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + rule], 30)
+            if add and allow_from:
+                remote = ",".join(x.strip() for x in allow_from.split(",") if x.strip())
+                _wg_run(["netsh", "advfirewall", "firewall", "add", "rule", "name=" + rule, "dir=in", "action=allow",
+                         "protocol=any", "remoteip=" + remote, "profile=any", "enable=yes"], 30)
+            return
+        if shutil.which("ufw"):
+            code, out = _wg_run(["ufw", "status"], 20)
+            if code == 0 and "Status: active" in out:
+                _wg_run(["ufw", "--force", "delete", "allow", "in", "on", name], 20)
+                if add:
+                    _wg_run(["ufw", "allow", "in", "on", name], 20)
+        if shutil.which("firewall-cmd"):
+            code, _ = _wg_run(["firewall-cmd", "--state"], 20)
+            if code == 0:
+                _wg_run(["firewall-cmd", "--zone=trusted", ("--add-interface=" if add else "--remove-interface=") + name], 20)
+    except Exception as e:
+        _print(f"[wg] Firewall {name}: {e}")
+
+
 def _wg_down(name):
+    _wg_firewall(name, "", add=False)
     exe = _wg_exe()
     if exe:
         if IS_WINDOWS:
@@ -1948,6 +1975,8 @@ async def on_wg_join(payload):
         if not _WG_NAME.match(name):
             raise RuntimeError("ungültiger Tunnelname")
         await asyncio.to_thread(_wg_up, name, str(payload.get("conf") or ""))
+        if payload.get("allow_from"):
+            await asyncio.to_thread(_wg_firewall, name, str(payload.get("allow_from")), True)
         res["ok"] = True
         _print(f"[wg] Tunnel {name} verbunden")
     except Exception as e:

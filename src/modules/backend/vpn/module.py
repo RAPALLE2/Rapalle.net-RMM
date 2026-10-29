@@ -5,7 +5,8 @@ from app.sockets import sio
 from . import hosting
 
 
-NEEDED = {"wg-quick": "wireguard-tools", "wg": "wireguard-tools", "iptables": "iptables", "ip": "iproute2"}
+NEEDED = {"wg-quick": "wireguard-tools", "wg": "wireguard-tools", "iptables": "iptables", "ip": "iproute2",
+          "ping": "iputils-ping"}
 
 
 def _ensure_tools(ctx):

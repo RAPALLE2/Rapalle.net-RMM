@@ -213,6 +213,7 @@ export function renderVpn(body, win) {
           <td data-conn>${p.join_ok === false ? `<span style="color:var(--danger)" title="${esc(p.join_error)}">⚠ ${esc(p.join_error.slice(0, 60))}</span>` : "…"}</td>
           <td>${p.expires ? fmtExp(p.expires) : "wie Tunnel"}</td>
           <td style="text-align:right;white-space:nowrap">${!ended && (p.mine || m) && p.kind === "user" ? `<button class="btn-tool" data-dl="${esc(p.id)}" title="WireGuard-Datei herunterladen">⬇</button><button class="btn-tool" data-qr="${esc(p.id)}" title="QR-Code für die WireGuard-App">▦</button>` : ""}
+            ${!ended && !p.mine ? `<button class="btn-tool" data-ping="${esc(p.id)}" title="Vom Host aus anpingen (Diagnose)">📶</button>` : ""}
             ${m || p.mine ? `<button class="btn-tool" data-rm="${esc(p.id)}" title="Aus dem Tunnel entfernen">✕</button>` : ""}</td></tr>`).join("")
           || `<tr><td colspan="6" style="color:var(--subtext)">Noch keine Teilnehmer.</td></tr>`}</tbody></table>
       <div data-qrbox style="margin-top:12px"></div>`;
@@ -282,6 +283,16 @@ export function renderVpn(body, win) {
         $("[data-qrbox]").innerHTML = `<div style="display:inline-block;background:#fff;padding:10px;border-radius:8px"><img src="${url}" style="width:240px;height:240px;display:block"></div>
           <div style="font-size:12px;color:var(--subtext);margin-top:4px">In der WireGuard-App: „+“ → „QR-Code scannen“.</div>`;
       } catch (e) { window.notify?.(e.message, "error"); }
+    });
+    root.querySelectorAll("[data-ping]").forEach((b) => b.onclick = async () => {
+      const box = $("[data-qrbox]");
+      box.innerHTML = `<span style="color:var(--subtext)">⏳ Host pingt ${esc(t.peers.find((x) => x.id === b.dataset.ping)?.ip || "")} …</span>`;
+      try {
+        const r = await vq(`/tunnels/${tid}/peers/${b.dataset.ping}/ping`, { method: "POST" });
+        box.innerHTML = `<div style="border:1px solid ${r.ok ? "#3ecf8e" : "var(--danger)"};border-radius:8px;padding:8px 12px;font-size:12.5px">
+          <b style="color:${r.ok ? "#3ecf8e" : "var(--danger)"}">${r.ok ? `✔ Host erreicht ${esc(r.ip)}` : `✘ Host erreicht ${esc(r.ip)} nicht`}</b>
+          ${r.ok ? ` – ${r.loss}% Verlust${r.avg_ms != null ? `, Ø ${r.avg_ms} ms` : ""}` : ""}<div style="margin-top:4px">${esc(r.hint)}</div></div>`;
+      } catch (e) { box.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; }
     });
     root.querySelectorAll("[data-rm]").forEach((b) => b.onclick = async () => {
       if (!(await uiConfirm("Teilnehmer aus dem Tunnel entfernen?", { okText: "Entfernen", danger: true }))) return;

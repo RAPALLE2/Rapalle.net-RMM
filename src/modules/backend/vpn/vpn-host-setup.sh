@@ -85,6 +85,7 @@ host|check)
   command -v wg-quick >/dev/null 2>&1 || MISSING="$MISSING wireguard-tools"
   command -v iptables >/dev/null 2>&1 || MISSING="$MISSING iptables"
   command -v ip >/dev/null 2>&1 || MISSING="$MISSING iproute2"
+  command -v ping >/dev/null 2>&1 || MISSING="$MISSING iputils-ping"
   if kernel_wg; then ok "Kernel-WireGuard verfügbar"
   else
     if [ -c /dev/net/tun ]; then command -v wireguard-go >/dev/null 2>&1 || MISSING="$MISSING wireguard-go"

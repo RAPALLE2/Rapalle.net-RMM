@@ -676,3 +676,35 @@ async def probe(body: ProbeBody, req: Request, user: dict = Depends(get_current_
         await hosting.host_down(t)
         store.update(lambda dd: dd["tunnels"].pop(t["id"], None))
         db.add_audit_entry(user["username"], "vpn.probe", details=f"{ep} über {body.via}")
+
+
+@router.post("/tunnels/{tid}/peers/{pid}/ping")
+async def ping_peer(tid: str, pid: str, user: dict = Depends(get_current_user)):
+    """Diagnose: Ping VOM HOST zum Teilnehmer. Antwortet er dem Host, du aber nicht -> Weiterleitung
+    am Host; antwortet er auch dem Host nicht -> Firewall/WireGuard beim Teilnehmer."""
+    t = _tunnel_or_404(tid)
+    if not (_may_manage(user, t) or _is_member(user, t)):
+        raise HTTPException(403, "Keine Berechtigung")
+    p = t["peers"].get(pid)
+    if not p:
+        raise HTTPException(404, "Teilnehmer nicht gefunden")
+    try:
+        res = await hosting.host_ping(t, p["ip"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(409, f"Ping vom Host nicht möglich: {e}")
+    fwd = ""
+    try:
+        if t["host"] == "backend":
+            from pathlib import Path
+            fwd = Path("/proc/sys/net/ipv4/ip_forward").read_text().strip()
+    except OSError:
+        pass
+    if res.get("missing"):
+        hint = res.get("output", "")
+    elif res.get("ok"):
+        hint = ("Der Host erreicht den Teilnehmer. Erreichst du ihn trotzdem nicht, liegt es an der Weiterleitung "
+                "am Host" + (" (IP-Weiterleitung ist AUS!)" if fwd == "0" else "") + " oder an deiner eigenen Verbindung.")
+    else:
+        hint = ("Auch der Host erreicht den Teilnehmer nicht: Ist er verbunden (Handshake)? Blockiert seine Firewall "
+                "Ping? Windows-Agents öffnen ihre Firewall für das VPN-Netz ab der aktuellen Agent-Version.")
+    return {**res, "ip": p["ip"], "hint": hint, "ip_forward": fwd}

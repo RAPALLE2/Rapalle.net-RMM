@@ -184,3 +184,19 @@ def list_rmm() -> list[str]:
         return sorted(p.stem for p in _conf_dir().glob("rmm*.conf"))
     except OSError:
         return []
+
+
+def ping(ip: str, count: int = 3) -> dict:
+    """Vom Host aus einen Teilnehmer anpingen (Diagnose: kommt der Host bis zum Teilnehmer?)."""
+    import ipaddress
+    ipaddress.ip_address(ip)                                   # nur echte IPs
+    cmd = ["ping", "-n", str(count), "-w", "1000", ip] if IS_WINDOWS else ["ping", "-c", str(count), "-W", "1", ip]
+    code, out = _run(cmd, timeout=count * 2 + 5)
+    if code == 127:
+        return {"ok": False, "loss": 100, "avg_ms": None, "output": "ping fehlt auf dem Host (Paket iputils-ping) – "
+                "„Werkzeuge installieren“ ausführen", "missing": True}
+    m = re.search(r"(\d+)% (?:packet )?loss|Verlust.*?(\d+)%|\((\d+)% (?:loss|Verlust)\)", out)
+    loss = next((int(g) for g in (m.groups() if m else ()) if g), 100 if code else 0)
+    rtt = re.search(r"= [\d.]+/([\d.]+)/", out) or re.search(r"(?:Average|Mittelwert) = (\d+)ms", out)
+    return {"ok": code == 0 and loss < 100, "loss": loss, "avg_ms": float(rtt.group(1)) if rtt else None,
+            "output": out.strip()[-500:]}

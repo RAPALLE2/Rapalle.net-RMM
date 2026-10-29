@@ -73,7 +73,10 @@ async def peer_join(t: dict, p: dict) -> None:
     name = wgconf.peer_iface(t)
     if p["kind"] == "agent":
         from app.sockets import send_to_agent
-        ok = await send_to_agent(p["ref"], "wg-join", {"tunnel": t["id"], "peer": p["id"], "name": name, "conf": conf})
+        # allow_from: Netz(e) des Tunnels - der Agent oeffnet dafuer seine Firewall (Windows blockt
+        # z.B. Ping und Freigaben auf neuen Netzwerkadaptern), damit andere Teilnehmer ihn erreichen.
+        ok = await send_to_agent(p["ref"], "wg-join", {"tunnel": t["id"], "peer": p["id"], "name": name, "conf": conf,
+                                                       "allow_from": wgconf.peer_allowed(t)})
         peer_state[key] = {"ok": None if ok else False, "error": "" if ok else "Agent offline – wird beim nächsten Verbinden nachgeholt",
                            "ts": int(time.time())}
     elif p["kind"] == "backend":
@@ -266,3 +269,10 @@ async def endpoint_test(tid: str, via: str, endpoint: str | None = None) -> dict
                 await host_up(x)
             except Exception:  # noqa: BLE001
                 pass
+
+
+async def host_ping(t: dict, ip: str) -> dict:
+    """Ping vom VPN-Host zu einem Teilnehmer."""
+    if t["host"] == "backend":
+        return await asyncio.get_running_loop().run_in_executor(None, wgsys().ping, ip)
+    return await _node_call(t["host"], "vpn-ping", {"ip": ip}, timeout=30)
