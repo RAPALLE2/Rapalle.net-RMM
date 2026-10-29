@@ -38,6 +38,17 @@ async function download(tid, pid, name) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+async function downloadScript() {
+  try {
+    const res = await vq("/setup-script", { raw: true });
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: "vpn-host-setup.sh" });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    window.notify?.("Auf dem Host als root: sh vpn-host-setup.sh  ·  Proxmox-Host für einen CT: sh vpn-host-setup.sh --pve-ct <CTID>  ·  Docker-Host: --docker", "info", 15000);
+  } catch (e) { window.notify?.(e.message, "error"); }
+}
+
 export function renderVpn(body, win) {
   body.innerHTML = `<div data-root style="height:100%;overflow:auto;box-sizing:border-box;padding:16px 20px 22px;font-size:13px"></div>`;
   const root = body.querySelector("[data-root]");
@@ -54,7 +65,8 @@ export function renderVpn(body, win) {
     root.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
         <h2 style="margin:0;flex:1;font-size:20px">🛡️ VPN-Tunnel</h2>
-        ${d.can_create ? `<button class="btn btn-primary" data-new>＋ Neuer Tunnel</button>` : ""}
+        ${d.can_create ? `<button class="btn btn-sm" data-script title="Skript für Linux-Host, Proxmox-CT oder Docker-Host">⬇ Host-Einrichtungsskript</button>
+          <button class="btn btn-primary" data-new>＋ Neuer Tunnel</button>` : ""}
       </div>
       <p style="color:var(--subtext);margin:0 0 14px">WireGuard-Tunnel mit Benutzern, Agents, Nodes und dem Backend. Host ist das Backend oder eine Node.
         Eigene Konfiguration hier herunterladen (oder per QR-Code ins Handy) – die Client-App richtet Tunnel automatisch ein und entfernt sie bei Ablauf.</p>
@@ -70,6 +82,7 @@ export function renderVpn(body, win) {
             ${(t.warnings || []).length && t.state === "active" ? ` · <span style="color:#f5a524">⚠ ${t.warnings.length} Hinweis(e)</span>` : ""}</div>
         </div>`).join("") : `<div style="color:var(--subtext)">Noch keine Tunnel.</div>`}`;
     root.querySelector("[data-new]")?.addEventListener("click", () => create(d));
+    root.querySelector("[data-script]")?.addEventListener("click", downloadScript);
     root.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => detail(el.dataset.open)));
   }
 
@@ -161,7 +174,7 @@ export function renderVpn(body, win) {
         <button class="btn btn-sm" data-back>← Alle Tunnel</button><h2 style="margin:0;font-size:18px;flex:1">${esc(t.name)}</h2>
         ${m && !ended ? `<select data-ext>${DUR.map(([h, l]) => `<option value="${h}">${l}</option>`).join("")}<option value="0">unbegrenzt</option></select>
           <button class="btn btn-sm" data-extend>Laufzeit ab jetzt setzen</button>
-          ${t.state === "error" ? `<button class="btn btn-sm" data-retry>↻ Erneut anwenden</button>` : ""}
+          ${t.state === "error" || (t.warnings || []).length ? `<button class="btn btn-sm" data-retry>↻ Erneut anwenden</button>` : ""}
           <button class="btn btn-sm btn-danger" data-expire>Verfallen lassen</button>` : ""}
         ${m ? `<button class="btn btn-sm btn-danger" data-del>Löschen</button>` : ""}
       </div>
@@ -179,6 +192,18 @@ export function renderVpn(body, win) {
         <b style="color:var(--danger)">Teilnehmer werden den Host so wahrscheinlich nicht erreichen:</b><ul style="margin:4px 0 0 18px;padding:0">${t.endpoint_warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
       ${(t.warnings || []).length && !ended ? `<div style="border:1px solid #f5a524;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px">
         <b style="color:#f5a524">Tunnel läuft, aber:</b><ul style="margin:4px 0 0 18px;padding:0">${t.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+      ${m && !ended ? `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:14px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b style="margin-right:4px">Endpunkt testen</b>
+          <select data-tester style="min-width:220px"><option value="">Tester wird geladen …</option></select>
+          <button class="btn btn-sm btn-primary" data-test>▶ Testen</button>
+          <span style="flex:1"></span>
+          <button class="btn btn-sm" data-tools title="wireguard-tools, iptables, iproute2 (ggf. wireguard-go) auf dem Host nachinstallieren">🔧 Werkzeuge auf dem Host installieren</button>
+          <button class="btn btn-sm" data-script2>⬇ Einrichtungsskript</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--subtext);margin-top:4px">Ein Tester (Agent/Node oder das Backend) baut einen echten WireGuard-Handshake zu <code>${esc(t.endpoint)}</code> auf –
+          so wird geprüft, ob IP <b>und</b> UDP-Port erreichbar sind. Aussagekräftig nur von <b>außerhalb</b> des Host-Netzes.</div>
+        <div data-testres style="margin-top:8px"></div></div>` : ""}
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><b style="flex:1">Teilnehmer (${t.peers.length})</b>
         ${m && !ended ? `<button class="btn btn-sm btn-primary" data-add>＋ Hinzufügen</button>` : ""}</div>
       <div data-addbox></div>
@@ -196,6 +221,39 @@ export function renderVpn(body, win) {
     $("[data-extend]")?.addEventListener("click", async () => {
       try { await vq(`/tunnels/${tid}`, { method: "PUT", body: { hours: Number($("[data-ext]").value) } }); detail(tid); }
       catch (e) { window.notify?.(e.message, "error", 6000); }
+    });
+    $("[data-script2]")?.addEventListener("click", downloadScript);
+    if ($("[data-tester]")) {
+      vq(`/tunnels/${tid}/testers`).then((r) => {
+        const sel = $("[data-tester]");
+        sel.innerHTML = r.testers.length ? r.testers.map((x) => `<option value="${esc(x.id)}">${x.id === "backend" ? "🗄" : "🖥"} ${esc(x.name)}${x.same_net ? " (gleiches Netz wie der Host – wenig aussagekräftig)" : ""}</option>`).join("")
+          : `<option value="">kein Tester online</option>`;
+      }).catch((e) => { $("[data-tester]").innerHTML = `<option value="">${esc(e.message)}</option>`; });
+    }
+    $("[data-test]")?.addEventListener("click", async () => {
+      const via = $("[data-tester]").value, box = $("[data-testres]");
+      if (!via) return;
+      $("[data-test]").disabled = true;
+      box.innerHTML = `<span style="color:var(--subtext)">⏳ Test läuft (bis 30 s) …</span>`;
+      try {
+        const r = await vq(`/tunnels/${tid}/test`, { method: "POST", body: { via } });
+        box.innerHTML = `<div style="border:1px solid ${r.ok ? "#3ecf8e" : "var(--danger)"};border-radius:8px;padding:8px 12px">
+          <b style="color:${r.ok ? "#3ecf8e" : "var(--danger)"}">${r.ok ? "✔ Erreichbar" : "✘ Nicht erreichbar"}</b> – ${esc(r.detail || "")}
+          ${(r.steps || []).length ? `<div style="font-size:11.5px;color:var(--subtext);margin-top:4px">${r.steps.map(esc).join(" → ")}</div>` : ""}
+          ${(r.endpoint_warnings || []).map((w) => `<div style="font-size:12px;color:#f5a524;margin-top:4px">⚠ ${esc(w)}</div>`).join("")}</div>`;
+      } catch (e) { box.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; }
+      $("[data-test]").disabled = false;
+    });
+    $("[data-tools]")?.addEventListener("click", async () => {
+      const b = $("[data-tools]"); b.disabled = true; b.textContent = "⏳ installiere …";
+      try {
+        const r = await vq(`/hosts/${encodeURIComponent(t.host)}/tools`, { method: "POST" });
+        const miss = Object.entries(r.tools || {}).filter(([, v]) => !v).map(([k]) => k);
+        window.notify?.(r.ok !== false && !miss.length ? "Werkzeuge vorhanden – Tunnel wird neu angewendet"
+          : `Werkzeuge: ${miss.join(", ") || r.error || r.hint || "teilweise"} fehlen noch – ggf. Einrichtungsskript benutzen`, miss.length ? "warn" : "success", 10000);
+        await vq(`/tunnels/${tid}/retry`, { method: "POST" }).catch(() => {});
+        detail(tid);
+      } catch (e) { window.notify?.(e.message, "error", 8000); b.disabled = false; b.textContent = "🔧 Werkzeuge auf dem Host installieren"; }
     });
     $("[data-ep-save]")?.addEventListener("click", async () => {
       try {

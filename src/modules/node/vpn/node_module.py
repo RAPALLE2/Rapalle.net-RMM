@@ -37,19 +37,32 @@ def vpn_check(ctx, data):
     return {**wg.available(), "tunnels": wg.list_rmm()}
 
 
-OPS = {"vpn-up": vpn_up, "vpn-down": vpn_down, "vpn-status": vpn_status, "vpn-check": vpn_check}
+OPS = {"vpn-up": vpn_up, "vpn-down": vpn_down, "vpn-status": vpn_status, "vpn-check": vpn_check,
+       "vpn-tools": vpn_tools}
 
 
 def _install(ctx):
+    """Fehlende Werkzeuge EINZELN nachladen (wireguard-tools, iptables, iproute2; ohne Kernel-WG wireguard-go)."""
     import os
     import shutil
     import subprocess
-    if wg.available()["exe"] or not shutil.which("apt-get") or not (hasattr(os, "geteuid") and os.geteuid() == 0):
-        return
-    ctx.log("lade WireGuard-Werkzeuge …")
+    need = {"wg-quick": "wireguard-tools", "wg": "wireguard-tools", "iptables": "iptables", "ip": "iproute2"}
+    missing = sorted({pkg for exe, pkg in need.items() if not shutil.which(exe)})
+    if not missing or not shutil.which("apt-get") or not (hasattr(os, "geteuid") and os.geteuid() == 0):
+        return {"missing": missing}
+    if not os.path.exists("/sys/module/wireguard"):
+        missing.append("wireguard-go")
+    ctx.log(f"lade fehlende Werkzeuge: {', '.join(missing)} …")
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-    subprocess.run(["apt-get", "install", "-y", "-q", "--no-install-recommends", "wireguard-tools", "iproute2", "iptables"],
-                   capture_output=True, timeout=900, env=env)
+    subprocess.run(["apt-get", "update", "-q"], capture_output=True, timeout=600, env=env)
+    r = subprocess.run(["apt-get", "install", "-y", "-q", "--no-install-recommends", *missing],
+                       capture_output=True, text=True, timeout=900, env=env)
+    return {"installed": missing, "ok": r.returncode == 0, "error": r.stderr[-300:] if r.returncode else ""}
+
+
+def vpn_tools(ctx, data):
+    res = _install(ctx)
+    return {**res, **wg.available()}
 
 
 def start(ctx):

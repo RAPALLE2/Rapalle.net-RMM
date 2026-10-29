@@ -173,3 +173,85 @@ async def expiry_loop():
                         x["peers"].pop(pid, None)
                 store.update(upd)
                 await apply(tid, left=gone)
+
+
+# ---------------------------------------------------------------------------
+# Endpunkt-Test: echter WireGuard-Handshake von einem Tester (Agent/Node oder Backend)
+# ---------------------------------------------------------------------------
+async def endpoint_test(tid: str, via: str) -> dict:
+    """Legt einen kurzlebigen Test-Teilnehmer an, laesst den Tester (Agent/Backend) sich
+    damit verbinden und prueft am Host, ob ein Handshake ankommt. Danach wird alles wieder
+    entfernt. Nur so laesst sich zuverlaessig pruefen, ob Endpunkt-IP UND UDP-Port von dort
+    aus erreichbar sind (WireGuard antwortet auf fremde Pakete nicht)."""
+    t = store.get(tid)
+    if not t or t.get("state") != "active":
+        return {"ok": False, "step": "host", "detail": "Der Tunnel läuft auf dem Host nicht (Zustand nicht „aktiv“)."}
+    now = int(time.time())
+    priv, pub = wgconf.keypair()
+    pid = "test" + store.new_id()
+    p = {"id": pid, "kind": "test", "ref": via, "name": "Endpunkt-Test", "pub": pub, "priv_enc": store.enc(priv),
+         "ip": wgconf.next_ip(t), "added": now, "added_by": "test", "expires": now + 180, "auto": False}
+    store.update(lambda d: d["tunnels"][tid]["peers"].__setitem__(pid, p))
+    name = f"rmt{tid}"[:15]
+    steps = []
+    t = store.get(tid)
+    try:
+        try:
+            await host_up(t)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "step": "host", "detail": f"Host konnte den Test-Teilnehmer nicht übernehmen: {e}"}
+        st = await host_status(t)
+        if not st.get("up"):
+            return {"ok": False, "step": "host", "detail": f"WireGuard-Schnittstelle auf dem Host läuft nicht. {st.get('error', '')}"}
+        steps.append(f"Host lauscht auf UDP {t['port']}")
+        conf = "\n".join(["[Interface]", f"PrivateKey = {priv}", f"Address = {p['ip']}/32", "",
+                          "[Peer]", f"PublicKey = {t['host_pub']}", f"Endpoint = {t['endpoint']}",
+                          f"AllowedIPs = {t['host_ip']}/32", "PersistentKeepalive = 3"]) + "\n"
+        key = f"{tid}:{pid}"
+        if via == "backend":
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, wgsys().up, name, conf)
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "step": "tester", "detail": f"Backend konnte den Test-Tunnel nicht starten: {e}"}
+        else:
+            from app.sockets import send_to_agent
+            if not await send_to_agent(via, "wg-join", {"tunnel": tid, "peer": pid, "name": name, "conf": conf}):
+                return {"ok": False, "step": "tester", "detail": "Der Tester-Agent ist offline."}
+        steps.append(f"Tester verbindet sich mit {t['endpoint']}")
+        t0 = time.time()
+        while time.time() - t0 < 25:
+            await asyncio.sleep(2)
+            ps = peer_state.get(key) or {}
+            if ps.get("ok") is False:
+                return {"ok": False, "step": "tester", "steps": steps,
+                        "detail": f"Tester konnte WireGuard nicht starten: {ps.get('error')}"}
+            st = await host_status(store.get(tid) or t)
+            hs = (st.get("peers", {}).get(pub) or {}).get("handshake") or 0
+            if hs:
+                steps.append(f"Handshake nach {int(time.time() - t0)} s")
+                return {"ok": True, "steps": steps, "seconds": int(time.time() - t0),
+                        "detail": f"Endpunkt {t['endpoint']} ist vom Tester aus per UDP erreichbar – WireGuard-Handshake erfolgreich."}
+        if via != "backend" and peer_state.get(key, {}).get("ok") is None:
+            return {"ok": False, "step": "tester", "steps": steps,
+                    "detail": "Der Tester hat nicht geantwortet – Agent aktualisieren (kennt den VPN-Beitritt noch nicht)."}
+        return {"ok": False, "step": "endpoint", "steps": steps,
+                "detail": f"Kein Handshake in 25 s: Beim Host kommt über {t['endpoint']} nichts an. Endpunkt-IP prüfen und "
+                          f"UDP-Port {t['endpoint'].rsplit(':', 1)[-1]} im Router/der Firewall zum Host weiterleiten "
+                          f"(Docker: Port-Freigabe /udp, Container neu erstellen)."}
+    finally:
+        try:
+            if via == "backend":
+                await asyncio.get_running_loop().run_in_executor(None, wgsys().down, name)
+            else:
+                from app.sockets import send_to_agent
+                await send_to_agent(via, "wg-leave", {"tunnel": tid, "name": name})
+        except Exception:  # noqa: BLE001
+            pass
+        peer_state.pop(f"{tid}:{pid}", None)
+        store.update(lambda d: d["tunnels"].get(tid, {}).get("peers", {}).pop(pid, None))
+        x = store.get(tid)
+        if x and x.get("state") == "active":
+            try:
+                await host_up(x)
+            except Exception:  # noqa: BLE001
+                pass

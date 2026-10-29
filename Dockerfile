@@ -62,6 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libffi-dev \
         libssl-dev \
         wireguard-tools \
+        iptables \
         procps \
     && rm -rf /var/lib/apt/lists/*
 

@@ -97,11 +97,15 @@ def _sysctl(key: str) -> str:
             f'echo "RMM-VPN Warnung: {key} ist aus und kann hier nicht gesetzt werden" >&2')
 
 
-def _ipt(spec: str, table: str = "") -> tuple[str, str]:
-    """iptables-Regel idempotent hinzufuegen/entfernen; fehlt iptables oder das Recht -> nur Warnung."""
+def _ipt(spec: str, table: str = "", essential: bool = False) -> tuple[str, str]:
+    """iptables-Regel idempotent hinzufuegen/entfernen.
+    FORWARD-Regeln sind nur noetig, wenn die Firewall Weiterleitung sonst verwirft; fehlt iptables
+    ganz (frischer Container/CT), ist FORWARD standardmaessig offen -> dann still ueberspringen.
+    essential=True (NAT): ohne iptables geht es nicht -> Warnung."""
     t = f"-t {table} " if table else ""
-    up = (f"command -v iptables >/dev/null 2>&1 && {{ iptables {t}-C {spec} 2>/dev/null || iptables {t}-A {spec}; }} "
-          f'|| echo "RMM-VPN Warnung: iptables-Regel nicht gesetzt ({spec})" >&2')
+    missing = (f'echo "RMM-VPN Warnung: iptables fehlt – Regel nicht gesetzt ({spec})" >&2' if essential else "true")
+    up = (f"if command -v iptables >/dev/null 2>&1; then iptables {t}-C {spec} 2>/dev/null || iptables {t}-A {spec} "
+          f'|| echo "RMM-VPN Warnung: iptables-Regel nicht gesetzt ({spec})" >&2; else {missing}; fi')
     down = f"iptables {t}-D {spec} 2>/dev/null || true"
     return up, down
 
@@ -113,8 +117,8 @@ def host_conf(t: dict) -> str:
     i = "%i"
     up, down = [_sysctl("net.ipv4.ip_forward")], []
 
-    def rule(spec, table=""):
-        u, d = _ipt(spec, table)
+    def rule(spec, table="", essential=False):
+        u, d = _ipt(spec, table, essential)
         up.append(u)
         down.append(d)
 
@@ -128,7 +132,7 @@ def host_conf(t: dict) -> str:
             rule(f"FORWARD -i {lif} -o {i} -j ACCEPT")
             up.append(_sysctl(f"net.ipv4.conf.{lif}.proxy_arp"))
         else:
-            rule(f"POSTROUTING -s {t['subnet']} -o {lif} -j MASQUERADE", "nat")
+            rule(f"POSTROUTING -s {t['subnet']} -o {lif} -j MASQUERADE", "nat", essential=True)
     lines = ["# RMM-VPN Host – vom Backend erzeugt, nicht von Hand ändern",
              "[Interface]", f"Address = {t['host_ip']}/{_prefix(t)}", f"ListenPort = {t['port']}",
              f"PrivateKey = {store.dec(t['host_priv_enc'])}"]

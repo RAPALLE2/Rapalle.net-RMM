@@ -5,24 +5,43 @@ from app.sockets import sio
 from . import hosting
 
 
+NEEDED = {"wg-quick": "wireguard-tools", "wg": "wireguard-tools", "iptables": "iptables", "ip": "iproute2"}
+
+
 def _ensure_tools(ctx):
-    """WireGuard-Werkzeuge fuer das BACKEND beim Aktivieren nachladen (Docker/Linux als root mit apt).
-    Ohne sie kann das Backend nur nicht selbst Host/Teilnehmer sein - Nodes gehen trotzdem."""
+    """WireGuard-Werkzeuge fuer das BACKEND beim Aktivieren nachladen (Linux als root mit apt).
+    Prueft JEDES Werkzeug einzeln - frueher wurde nur wg-quick geprueft, dadurch fehlte im
+    Docker-Image iptables ("iptables fehlt – Weiterleitungs-/NAT-Regeln konnten nicht gesetzt werden")."""
     import os
     import shutil
     import subprocess
-    if shutil.which("wg-quick") or not shutil.which("apt-get") or not (hasattr(os, "geteuid") and os.geteuid() == 0):
+    missing = sorted({pkg for exe, pkg in NEEDED.items() if not shutil.which(exe)})
+    if not missing:
         return
-    ctx.log("lade WireGuard-Werkzeuge (wireguard-tools, wireguard-go, iproute2, iptables) …")
+    if not shutil.which("apt-get") or not (hasattr(os, "geteuid") and os.geteuid() == 0):
+        ctx.log(f"fehlende Werkzeuge: {', '.join(missing)} – bitte auf dem Host installieren")
+        return
+    if not os.path.exists("/sys/module/wireguard"):
+        missing.append("wireguard-go")                 # kein Kernel-WireGuard -> Userspace-Umsetzung
+    ctx.log(f"lade fehlende Werkzeuge: {', '.join(missing)} …")
     try:
         env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
         subprocess.run(["apt-get", "update", "-q"], capture_output=True, timeout=600, env=env)
-        r = subprocess.run(["apt-get", "install", "-y", "-q", "--no-install-recommends",
-                            "wireguard-tools", "wireguard-go", "iproute2", "iptables"],
+        r = subprocess.run(["apt-get", "install", "-y", "-q", "--no-install-recommends", *missing],
                            capture_output=True, text=True, timeout=900, env=env)
-        ctx.log("WireGuard-Werkzeuge bereit" if r.returncode == 0 else f"WireGuard-Werkzeuge: {r.stderr[-300:]}")
+        ctx.log("Werkzeuge bereit" if r.returncode == 0 else f"Werkzeuge: {r.stderr[-300:]}")
     except Exception as e:  # noqa: BLE001
-        ctx.log(f"WireGuard-Werkzeuge nicht installierbar: {e}")
+        ctx.log(f"Werkzeuge nicht installierbar: {e}")
+
+
+def ensure_tools_now(log=print) -> dict:
+    """Fuer die Schaltflaeche "Werkzeuge installieren" (synchron, im Executor aufrufen)."""
+    class _C:
+        def log(self, m):
+            log(m)
+    _ensure_tools(_C())
+    import shutil
+    return {exe: bool(shutil.which(exe)) for exe in NEEDED}
 
 
 def on_startup(ctx):

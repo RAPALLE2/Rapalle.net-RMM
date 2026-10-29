@@ -81,6 +81,8 @@ def _view(user: dict, t: dict, full: bool) -> dict:
         out["endpoint_warnings"] = endpoint_problems(t.get("endpoint", ""))      # aeltere Tunnel
     peers = []
     for p in t["peers"].values():
+        if p["kind"] == "test":
+            continue                                   # kurzlebige Endpunkt-Test-Teilnehmer nicht anzeigen
         if not full and not (p["kind"] == "user" and p["ref"] == user["id"]):
             continue
         st = hosting.peer_state.get(f"{t['id']}:{p['id']}") or {}
@@ -508,3 +510,84 @@ def candidates(user: dict = Depends(get_current_user)):
               for c in db.list_clients() if can_access_client(user, c["id"]) and user_has_permission(user, "c_vpn", c["id"])]
     return {"users": sorted(users, key=lambda x: x["name"].lower()),
             "agents": sorted(agents, key=lambda x: x["name"].lower()), "backend": is_super_admin(user)}
+
+
+# ------------------------------------------------------------------ Endpunkt-Test
+@router.get("/tunnels/{tid}/testers")
+def testers(tid: str, user: dict = Depends(get_current_user)):
+    """Wer kann den Endpunkt testen: Online-Agents/Nodes (mit c_vpn), Backend (Admins, wenn eine Node Host ist).
+    Aussagekraeftig ist der Test nur von AUSSERHALB des Host-Netzes (sonst greift das Router-Hairpin)."""
+    t = _tunnel_or_404(tid)
+    if not _may_manage(user, t):
+        raise HTTPException(403, "Nur Ersteller oder Administratoren")
+    from app.sockets import state
+    ep_ips = set()
+    try:
+        import socket
+        ep_ips = {ai[4][0] for ai in socket.getaddrinfo(t["endpoint"].rsplit(":", 1)[0].strip("[]"), None, socket.AF_INET)}
+    except OSError:
+        pass
+    host_ip = (db.get_client(t["host"]) or {}).get("ip") if t["host"] != "backend" else ""
+    out = []
+    if t["host"] != "backend" and is_super_admin(user):
+        out.append({"id": "backend", "name": "RMM-Server (Backend)", "same_net": False})
+    for c in db.list_clients():
+        if c["id"] == t["host"] or not state.is_online(c["id"]):
+            continue
+        if not (can_access_client(user, c["id"]) and user_has_permission(user, "c_vpn", c["id"])):
+            continue
+        ip = c.get("ip") or ""
+        out.append({"id": c["id"], "name": c.get("hostname") or c["id"][:8], "ip": ip,
+                    "same_net": bool(ip and (ip in ep_ips or ip == host_ip))})
+    return {"testers": sorted(out, key=lambda x: (x["same_net"], x["name"].lower())), "endpoint_ips": sorted(ep_ips)}
+
+
+class TestBody(BaseModel):
+    via: str
+
+
+@router.post("/tunnels/{tid}/test")
+async def test_endpoint(tid: str, body: TestBody, user: dict = Depends(get_current_user)):
+    t = _tunnel_or_404(tid)
+    if not _may_manage(user, t):
+        raise HTTPException(403, "Nur Ersteller oder Administratoren")
+    if body.via == "backend":
+        if not is_super_admin(user) or t["host"] == "backend":
+            raise HTTPException(403, "Das Backend kann nur testen, wenn eine Node Host ist (Admins)")
+    elif not user_has_permission(user, "c_vpn", body.via):
+        raise HTTPException(403, "Kein Recht „VPN-Tunnel ausstellen“ für diesen Tester")
+    res = await hosting.endpoint_test(tid, body.via)
+    res["endpoint_warnings"] = endpoint_problems(t["endpoint"])
+    db.add_audit_entry(user["username"], "vpn.endpoint_test", details=f"{t['name']}: {'ok' if res.get('ok') else res.get('detail', '')[:120]}")
+    return res
+
+
+# ------------------------------------------------------------------ Werkzeuge / Einrichtungsskript
+@router.post("/hosts/{host}/tools")
+async def install_tools(host: str, user: dict = Depends(get_current_user)):
+    """Fehlende Werkzeuge (wireguard-tools, iptables, iproute2, ggf. wireguard-go) auf dem Host nachladen."""
+    import asyncio
+    if host == "backend":
+        if not is_super_admin(user):
+            raise HTTPException(403, "Nur Administratoren")
+        from .module import ensure_tools_now
+        logs: list[str] = []
+        res = await asyncio.get_running_loop().run_in_executor(None, ensure_tools_now, logs.append)
+        return {"ok": all(res.values()), "tools": res, "log": logs, **hosting.wgsys().available()}
+    if not user_has_permission(user, "c_vpn", host):
+        raise HTTPException(403, "Kein Recht „VPN-Tunnel ausstellen“ auf dieser Node")
+    from app import node_manager
+    try:
+        node_manager.require_module(host, "vpn")
+        return await node_manager.command(host, "vpn-tools", {}, timeout=1000)
+    except node_manager.NodeError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.get("/setup-script")
+def setup_script(user: dict = Depends(get_current_user)):
+    """Einrichtungsskript fuer einen VPN-Host (Linux, Docker-Host, Proxmox-CT) zum Herunterladen."""
+    from pathlib import Path
+    sh = (Path(__file__).with_name("vpn-host-setup.sh")).read_text(encoding="utf-8")
+    return PlainTextResponse(sh, media_type="text/x-shellscript",
+                             headers={"Content-Disposition": 'attachment; filename="vpn-host-setup.sh"'})

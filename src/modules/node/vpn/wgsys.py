@@ -83,6 +83,7 @@ def _warnings(conf: str, out: str = "") -> list[str]:
     # nur echte Meldungen - nicht die von wg-quick wiederholten Befehlszeilen ("[#] ...")
     w = [ln.split("RMM-VPN Warnung:", 1)[1].strip() for ln in out.splitlines()
          if "RMM-VPN Warnung:" in ln and not ln.lstrip().startswith("[#]")]
+    w = [x for x in w if "iptables fehlt" not in x or "MASQUERADE" in x]
     if any("ip_forward" in x for x in w):
         w = [x for x in w if "ip_forward" not in x]          # ersetzt durch den ausfuehrlichen Hinweis unten
     if not IS_WINDOWS:
@@ -93,8 +94,11 @@ def _warnings(conf: str, out: str = "") -> list[str]:
                          "„sysctls: - net.ipv4.ip_forward=1“ setzen und den Container neu erstellen.")
         except OSError:
             pass
-        if "iptables" in conf and not shutil.which("iptables"):
-            w.append("iptables fehlt – Weiterleitungs-/NAT-Regeln konnten nicht gesetzt werden.")
+        if "MASQUERADE" in conf and not shutil.which("iptables"):
+            w.append("iptables fehlt – ohne NAT-Regel erreichen Teilnehmer das Netz hinter dem Host nicht. "
+                     "In der VPN-App „Werkzeuge installieren“ ausführen oder das Einrichtungsskript benutzen.")
+    if any("ohne NAT-Regel" in x for x in w):
+        w = [x for x in w if not x.startswith("iptables fehlt – Regel nicht gesetzt")]
     return list(dict.fromkeys(w))
 
 
