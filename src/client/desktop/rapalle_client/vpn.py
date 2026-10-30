@@ -145,6 +145,46 @@ class _Lock:
                 pass
 
 
+def siblings(iface: str) -> list[str]:
+    """Andere WireGuard-Tunnel DESSELBEN RMM-Tunnels auf diesem PC (Name "r" + Tunnel-ID + Teilnehmer-ID).
+    Typisch: Auf dem PC laeuft auch der Agent, und der ist schon Teilnehmer. Beide Tunnel wuerden die
+    gleiche Route (z.B. 10.77.0.0/24) anlegen - Windows meldet dann "Das Objekt ist bereits vorhanden"."""
+    if len(iface) < 9 or not iface.startswith("r"):
+        return []
+    prefix = iface[:9]                                   # "r" + 8 Zeichen Tunnel-ID
+    out = []
+    try:
+        if IS_WINDOWS:
+            r = subprocess.run(["sc", "query", "type=", "service", "state=", "all"], capture_output=True, text=True,
+                               timeout=20, creationflags=0x08000000)
+            for line in (r.stdout or "").splitlines():
+                line = line.strip()
+                if line.upper().startswith(("SERVICE_NAME:", "DIENSTNAME:")) and "WireGuardTunnel$" in line:
+                    name = line.split("WireGuardTunnel$", 1)[1].strip()
+                    if name.startswith(prefix) and name != iface:
+                        out.append(name)
+        else:
+            out = [p.name for p in Path("/sys/class/net").glob(prefix + "*") if p.name != iface]
+    except Exception:
+        pass
+    return out
+
+
+def service_running(iface: str) -> bool:
+    try:
+        if IS_WINDOWS:
+            r = subprocess.run(["sc", "query", "WireGuardTunnel$" + iface], capture_output=True, text=True,
+                               timeout=10, creationflags=0x08000000)
+            return r.returncode == 0 and "RUNNING" in (r.stdout or "")
+        return Path(f"/sys/class/net/{iface}").exists()
+    except Exception:
+        return False
+
+
+class SameDeviceError(RuntimeError):
+    pass
+
+
 def install_locked(data_dir: Path, store, iface: str, conf: str, force: bool = False) -> bool:
     """Einrichten mit Sperre; prueft danach erneut, ob ein anderer Prozess es schon erledigt hat.
     Rueckgabe: True = eingerichtet, False = war schon aktuell."""
@@ -155,8 +195,23 @@ def install_locked(data_dir: Path, store, iface: str, conf: str, force: bool = F
         except Exception:
             pass
         managed = dict(store.get("vpn_managed", {}) or {})
-        if managed.get(iface) == h and not force:
+        if managed.get(iface) == h and (not force or service_running(iface)):
+            # gleiche Konfiguration und Tunnel laeuft -> NICHT neu einrichten (ein zweites Einrichten
+            # entfernte den laufenden Tunnel und scheiterte dann an seinem noch vorhandenen Adapter)
             return False
+        sib = siblings(iface)
+        if sib:
+            if iface in managed:                         # Reste eines frueheren Versuchs entfernen
+                try:
+                    uninstall(data_dir, iface)
+                except Exception:
+                    pass
+                managed.pop(iface, None)
+                store.set(vpn_managed=managed)
+            raise SameDeviceError(
+                "Dieser PC ist schon Teilnehmer dieses Tunnels (der Agent auf diesem PC, Tunnel " + sib[0] + "). "
+                "Damit bist du hier bereits im VPN und erreichst die anderen Teilnehmer – ein zweiter Zugang auf "
+                "demselben PC geht nicht (gleiches Netz). Für deinen eigenen Zugang einen anderen PC benutzen.")
         install(data_dir, iface, conf)
         try:
             store.reload()
@@ -211,12 +266,22 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "  }",
             "}",
             "if (Svc) { Write-Output 'Der alte WireGuard-Tunneldienst laesst sich nicht entfernen - bitte Rechner neu starten.'; exit 4 }",
+            "# Verwaister Netzwerkadapter gleichen Namens (abgestuerzter Tunnel) -> sonst 'Das Objekt ist bereits vorhanden'",
+            "for ($i = 0; $i -lt 10; $i++) {",
+            "  $a = Get-NetAdapter -Name $n -IncludeHidden -ErrorAction SilentlyContinue",
+            "  if (-not $a) { break }",
+            "  if ($i -ge 4 -and $a.PnPDeviceID) { pnputil /remove-device \"$($a.PnPDeviceID)\" | Out-Null }",
+            "  Start-Sleep -Milliseconds 700",
+            "}",
             "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($n + '.conf')), (Join-Path $d ($n + '.conf.dpapi'))",
             "$dst = Join-Path $d ($n + '.conf.dpapi')",
             "Copy-Item -Force -LiteralPath $src -Destination $dst",
             "& $exe /installtunnelservice $dst | Out-Null",
             "for ($i = 0; $i -lt 20 -and -not (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
             "if (-not (Svc)) { Write-Output 'Der WireGuard-Tunneldienst wurde nicht angelegt.'; exit 3 }",
+            "Start-Sleep -Seconds 4",
+            "$s = Svc",
+            "if (-not $s -or $s.Status -ne 'Running') { Write-Output 'Der WireGuard-Tunnel ist beim Start gescheitert (Protokoll in der WireGuard-App). Häufig: ein anderer Tunnel auf diesem PC nutzt dasselbe Netz.'; exit 5 }",
             "exit 0",
         ])
         try:

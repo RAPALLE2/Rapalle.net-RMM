@@ -29,8 +29,10 @@ ALIVE = "app.alive"             # Lebenszeichen der Hauptapp (Link-Starter pruef
 
 
 def local_state(iface: str) -> str:
-    """'aktiv' | 'aus' | 'fehlt' fuer den WireGuard-Tunnel auf diesem Rechner."""
+    """'aktiv' | 'aus' | 'fehlt' | 'über Agent' fuer den WireGuard-Tunnel auf diesem Rechner."""
     try:
+        if vpn.siblings(iface) and not _own_exists(iface):
+            return "über Agent"
         if vpn.IS_WINDOWS:
             r = subprocess.run(["sc", "query", "WireGuardTunnel$" + iface], capture_output=True, text=True,
                                timeout=10, creationflags=0x08000000)
@@ -40,6 +42,16 @@ def local_state(iface: str) -> str:
         return "aktiv" if Path(f"/sys/class/net/{iface}").exists() else "fehlt"
     except Exception:
         return "?"
+
+
+def _own_exists(iface: str) -> bool:
+    try:
+        if vpn.IS_WINDOWS:
+            return subprocess.run(["sc", "query", "WireGuardTunnel$" + iface], capture_output=True, timeout=10,
+                                  creationflags=0x08000000).returncode == 0
+        return Path(f"/sys/class/net/{iface}").exists()
+    except Exception:
+        return False
 
 
 def app_alive(data_dir: Path) -> bool:
@@ -141,7 +153,7 @@ class VpnPanel:
             st = "arbeitet …" if iface in self.busy else self.states.get(iface, "…")
             row = ttk.Frame(self.rows)
             row.pack(fill="x", pady=2)
-            dot = {"aktiv": "🟢", "aus": "⚪", "fehlt": "⚪"}.get(st, "🟡")
+            dot = {"aktiv": "🟢", "über Agent": "🟢", "aus": "⚪", "fehlt": "⚪"}.get(st, "🟡")
             exp = ""
             if t.get("expires"):
                 left = int(t["expires"] - time.time())
@@ -149,7 +161,9 @@ class VpnPanel:
             ttk.Label(row, text=f"{dot} {t['name']}  ({st}{exp})").pack(side="left")
             if iface in self.busy:
                 continue
-            if st == "aktiv":
+            if st == "über Agent":
+                ttk.Label(row, text="(dieser PC ist als Agent im Tunnel)", style="Sub.TLabel").pack(side="right")
+            elif st == "aktiv":
                 ttk.Button(row, text="Trennen", command=lambda t=t: self.deactivate(t)).pack(side="right")
             else:
                 ttk.Button(row, text="Verbinden", command=lambda t=t: self.activate(t)).pack(side="right")
@@ -157,6 +171,8 @@ class VpnPanel:
     # ------------------------------------------------------------ Aktionen
     def activate(self, t: dict):
         iface = t["iface"]
+        if iface in self.busy:                           # laeuft schon - nicht doppelt einrichten
+            return
         manual = set(self.gui.store.get("vpn_manual", []) or [])
         manual.add(iface)
         off = set(self.gui.store.get("vpn_off", []) or [])
@@ -199,6 +215,11 @@ class VpnPanel:
             p.unlink()
         except (OSError, ValueError):
             return
+        # dieselbe Anforderung mehrfach (Doppelklick, Browser oeffnet den Link zweimal) -> nur einmal
+        key = req.get("tunnel")
+        if key == getattr(self, "_last_req", None) and time.time() - getattr(self, "_last_req_ts", 0) < 30:
+            return
+        self._last_req, self._last_req_ts = key, time.time()
         try:
             self.gui.root.deiconify()
             self.gui.root.lift()
