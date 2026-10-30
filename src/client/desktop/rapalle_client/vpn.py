@@ -276,12 +276,20 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($n + '.conf')), (Join-Path $d ($n + '.conf.dpapi'))",
             "$dst = Join-Path $d ($n + '.conf.dpapi')",
             "Copy-Item -Force -LiteralPath $src -Destination $dst",
+            "# Der WireGuard-Manager (laeuft, wenn die WireGuard-App offen ist) bemerkt die neue Datei und",
+            "# startet einen dazu LAUFENDEN Tunnel neu ('aktiviert - deaktiviert - existiert bereits').",
+            "# Darum erst warten, bis er die Datei verarbeitet hat, dann starten.",
+            "if (Get-Process -Name 'wireguard' -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 4 } else { Start-Sleep -Milliseconds 500 }",
             "& $exe /installtunnelservice $dst | Out-Null",
             "for ($i = 0; $i -lt 20 -and -not (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
             "if (-not (Svc)) { Write-Output 'Der WireGuard-Tunneldienst wurde nicht angelegt.'; exit 3 }",
             "Start-Sleep -Seconds 4",
             "$s = Svc",
-            "if (-not $s -or $s.Status -ne 'Running') { Write-Output 'Der WireGuard-Tunnel ist beim Start gescheitert (Protokoll in der WireGuard-App). Häufig: ein anderer Tunnel auf diesem PC nutzt dasselbe Netz.'; exit 5 }",
+            "if (-not $s -or $s.Status -ne 'Running') {",
+            "  Write-Output 'Der WireGuard-Tunnel ist beim Start gescheitert. WireGuard-Protokoll:'",
+            "  & $exe /dumplog 2>&1 | Select-String -SimpleMatch $n | Select-Object -Last 12 | ForEach-Object { $_.Line }",
+            "  exit 5",
+            "}",
             "exit 0",
         ])
         try:
@@ -291,8 +299,14 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
     else:
         code, out = _elevated([f"install -m 600 '{path}' /etc/wireguard/{iface}.conf",
                                f"wg-quick down {iface} 2>/dev/null", f"wg-quick up {iface}"])
+    try:                                                  # Protokoll fuer die Fehlersuche (VPN-Bereich zeigt es an)
+        import time as _t
+        with open(_conf_dir(data_dir) / "vpn.log", "a", encoding="utf-8") as f:
+            f.write(f"\n=== {_t.strftime('%Y-%m-%d %H:%M:%S')} install {iface} -> {code}\n{out.strip()}\n")
+    except OSError:
+        pass
     if code != 0:
-        raise RuntimeError(out.strip()[-300:] or f"Fehler {code}")
+        raise RuntimeError((out.strip()[-1500:] or f"Fehler {code}") + f" (Code {code})")
 
 
 def uninstall(data_dir: Path, iface: str) -> None:
@@ -396,6 +410,10 @@ class VpnSync:
         for iface, t in want.items():
             h = hashlib.sha256(t["conf"].encode()).hexdigest()[:16]
             if have.get(iface) == h:
+                continue
+            if iface in manual:
+                # Von Hand aktivierte Tunnel richtet NUR der VPN-Bereich/Link-Starter ein - der Hintergrund-
+                # Abgleich startete sonst einen zweiten Durchgang, der den ersten Tunnel wieder abbaute.
                 continue
             import time as _t
             key = f"{iface}:{h}"

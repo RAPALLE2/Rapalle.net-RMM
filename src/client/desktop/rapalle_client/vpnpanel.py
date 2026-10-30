@@ -201,7 +201,9 @@ class VpnPanel:
                 fn()
                 text = ok_text
             except Exception as e:  # noqa: BLE001
-                text = f"Fehler: {str(e).strip().splitlines()[-1][:200] if str(e).strip() else e}"
+                lines = [ln for ln in str(e).strip().splitlines() if ln.strip()]
+                text = "Fehler: " + ("\n".join(lines[-8:])[:900] if lines else str(e))
+                text += f"\n(Protokoll: {self.data_dir / 'wireguard' / 'vpn.log'})"
             self.busy.discard(iface)
             self.states[iface] = local_state(iface)
             self._ui(lambda: (self.msg.config(text=text), self.draw()))
