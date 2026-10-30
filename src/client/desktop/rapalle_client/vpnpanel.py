@@ -200,6 +200,9 @@ class VpnPanel:
             try:
                 fn()
                 text = ok_text
+                note = vpn.LAST_NOTE.pop(iface, "")
+                if note:
+                    text += f" – {note}"
             except Exception as e:  # noqa: BLE001
                 lines = [ln for ln in str(e).strip().splitlines() if ln.strip()]
                 text = "Fehler: " + ("\n".join(lines[-8:])[:900] if lines else str(e))

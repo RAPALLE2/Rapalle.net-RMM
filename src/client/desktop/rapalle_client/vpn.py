@@ -58,8 +58,14 @@ def _elevated(script_lines: list[str]) -> tuple[int, str]:
     if IS_WINDOWS:
         import tempfile
         fd, path = tempfile.mkstemp(suffix=".ps1", prefix="rmm-")
+        logp = path + ".log"
         with os.fdopen(fd, "w", encoding="utf-8-sig") as f:
             f.write("$ErrorActionPreference = 'Continue'\r\n")
+            # Ein per UAC gestarteter Prozess kann seine Ausgabe nicht an uns zurueckgeben -> in eine Datei.
+            # Write-Output wird umgeleitet; Fremdprogramme mit "| Write-Output" protokollieren.
+            f.write(f"$RmmLog = '{logp}'\r\n")
+            f.write("function Write-Output { param([Parameter(ValueFromPipeline=$true)]$InputObject) "
+                    "process { Add-Content -LiteralPath $RmmLog -Value ([string]$InputObject) -Encoding UTF8 } }\r\n")
             f.write("\r\n".join(script_lines) + "\r\n")
             f.write("exit $LASTEXITCODE\r\n")
         ps = ("$p = Start-Process -FilePath powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
@@ -69,16 +75,21 @@ def _elevated(script_lines: list[str]) -> tuple[int, str]:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                creationflags=0x08000000)       # CREATE_NO_WINDOW
             out = (p.stdout or "") + (p.stderr or "")
+            try:
+                out = Path(logp).read_text(encoding="utf-8-sig", errors="replace") + out
+            except OSError:
+                pass
             if "abgebrochen" in out.lower() or "canceled by the user" in out.lower():
                 return 1, "Administratorrechte wurden abgelehnt."
             return p.returncode, out
         except Exception as e:  # noqa: BLE001
             return 1, str(e)
         finally:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+            for x in (path, logp):
+                try:
+                    os.unlink(x)
+                except OSError:
+                    pass
     sh = " ; ".join(script_lines)
     cmd = ["sh", "-c", sh] if hasattr(os, "geteuid") and os.geteuid() == 0 else ["pkexec", "sh", "-c", sh]
     try:
@@ -247,6 +258,11 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
         # Verschluesselt fuer die WireGuard-App (sofort in ihrer Liste), dann mit Adminrechten:
         # alten Dienst nur entfernen, wenn es ihn gibt, warten bis er WIRKLICH weg ist (sonst
         # "Objekt bereits vorhanden"), Datei in die App-Ablage legen und Tunnel starten.
+        import re as _re
+        _m = _re.search(r"^Address\s*=\s*([0-9.]+)", conf, _re.M)
+        ip = _m.group(1) if _m else ""
+        _m = _re.search(r"^AllowedIPs\s*=\s*([^,\s]+)", conf, _re.M)
+        route = _m.group(1) if _m else ""
         dp = _conf_dir(data_dir) / f"{iface}.conf.dpapi"
         dp.write_bytes(_dpapi_machine(conf.encode("utf-8"), iface))
         code, out = _elevated([
@@ -283,11 +299,36 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "& $exe /installtunnelservice $dst | Out-Null",
             "for ($i = 0; $i -lt 20 -and -not (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
             "if (-not (Svc)) { Write-Output 'Der WireGuard-Tunneldienst wurde nicht angelegt.'; exit 3 }",
-            "Start-Sleep -Seconds 4",
-            "$s = Svc",
+            "# Bis 25 s auf 'Running' warten (StartPending ist normal, z.B. waehrend der Endpunkt-Name aufgeloest wird);",
+            "# Fehler erst, wenn der Dienst gestoppt bzw. verschwunden ist oder die Zeit abgelaufen ist.",
+            "$s = $null",
+            "for ($i = 0; $i -lt 50; $i++) {",
+            "  $s = Svc",
+            "  if ($s -and $s.Status -eq 'Running') { break }",
+            "  if ($i -ge 6 -and (-not $s -or $s.Status -eq 'Stopped')) { break }",
+            "  Start-Sleep -Milliseconds 500",
+            "}",
+            "if ($s -and $s.Status -eq 'Running') { Write-Output ('Tunnel laeuft (' + $n + ')') }",
             "if (-not $s -or $s.Status -ne 'Running') {",
-            "  Write-Output 'Der WireGuard-Tunnel ist beim Start gescheitert. WireGuard-Protokoll:'",
-            "  & $exe /dumplog 2>&1 | Select-String -SimpleMatch $n | Select-Object -Last 12 | ForEach-Object { $_.Line }",
+            "  Write-Output ('Tunnelstart aus der WireGuard-Ablage gescheitert (Status: ' + $(if ($s) { $s.Status } else { 'kein Dienst' }) + ').')",
+            "  Write-Output '--- WireGuard-Protokoll (Ende) ---'",
+            "  & $exe /dumplog 2>&1 | Select-Object -Last 25 | ForEach-Object { Write-Output $_ }",
+            "  Write-Output '--- Netzwerk ---'",
+            "  Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*WireGuard*' -or $_.InterfaceDescription -like '*Wintun*' } | ForEach-Object { Write-Output ('Adapter: ' + $_.Name + ' / ' + $_.Status + ' / ' + $_.InterfaceDescription) }",
+            f"  Get-NetIPAddress -IPAddress '{ip}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output ('IP {ip} schon vergeben auf: ' + $_.InterfaceAlias) }}",
+            f"  Get-NetRoute -DestinationPrefix '{route}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output ('Route {route} schon vorhanden auf: ' + $_.InterfaceAlias) }}",
+            "  # Rueckfall: Klartext-Konfiguration ausserhalb der WireGuard-Ablage (so wie beim Import von Hand)",
+            "  if (Svc) { & $exe /uninstalltunnelservice $n | Out-Null; for ($i = 0; $i -lt 20 -and (Svc); $i++) { Start-Sleep -Milliseconds 500 } }",
+            "  $alt = Join-Path $env:ProgramData 'Rapalle'",
+            "  New-Item -ItemType Directory -Force -Path $alt | Out-Null",
+            "  $alt = Join-Path $alt ($n + '.conf')",
+            f"  Copy-Item -Force -LiteralPath '{path}' -Destination $alt",
+            "  icacls $alt /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null",
+            "  & $exe /installtunnelservice $alt | Out-Null",
+            "  for ($i = 0; $i -lt 50; $i++) { $s = Svc; if ($s -and $s.Status -eq 'Running') { break }; if ($i -ge 6 -and (-not $s -or $s.Status -eq 'Stopped')) { break }; Start-Sleep -Milliseconds 500 }",
+            "  if ($s -and $s.Status -eq 'Running') { Write-Output 'RUECKFALL-OK'; exit 0 }",
+            "  Write-Output 'Auch der Rueckfall (Klartext-Datei) startet nicht.'",
+            "  & $exe /dumplog 2>&1 | Select-Object -Last 12 | ForEach-Object { Write-Output $_ }",
             "  exit 5",
             "}",
             "exit 0",
@@ -306,7 +347,12 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
     except OSError:
         pass
     if code != 0:
-        raise RuntimeError((out.strip()[-1500:] or f"Fehler {code}") + f" (Code {code})")
+        raise RuntimeError((out.strip()[-2500:] or f"Fehler {code}") + f" (Code {code})")
+    if "RUECKFALL-OK" in out:
+        LAST_NOTE[iface] = "läuft (Rückfall: nicht in der WireGuard-Liste – Diagnose in vpn.log)"
+
+
+LAST_NOTE: dict[str, str] = {}
 
 
 def uninstall(data_dir: Path, iface: str) -> None:
@@ -316,7 +362,7 @@ def uninstall(data_dir: Path, iface: str) -> None:
             _elevated([f"$exe = '{exe}'", f"$n = '{iface}'",
                        "if (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue) { & $exe /uninstalltunnelservice $n | Out-Null }",
                        "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'",
-                       f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{iface}.conf'), (Join-Path $d '{iface}.conf.dpapi')"])
+                       f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{iface}.conf'), (Join-Path $d '{iface}.conf.dpapi'), (Join-Path (Join-Path $env:ProgramData 'Rapalle') '{iface}.conf')"])
         else:
             _elevated([f"wg-quick down {iface} 2>/dev/null", f"rm -f /etc/wireguard/{iface}.conf"])
     try:
