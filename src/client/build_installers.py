@@ -224,11 +224,18 @@ def build_msi(v: str, exe: Path) -> Path:
     <Media Id="1" Cabinet="client.cab" EmbedCab="yes" />
     <Icon Id="AppIcon" SourceFile="rmmclient.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <!-- Auswahl im Installationsassistenten: 1 = mit Administratorrechten (VPN ohne Rueckfrage), 0 = ohne.
+         Unbeaufsichtigt: msiexec /i RapalleClient.msi /qn ADMINMODE=0 -->
+    <Property Id="ADMINMODE" Value="1" />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLDIR" Name="RAPALLE.net RMM Client">
           <Component Id="MainExe" Guid="7D1A2B3C-4E5F-4A6B-8C7D-9E0F1A2B3C4D" Win64="yes">
             <File Id="RapalleClientExe" Source="RapalleClient.exe" KeyPath="yes" />
+          </Component>
+          <Component Id="ModeReg" Guid="5A4B3C2D-1E0F-4A9B-8C7D-6E5F4A3B2C1D" Win64="yes">
+            <RegistryValue Root="HKLM" Key="Software\\RAPALLE.net\\RMMClient" Name="AdminMode" Type="string"
+                           Value="[ADMINMODE]" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
@@ -249,6 +256,7 @@ def build_msi(v: str, exe: Path) -> Path:
     </Directory>
     <Feature Id="Main" Level="1" Title="RAPALLE.net RMM Client">
       <ComponentRef Id="MainExe" />
+      <ComponentRef Id="ModeReg" />
       <ComponentRef Id="StartShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
@@ -265,7 +273,81 @@ def build_msi(v: str, exe: Path) -> Path:
             run([str(wix[1]), "-nologo", "-sval", "-out", str(out), "client.wixobj"], cwd=t)
         else:
             run([wixl or "wixl", "-a", "x64", "-o", str(out), "client.wxs"], cwd=t)
+            _msi_add_wizard(out, t, v)
     return out
+
+
+def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
+    """Installationsassistent nachtraeglich in die MSI (wixl kann keine Dialoge): Auswahl
+    „mit Administratorrechten“ / „ohne“ -> Property ADMINMODE -> HKLM\\Software\\RAPALLE.net\\RMMClient\\AdminMode.
+    Die App wertet das beim ersten Start aus (geplante Aufgabe bzw. nie nachfragen)."""
+    msibuild = shutil.which("msibuild")
+    if not msibuild and shutil.which("apt-get") and hasattr(os, "geteuid") and os.geteuid() == 0:
+        subprocess.run(["apt-get", "install", "-y", "-q", "msitools"], capture_output=True)   # aelteres Bau-Image
+        msibuild = shutil.which("msibuild")
+    if not msibuild:
+        print("  (msibuild fehlt - MSI ohne Assistent; apt install msitools)")
+        return
+
+    def idt(name, cols, types, key, rows):
+        lines = ["\t".join(cols), "\t".join(types), "\t".join([name, *key])]
+        lines += ["\t".join("" if c is None else str(c) for c in r) for r in rows]
+        # libmsi erwartet UTF-8 und speichert in der Codepage der MSI (1252)
+        (t / f"{name}.idt").write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
+        return f"{name}.idt"
+
+    W, H = 370, 270
+    files = [
+        idt("TextStyle", ["TextStyle", "FaceName", "Size", "Color", "StyleBits"], ["s72", "s32", "i2", "I4", "I2"],
+            ["TextStyle"], [["DlgFont8", "Segoe UI", 9, None, None], ["DlgTitle", "Segoe UI", 12, None, 1]]),
+        idt("Dialog", ["Dialog", "HCentering", "VCentering", "Width", "Height", "Attributes", "Title", "Control_First",
+                       "Control_Default", "Control_Cancel"],
+            ["s72", "i2", "i2", "i2", "i2", "I4", "L128", "s50", "S50", "S50"], ["Dialog"],
+            [["ModeDlg", 50, 50, W, H, 3, "RAPALLE.net RMM Client " + v, "Mode", "Install", "Cancel"],
+             ["FinishDlg", 50, 50, W, 160, 3, "RAPALLE.net RMM Client " + v, "Done", "Done", "Done"]]),
+        idt("Control", ["Dialog_", "Control", "Type", "X", "Y", "Width", "Height", "Attributes", "Property", "Text",
+                        "Control_Next", "Help"],
+            ["s72", "s50", "s20", "i2", "i2", "i2", "i2", "I4", "S72", "L0", "S50", "L50"], ["Dialog_", "Control"],
+            [["ModeDlg", "Title", "Text", 20, 14, 330, 20, 3, None, "{\\DlgTitle}RAPALLE.net RMM Client installieren", None, None],
+             ["ModeDlg", "Intro", "Text", 20, 40, 330, 34, 3, None,
+              "Wie soll die App laufen? VPN-Tunnel (WireGuard) brauchen unter Windows Administratorrechte.", None, None],
+             ["ModeDlg", "Mode", "RadioButtonGroup", 20, 80, 330, 110, 3, "ADMINMODE", None, "Install", None],
+             ["ModeDlg", "Install", "PushButton", 230, 238, 60, 18, 3, None, "Installieren", "Cancel", None],
+             ["ModeDlg", "Cancel", "PushButton", 296, 238, 56, 18, 3, None, "Abbrechen", "Mode", None],
+             ["FinishDlg", "Text", "Text", 20, 20, 330, 80, 3, None,
+              "Der RAPALLE.net RMM Client ist installiert. Die Verknüpfung liegt auf dem Desktop und im Startmenü.", None, None],
+             ["FinishDlg", "Done", "PushButton", 296, 132, 56, 18, 3, None, "Fertig", None, None]]),
+        idt("RadioButton", ["Property", "Order", "Value", "X", "Y", "Width", "Height", "Text", "Help"],
+            ["s72", "i2", "s64", "i2", "i2", "i2", "i4", "L0", "L50"], ["Property", "Order"],
+            [["ADMINMODE", 1, "1", 0, 0, 330, 46,
+              "Mit Administratorrechten (empfohlen): startet immer als Administrator, VPN ohne Rückfragen", None],
+             ["ADMINMODE", 2, "0", 0, 56, 330, 46,
+              "Ohne Administratorrechte: keine Rückfragen beim Start, VPN ist dann nicht verfügbar", None]]),
+        idt("ControlEvent", ["Dialog_", "Control_", "Event", "Argument", "Condition", "Ordering"],
+            ["s72", "s50", "s50", "s255", "S255", "I2"], ["Dialog_", "Control_", "Event", "Argument", "Condition"],
+            [["ModeDlg", "Install", "EndDialog", "Return", "1", 1],
+             ["ModeDlg", "Cancel", "EndDialog", "Exit", "1", 1],
+             ["FinishDlg", "Done", "EndDialog", "Return", "1", 1]]),
+    ]
+    for f in files:
+        run([msibuild, str(msi), "-i", f], cwd=t)
+    # Dialoge in die Oberflaechen-Reihenfolge: Assistent vor der Installation, "Fertig" danach (-1)
+    seq = subprocess.run(["msiinfo", "export", str(msi), "InstallUISequence"], capture_output=True, text=True).stdout
+    rows = [ln.split("\t") for ln in seq.replace("\r", "").split("\n")[3:] if ln.strip()]
+    rows = [r for r in rows if r[0] not in ("ModeDlg", "FinishDlg")]
+    rows += [["ModeDlg", "NOT Installed", "1100"], ["FinishDlg", "", "-1"]]
+    files2 = [idt("InstallUISequence", ["Action", "Condition", "Sequence"], ["s72", "S255", "I2"], ["Action"], rows)]
+    prop = subprocess.run(["msiinfo", "export", str(msi), "Property"], capture_output=True, text=True).stdout
+    prows = [ln.split("\t") for ln in prop.replace("\r", "").split("\n")[3:] if ln.strip()]
+    prows = [r for r in prows if r[0] != "DefaultUIFont"] + [["DefaultUIFont", "DlgFont8"]]
+    for r in prows:                      # ADMINMODE an die (erhoehte) Installation weitergeben
+        if r[0] == "SecureCustomProperties" and "ADMINMODE" not in r[1]:
+            r[1] = r[1] + ";ADMINMODE" if r[1] else "ADMINMODE"
+    if not any(r[0] == "SecureCustomProperties" for r in prows):
+        prows.append(["SecureCustomProperties", "ADMINMODE"])
+    files2.append(idt("Property", ["Property", "Value"], ["s72", "l0"], ["Property"], prows))
+    for f in files2:
+        run([msibuild, str(msi), "-i", f], cwd=t)
 
 
 # ============================================================== Linux

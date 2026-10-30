@@ -3,7 +3,7 @@
 # Docker-Betrieb (Standard, alle Formate):
 #   Beim Aktivieren des Moduls wird EIN Bau-Image angelegt:
 #       rapalle/rmm-client-builder:<kennung>
-#   Inhalt: Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl + rpmbuild
+#   Inhalt: Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl/msitools (MSI-Assistent) + rpmbuild
 #           + JDK 17 + Android-Werkzeuge (aapt, dx, zipalign, apksigner, android-23).
 #   Angelegt wird es OHNE Dockerfile-Build (der Build-Endpunkt aendert sich je nach
 #   Docker-Version): Basis-Image holen -> Einrichtungs-Container laufen lassen ->
@@ -53,7 +53,7 @@ export DEBIAN_FRONTEND=noninteractive
 echo "== Systempakete (Wine, wixl, rpm, JDK, Android-Werkzeuge) ..."
 apt-get update -q
 apt-get install -y -q --no-install-recommends ca-certificates curl python3 xz-utils \
-    wine64 wixl rpm openjdk-17-jdk-headless \
+    wine64 wixl msitools rpm openjdk-17-jdk-headless \
     android-sdk-platform-23 aapt apksigner zipalign dalvik-exchange
 echo "== Windows-Python (python-build-standalone) ..."
 URL=$(python3 - <<'PY' || true
