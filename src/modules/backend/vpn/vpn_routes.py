@@ -164,6 +164,30 @@ class TunnelBody(BaseModel):
     auto: bool = True                   # Client-App richtet Benutzer-Teilnehmer selbst ein
 
 
+def _used_subnets(d: dict) -> set[str]:
+    """Belegte UND kuerzlich benutzte Teilnetze. Ein geloeschter Tunnel gibt sein Netz NICHT sofort frei:
+    Geraete, auf denen sein Tunnel noch (unbemerkt) laeuft, belegen dessen Adressen - ein neuer Tunnel mit
+    demselben Netz scheitert dort mit "unable to set ips: Das Objekt ist bereits vorhanden"."""
+    used = {t["subnet"] for t in d["tunnels"].values() if t.get("state") != "expired"}
+    used |= set(d.get("recent_subnets") or [])
+    return used
+
+
+def _pick_subnet(d: dict, used: set[str]) -> str:
+    pool = str(_set("pool", "10.77.0.0/16"))
+    try:
+        return wgconf.pick_subnet(pool, used)
+    except ValueError:                                   # kleiner Pool: dann nur aktive Tunnel meiden
+        return wgconf.pick_subnet(pool, {t["subnet"] for t in d["tunnels"].values() if t.get("state") != "expired"})
+
+
+def _remember_subnet(subnet: str) -> None:
+    def upd(d):
+        r = [x for x in (d.get("recent_subnets") or []) if x != subnet]
+        d["recent_subnets"] = (r + [subnet])[-64:]          # die letzten 64 Netze nicht wiederverwenden
+    store.update(upd)
+
+
 def _default_endpoint(req: Request, host: str, port: int) -> str:
     """Oeffentliche Adresse des Hosts. Backend: VPN-Einstellung > Server-Adresse aus den
     Einstellungen (Domain, IP, volle URL) > Adresse, ueber die das Dashboard gerade laeuft."""
@@ -267,10 +291,10 @@ async def create_tunnel(body: TunnelBody, req: Request, user: dict = Depends(get
     ip_mode = body.ip_mode if body.ip_mode in ("own", "nat") else "nat"
     expires = _check_hours(user, body.hours, body.members.agents)
     d = store.load()
-    used_subnets = {t["subnet"] for t in d["tunnels"].values() if t.get("state") != "expired"}
+    used_subnets = _used_subnets(d)
     try:
         subnet = str(ipaddress.ip_network(body.subnet, strict=False)) if body.subnet.strip() \
-            else wgconf.pick_subnet(str(_set("pool", "10.77.0.0/16")), used_subnets)
+            else _pick_subnet(d, used_subnets)
         lan = {}
         if mode == "real":
             if not body.lan.iface.strip() or not body.lan.cidr.strip():
@@ -318,6 +342,7 @@ async def create_tunnel(body: TunnelBody, req: Request, user: dict = Depends(get
         raise HTTPException(400, str(e))
     t["endpoint_warnings"] = endpoint_problems(t["endpoint"])
     store.update(lambda dd: dd["tunnels"].__setitem__(t["id"], t))
+    _remember_subnet(t["subnet"])
     res = await hosting.apply(t["id"], joined=joined)
     db.add_audit_entry(user["username"], "vpn.tunnel_created",
                        details=f"{t['name']} auf {_view(user, t, True)['host_name']}, {len(joined)} Teilnehmer")
@@ -659,10 +684,10 @@ async def probe(body: ProbeBody, req: Request, user: dict = Depends(get_current_
             node_manager.require_module(body.host, "vpn")
         except node_manager.NodeError as e:
             raise HTTPException(409, str(e))
-    used = {t["subnet"] for t in d["tunnels"].values() if t.get("state") != "expired"}
+    used = _used_subnets(d)
     priv, pub = wgconf.keypair()
     t = {"id": store.new_id(), "name": "Verbindungstest", "host": body.host, "port": port, "endpoint": ep,
-         "mode": "virtual", "ip_mode": "nat", "subnet": wgconf.pick_subnet(str(_set("pool", "10.77.0.0/16")), used),
+         "mode": "virtual", "ip_mode": "nat", "subnet": _pick_subnet(d, used),
          "lan": {}, "dns": "", "routes": [], "keepalive": 25, "host_pub": pub, "host_priv_enc": store.enc(priv),
          "created": int(time.time()), "created_by": user["username"], "expires": int(time.time()) + 300,
          "state": "pending", "error": "", "auto": False, "peers": {}, "temp": True}

@@ -1,4 +1,5 @@
 """RAPALLE.net RMM Client - das Dashboard als eigene App (Windows, Linux, Android)."""
+# 1.6.9: alte RMM-Tunnel mit gleicher Adresse werden vor dem Start entfernt (Ursache "Objekt bereits vorhanden")
 # 1.6.8: Startpruefung wartet StartPending ab, Rueckfall Klartext-Datei, Admin-Ausgabe/Diagnose ins vpn.log
 # 1.6.7: Tunnelstart erst nach dem WireGuard-Manager, kein Parallel-Abgleich manueller Tunnel, Protokoll bei Fehler
 # 1.6.6: laufenden Tunnel nie erneut einrichten, verwaiste Adapter entfernen, Doppel-Anforderungen ignorieren
@@ -8,4 +9,4 @@
 # 1.6.2: keine WireGuard-Fehlerfenster mehr ("kein installierter Dienst"), Tunnel zuverlaessig in der App
 # 1.6.1: WireGuard-Tunnel in der WireGuard-App sichtbar, "DLL nicht gefunden" behoben
 # 1.6.0: RDP/SSH/VNC + VPN direkt aus dem Dashboard, WireGuard-Datei aktivieren, Netzlaufwerk Windows 11
-__version__ = "1.6.8"
+__version__ = "1.6.9"

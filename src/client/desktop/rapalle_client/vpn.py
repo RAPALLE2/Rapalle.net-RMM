@@ -289,6 +289,25 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "  if ($i -ge 4 -and $a.PnPDeviceID) { pnputil /remove-device \"$($a.PnPDeviceID)\" | Out-Null }",
             "  Start-Sleep -Milliseconds 700",
             "}",
+            "# Alte RMM-Tunnel, die DIESELBE Adresse belegen (z.B. von einem frueheren, laengst geloeschten",
+            "# RMM-Tunnel; aeltere App-Versionen legten sie ohne Eintrag in der WireGuard-Liste an) -> entfernen.",
+            "# Sonst: 'unable to set ips: Das Objekt ist bereits vorhanden'.",
+            f"$ip = '{ip}'",
+            "if ($ip) {",
+            "  foreach ($x in @(Get-NetIPAddress -IPAddress $ip -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -ne $n })) {",
+            "    $al = $x.InterfaceAlias",
+            "    if ($al -like 'rmv*' -or $al -match '^r[0-9a-f]{14}$' -or $al -like 'rmt*') {",
+            "      Write-Output ('Entferne alten RMM-Tunnel ' + $al + ' (belegt ' + $ip + ')')",
+            "      if (Get-Service -Name ('WireGuardTunnel$' + $al) -ErrorAction SilentlyContinue) { & $exe /uninstalltunnelservice $al | Out-Null }",
+            "      for ($i = 0; $i -lt 20 -and (Get-Service -Name ('WireGuardTunnel$' + $al) -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }",
+            "      Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($al + '.conf')), (Join-Path $d ($al + '.conf.dpapi')), (Join-Path (Join-Path $env:ProgramData 'Rapalle') ($al + '.conf'))",
+            "      for ($i = 0; $i -lt 10; $i++) { $a = Get-NetAdapter -Name $al -IncludeHidden -ErrorAction SilentlyContinue; if (-not $a) { break }; if ($i -ge 4 -and $a.PnPDeviceID) { pnputil /remove-device \"$($a.PnPDeviceID)\" | Out-Null }; Start-Sleep -Milliseconds 700 }",
+            "    } else {",
+            "      Write-Output ('Die Adresse ' + $ip + ' ist auf diesem PC schon von \"' + $al + '\" belegt (kein RMM-Tunnel) - bitte dort trennen.')",
+            "      exit 6",
+            "    }",
+            "  }",
+            "}",
             "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($n + '.conf')), (Join-Path $d ($n + '.conf.dpapi'))",
             "$dst = Join-Path $d ($n + '.conf.dpapi')",
             "Copy-Item -Force -LiteralPath $src -Destination $dst",
@@ -436,6 +455,7 @@ class VpnSync:
                 raise
             self.refresh()
             data = self.get_api().request("GET", "/api/vpn/my")
+        self._cleanup_legacy()
         manual = set(self.store.get("vpn_manual", []) or [])          # per Dashboard-Knopf aktiviert
         off = set(self.store.get("vpn_off", []) or [])                 # im VPN-Bereich bewusst getrennt
         want = {t["iface"]: t for t in data.get("tunnels", [])
@@ -476,6 +496,41 @@ class VpnSync:
         names = ", ".join(t["name"] for t in want.values())
         self.on_status(("VPN-Fehler: " + "; ".join(errors)) if errors else
                        (f"VPN verbunden: {names}" if want else "Kein VPN-Tunnel aktiv"))
+
+    def _cleanup_legacy(self):
+        """Tunnel aelterer App-Versionen ("rmv<Tunnel-ID>") entfernen - das Backend benutzt diese Namen nicht
+        mehr; sie liefen ggf. unsichtbar (nicht in der WireGuard-Liste) weiter und belegten Adresse und Route."""
+        if not IS_WINDOWS:
+            return
+        import time as _t
+        if _t.time() - self._failed.get("legacy", 0) < 900:
+            return
+        try:
+            r = subprocess.run(["sc", "query", "type=", "service", "state=", "all"], capture_output=True, text=True,
+                               timeout=20, creationflags=0x08000000)
+        except Exception:
+            return
+        old = []
+        for line in (r.stdout or "").splitlines():
+            if "WireGuardTunnel$rmv" in line:
+                old.append(line.split("WireGuardTunnel$", 1)[1].strip())
+        if not old:
+            return
+        exe = wg_exe()
+        if not exe:
+            return
+        lines = [f"$exe = '{exe}'", "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'"]
+        for n in old:
+            lines += [f"& $exe /uninstalltunnelservice {n} | Out-Null",
+                      f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{n}.conf'), (Join-Path $d '{n}.conf.dpapi')"]
+        code, _ = _elevated(lines)
+        if code != 0:
+            self._failed["legacy"] = _t.time()
+        managed = dict(self.store.get("vpn_managed", {}) or {})
+        for n in old:
+            managed.pop(n, None)
+        self.store.set(vpn_managed=managed)
+        self.on_status(f"Alte VPN-Tunnel entfernt: {', '.join(old)}")
 
     def remove_all(self):
         for iface in list(self.managed()):
