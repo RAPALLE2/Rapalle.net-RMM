@@ -1913,10 +1913,44 @@ def _wg_gui_dir():
     return os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "WireGuard", "Data", "Configurations")
 
 
+def _wg_svc_exists(name):
+    """Gibt es den WireGuard-Tunneldienst schon? (wireguard.exe zeigt sonst bei /uninstalltunnelservice
+    ein Fenster "Der angegebene Dienst ist kein installierter Dienst" und wartet auf OK.)"""
+    code, _ = _wg_run(["sc", "query", "WireGuardTunnel$" + name], 20)
+    return code == 0
+
+
+def _wg_dpapi_encrypt(data, name):
+    """Konfiguration so verschluesseln, wie es die WireGuard-App selbst tut (DPAPI, Beschreibung =
+    Tunnelname). Der Agent laeuft als SYSTEM - wie der WireGuard-Manager -, daher kann die App
+    die Datei lesen und zeigt den Tunnel in ihrer Liste an."""
+    import ctypes
+    from ctypes import wintypes
+
+    class BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    buf = ctypes.create_string_buffer(data, len(data))
+    blob_in = BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    blob_out = BLOB()
+    CRYPTPROTECT_UI_FORBIDDEN = 0x1
+    if not ctypes.windll.crypt32.CryptProtectData(ctypes.byref(blob_in), ctypes.c_wchar_p(name), None, None, None,
+                                                  CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
+        raise OSError(ctypes.GetLastError(), "CryptProtectData fehlgeschlagen")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
 def _wg_win_install(exe, name, conf):
-    """Windows: Tunnel in die WireGuard-App eintragen UND als Dienst starten (sichtbar + aktiv)."""
-    _wg_run([exe, "/installmanagerservice"], 60)              # Manager laeuft -> verschluesselt + App-Liste
-    _wg_run([exe, "/uninstalltunnelservice", name], 60)
+    """Windows: Tunnel in die Ablage der WireGuard-App legen (verschluesselt, damit die App ihn
+    in ihrer Liste zeigt) und als Dienst starten -> sichtbar UND aktiv. Ohne Fehlerfenster."""
+    if _wg_svc_exists(name):
+        _wg_run([exe, "/uninstalltunnelservice", name], 60)
+        for _ in range(20):
+            if not _wg_svc_exists(name):
+                break
+            time.sleep(0.5)
     d = _wg_gui_dir()
     os.makedirs(d, exist_ok=True)
     for old in (name + ".conf", name + ".conf.dpapi"):
@@ -1924,21 +1958,23 @@ def _wg_win_install(exe, name, conf):
             os.remove(os.path.join(d, old))
         except OSError:
             pass
-    plain = os.path.join(d, name + ".conf")
-    with open(plain, "w", encoding="utf-8") as f:
-        f.write(conf)
-    dpapi = plain + ".dpapi"
-    for _ in range(30):                                          # Manager wandelt die Datei um (meist < 1 s)
-        if os.path.exists(dpapi):
-            break
-        time.sleep(0.3)
-    target = dpapi if os.path.exists(dpapi) else plain
-    code, out = _wg_run([exe, "/installtunnelservice", target])
-    if code != 0 and target == dpapi:                            # Rueckfall: Klartext-Datei aus eigenem Ordner
-        path = os.path.join(_wg_conf_dir(), name + ".conf")
-        with open(path, "w", encoding="utf-8") as f:
+    target = os.path.join(d, name + ".conf.dpapi")
+    try:
+        with open(target, "wb") as f:
+            f.write(_wg_dpapi_encrypt(conf.encode("utf-8"), name))
+    except Exception as e:                                       # Rueckfall: Klartext (laeuft, App zeigt ihn evtl. nicht)
+        _print(f"[wg] Verschluesseln fuer die WireGuard-App nicht moeglich ({e}) - nutze Klartext")
+        target = os.path.join(_wg_conf_dir(), name + ".conf")
+        with open(target, "w", encoding="utf-8") as f:
             f.write(conf)
-        code, out = _wg_run([exe, "/installtunnelservice", path])
+    code, out = _wg_run([exe, "/installtunnelservice", target])
+    if code == 0:
+        for _ in range(20):                                      # Dienst wirklich da?
+            if _wg_svc_exists(name):
+                break
+            time.sleep(0.5)
+        else:
+            return 1, "Der WireGuard-Tunneldienst wurde nicht angelegt"
     return code, out
 
 
@@ -2023,7 +2059,8 @@ def _wg_down(name):
     exe = _wg_exe()
     if exe:
         if IS_WINDOWS:
-            _wg_run([exe, "/uninstalltunnelservice", name], 60)
+            if _wg_svc_exists(name):                               # sonst Fehlerfenster von wireguard.exe
+                _wg_run([exe, "/uninstalltunnelservice", name], 60)
             for old in (name + ".conf", name + ".conf.dpapi"):     # auch aus der WireGuard-App entfernen
                 try:
                     os.remove(os.path.join(_wg_gui_dir(), old))

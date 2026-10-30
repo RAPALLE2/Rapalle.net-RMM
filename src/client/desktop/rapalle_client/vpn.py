@@ -99,18 +99,30 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
     if IS_WINDOWS:
         # In die Ablage der WireGuard-App kopieren (dann steht der Tunnel in ihrer Liste; der Manager
         # verschluesselt die Datei zu .conf.dpapi) und als Dienst starten -> sichtbar UND aktiv.
+        # Ablage der WireGuard-App (dann steht der Tunnel in ihrer Liste). Verschluesseln (.conf.dpapi)
+        # macht der WireGuard-Manager beim (Neu-)Start selbst. Dienst-Aufrufe nur, wenn der Dienst
+        # existiert - wireguard.exe zeigt sonst Fehlerfenster ("kein installierter Dienst").
         code, out = _elevated([
             f"$exe = '{exe}'",
+            f"$n = '{iface}'",
             "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'",
             "New-Item -ItemType Directory -Force -Path $d | Out-Null",
-            "& $exe /installmanagerservice 2>$null | Out-Null",
-            f"& $exe /uninstalltunnelservice {iface} 2>$null | Out-Null",
-            f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{iface}.conf'), (Join-Path $d '{iface}.conf.dpapi')",
-            f"Copy-Item -Force -LiteralPath '{path}' -Destination (Join-Path $d '{iface}.conf')",
-            f"$p = Join-Path $d '{iface}.conf.dpapi'",
-            "for ($i = 0; $i -lt 30 -and -not (Test-Path $p); $i++) { Start-Sleep -Milliseconds 300 }",
-            f"if (-not (Test-Path $p)) {{ $p = Join-Path $d '{iface}.conf' }}",
+            "if (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue) {",
+            "  & $exe /uninstalltunnelservice $n | Out-Null",
+            "  for ($i = 0; $i -lt 20 -and (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }",
+            "}",
+            "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($n + '.conf')), (Join-Path $d ($n + '.conf.dpapi'))",
+            f"Copy-Item -Force -LiteralPath '{path}' -Destination (Join-Path $d ($n + '.conf'))",
+            "$m = Get-Service -Name 'WireGuardManager' -ErrorAction SilentlyContinue",
+            "if ($m) { Restart-Service -Name 'WireGuardManager' -Force -ErrorAction SilentlyContinue }",
+            "else { Start-Process -FilePath $exe -ArgumentList '/installmanagerservice' -WindowStyle Hidden }",
+            "$p = Join-Path $d ($n + '.conf.dpapi')",
+            "for ($i = 0; $i -lt 40 -and -not (Test-Path $p); $i++) { Start-Sleep -Milliseconds 300 }",
+            "if (-not (Test-Path $p)) { $p = Join-Path $d ($n + '.conf') }",
             "& $exe /installtunnelservice $p",
+            "for ($i = 0; $i -lt 20 -and -not (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }",
+            "if (-not (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue)) { exit 3 }",
+            "exit 0",
         ])
     else:
         code, out = _elevated([f"install -m 600 '{path}' /etc/wireguard/{iface}.conf",
@@ -123,7 +135,8 @@ def uninstall(data_dir: Path, iface: str) -> None:
     exe = wg_exe()
     if exe:
         if IS_WINDOWS:
-            _elevated([f"& '{exe}' /uninstalltunnelservice {iface}",
+            _elevated([f"$exe = '{exe}'", f"$n = '{iface}'",
+                       "if (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue) { & $exe /uninstalltunnelservice $n | Out-Null }",
                        "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'",
                        f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{iface}.conf'), (Join-Path $d '{iface}.conf.dpapi')"])
         else:
