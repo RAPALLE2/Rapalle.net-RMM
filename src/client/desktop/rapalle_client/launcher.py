@@ -138,16 +138,14 @@ class Launcher:
         ok, why = vpn.supported()
         if not ok:
             raise ValueError(f"VPN nicht möglich: {why}")
-        managed = dict(self.store.get("vpn_managed", {}) or {})
-        h = hashlib.sha256(t["conf"].encode()).hexdigest()[:16]
-        if managed.get(t["iface"]) != h:
-            self.status(msg="VPN-Tunnel wird in WireGuard eingerichtet (Administratorrechte nötig) …")
-            vpn.install(default_data_dir(), t["iface"], t["conf"])
-            managed[t["iface"]] = h
-            self.store.set(vpn_managed=managed)
+        # ZUERST als "manuell" merken - sonst koennte der Hintergrund-Abgleich der laufenden App den
+        # frisch eingerichteten Tunnel wieder entfernen (wenn er nicht automatisch verwaltet wird)
+        self.store.reload()
         manual = set(self.store.get("vpn_manual", []) or [])
         manual.add(t["iface"])
         self.store.set(vpn_manual=sorted(manual))
+        self.status(msg="VPN-Tunnel wird in WireGuard eingerichtet (Administratorrechte nötig) …")
+        vpn.install_locked(default_data_dir(), self.store, t["iface"], t["conf"])
         return t
 
     def watch(self):

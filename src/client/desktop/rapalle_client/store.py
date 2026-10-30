@@ -34,6 +34,12 @@ class Store:
     def get(self, key: str, default=None):
         return self.settings.get(key, default)
 
+    def reload(self) -> None:
+        """Neu einlesen (ein anderer App-Prozess - z.B. der Link-Starter - kann geaendert haben)."""
+        fresh = self._load()
+        if fresh:
+            self.settings = fresh
+
     def set(self, **kw) -> None:
         self.settings.update(kw)
         tmp = self.file.with_suffix(".tmp")

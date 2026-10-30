@@ -88,6 +88,86 @@ def _elevated(script_lines: list[str]) -> tuple[int, str]:
         return 1, str(e)
 
 
+def _dpapi_machine(data: bytes, name: str) -> bytes:
+    """Konfiguration im Format der WireGuard-App verschluesseln (<name>.conf.dpapi): DPAPI mit
+    Beschreibung = Tunnelname. CRYPTPROTECT_LOCAL_MACHINE, damit der WireGuard-Manager (SYSTEM)
+    die Datei lesen kann - so steht der Tunnel sofort in der App, ohne Manager-Neustart."""
+    import ctypes
+    from ctypes import wintypes
+
+    class BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    buf = ctypes.create_string_buffer(data, len(data))
+    blob_in = BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    blob_out = BLOB()
+    flags = 0x1 | 0x4                                   # UI_FORBIDDEN | LOCAL_MACHINE
+    if not ctypes.windll.crypt32.CryptProtectData(ctypes.byref(blob_in), ctypes.c_wchar_p(name), None, None, None,
+                                                  flags, ctypes.byref(blob_out)):
+        raise OSError(ctypes.GetLastError(), "CryptProtectData fehlgeschlagen")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+class _Lock:
+    """Nur EIN Einrichten gleichzeitig (Hintergrund-Abgleich und „In PC-App aktivieren“ laufen in
+    verschiedenen Prozessen - zwei gleichzeitige Installationen ergaben „Tunnel existiert bereits“)."""
+
+    def __init__(self, data_dir: Path):
+        self.path = _conf_dir(data_dir) / ".install.lock"
+        self.fd = None
+
+    def __enter__(self):
+        import time as _t
+        for _ in range(240):                                    # bis 2 min warten
+            try:
+                self.fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self.fd, str(os.getpid()).encode())
+                return self
+            except FileExistsError:
+                try:
+                    if _t.time() - self.path.stat().st_mtime > 300:   # liegengebliebene Sperre
+                        self.path.unlink()
+                        continue
+                except OSError:
+                    pass
+                _t.sleep(0.5)
+        raise RuntimeError("Eine andere VPN-Einrichtung läuft noch – bitte gleich erneut versuchen.")
+
+    def __exit__(self, *exc):
+        try:
+            os.close(self.fd)
+        finally:
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+
+
+def install_locked(data_dir: Path, store, iface: str, conf: str) -> bool:
+    """Einrichten mit Sperre; prueft danach erneut, ob ein anderer Prozess es schon erledigt hat.
+    Rueckgabe: True = eingerichtet, False = war schon aktuell."""
+    h = hashlib.sha256(conf.encode()).hexdigest()[:16]
+    with _Lock(data_dir):
+        try:
+            store.reload()
+        except Exception:
+            pass
+        managed = dict(store.get("vpn_managed", {}) or {})
+        if managed.get(iface) == h:
+            return False
+        install(data_dir, iface, conf)
+        try:
+            store.reload()
+        except Exception:
+            pass
+        managed = dict(store.get("vpn_managed", {}) or {})
+        managed[iface] = h
+        store.set(vpn_managed=managed)
+        return True
+
+
 def install(data_dir: Path, iface: str, conf: str) -> None:
     path = _conf_dir(data_dir) / f"{iface}.conf"
     path.write_text(conf, encoding="utf-8")
@@ -97,33 +177,40 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
         pass
     exe = wg_exe()
     if IS_WINDOWS:
-        # In die Ablage der WireGuard-App kopieren (dann steht der Tunnel in ihrer Liste; der Manager
-        # verschluesselt die Datei zu .conf.dpapi) und als Dienst starten -> sichtbar UND aktiv.
-        # Ablage der WireGuard-App (dann steht der Tunnel in ihrer Liste). Verschluesseln (.conf.dpapi)
-        # macht der WireGuard-Manager beim (Neu-)Start selbst. Dienst-Aufrufe nur, wenn der Dienst
-        # existiert - wireguard.exe zeigt sonst Fehlerfenster ("kein installierter Dienst").
+        # Verschluesselt fuer die WireGuard-App (sofort in ihrer Liste), dann mit Adminrechten:
+        # alten Dienst nur entfernen, wenn es ihn gibt, warten bis er WIRKLICH weg ist (sonst
+        # "Objekt bereits vorhanden"), Datei in die App-Ablage legen und Tunnel starten.
+        dp = _conf_dir(data_dir) / f"{iface}.conf.dpapi"
+        dp.write_bytes(_dpapi_machine(conf.encode("utf-8"), iface))
         code, out = _elevated([
             f"$exe = '{exe}'",
             f"$n = '{iface}'",
+            f"$src = '{dp}'",
             "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'",
             "New-Item -ItemType Directory -Force -Path $d | Out-Null",
-            "if (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue) {",
+            "function Svc { Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue }",
+            "if (Svc) {",
             "  & $exe /uninstalltunnelservice $n | Out-Null",
-            "  for ($i = 0; $i -lt 20 -and (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }",
+            "  for ($i = 0; $i -lt 20 -and (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
+            "  if (Svc) {",
+            "    # Dienst ist 'zum Loeschen markiert', solange der WireGuard-Manager ihn offen haelt",
+            "    Restart-Service -Name 'WireGuardManager' -Force -ErrorAction SilentlyContinue",
+            "    for ($i = 0; $i -lt 20 -and (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
+            "  }",
             "}",
+            "if (Svc) { Write-Output 'Der alte WireGuard-Tunneldienst laesst sich nicht entfernen - bitte Rechner neu starten.'; exit 4 }",
             "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($n + '.conf')), (Join-Path $d ($n + '.conf.dpapi'))",
-            f"Copy-Item -Force -LiteralPath '{path}' -Destination (Join-Path $d ($n + '.conf'))",
-            "$m = Get-Service -Name 'WireGuardManager' -ErrorAction SilentlyContinue",
-            "if ($m) { Restart-Service -Name 'WireGuardManager' -Force -ErrorAction SilentlyContinue }",
-            "else { Start-Process -FilePath $exe -ArgumentList '/installmanagerservice' -WindowStyle Hidden }",
-            "$p = Join-Path $d ($n + '.conf.dpapi')",
-            "for ($i = 0; $i -lt 40 -and -not (Test-Path $p); $i++) { Start-Sleep -Milliseconds 300 }",
-            "if (-not (Test-Path $p)) { $p = Join-Path $d ($n + '.conf') }",
-            "& $exe /installtunnelservice $p",
-            "for ($i = 0; $i -lt 20 -and -not (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }",
-            "if (-not (Get-Service -Name ('WireGuardTunnel$' + $n) -ErrorAction SilentlyContinue)) { exit 3 }",
+            "$dst = Join-Path $d ($n + '.conf.dpapi')",
+            "Copy-Item -Force -LiteralPath $src -Destination $dst",
+            "& $exe /installtunnelservice $dst | Out-Null",
+            "for ($i = 0; $i -lt 20 -and -not (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
+            "if (-not (Svc)) { Write-Output 'Der WireGuard-Tunneldienst wurde nicht angelegt.'; exit 3 }",
             "exit 0",
         ])
+        try:
+            dp.unlink()
+        except OSError:
+            pass
     else:
         code, out = _elevated([f"install -m 600 '{path}' /etc/wireguard/{iface}.conf",
                                f"wg-quick down {iface} 2>/dev/null", f"wg-quick up {iface}"])
@@ -191,6 +278,10 @@ class VpnSync:
             self._wake.clear()
 
     def sync(self):
+        try:
+            self.store.reload()                 # Aenderungen anderer App-Prozesse (Link-Starter) uebernehmen
+        except Exception:
+            pass
         auto_on = bool(self.store.get("vpn_auto", True))
         if not auto_on and not (self.store.get("vpn_manual") or self.managed()):
             return
@@ -235,7 +326,7 @@ class VpnSync:
                 errors.append(f"{t['name']}: Einrichtung fehlgeschlagen – neuer Versuch später")
                 continue
             try:
-                install(self.data_dir, iface, t["conf"])
+                install_locked(self.data_dir, self.store, iface, t["conf"])
                 have[iface] = h
                 changed = True
                 self._failed.pop(key, None)
