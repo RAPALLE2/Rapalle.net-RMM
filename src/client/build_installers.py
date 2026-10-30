@@ -141,10 +141,13 @@ def prepare() -> None:
 
 
 def version() -> str:
-    for line in (DESKTOP / "rapalle_client" / "__init__.py").read_text(encoding="utf-8").splitlines():
-        if line.startswith("__version__"):
-            return line.split("=")[1].strip().strip('"\'')
-    return "1.0.0"
+    """Nur die Zahl aus __version__ = "x.y.z" - robust gegen Kommentare hinter der Zeile.
+    (Frueher wurde alles hinter "=" genommen: mit Kommentar landeten Anfuehrungszeichen und "/"
+    in den Paketnamen -> Bau scheiterte, "Versionsnummer setzen" meldete Fehler.)"""
+    import re as _re
+    s = (DESKTOP / "rapalle_client" / "__init__.py").read_text(encoding="utf-8")
+    m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', s, _re.M)
+    return m.group(1).strip() if m else "1.0.0"
 
 
 def run(cmd, **kw):
@@ -538,6 +541,9 @@ def main():
     ap.add_argument("--prepare", action="store_true", help="Werkzeuge vorab holen (Windows: PyInstaller + WiX)")
     a = ap.parse_args()
     global RELEASE
+    if a.out:                               # Ausgabeordner IMMER zuerst anlegen (Bau-Container holt /out ab,
+        RELEASE = Path(a.out).resolve()     # auch wenn der Bau scheitert -> sonst "/out not found")
+        RELEASE.mkdir(parents=True, exist_ok=True)
     if a.set_version:                       # vor --tools: "--set-version X --tools" setzt und meldet
         set_version(a.set_version)
     if a.prepare:

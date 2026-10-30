@@ -424,7 +424,9 @@ def run_in_container(args: list[str], out_dir: Path, on_line, on_container) -> i
     on_container(cid) bekommt die Container-ID (fuer Stopp). Rueckgabe: Exit-Code (-1 = abgebrochen)."""
     if not image_ready():
         raise RuntimeError("Die Bau-Umgebung ist noch nicht bereit (Modul-Einstellungen → „Bau-Umgebung vorbereiten“).")
-    cfg = {"Image": IMAGE, "Cmd": ["python3", "-u", "/work/client/build_installers.py", "--out", "/out", *args],
+    # /out vorab anlegen: scheitert der Bau frueh, findet der Abgleich sonst "/out" nicht
+    cfg = {"Image": IMAGE, "Cmd": ["sh", "-c", 'mkdir -p /out && exec python3 -u /work/client/build_installers.py --out /out "$@"',
+                                   "sh", *args],
            "WorkingDir": "/work/client", "Env": BUILD_ENV, "Labels": {LABEL: "build"},
            "HostConfig": {"AutoRemove": False, "NetworkMode": "none"}}
     cid = _json("POST", "/containers/create", cfg)["Id"]
@@ -445,7 +447,11 @@ def run_in_container(args: list[str], out_dir: Path, on_line, on_container) -> i
         if rc in (137, 143):             # SIGKILL/SIGTERM -> Stopp
             return -1
         # Ergebnis holen: /out komplett, dann storage/client abgleichen
-        conn, resp = _raw("GET", f"/containers/{cid}/archive?path=/out", timeout=600, stream=True)
+        try:
+            conn, resp = _raw("GET", f"/containers/{cid}/archive?path=/out", timeout=600, stream=True)
+        except Exception as e:  # noqa: BLE001
+            on_line(f"Keine Pakete abholbar (/out): {e}")
+            return rc or 1
         try:
             data = resp.read()
         finally:
