@@ -313,7 +313,12 @@ class ClientApp:
                 self.bg(self.vpn.remove_all, lambda *_: self._vpn_status("VPN-Automatik aus – Tunnel entfernt"))
         ttk.Checkbutton(f, text="VPN-Tunnel automatisch verwalten", variable=self.v_vpn, command=_vpn_toggle).pack(anchor="w")
         self.lbl_vpn = ttk.Label(f, text="VPN: wird geprüft …", style="Sub.TLabel")
-        self.lbl_vpn.pack(anchor="w", pady=(2, 8))
+        self.lbl_vpn.pack(anchor="w", pady=(2, 4))
+        # VPN-Bereich direkt im Hauptfenster (Echtzeit-Zustand, Verbinden/Trennen)
+        from .vpnpanel import VpnPanel
+        if getattr(self, "vpnpanel", None):
+            self.vpnpanel.stop()
+        self.vpnpanel = VpnPanel(self, f, default_data_dir())
         self.vpn.start()
         ttk.Separator(f).pack(fill="x", pady=8)
         self.v_auto = tk.BooleanVar(value=autostart.is_enabled())
@@ -579,6 +584,8 @@ class ClientApp:
             except Exception:
                 pass
             try:                                   # eigene VPN-Tunnel beim Abmelden entfernen
+                if getattr(self, "vpnpanel", None):
+                    self.vpnpanel.stop()
                 self.vpn.stop()
                 self.vpn.remove_all()
             except Exception:

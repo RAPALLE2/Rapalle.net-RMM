@@ -240,6 +240,54 @@ public class MainActivity extends Activity {
             }}).start();
         }
 
+        /** VPN (Modul "vpn"): eigenen Tunnel an die WireGuard-App uebergeben.
+         *  Die Datei kommt ueber einen eigenen ContentProvider (Name = Tunnelname.conf);
+         *  Android zeigt die Auswahl "Oeffnen mit" -> WireGuard -> "Importieren". */
+        @JavascriptInterface
+        public void wgImport(final String tunnelId) {
+            new Thread(new Runnable() { public void run() {
+                try {
+                    JSONObject my = new JSONObject(http("GET", "/api/vpn/my", null, true));
+                    org.json.JSONArray arr = my.optJSONArray("tunnels");
+                    JSONObject t = null;
+                    for (int i = 0; arr != null && i < arr.length(); i++) {
+                        if (arr.getJSONObject(i).optString("tunnel").equals(tunnelId)) { t = arr.getJSONObject(i); break; }
+                    }
+                    if (t == null) throw new Exception("Der VPN-Tunnel wurde nicht gefunden oder ist abgelaufen.");
+                    final String name = t.optString("iface");
+                    java.io.File dir = new java.io.File(getCacheDir(), "wg");
+                    dir.mkdirs();
+                    java.io.File f = new java.io.File(dir, name + ".conf");
+                    java.io.FileOutputStream out = new java.io.FileOutputStream(f);
+                    out.write(t.optString("conf").getBytes("UTF-8"));
+                    out.close();
+                    ui.post(new Runnable() { public void run() { openWireGuard(name); }});
+                } catch (final Exception e) {
+                    ui.post(new Runnable() { public void run() { message("VPN", e.getMessage()); }});
+                }
+            }}).start();
+        }
+
+        /** Tunnel in der WireGuard-App ein-/ausschalten (WireGuard-Einstellung
+         *  "Fernsteuerung durch Apps erlauben" muss einmal aktiviert sein). */
+        @JavascriptInterface
+        public void wgSet(final String name, final boolean up) {
+            ui.post(new Runnable() { public void run() {
+                Intent i = new Intent(up ? "com.wireguard.android.action.SET_TUNNEL_UP" : "com.wireguard.android.action.SET_TUNNEL_DOWN");
+                i.setPackage("com.wireguard.android");
+                i.putExtra("tunnel", name);
+                sendBroadcast(i);
+                android.widget.Toast.makeText(MainActivity.this, up ? "WireGuard: " + name + " wird verbunden …"
+                    : "WireGuard: " + name + " wird getrennt …", android.widget.Toast.LENGTH_LONG).show();
+            }});
+        }
+
+        @JavascriptInterface
+        public boolean wgInstalled() {
+            try { getPackageManager().getPackageInfo("com.wireguard.android", 0); return true; }
+            catch (Exception e) { return false; }
+        }
+
         @JavascriptInterface
         public String prefill() {
             try {
@@ -645,5 +693,64 @@ public class MainActivity extends Activity {
         ctx.init(null, tm, new java.security.SecureRandom());
         c.setSSLSocketFactory(ctx.getSocketFactory());
         c.setHostnameVerifier(new HostnameVerifier() { public boolean verify(String h, SSLSession s) { return true; } });
+    }
+
+    /** Konfiguration an WireGuard geben: zuerst "Oeffnen mit" (WireGuard importiert .conf-Dateien),
+     *  sonst "Teilen". Fehlt WireGuard, in den Play Store. */
+    void openWireGuard(String name) {
+        boolean wg = false;
+        try { getPackageManager().getPackageInfo("com.wireguard.android", 0); wg = true; } catch (Exception e) { /* fehlt */ }
+        if (!wg) {
+            message("VPN", "Bitte zuerst die App „WireGuard“ installieren, dann erneut tippen.");
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.wireguard.android"))); }
+            catch (Exception e) { /* kein Store */ }
+            return;
+        }
+        Uri uri = Uri.parse("content://net.rapalle.rmmclient.conf/" + name + ".conf");
+        Intent view = new Intent(Intent.ACTION_VIEW);
+        view.setDataAndType(uri, "application/x-wireguard-config");
+        view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        view.setPackage("com.wireguard.android");
+        try {
+            startActivity(view);
+            return;
+        } catch (ActivityNotFoundException e) { /* naechster Weg */ }
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("application/octet-stream");
+        send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(Intent.createChooser(send, "Tunnel „" + name + "“ an WireGuard übergeben"));
+            android.widget.Toast.makeText(this, "In WireGuard „Importieren“ wählen; danach im RMM „Verbinden“.",
+                android.widget.Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            message("VPN", "WireGuard konnte die Datei nicht übernehmen. Alternativ im Dashboard den QR-Code mit WireGuard scannen.");
+        }
+    }
+
+    /** Liefert die Tunnel-Dateien aus dem Cache an WireGuard (nur lesend, nur per Freigabe). */
+    public static class ConfProvider extends android.content.ContentProvider {
+        @Override public boolean onCreate() { return true; }
+        private java.io.File file(Uri uri) {
+            String n = uri.getLastPathSegment();
+            if (n == null || n.contains("/") || n.contains("..")) return null;
+            return new java.io.File(new java.io.File(getContext().getCacheDir(), "wg"), n);
+        }
+        @Override public android.database.Cursor query(Uri uri, String[] proj, String sel, String[] args, String sort) {
+            java.io.File f = file(uri);
+            android.database.MatrixCursor c = new android.database.MatrixCursor(
+                new String[] {android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE});
+            if (f != null && f.exists()) c.addRow(new Object[] {f.getName(), f.length()});
+            return c;
+        }
+        @Override public String getType(Uri uri) { return "application/x-wireguard-config"; }
+        @Override public android.os.ParcelFileDescriptor openFile(Uri uri, String mode) throws java.io.FileNotFoundException {
+            java.io.File f = file(uri);
+            if (f == null || !f.exists()) throw new java.io.FileNotFoundException();
+            return android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+        }
+        @Override public Uri insert(Uri uri, android.content.ContentValues v) { return null; }
+        @Override public int delete(Uri uri, String s, String[] a) { return 0; }
+        @Override public int update(Uri uri, android.content.ContentValues v, String s, String[] a) { return 0; }
     }
 }

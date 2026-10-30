@@ -145,7 +145,7 @@ class _Lock:
                 pass
 
 
-def install_locked(data_dir: Path, store, iface: str, conf: str) -> bool:
+def install_locked(data_dir: Path, store, iface: str, conf: str, force: bool = False) -> bool:
     """Einrichten mit Sperre; prueft danach erneut, ob ein anderer Prozess es schon erledigt hat.
     Rueckgabe: True = eingerichtet, False = war schon aktuell."""
     h = hashlib.sha256(conf.encode()).hexdigest()[:16]
@@ -155,7 +155,7 @@ def install_locked(data_dir: Path, store, iface: str, conf: str) -> bool:
         except Exception:
             pass
         managed = dict(store.get("vpn_managed", {}) or {})
-        if managed.get(iface) == h:
+        if managed.get(iface) == h and not force:
             return False
         install(data_dir, iface, conf)
         try:
@@ -166,6 +166,18 @@ def install_locked(data_dir: Path, store, iface: str, conf: str) -> bool:
         managed[iface] = h
         store.set(vpn_managed=managed)
         return True
+
+
+def uninstall_locked(data_dir: Path, store, iface: str) -> None:
+    with _Lock(data_dir):
+        uninstall(data_dir, iface)
+        try:
+            store.reload()
+        except Exception:
+            pass
+        managed = dict(store.get("vpn_managed", {}) or {})
+        managed.pop(iface, None)
+        store.set(vpn_managed=managed)
 
 
 def install(data_dir: Path, iface: str, conf: str) -> None:
@@ -300,8 +312,9 @@ class VpnSync:
             self.refresh()
             data = self.get_api().request("GET", "/api/vpn/my")
         manual = set(self.store.get("vpn_manual", []) or [])          # per Dashboard-Knopf aktiviert
+        off = set(self.store.get("vpn_off", []) or [])                 # im VPN-Bereich bewusst getrennt
         want = {t["iface"]: t for t in data.get("tunnels", [])
-                if (auto_on and t.get("auto", True)) or t["iface"] in manual}
+                if ((auto_on and t.get("auto", True)) or t["iface"] in manual) and t["iface"] not in off}
         gone = manual - {t["iface"] for t in data.get("tunnels", [])}
         if gone:
             self.store.set(vpn_manual=sorted(manual - gone))
@@ -311,10 +324,9 @@ class VpnSync:
                 self.on_status(f"VPN: {len(want)} Tunnel verfügbar – {why}")
             return
         changed = False
-        for iface in [i for i in have if i not in want]:          # abgelaufen/entfernt -> loeschen
-            uninstall(self.data_dir, iface)
+        for iface in [i for i in have if i not in want]:          # abgelaufen/entfernt/getrennt -> loeschen
+            uninstall_locked(self.data_dir, self.store, iface)   # pflegt vpn_managed selbst
             have.pop(iface, None)
-            changed = True
         errors = []
         for iface, t in want.items():
             h = hashlib.sha256(t["conf"].encode()).hexdigest()[:16]
@@ -326,15 +338,12 @@ class VpnSync:
                 errors.append(f"{t['name']}: Einrichtung fehlgeschlagen – neuer Versuch später")
                 continue
             try:
-                install_locked(self.data_dir, self.store, iface, t["conf"])
+                install_locked(self.data_dir, self.store, iface, t["conf"])   # pflegt vpn_managed selbst
                 have[iface] = h
-                changed = True
                 self._failed.pop(key, None)
             except Exception as e:  # noqa: BLE001
                 self._failed[key] = _t.time()
                 errors.append(f"{t['name']}: {str(e).strip().splitlines()[-1][:160] if str(e).strip() else e}")
-        if changed:
-            self._set_managed(have)
         names = ", ".join(t["name"] for t in want.values())
         self.on_status(("VPN-Fehler: " + "; ".join(errors)) if errors else
                        (f"VPN verbunden: {names}" if want else "Kein VPN-Tunnel aktiv"))

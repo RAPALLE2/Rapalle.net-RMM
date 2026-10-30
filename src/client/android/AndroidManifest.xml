@@ -7,6 +7,12 @@
 
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="33" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- WireGuard-Tunnel ein-/ausschalten (WireGuard-App: "Fernsteuerung durch Apps erlauben") -->
+    <uses-permission android:name="com.wireguard.android.permission.CONTROL_TUNNELS" />
+    <!-- Android 11+: WireGuard-App sichtbar machen (pruefen, ob installiert) -->
+    <queries>
+        <package android:name="com.wireguard.android" />
+    </queries>
 
     <application
         android:label="RAPALLE.net RMM"
@@ -25,5 +31,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- liefert VPN-Konfigurationen an die WireGuard-App (nur per Freigabe) -->
+        <provider
+            android:name=".MainActivity$ConfProvider"
+            android:authorities="net.rapalle.rmmclient.conf"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

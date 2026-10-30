@@ -213,7 +213,8 @@ export function renderVpn(body, win) {
           <td><b>${esc(p.name)}</b>${p.mine ? " (du)" : ""}</td><td>${KIND[p.kind] || p.kind}</td><td><code>${esc(p.ip)}</code></td>
           <td data-conn>${p.join_ok === false ? `<span style="color:var(--danger)" title="${esc(p.join_error)}">⚠ ${esc(p.join_error.slice(0, 60))}</span>` : "…"}</td>
           <td>${p.expires ? fmtExp(p.expires) : "wie Tunnel"}</td>
-          <td style="text-align:right;white-space:nowrap">${!ended && p.mine && getModuleApi("client")?.openAppLink && !/Android|iPhone|iPad/i.test(navigator.userAgent) ? `<button class="btn btn-sm btn-primary" data-pcapp title="PC-App holt die Datei und aktiviert den Tunnel in WireGuard">🖥 In PC-App aktivieren</button> ` : ""}${!ended && (p.mine || m) && p.kind === "user" ? `<button class="btn-tool" data-dl="${esc(p.id)}" title="WireGuard-Datei herunterladen">⬇</button><button class="btn-tool" data-qr="${esc(p.id)}" title="QR-Code für die WireGuard-App">▦</button>` : ""}
+          <td style="text-align:right;white-space:nowrap">${!ended && p.mine && window.RMM?.wgImport ? `<button class="btn btn-sm btn-primary" data-wgimp title="Datei an die WireGuard-App übergeben">📲 In WireGuard übernehmen</button>
+              <button class="btn btn-sm" data-wgup="${esc(p.iface)}" title="WireGuard: Tunnel verbinden">▶</button><button class="btn btn-sm" data-wgdown="${esc(p.iface)}" title="WireGuard: Tunnel trennen">■</button> ` : ""}${!ended && p.mine && !window.RMM?.wgImport && getModuleApi("client")?.openAppLink && !/Android|iPhone|iPad/i.test(navigator.userAgent) ? `<button class="btn btn-sm btn-primary" data-pcapp title="PC-App holt die Datei und aktiviert den Tunnel in WireGuard">🖥 In PC-App aktivieren</button> ` : ""}${!ended && (p.mine || m) && p.kind === "user" ? `<button class="btn-tool" data-dl="${esc(p.id)}" title="WireGuard-Datei herunterladen">⬇</button><button class="btn-tool" data-qr="${esc(p.id)}" title="QR-Code für die WireGuard-App">▦</button>` : ""}
             ${!ended && !p.mine ? `<button class="btn-tool" data-ping="${esc(p.id)}" title="Vom Host aus anpingen (Diagnose)">📶</button>` : ""}
             ${m || p.mine ? `<button class="btn-tool" data-rm="${esc(p.id)}" title="Aus dem Tunnel entfernen">✕</button>` : ""}</td></tr>`).join("")
           || `<tr><td colspan="6" style="color:var(--subtext)">Noch keine Teilnehmer.</td></tr>`}</tbody></table>
@@ -285,6 +286,10 @@ export function renderVpn(body, win) {
           <div style="font-size:12px;color:var(--subtext);margin-top:4px">In der WireGuard-App: „+“ → „QR-Code scannen“.</div>`;
       } catch (e) { window.notify?.(e.message, "error"); }
     });
+    // Android-App: Datei an WireGuard geben bzw. Tunnel dort schalten
+    root.querySelectorAll("[data-wgimp]").forEach((b) => b.onclick = () => window.RMM.wgImport(tid));
+    root.querySelectorAll("[data-wgup]").forEach((b) => b.onclick = () => window.RMM.wgSet(b.dataset.wgup, true));
+    root.querySelectorAll("[data-wgdown]").forEach((b) => b.onclick = () => window.RMM.wgSet(b.dataset.wgdown, false));
     root.querySelectorAll("[data-pcapp]").forEach((b) => b.onclick = async () => {
       try {
         const res = await fetch("/api/client/launch-vpn", { method: "POST",

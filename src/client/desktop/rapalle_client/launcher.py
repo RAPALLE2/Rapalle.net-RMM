@@ -93,6 +93,13 @@ class Launcher:
             p = self.api.redeem(ticket)
             proto = p["protocol"]
             self.status(f"{LABEL.get(proto, proto)} wird geöffnet …")
+            if proto == "vpn":
+                # Laeuft die Haupt-App, erledigt SIE das (VPN-Bereich im Hauptfenster) - kein zweiter
+                # Prozess, der parallel denselben Tunnel einrichtet.
+                from .vpnpanel import app_alive, forward_request
+                if app_alive(default_data_dir()):
+                    forward_request(default_data_dir(), p["vpn_tunnel"])
+                    return self.ui(self.finish)
             if p.get("vpn_tunnel"):
                 t = self.ensure_vpn(p["vpn_tunnel"])
                 if proto == "vpn":
@@ -138,6 +145,16 @@ class Launcher:
         ok, why = vpn.supported()
         if not ok:
             raise ValueError(f"VPN nicht möglich: {why}")
+        from .vpnpanel import app_alive, forward_request, local_state
+        if app_alive(default_data_dir()):
+            # Haupt-App richtet ein (eine Stelle, keine Doppel-Installation); hier nur warten
+            forward_request(default_data_dir(), tid)
+            self.status(msg="VPN wird in der RMM-App eingerichtet (Administratorrechte bestätigen) …")
+            for _ in range(90):
+                if local_state(t["iface"]) == "aktiv":
+                    return t
+                time.sleep(1)
+            raise ValueError("Der VPN-Tunnel wurde nicht rechtzeitig verbunden – siehe VPN-Bereich der RMM-App.")
         # ZUERST als "manuell" merken - sonst koennte der Hintergrund-Abgleich der laufenden App den
         # frisch eingerichteten Tunnel wieder entfernen (wenn er nicht automatisch verwaltet wird)
         self.store.reload()
