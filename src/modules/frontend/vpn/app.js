@@ -276,7 +276,7 @@ export function renderVpn(body, win) {
       if (!(await uiConfirm("Tunnel löschen?", { okText: "Löschen", danger: true }))) return;
       await vq(`/tunnels/${tid}`, { method: "DELETE" }).catch((e) => window.notify?.(e.message, "error")); list();
     });
-    root.querySelectorAll("[data-dl]").forEach((b) => b.onclick = () => download(tid, b.dataset.dl, t.peer_iface).catch((e) => window.notify?.(e.message, "error")));
+    root.querySelectorAll("[data-dl]").forEach((b) => b.onclick = () => download(tid, b.dataset.dl, (t.peers.find((x) => x.id === b.dataset.dl) || {}).iface || t.peer_iface).catch((e) => window.notify?.(e.message, "error")));
     root.querySelectorAll("[data-qr]").forEach((b) => b.onclick = async () => {
       try {
         const res = await vq(`/tunnels/${tid}/peers/${b.dataset.qr}/config?qr=1`, { raw: true });

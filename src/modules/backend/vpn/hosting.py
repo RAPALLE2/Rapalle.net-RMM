@@ -70,9 +70,17 @@ async def peer_join(t: dict, p: dict) -> None:
     """Agent/Backend in den Tunnel holen (Benutzer machen das selbst/ueber die Client-App)."""
     key = f"{t['id']}:{p['id']}"
     conf = wgconf.peer_conf(t, p)
-    name = wgconf.peer_iface(t)
+    name = wgconf.peer_iface(t, p)
     if p["kind"] == "agent":
         from app.sockets import send_to_agent
+        if p.get("iface_v") != 2:                          # alten, je Tunnel gleichen Namen einmal abraeumen
+            await send_to_agent(p["ref"], "wg-leave", {"tunnel": t["id"], "name": wgconf.legacy_peer_iface(t)})
+
+            def _mark(d, tid=t["id"], pid=p["id"]):
+                x = d["tunnels"].get(tid, {}).get("peers", {}).get(pid)
+                if x is not None:
+                    x["iface_v"] = 2
+            store.update(_mark)
         # allow_from: Netz(e) des Tunnels - der Agent oeffnet dafuer seine Firewall (Windows blockt
         # z.B. Ping und Freigaben auf neuen Netzwerkadaptern), damit andere Teilnehmer ihn erreichen.
         ok = await send_to_agent(p["ref"], "wg-join", {"tunnel": t["id"], "peer": p["id"], "name": name, "conf": conf,
@@ -88,7 +96,7 @@ async def peer_join(t: dict, p: dict) -> None:
 
 
 async def peer_leave(t: dict, p: dict) -> None:
-    name = wgconf.peer_iface(t)
+    name = wgconf.peer_iface(t, p)
     peer_state.pop(f"{t['id']}:{p['id']}", None)
     if p["kind"] == "agent":
         from app.sockets import send_to_agent

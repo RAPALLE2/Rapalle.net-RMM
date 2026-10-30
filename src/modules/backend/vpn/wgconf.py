@@ -29,9 +29,16 @@ def iface(t: dict) -> str:
     return f"rmm{t['id']}"[:15]
 
 
-def peer_iface(t: dict) -> str:
-    """Schnittstelle eines TEILNEHMERS - anderer Name als beim Host, damit Host und
-    Teilnehmer auf derselben Maschine (z.B. Agent auf dem Node-Host) nicht kollidieren."""
+def peer_iface(t: dict, p: dict | None = None) -> str:
+    """Schnittstelle eines TEILNEHMERS - je Teilnehmer eindeutig ("r" + Tunnel-ID + Teilnehmer-ID,
+    max. 15 Zeichen). Frueher je Tunnel gleich ("rmv<id>"): liefen Agent UND Client-App auf demselben
+    PC, ueberschrieben sie sich gegenseitig -> WireGuard: "Das Objekt ist bereits vorhanden"."""
+    if p is None:
+        return f"rmv{t['id']}"[:15]                       # alter Name (nur noch zum Aufraeumen)
+    return f"r{t['id']}{p['id']}"[:15]
+
+
+def legacy_peer_iface(t: dict) -> str:
     return f"rmv{t['id']}"[:15]
 
 

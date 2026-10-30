@@ -75,7 +75,7 @@ def _view(user: dict, t: dict, full: bool) -> dict:
     out = {k: v for k, v in t.items() if k not in ("host_priv_enc", "peers")}
     out["host_name"] = "RMM-Server (Backend)" if t["host"] == "backend" else _cname(t["host"])
     out["iface"] = wgconf.iface(t)
-    out["peer_iface"] = wgconf.peer_iface(t)
+    out["peer_iface"] = wgconf.legacy_peer_iface(t)
     out["can_manage"] = _may_manage(user, t)
     if "endpoint_warnings" not in t and t.get("state") != "expired":
         out["endpoint_warnings"] = endpoint_problems(t.get("endpoint", ""))      # aeltere Tunnel
@@ -86,7 +86,7 @@ def _view(user: dict, t: dict, full: bool) -> dict:
         if not full and not (p["kind"] == "user" and p["ref"] == user["id"]):
             continue
         st = hosting.peer_state.get(f"{t['id']}:{p['id']}") or {}
-        peers.append({k: v for k, v in p.items() if k != "priv_enc"} |
+        peers.append({k: v for k, v in p.items() if k != "priv_enc"} | {"iface": wgconf.peer_iface(t, p)} |
                      {"join_ok": st.get("ok"), "join_error": st.get("error", ""),
                       "mine": p["kind"] == "user" and p["ref"] == user["id"]})
     out["peers"] = sorted(peers, key=lambda x: (x["kind"], x["name"].lower()))
@@ -482,7 +482,7 @@ def peer_config(tid: str, pid: str, qr: bool = False, user: dict = Depends(get_c
         buf = io.BytesIO()
         qrcode.make(conf).save(buf, format="PNG")
         return Response(buf.getvalue(), media_type="image/png")
-    fname = f"{wgconf.peer_iface(t)}.conf"
+    fname = f"{wgconf.peer_iface(t, p)}.conf"
     return PlainTextResponse(conf, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
@@ -500,7 +500,7 @@ def my_tunnels(user: dict = Depends(get_current_user)):
                 exp = min([x for x in (t.get("expires"), p.get("expires")) if x] or [0])
                 if exp and exp <= now:
                     continue
-                out.append({"tunnel": t["id"], "peer": p["id"], "name": t["name"], "iface": wgconf.peer_iface(t),
+                out.append({"tunnel": t["id"], "peer": p["id"], "name": t["name"], "iface": wgconf.peer_iface(t, p),
                             "expires": exp, "auto": bool(p.get("auto", True)), "conf": wgconf.peer_conf(t, p)})
     return {"tunnels": out, "server_time": int(now)}
 
