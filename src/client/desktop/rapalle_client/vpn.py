@@ -97,8 +97,21 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
         pass
     exe = wg_exe()
     if IS_WINDOWS:
-        code, out = _elevated([f"& '{exe}' /uninstalltunnelservice {iface}",
-                               f"& '{exe}' /installtunnelservice '{path}'"])
+        # In die Ablage der WireGuard-App kopieren (dann steht der Tunnel in ihrer Liste; der Manager
+        # verschluesselt die Datei zu .conf.dpapi) und als Dienst starten -> sichtbar UND aktiv.
+        code, out = _elevated([
+            f"$exe = '{exe}'",
+            "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'",
+            "New-Item -ItemType Directory -Force -Path $d | Out-Null",
+            "& $exe /installmanagerservice 2>$null | Out-Null",
+            f"& $exe /uninstalltunnelservice {iface} 2>$null | Out-Null",
+            f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{iface}.conf'), (Join-Path $d '{iface}.conf.dpapi')",
+            f"Copy-Item -Force -LiteralPath '{path}' -Destination (Join-Path $d '{iface}.conf')",
+            f"$p = Join-Path $d '{iface}.conf.dpapi'",
+            "for ($i = 0; $i -lt 30 -and -not (Test-Path $p); $i++) { Start-Sleep -Milliseconds 300 }",
+            f"if (-not (Test-Path $p)) {{ $p = Join-Path $d '{iface}.conf' }}",
+            "& $exe /installtunnelservice $p",
+        ])
     else:
         code, out = _elevated([f"install -m 600 '{path}' /etc/wireguard/{iface}.conf",
                                f"wg-quick down {iface} 2>/dev/null", f"wg-quick up {iface}"])
@@ -110,7 +123,9 @@ def uninstall(data_dir: Path, iface: str) -> None:
     exe = wg_exe()
     if exe:
         if IS_WINDOWS:
-            _elevated([f"& '{exe}' /uninstalltunnelservice {iface}"])
+            _elevated([f"& '{exe}' /uninstalltunnelservice {iface}",
+                       "$d = Join-Path $env:ProgramFiles 'WireGuard\\Data\\Configurations'",
+                       f"Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d '{iface}.conf'), (Join-Path $d '{iface}.conf.dpapi')"])
         else:
             _elevated([f"wg-quick down {iface} 2>/dev/null", f"rm -f /etc/wireguard/{iface}.conf"])
     try:

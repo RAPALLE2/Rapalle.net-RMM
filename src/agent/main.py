@@ -1871,9 +1871,75 @@ def _wg_exe():
     return shutil.which("wg-quick")
 
 
+def _child_env():
+    """Umgebung fuer Fremdprogramme (wireguard.exe, netsh, ...). Eine mit PyInstaller gebaute
+    .exe setzt eigene DLL-/Pfad-Variablen; erben Kindprozesse die, meldet WireGuard
+    "DLL nicht gefunden". Darum hier ohne _MEI*/_PYI*-Variablen und mit dem urspruenglichen PATH."""
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        for k in list(env):
+            if k.startswith(("_MEI", "_PYI")):
+                env.pop(k, None)
+        mei = getattr(sys, "_MEIPASS", "")
+        if mei and env.get("PATH"):
+            env["PATH"] = os.pathsep.join(p for p in env["PATH"].split(os.pathsep) if not p.startswith(mei))
+    return env
+
+
 def _wg_run(cmd, timeout=90):
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return r.returncode, (r.stdout or "") + (r.stderr or "")
+    k32 = None
+    if IS_WINDOWS and getattr(sys, "frozen", False):
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.SetDllDirectoryW(None)            # DLL-Suchpfad der .exe nicht an Kindprozesse vererben
+        except Exception:
+            k32 = None
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=_child_env(),
+                           creationflags=0x08000000 if IS_WINDOWS else 0)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    finally:
+        if k32 is not None:
+            try:
+                k32.SetDllDirectoryW(getattr(sys, "_MEIPASS", None))
+            except Exception:
+                pass
+
+
+def _wg_gui_dir():
+    """Konfigurationsablage der WireGuard-App: Dateien hier zeigt die App in ihrer Tunnelliste an
+    (der WireGuard-Manager verschluesselt sie selbst zu <name>.conf.dpapi)."""
+    return os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "WireGuard", "Data", "Configurations")
+
+
+def _wg_win_install(exe, name, conf):
+    """Windows: Tunnel in die WireGuard-App eintragen UND als Dienst starten (sichtbar + aktiv)."""
+    _wg_run([exe, "/installmanagerservice"], 60)              # Manager laeuft -> verschluesselt + App-Liste
+    _wg_run([exe, "/uninstalltunnelservice", name], 60)
+    d = _wg_gui_dir()
+    os.makedirs(d, exist_ok=True)
+    for old in (name + ".conf", name + ".conf.dpapi"):
+        try:
+            os.remove(os.path.join(d, old))
+        except OSError:
+            pass
+    plain = os.path.join(d, name + ".conf")
+    with open(plain, "w", encoding="utf-8") as f:
+        f.write(conf)
+    dpapi = plain + ".dpapi"
+    for _ in range(30):                                          # Manager wandelt die Datei um (meist < 1 s)
+        if os.path.exists(dpapi):
+            break
+        time.sleep(0.3)
+    target = dpapi if os.path.exists(dpapi) else plain
+    code, out = _wg_run([exe, "/installtunnelservice", target])
+    if code != 0 and target == dpapi:                            # Rueckfall: Klartext-Datei aus eigenem Ordner
+        path = os.path.join(_wg_conf_dir(), name + ".conf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(conf)
+        code, out = _wg_run([exe, "/installtunnelservice", path])
+    return code, out
 
 
 def _wg_install():
@@ -1917,8 +1983,7 @@ def _wg_up(name, conf):
     except OSError:
         pass
     if IS_WINDOWS:
-        _wg_run([exe, "/uninstalltunnelservice", name], 60)
-        code, out = _wg_run([exe, "/installtunnelservice", path])
+        code, out = _wg_win_install(exe, name, conf)
     else:
         if os.path.exists("/sys/class/net/" + name):
             _wg_run(["wg-quick", "down", name], 60)
@@ -1959,6 +2024,11 @@ def _wg_down(name):
     if exe:
         if IS_WINDOWS:
             _wg_run([exe, "/uninstalltunnelservice", name], 60)
+            for old in (name + ".conf", name + ".conf.dpapi"):     # auch aus der WireGuard-App entfernen
+                try:
+                    os.remove(os.path.join(_wg_gui_dir(), old))
+                except OSError:
+                    pass
         elif os.path.exists("/sys/class/net/" + name):
             _wg_run(["wg-quick", "down", name], 60)
     try:
